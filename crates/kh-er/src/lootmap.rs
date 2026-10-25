@@ -240,6 +240,10 @@ pub struct ErItem {
     pub somber: bool,
     /// False: the row was not found in the game's params (nothing but the id is known).
     pub known: bool,
+    /// (ONLINEITEMS fix) A goods row Elden Ring's own inventory never shows (loot.rs `describe`: its goodsType is one of
+    /// the sheet row `goods.hidden_types`, or it has no name in the game's message files): left alone by every rule
+    /// and listed on no KH screen.
+    pub hidden: bool,
 }
 
 impl ErItem {
@@ -442,6 +446,8 @@ pub struct LootRules {
     classes: HashMap<String, &'static str>,
     shop_tier_price: Vec<u32>,
     name_files: HashMap<Cat, Vec<u32>>,
+    /// (ONLINEITEMS fix) row `goods.hidden_types`: the goodsType values Elden Ring's inventory never lists.
+    hidden_goods_types: Vec<u8>,
     /// (IMPL_ER42) row `msg.texts`: the message files holding an item's DESCRIPTION (tried in order).
     text_files: HashMap<Cat, Vec<u32>>,
     /// (er30) The base consumable drop: rows `base.*`.
@@ -558,6 +564,7 @@ impl LootRules {
             classes: HashMap::new(), // (PU)
             shop_tier_price: Vec::new(),
             name_files: HashMap::new(),
+            hidden_goods_types: Vec::new(),
             // (IMPL_ER42) without the sheet row: GoodsCaption (the long text) 24, its DLC file 321, then GoodsInfo (the
             // short line) 20, its DLC file 320. FROM MEMORY of the public FMG lists (10 = GoodsName is proven by the log).
             text_files: HashMap::from([(Cat::Goods, vec![24, 321, 20, 320])]),
@@ -700,6 +707,7 @@ impl LootRules {
                         }
                     }
                 }
+                "goods.hidden_types" => out.hidden_goods_types = value.as_array().into_iter().flatten().filter_map(|x| x.as_u64().map(|n| n as u8)).collect(),
                 "msg.texts" => {
                     for (k, v) in value.as_object().into_iter().flatten() {
                         match Cat::from_name(k) {
@@ -862,6 +870,12 @@ impl LootRules {
     /// `EquipParamWeapon.wepType` -> the kind of armament (everything the sheet does not name is a melee weapon).
     pub fn wep_kind(&self, wep_type: u16) -> WepKind {
         self.wep_kinds.get(&(wep_type as u32)).copied().unwrap_or(WepKind::Melee)
+    }
+
+    /// (ONLINEITEMS fix) A goodsType Elden Ring's own inventory never lists (sheet row `goods.hidden_types`, derived from
+    /// EquipParamGoods: a type no named row uses; 13 = the internal row 166 every new character is given).
+    pub fn goods_hidden(&self, goods_type: u8) -> bool {
+        self.hidden_goods_types.contains(&goods_type)
     }
 
     /// The message files (FMG categories of the game's `MsgRepository`) that hold the names of a table's items.
@@ -1182,8 +1196,8 @@ impl LootRules {
     /// names PASSES (it stays Elden Ring's) under the rule name "unknown".
     pub fn classify(&self, item: &ErItem, ctx: &Ctx) -> Decision {
         let d = self.classify_rules(item, ctx);
-        // (SHOP-4) an item a game script takes or counts stays Elden Ring's, over the generic rules (the categories r2.1xx ..,
-        // the online items); the user's own decisions stand (the explicit r2.0xx rules, id.* overrides, the old generation)
+        // (SHOP-4) an item a game script takes or counts stays Elden Ring's, over the generic rules (the categories r2.1xx ..;
+        // the online items pass anyway, ONLINEITEMS); the user's own decisions stand (the explicit r2.0xx rules, id.* overrides, the old generation)
         let decided = d.rule.starts_with("id.") || d.rule.starts_with("r2.0") || d.rule.starts_with("rule.");
         if !matches!(d.give, Give::Pass) && !decided {
             if let Some(keep) = script_required(item) {
@@ -1197,8 +1211,12 @@ impl LootRules {
     fn classify_rules(&self, item: &ErItem, ctx: &Ctx) -> Decision {
         let unknown = || Decision { give: Give::Pass, rule: "unknown".to_string(), tier: 0, why: String::new(), one: false };
         let Some(cat) = item.cat else { return unknown() };
+        // (ONLINEITEMS fix) a goods row Elden Ring never shows (an internal item the game itself uses) is left alone
+        if item.hidden {
+            return Decision { give: Give::Pass, rule: "er.hidden".to_string(), tier: 0, why: "not shown by Elden Ring's inventory: the game's own".to_string(), one: false };
+        }
         let (tier, why) = self.tier_of(item, ctx);
-        // (SHOP, the user 2026-10-23: "remove all online items, replace them with kingdom hearts consumable items")
+        // (ONLINEITEMS, the user 2026-10-25: "just restore the online items") an online item stays Elden Ring's
         if let Some(d) = online_item(item, ctx) {
             return d;
         }
@@ -2257,29 +2275,71 @@ pub fn script_required(item: &ErItem) -> Option<Decision> {
     (keep.contains(&(item_type(cat), item.id)) || keep.contains(&(item_type(cat), item.base_id()))).then(|| Decision { give: Give::Pass, rule: "shop.script_keep".to_string(), tier: 0, why: String::new(), one: false })
 }
 
-/// (SHOP, the user 2026-10-23: "remove all online items, replace them with kingdom hearts consumable items") AN ELDEN RING
-/// ONLINE ITEM (a goods row of the game's "Multiplayer Items" group: `EquipParamGoods.sortGroupId` in the sheet
-/// sora-er-shop `online.sort_groups`, 120: the furled fingers, the Finger Severer, the bloody / recusant fingers, the cipher
-/// rings, the effigies, the Taunter's Tongue, the Furlcalling Finger Remedy, the Wizened Finger, the phantom items) is
-/// NEVER Elden Ring's: wherever it comes from (a pickup, a corpse, a gift, the start's kit, a reward) it becomes a KH
-/// consumable that a merchant of the area sells (the shop's own area-tier rule: `shop.area_tier` of the region depth,
-/// one of `stock_for(tier)` chosen by the item's id), from every source (the user's own replacement rule).
-pub fn online_item(item: &ErItem, ctx: &Ctx) -> Option<Decision> {
+/// (ONLINEITEMS, the user 2026-10-25: "add the online items that you need for progression back into the game including the
+/// one right at the start"; "we changed this ourselves, so just restore the online items") AN ELDEN RING ONLINE ITEM (a goods
+/// row of the game's "Multiplayer Items" group: `EquipParamGoods.sortGroupId` in the sheet sora-er-shop `online.sort_groups`,
+/// 120: the furled fingers, the Finger Severer, the bloody / recusant fingers, the cipher rings, the effigies, the Taunter's
+/// Tongue, the Furlcalling Finger Remedy, the Tarnished's Wizened Finger, the phantom items, the DLC copies) STAYS ELDEN
+/// RING'S, as in the game, from every source: the pickup gives the real item and the game sets its own flags (the chapel of
+/// the start: the Wizened Finger's lot flag 60210 opens the exit, m10_01 event 10012504). The KH3 Items screen lists them on
+/// the Key Items tab (loot.rs `key_items`: the normal inventory's goods the gate passes). The rule stands before the
+/// category rules, so the consumable ones (the Furlcalling Finger Remedy, the Festering Bloody Finger, the phantom fingers)
+/// are not taken by r2.600 either. (It replaces SHOP's conversion of 2026-10-23 into a KH consumable.)
+pub fn online_item(item: &ErItem, _ctx: &Ctx) -> Option<Decision> {
     let shop = kh_host::shop::rules();
     if item.cat != Some(Cat::Goods) || !item.known || !shop.is_online_group(item.sort_group) {
         return None;
     }
-    // (the user: "keep quest items only") an online item a quest needs (sheet `online.quest_keep`, from the game's scripts)
-    // stays Elden Ring's: the gate passes it, the KH3 Items screen lists it with the key items
-    if shop.is_quest_online(item.id) {
-        return Some(Decision { give: Give::Pass, rule: "shop.online_quest".to_string(), tier: 0, why: String::new(), one: false });
+    Some(Decision { give: Give::Pass, rule: "shop.online_er".to_string(), tier: 0, why: format!("an online item (sortGroupId {}): Elden Ring's, as in the game", item.sort_group), one: false })
+}
+
+/// (ONLINEITEMS fix) WHETHER A KH SCREEN LISTS AN ELDEN RING ITEM the mod leaves Elden Ring's (the KH3 Items screen's
+/// Key Items / All tabs, the OBTAINED popup): exactly what Elden Ring's own inventory would show, so never a hidden row.
+pub fn listed_on_kh_screens(item: &ErItem) -> bool {
+    !item.hidden
+}
+
+/// (ONLINEITEMS fix) THE NO-NAME HALF OF THE HIDDEN RULE: an item with no name text is hidden only when every name file of
+/// its table has given a name this session (the files are proven readable), so a wrong file number never hides a table.
+pub fn unnamed_hidden(name_files: &[u32], proven: &dyn Fn(u32) -> bool, has_name: bool) -> bool {
+    !has_name && !name_files.is_empty() && name_files.iter().all(|f| proven(*f))
+}
+
+#[cfg(test)]
+mod hidden_goods_tests {
+    use super::*;
+
+    /// (ONLINEITEMS fix, the user's report: "Elden Ring goods 166 x1" on the KH3 Items screen) EquipParamGoods 166 (goodsType
+    /// 13, sortGroup 120, no name) and any hidden-type good pass every rule from every source (nothing converts, removes or
+    /// sells it) and are on no KH list; the sheet's hidden types are the derived ones.
+    #[test]
+    fn hidden_goods_are_left_alone_and_never_listed() {
+        let rules = LootRules::load();
+        assert!(rules.goods_hidden(13), "goodsType 13: no named row in EquipParamGoods");
+        for t in [0u8, 1, 2, 3, 5, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18] {
+            assert!(!rules.goods_hidden(t), "goodsType {t} is listed by Elden Ring");
+        }
+        let g166 = ErItem { cat: Some(Cat::Goods), id: 166, goods_type: 13, sort_group: 120, known: true, hidden: rules.goods_hidden(13), ..ErItem::default() };
+        let other = ErItem { id: 9_999_001, sort_group: 10, consumable: true, ..g166 };
+        for item in [g166, other] {
+            for source in [Source::World, Source::Npc, Source::Enemy, Source::Gather, Source::Unknown, Source::Shop] {
+                let d = rules.classify(&item, &Ctx::of(source, 2));
+                assert_eq!((&d.give, d.rule.as_str()), (&Give::Pass, "er.hidden"), "{} from {source:?}", item.id);
+            }
+            assert!(!listed_on_kh_screens(&item));
+        }
+        // a shown online item is still listed and still Elden Ring's
+        let finger = ErItem { cat: Some(Cat::Goods), id: 106, sort_group: 120, known: true, ..ErItem::default() };
+        assert!(listed_on_kh_screens(&finger));
+        assert_eq!(rules.classify(&finger, &Ctx::of(Source::World, 0)).rule, "shop.online_er");
+        // the no-name half: only with every name file of the table proven readable
+        let yes = |_: u32| true;
+        let only10 = |f: u32| f == 10;
+        assert!(unnamed_hidden(&[10, 319], &yes, false));
+        assert!(!unnamed_hidden(&[10, 319], &yes, true), "a named item is shown");
+        assert!(!unnamed_hidden(&[10, 319], &only10, false), "the DLC file has not given a name yet: not hidden by its name");
+        assert!(!unnamed_hidden(&[], &yes, false));
     }
-    let tier = shop.tier_of_depth(ctx.depth);
-    let why = format!("an online item (sortGroupId {}): the area's shop tier {tier} (depth {})", item.sort_group, ctx.depth);
-    Some(match shop.replacement(tier, item.id) {
-        Some(o) => Decision { give: Give::Kh { item_id: o.item_id, key: o.key }, rule: "shop.online".to_string(), tier, why, one: true },
-        None => Decision { give: Give::Nothing, rule: "shop.online".to_string(), tier, why: format!("{why}; the shop sheet has no stock: nothing"), one: true },
-    })
 }
 
 #[cfg(test)]
@@ -2290,37 +2350,34 @@ mod shop_online_tests {
         ErItem { cat: Some(Cat::Goods), id, goods_type: 0, sort_group: 120, consumable: false, known: true, ..ErItem::default() }
     }
 
-    /// (SHOP) Every online item becomes ONE KH consumable of the area's shop stock, from every source (a pickup, the
-    /// start's gift, a gather); an ordinary goods item is not touched by the rule.
+    /// (ONLINEITEMS) Every online item stays Elden Ring's from every source (a pickup, a corpse, a gift, a gather, the
+    /// start's kit), consumable or not, at every depth: the Wizened Finger of the chapel, the Finger Severer, the
+    /// Furlcalling Finger Remedy, the effigies, the bloody fingers, the DLC copies. An ordinary goods item is not this rule's.
     #[test]
-    fn shop_online_items_become_kh_consumables_everywhere() {
+    fn online_items_stay_elden_rings_from_every_source() {
         let rules = LootRules::load();
-        let shop = kh_host::shop::rules();
-        for (id, source, depth) in [(100u32, Source::Npc, 0u8), (101, Source::World, 0), (150, Source::Gather, 1), (109, Source::Unknown, 4), (182, Source::Enemy, 2)] {
-            let d = rules.classify(&online(id), &Ctx::of(source, depth));
-            let Give::Kh { key, .. } = &d.give else { panic!("{id} from {source:?}: {d:?}") };
-            assert_eq!(d.rule, "shop.online");
-            assert!(d.one, "one item for the stack");
-            assert!(shop.stock_for(shop.tier_of_depth(depth)).iter().any(|o| &o.key == key), "{key} is sold in that area");
-            assert!(kh_host::items::battle_kind(kh_host::items::by_key(key).unwrap().item_id).is_some(), "a usable item");
+        let sources = [Source::World, Source::Npc, Source::Enemy, Source::Gather, Source::Unknown];
+        for id in [100u32, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 135, 150, 166, 170, 182, 184] {
+            for (k, source) in sources.iter().enumerate() {
+                for consumable in [false, true] {
+                    let item = ErItem { consumable, ..online(id) };
+                    let d = rules.classify(&item, &Ctx::of(*source, k as u8));
+                    assert_eq!((&d.give, d.rule.as_str()), (&Give::Pass, "shop.online_er"), "{id} from {source:?} (consumable {consumable}): {d:?}");
+                    assert!(!d.one);
+                }
+            }
         }
-        // the shop's stock: never an online item there either (only KH items)
-        assert!(shop.stock_for(shop.top_tier()).iter().all(|o| o.key.starts_with("ITEM_")));
-        // an ordinary reusable tool (sort group 10) still passes by its own rule
-        // (the user: "keep quest items only") Varré's fingers stay Elden Ring's from every source
-        // (SHOP-4) Varré's fingers stay Elden Ring's; the Wizened Finger is converted (its flag is set at the gate)
+        // the chapel's finger: nothing turns it into anything else (the game's own pickup sets its flag 60210)
         let finger = rules.classify(&online(106), &Ctx::of(Source::World, 0));
-        assert!(matches!(finger.give, Give::Kh { .. }) && finger.rule == "shop.online", "{finger:?}");
-        // an item a script takes (the Stone-Sheathed Sword) stays Elden Ring's, whatever its upgrade
+        assert_eq!((finger.give, finger.rule.as_str()), (Give::Pass, "shop.online_er"));
+        // an item a script takes (the Stone-Sheathed Sword) stays Elden Ring's, whatever its upgrade (SHOP-4, unchanged)
         for id in [2_540_000u32, 2_540_003] {
             let sword = ErItem { cat: Some(Cat::Weapon), id, known: true, rarity: 2, ..ErItem::default() };
             assert_eq!(rules.classify(&sword, &Ctx::of(Source::World, 3)).rule, "shop.script_keep");
         }
-        for id in [102u32, 111] {
-            let d = rules.classify(&online(id), &Ctx::of(Source::Npc, 1));
-            assert_eq!((d.give, d.rule.as_str()), (Give::Pass, "shop.online_quest"), "{id}");
+        // ordinary goods of another group are not this rule's (a reusable tool, a consumable)
+        for item in [ErItem { sort_group: 10, ..online(8000) }, ErItem { sort_group: 10, consumable: true, ..online(1234) }] {
+            assert_ne!(rules.classify(&item, &Ctx::of(Source::World, 0)).rule, "shop.online_er");
         }
-        let tool = ErItem { sort_group: 10, ..online(8000) };
-        assert_ne!(rules.classify(&tool, &Ctx::of(Source::World, 0)).rule, "shop.online");
     }
 }

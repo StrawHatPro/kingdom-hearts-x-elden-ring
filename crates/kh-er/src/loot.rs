@@ -153,6 +153,8 @@ pub fn describe(cat: Cat, id: u32) -> ErItem {
                 item.sort_group = row.sort_group_id();
                 item.consumable = row.is_consume();
                 item.sell_value = row.sell_value();
+                // (ONLINEITEMS fix) a row Elden Ring's inventory never shows: a hidden goodsType, or no name text at all
+                item.hidden = rules().goods_hidden(item.goods_type) || unnamed(Cat::Goods, id);
                 // its use effect (a goods item that refers to no SpEffect row has none)
                 let effect = row.ref_id_default();
                 if effect > 0 {
@@ -210,6 +212,24 @@ pub fn describe(cat: Cat, id: u32) -> ErItem {
 /// (IMPL_ER28) The item's name in the game's message tables (the files the sheet row `msg.names` lists for its
 /// table). `None`: not readable there. NOT VERIFIED IN THE GAME (the file numbers are public documentation).
 pub fn item_name(cat: Cat, id: u32) -> Option<String> {
+    item_name_in(cat, id).map(|(name, _)| name)
+}
+
+/// (ONLINEITEMS fix) The message files that have given a name this session (proven readable: `unnamed`).
+static NAME_FILES_PROVEN: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+/// (ONLINEITEMS fix) An item with no name text in the game's message files, once every name file of its table is proven
+/// readable (lootmap `unnamed_hidden`): Elden Ring never shows such a row. A file not proven yet hides nothing.
+pub fn unnamed(cat: Cat, id: u32) -> bool {
+    if unsafe { MsgRepository::instance() }.is_err() {
+        return false;
+    }
+    let has_name = item_name_in(cat, id).is_some();
+    let proven = NAME_FILES_PROVEN.lock().map(|v| v.clone()).unwrap_or_default();
+    crate::lootmap::unnamed_hidden(rules().name_files(cat), &|f| proven.contains(&f), has_name)
+}
+
+fn item_name_in(cat: Cat, id: u32) -> Option<(String, u32)> {
     // SAFETY: the singleton lives as long as the game; the SDK checks the file table's bounds.
     let msgs = unsafe { MsgRepository::instance() }.ok()?;
     let ids = if cat == Cat::Weapon { vec![id, id / 100 * 100, id / 10000 * 10000] } else { vec![id] };
@@ -219,7 +239,12 @@ pub fn item_name(cat: Cat, id: u32) -> Option<String> {
                 let end = text.iter().position(|c| *c == 0).unwrap_or(text.len()).min(80);
                 let name = String::from_utf16_lossy(&text[..end]);
                 if !name.trim().is_empty() && !name.contains("[ERROR]") {
-                    return Some(name.trim().to_string());
+                    if let Ok(mut proven) = NAME_FILES_PROVEN.lock() {
+                        if !proven.contains(file) {
+                            proven.push(*file);
+                        }
+                    }
+                    return Some((name.trim().to_string(), *file));
                 }
             }
         }
@@ -916,6 +941,14 @@ impl ErLoot {
     }
 }
 
+/// (ONLINEITEMS fix) Whether Elden Ring's own inventory shows this item (goods only can be hidden; other tables always show).
+fn shown_by_er(raw: u32) -> bool {
+    match cat_of_item_id(raw) {
+        Some(Cat::Goods) => crate::lootmap::listed_on_kh_screens(&describe(Cat::Goods, raw & 0x0FFF_FFFF)),
+        _ => true,
+    }
+}
+
 /// (HUD2) The key items that came since the last read: (item id, how many more). The first read, and a read where more
 /// than 4 items came at once (a load, another character), take the baseline only.
 fn key_gains(seen: &mut Option<HashMap<u32, u32>>, now: HashMap<u32, u32>) -> Vec<(u32, u32)> {
@@ -935,6 +968,9 @@ fn key_gains(seen: &mut Option<HashMap<u32, u32>>, now: HashMap<u32, u32>) -> Ve
 /// (HUD2) One Elden Ring key item as the Key Items tab lists it (name, caption, icon) by its item id.
 fn key_item_of(raw: u32) -> Option<KeyItem> {
     let cat = cat_of_item_id(raw)?;
+    if !shown_by_er(raw) {
+        return None; // (ONLINEITEMS fix) no popup for a row Elden Ring never shows
+    }
     let id = raw & 0x0FFF_FFFF;
     let name = item_name(cat, id).unwrap_or_else(|| format!("Elden Ring {} {id}", cat.name()));
     let text = item_text(cat, id);
@@ -966,7 +1002,7 @@ mod hud2_key_tests {
 }
 
 /// The local player's game data (the inventory lives in it).
-pub(crate) fn player_data() -> Option<&'static mut PlayerGameData> { // (SHOP) pub(crate): shopkh.rs converts held online items
+pub(crate) fn player_data() -> Option<&'static mut PlayerGameData> { // (SHOP) pub(crate)
     let player = crate::game::player_mut()?;
     if !crate::game::plausible(crate::word!(player.player_game_data)) {
         return None;
@@ -1010,6 +1046,10 @@ fn key_items(data: &PlayerGameData) -> Vec<KeyItem> {
     };
     let items = &data.equipment.equip_inventory_data.items_data;
     for entry in items.current_key_entries().iter().filter_map(|e| e.as_option()) {
+        // (ONLINEITEMS fix) a hidden row is not listed (Elden Ring's own inventory does not show it)
+        if !shown_by_er(entry.item_id.into_inner()) {
+            continue;
+        }
         add(&mut out, entry.item_id.into_inner(), entry.quantity);
         if out.len() >= 400 {
             return out;
@@ -1017,15 +1057,16 @@ fn key_items(data: &PlayerGameData) -> Vec<KeyItem> {
     }
     // (SHOP, the user 2026-10-23: "keep quest items only, and make them and all other quest items show up in the KH3
     // inventory menu") the goods of the NORMAL inventory that the mod leaves Elden Ring's (the gate passes them: tools
-    // such as the whistle and the lantern, the online items a quest needs, sheet sora-er-shop `online.quest_keep`,
-    // anything no rule names) are listed with the key items
+    // such as the whistle and the lantern, (ONLINEITEMS) every online item (the fingers, the effigies, the Furlcalling
+    // Finger Remedy ...: lootmap `online_item`), anything no rule names) are listed with the key items
     for entry in items.normal_entries().iter().filter_map(|e| e.as_option()) {
         let raw = entry.item_id.into_inner();
         if cat_of_item_id(raw) != Some(Cat::Goods) {
             continue;
         }
         let item = describe(Cat::Goods, raw & 0x0FFF_FFFF);
-        if !item.known || !matches!(rules().classify(&item, &ctx(Source::Unknown)).give, Give::Pass) {
+        // (ONLINEITEMS fix) never a row Elden Ring's own inventory hides (goods 166 and the like)
+        if !item.known || !crate::lootmap::listed_on_kh_screens(&item) || !matches!(rules().classify(&item, &ctx(Source::Unknown)).give, Give::Pass) {
             continue;
         }
         add(&mut out, raw, entry.quantity);
@@ -1238,38 +1279,6 @@ fn satisfy_check(decision: Decision, raw: u32) -> (Decision, Result<Option<Vec<u
     }
 }
 
-/// (SHOP-3) The context of the latest real give (see `give_hook`).
-static GATE_CTX: Mutex<Option<(usize, [u8; 12], i32)>> = Mutex::new(None);
-/// (SHOP-3) The last two fields of a real goods entry (unknown meaning: copied as the game gave them).
-static GATE_GOODS_AB: Mutex<Option<(i32, i32)>> = Mutex::new(None);
-
-/// (SHOP-3) Whether a real give was seen this session (the repair waits for one).
-pub(crate) fn can_give_er() -> bool {
-    GATE_ORIGINAL.load(Ordering::Relaxed) != 0 && GATE_CTX.lock().is_ok_and(|c| c.is_some()) && GATE_GOODS_AB.lock().is_ok_and(|c| c.is_some())
-}
-
-/// (SHOP-3) GIVES THE PLAYER AN ELDEN RING GOODS ITEM through the game's own give function (2.7.x RVA 0x561400 / 0x5618b0:
-/// rcx the item manager, rdx {count, entries}, r8 a 12-byte source block it reads, r9d), with the context of the latest
-/// real give of the session, past the gate (the original is called). Game thread only. UNTESTED IN THE GAME.
-pub(crate) fn give_er_goods(goods_id: u32, quantity: u32) -> Result<(), &'static str> {
-    let f = GATE_ORIGINAL.load(Ordering::Relaxed);
-    if f == 0 {
-        return Err("the item-give function is not detoured");
-    }
-    let Some((this, source, flag)) = GATE_CTX.lock().ok().and_then(|c| *c) else { return Err("no real give seen yet this session") };
-    let Some((a, b)) = GATE_GOODS_AB.lock().ok().and_then(|t| *t) else { return Err("no real goods give seen yet this session") };
-    let mut buffer = GiveBuffer { count: 1, entries: [GiveEntry { item: 0, quantity: 0, a: 0, b: 0 }; 10] };
-    buffer.entries[0] = GiveEntry { item: 0x4000_0000 | (goods_id & 0x0FFF_FFFF), quantity: quantity.clamp(1, 99), a, b };
-    let source = source;
-    let original: GiveFn = unsafe { std::mem::transmute(f) };
-    IN_GATE.store(true, Ordering::SeqCst);
-    // SAFETY: the game's own function (its trampoline), on the game's thread, with the item manager it was last called
-    // with, a buffer of its own layout and a copy of the source block a real call handed it.
-    unsafe { original(this, &buffer, source.as_ptr() as usize, flag) };
-    IN_GATE.store(false, Ordering::SeqCst);
-    Ok(())
-}
-
 /// THE GATE. Fail-safe at every step: a buffer that does not look like one, a second entry into the hook, an item
 /// that is not positively mapped: the call goes to the game unchanged.
 unsafe extern "C" fn give_hook(this: usize, buffer: *const GiveBuffer, out: usize, flag: i32) -> usize {
@@ -1279,26 +1288,6 @@ unsafe extern "C" fn give_hook(this: usize, buffer: *const GiveBuffer, out: usiz
         return original(this, buffer, out, flag);
     }
     GATE_CALLS.fetch_add(1, Ordering::Relaxed);
-    // (SHOP-3) the context of a real give (the item manager, the 12-byte source block it reads, its last argument): the
-    // repair gives an Elden Ring item back the same way (`give_er_goods`)
-    if crate::game::plausible(this) && crate::game::plausible(out) {
-        let mut source = [0u8; 12];
-        if crate::probe::read(out, &mut source) {
-            if let Ok(mut ctx) = GATE_CTX.lock() {
-                *ctx = Some((this, source, flag));
-            }
-            // a goods entry's own two last fields (the repair's entry copies them)
-            let n = (*buffer).count;
-            if (1..=10).contains(&n) {
-                let entries = &(*buffer).entries;
-                if let Some(e) = entries[..n as usize].iter().find(|e| e.item >> 28 == 4) {
-                    if let Ok(mut t) = GATE_GOODS_AB.lock() {
-                        *t = Some((e.a, e.b));
-                    }
-                }
-            }
-        }
-    }
     let count = (*buffer).count;
     let mut kept = GiveBuffer { count: 0, entries: [GiveEntry { item: 0, quantity: 0, a: 0, b: 0 }; 10] };
     let mut changed = false;

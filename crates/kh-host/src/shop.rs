@@ -15,7 +15,8 @@
 //!   classes outside `sell.classes`.
 //! - THE KILL MUNNY: `munny.kill_scale` (by the prize tier of the kill, 0 .. 2 by maximum HP) for an enemy whose row names a
 //!   rune value; `munny.boss_scale` for a kill whose row names none (a boss: the game awards its runes by its own event).
-//! - ELDEN RING'S ONLINE ITEMS: `online.sort_groups` (EquipParamGoods.sortGroupId of the game's "Multiplayer Items" group).
+//! - ELDEN RING'S ONLINE ITEMS: `online.sort_groups` (EquipParamGoods.sortGroupId of the game's "Multiplayer Items" group);
+//!   (ONLINEITEMS 2026-10-25) they stay Elden Ring's items (kh-er lootmap.rs `online_item`).
 //! - THE SMITHS: `smith.talk_ids` (talk scripts that open the game's reinforcement menu; generated from the game's own talk
 //!   scripts) and the talk-script numbers the host reads (`talk.commands`).
 //!
@@ -84,13 +85,8 @@ pub struct ShopRules {
     pub kill_scale: [f32; 3],
     /// Munny scale of a kill whose row names no rune value (a boss).
     pub boss_scale: f32,
+    /// (ONLINEITEMS) the "Multiplayer Items" sort groups: their goods stay Elden Ring's.
     pub online_groups: Vec<u8>,
-    /// (the user 2026-10-23: "keep quest items only") online items a quest needs (row `online.quest_keep`): kept.
-    pub quest_keep: Vec<u32>,
-    /// (SHOP-3, the user 2026-10-24: the chapel's exit waits on the Wizened Finger) row `online.wait_flags`: the kept
-    /// online items whose "obtained" flag an event / talk waits on, with the maps of their lots and whether one may be
-    /// given back (no event ever takes it away).
-    pub wait: Vec<WaitRow>,
     /// (SHOP-4, the user: zero progression blockers) row `required.keep`: items (event type, id: 0 weapon, 1 protector,
     /// 2 accessory, 3 goods, 4 gem) a script takes or counts: they stay Elden Ring's.
     pub required_keep: std::collections::HashSet<(u8, u32)>,
@@ -106,20 +102,8 @@ pub struct ShopRules {
 
 impl Default for ShopRules {
     fn default() -> ShopRules {
-        ShopRules { area_tier: vec![1], markup: vec![1.0], round: 10, stock: Vec::new(), sell_share: 0.25, kh_factor: 10.0, sell_min: 1, never_prefix: vec!["WEP_".to_string()], sell_classes: Vec::new(), kill_scale: [1.0; 3], boss_scale: 1.0, online_groups: Vec::new(), quest_keep: Vec::new(), wait: Vec::new(), required_keep: Default::default(), satisfy: Default::default(), smith_talks: Vec::new(), talk: TalkNumbers::default(), qty_max: 99, problems: Vec::new() }
+        ShopRules { area_tier: vec![1], markup: vec![1.0], round: 10, stock: Vec::new(), sell_share: 0.25, kh_factor: 10.0, sell_min: 1, never_prefix: vec!["WEP_".to_string()], sell_classes: Vec::new(), kill_scale: [1.0; 3], boss_scale: 1.0, online_groups: Vec::new(), required_keep: Default::default(), satisfy: Default::default(), smith_talks: Vec::new(), talk: TalkNumbers::default(), qty_max: 99, problems: Vec::new() }
     }
-}
-
-/// (SHOP-3) A kept online item something waits on (row `online.wait_flags`).
-#[derive(Clone, Debug, PartialEq)]
-pub struct WaitRow {
-    pub goods: u32,
-    /// The event flags that say it was obtained and that an event / talk waits on.
-    pub flags: Vec<u32>,
-    /// The maps (`mAA_BB_00_00`) its lot lies in, where an event of that map waits on it.
-    pub maps: Vec<String>,
-    /// No event ever takes it away: missing while obtained = the mod took it, it may be given back.
-    pub restore: bool,
 }
 
 /// (SHOP-4) An item whose "obtained" flag a script waits on (row `required.satisfy`).
@@ -150,14 +134,6 @@ impl SatisfyRow {
 pub fn item_key(text: &str) -> Option<(u8, u32)> {
     let (t, id) = text.split_once(':')?;
     Some((t.parse().ok()?, id.parse().ok()?))
-}
-
-impl WaitRow {
-    /// (SHOP-3) THE REPAIR'S RULE: give it back (and set its flags) when it may be restored, the player does not hold it,
-    /// and either one of its flags is on (he had it) or he stands in a map its lot lies in (that map waits on it).
-    pub fn restore_due(&self, held: bool, flag_on: &dyn Fn(u32) -> bool, map_now: &str) -> bool {
-        self.restore && !held && (self.flags.iter().any(|f| flag_on(*f)) || self.maps.iter().any(|m| m == map_now))
-    }
 }
 
 /// Why a trade cannot be made.
@@ -225,7 +201,6 @@ impl ShopRules {
             out.problems.push("the sheet is not JSON".to_string());
             return out;
         };
-        let mut keep2: Option<Vec<u32>> = None;
         let floats = |v: &serde_json::Value| v.as_array().map(|a| a.iter().filter_map(|x| x.as_f64().map(|n| n as f32)).collect::<Vec<_>>()).unwrap_or_default();
         let strings = |v: &serde_json::Value| v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>()).unwrap_or_default();
         for row in json["rows"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
@@ -261,16 +236,6 @@ impl ShopRules {
                         out.satisfy.insert(key, SatisfyRow { flags, waited, local });
                     }
                 }
-                "online.quest_keep2" => keep2 = Some(value.as_array().map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as u32)).collect()).unwrap_or_default()),
-                "online.quest_keep" => out.quest_keep = value.as_array().map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as u32)).collect()).unwrap_or_default(),
-                "online.wait_flags" => {
-                    for (k, v) in value.as_object().into_iter().flatten() {
-                        let Ok(goods) = k.parse::<u32>() else { continue };
-                        let flags = v["flags"].as_array().map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as u32)).collect()).unwrap_or_default();
-                        let maps = v["maps"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
-                        out.wait.push(WaitRow { goods, flags, maps, restore: v["restore"].as_bool() == Some(true) });
-                    }
-                }
                 "smith.talk_ids" => out.smith_talks = value.as_array().map(|a| a.iter().filter_map(|x| x.as_i64().map(|n| n as i32)).collect()).unwrap_or_default(),
                 "talk.commands" => {
                     let n = |k: &str, d: i32| value[k].as_i64().map_or(d, |v| v as i32);
@@ -287,10 +252,6 @@ impl ShopRules {
                 }
                 _ => {}
             }
-        }
-        // (SHOP-4) the new build's list (online.quest_keep stays the deployed build's)
-        if let Some(k) = keep2 {
-            out.quest_keep = k;
         }
         if out.area_tier.is_empty() {
             out.problems.push("shop.area_tier is empty".to_string());
@@ -395,31 +356,11 @@ impl ShopRules {
         self.online_groups.contains(&sort_group)
     }
 
-    /// An online item a quest needs (kept as Elden Ring's: never converted).
-    pub fn is_quest_online(&self, goods_id: u32) -> bool {
-        self.quest_keep.contains(&goods_id)
-    }
-
     /// A talk script that opens the game's reinforcement menu (a smith).
     pub fn is_smith_talk(&self, talk_id: i32) -> bool {
         self.smith_talks.contains(&talk_id)
     }
 
-    /// (online items) THE KH CONSUMABLE IN AN ONLINE ITEM'S PLACE: one of what a merchant of this tier sells, the same one
-    /// for the same Elden Ring item (`seed` = its id), so that every tier gives its own kind of thing.
-    pub fn replacement(&self, tier: u8, seed: u32) -> Option<Offer> {
-        let offers = self.stock_for(tier);
-        if offers.is_empty() {
-            return None;
-        }
-        // FNV-1a of the id: neighbouring ids spread over the list
-        let mut h: u32 = 0x811C_9DC5;
-        for b in seed.to_le_bytes() {
-            h ^= b as u32;
-            h = h.wrapping_mul(0x0100_0193);
-        }
-        offers.get((h >> 8) as usize % offers.len()).cloned()
-    }
 }
 
 static RULES: OnceLock<ShopRules> = OnceLock::new();
@@ -534,33 +475,25 @@ mod tests {
         assert!(r.boss_scale >= 1.0, "bosses keep their reward");
     }
 
-    /// AN ONLINE ITEM'S REPLACEMENT: one of the area's stock, the same for the same item, different items spread.
+    /// (ONLINEITEMS) The online group is read (its items stay Elden Ring's: kh-er lootmap); the script-required rows of SHOP-4
+    /// stand for the items the gate still converts.
     #[test]
-    fn shop_online_items_become_the_areas_consumables() {
+    fn shop_online_group_and_the_script_required_rows() {
         let r = sheet();
         assert!(r.is_online_group(120) && !r.is_online_group(10));
-        // (the user: "keep quest items only") Varré's Bloody Finger and Festering Bloody Finger, found in the game's scripts
-        assert!(r.is_quest_online(102) && r.is_quest_online(111) && !r.is_quest_online(100) && !r.is_quest_online(150));
-        // (SHOP-4) THE CHAPEL: its exit (m10_01 event 10012504) waits on flag 60210, the Wizened Finger's pickup flag: the finger
-        // is NOT kept any more (the user: "remove the item requirement"): converted, and the flag of its pickup set
-        assert!(!r.is_quest_online(106), "the finger is satisfied, not kept");
-        let chapel = r.satisfy.get(&(3, 106)).expect("the chapel's row");
+        // (SHOP-4) the satisfy rule of the gate (applies to converted items only; an online item is never converted)
+        let chapel = r.satisfy.get(&(3, 106)).expect("the scan's row of the chapel's finger");
         assert_eq!(chapel.pickup_flags("m10_01_00_00"), Some(vec![60210]));
-        assert_eq!(chapel.local, vec![(60210, "m10_01_00_00".to_string())]);
         // an item a script takes or counts stays Elden Ring's; an ambiguous pickup cannot be satisfied
         assert!(r.required_keep.contains(&(0, 2_540_000)), "the Stone-Sheathed Sword (an event takes it)");
         assert!(r.required_keep.len() > 100 && r.satisfy.len() > 100);
         let two = SatisfyRow { flags: vec![(1, Some("m10_00_00_00".into())), (2, Some("m10_00_00_00".into()))], ..SatisfyRow::default() };
         assert_eq!(two.pickup_flags("m10_00_00_00"), None, "two lots of it here: cannot be told");
         assert_eq!(SatisfyRow { flags: vec![(5, None)], ..SatisfyRow::default() }.pickup_flags("m60_42_36_00"), Some(vec![5]), "its only flag");
-        let off = |_: u32| false;
-        let varre = r.wait.iter().find(|w| w.goods == 102).unwrap();
-        assert!(!varre.restore_due(false, &off, "m10_01_00_00"), "Varré's finger is never given before he gives it");
-        let a = r.replacement(1, 100).unwrap();
-        assert_eq!(r.replacement(1, 100), Some(a.clone()), "stable");
-        assert!(r.stock_for(1).iter().any(|o| o.key == a.key));
-        let kinds: std::collections::HashSet<String> = (100..115).filter_map(|id| r.replacement(1, id)).map(|o| o.key).collect();
-        assert!(kinds.len() >= 2, "{kinds:?}");
-        assert!(r.replacement(r.top_tier(), 100).is_some());
+        // the retired rows of the online conversion are gone from the sheet
+        for gone in ["online.quest_keep", "online.quest_keep2", "online.wait_flags"] {
+            assert!(!SHEET.contains(&format!("\"{gone}\"")), "{gone}");
+        }
+        assert!(r.problems.is_empty(), "{:?}", r.problems);
     }
 }
