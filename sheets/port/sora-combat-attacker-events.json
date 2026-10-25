@@ -1,0 +1,10 @@
+{"sheet":"sora-combat-attacker-events","group":"port","columns":["id","when","action","ref_addr","ref_conf"],"rows":[
+["gain_01","contact (result != NONE)","pawn+0x6C8 = ImpactPoint","0x1405B2710","confirmed"],
+["gain_02","contact, attacker result REFLECT / GUARD_REFLECT / GUARD","Attack state recoil record: +0x264 |= 1, +0x268 = result, +0x270 = victim (map hit: only combo 0, no target)","0x141341B10","inferred"],
+["gain_03","contact, other results","pawn+0xE24 += 1; pawn+0xE28 = 1; state+0x13C |= 4; state+0x234 |= 0x2000; revenge-chase arming for kinds 0x21 / 0x23 / 0x24 / 0x25","0x141341B10","inferred"],
+["gain_04","contact, just-guard attack","spawn pawn+0x1540 effect at the impact","0x1414471A0","confirmed"],
+["gain_05","victim lost HP","AddStylePoint((float)m_FormPoint, 1, commandKind)","0x141442DE0","confirmed"],
+["gain_06","victim lost HP, ctrl+0xA08 bit 1","target HP gauge refresh 0x14158A860","0x141442DE0","confirmed"],
+["gain_07","victim lost HP or not","AddFocus(MyFocusPointAddHit) when > 0 (0 for Sora)","0x141442DE0","confirmed"],
+["gain_08","never","hit-stop, camera shake, force feedback","-","confirmed"]
+]}

@@ -1,0 +1,12 @@
+[package]
+name = "kh-ui"
+description = "A small Scaleform GFx timeline player for KH3's HUD movies, engine-free (glam, serde_json, png and std only): reads build/sora_pack/ui, evaluates display lists, rasterises them in software, and ports the AS3 interface methods of HudStatus / HudCommand / HudTarget / HudLeft / HudRight that the game's native side calls. docs/sora-ui-spec.md."
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+kh-gendata = { path = "../kh-gendata" }
+glam = { workspace = true }
+# The pack is JSON (movies, fonts, strings) and PNG (textures); both crates are in the tree through Bevy already.
+serde_json = "1"
+png = "0.18"

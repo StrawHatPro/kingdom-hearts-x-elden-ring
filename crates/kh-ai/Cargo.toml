@@ -1,0 +1,10 @@
+[package]
+name = "kh-ai"
+description = "Donald's and Goofy's AI, engine-free (glam, serde_json and std only): a UE 4.17 behaviour-tree / blackboard / EQS runtime with the Square Enix node classes the friends' trees use, the friend AI controller (combat styles, ability / recovery settings, target selection, follow / formation, warp, cure / item choice) and a navigation stand-in. Runs the game's own trees from build/sora_pack/party/ai (tools/party_ai_pack.js). docs/party-port-plan.md stream C, docs/party-contracts.md section C."
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+glam = { workspace = true }
+# The AI pack (trees, blackboards, EQS queries, action definitions, tables) is JSON.
+serde_json = "1"

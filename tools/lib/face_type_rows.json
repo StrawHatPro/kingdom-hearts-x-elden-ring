@@ -1,0 +1,736 @@
+{
+ "source": "FUN_14056D3E0 (decompiled C: string constants per case of the switch on ETresFaceAnimType); two names = [in battle, otherwise]",
+ "rows": {
+  "NORMAL_AUTO": {
+   "value": 0,
+   "names": [
+    "NO_0"
+   ],
+   "note": "the default case (docs/sora-animation-spec.md Face: NORMAL_AUTO plays NO_0)"
+  },
+  "NORMAL_AUTO_IDLE_BATTLE": {
+   "value": 1,
+   "names": [
+    "BA_3",
+    "BA_00"
+   ]
+  },
+  "NORMAL_AUTO_BATTLE_IDLE": {
+   "value": 2,
+   "names": [
+    "NO_0",
+    "BA_4"
+   ]
+  },
+  "NORMAL": {
+   "value": 3,
+   "names": [
+    "NO_0"
+   ]
+  },
+  "NO_1": {
+   "value": 4,
+   "names": [
+    "NO_1"
+   ]
+  },
+  "NO_2": {
+   "value": 5,
+   "names": [
+    "NO_2"
+   ]
+  },
+  "NO_3": {
+   "value": 6,
+   "names": [
+    "NO_3"
+   ]
+  },
+  "NO_4": {
+   "value": 7,
+   "names": [
+    "NO_4"
+   ]
+  },
+  "BATTLE": {
+   "value": 8,
+   "names": [
+    "BA_0"
+   ]
+  },
+  "BATTLE_SINGLE": {
+   "value": 9,
+   "names": [
+    "BA_00"
+   ]
+  },
+  "BA_1": {
+   "value": 10,
+   "names": [
+    "BA_1"
+   ]
+  },
+  "DAMAGE": {
+   "value": 11,
+   "names": [
+    "DA_0"
+   ]
+  },
+  "DMG_LOOP": {
+   "value": 12,
+   "names": [
+    "DA_1"
+   ]
+  },
+  "DMG_END": {
+   "value": 13,
+   "names": [
+    "DA_2"
+   ]
+  },
+  "MAGIC_AUTO_IDLE_BATTLE": {
+   "value": 14,
+   "names": [
+    "BA_14",
+    "NO_8"
+   ]
+  },
+  "MAGIC2_AUTO_IDLE_BATTLE": {
+   "value": 15,
+   "names": [
+    "BA_1",
+    "NO_8"
+   ]
+  },
+  "USEITEM_AUTO_IDLE_BATTLE": {
+   "value": 16,
+   "names": [
+    "BA_13",
+    "NO_8"
+   ]
+  },
+  "NORMAL_AUTO_01": {
+   "value": 17,
+   "names": [
+    "BA_0",
+    "NO_0"
+   ]
+  },
+  "SA_FREEZE_0": {
+   "value": 18,
+   "names": [
+    "SA_Freeze_0"
+   ]
+  },
+  "SA_BARN_0": {
+   "value": 19,
+   "names": [
+    "SA_Barn_0"
+   ]
+  },
+  "SA_OIL_0": {
+   "value": 20,
+   "names": [
+    "SA_Oil_0"
+   ]
+  },
+  "SA_STEAM_0": {
+   "value": 21,
+   "names": [
+    "SA_Steam_0"
+   ]
+  },
+  "SA_THUNDER_0": {
+   "value": 22,
+   "names": [
+    "SA_Thunder_0"
+   ]
+  },
+  "AF_RC_0": {
+   "value": 23,
+   "names": [
+    "AF_RC_0"
+   ]
+  },
+  "AF_VS_0": {
+   "value": 24,
+   "names": [
+    "AF_VS_0"
+   ]
+  },
+  "AF_TC_0": {
+   "value": 25,
+   "names": [
+    "AF_TC_0"
+   ]
+  },
+  "WEP_BS_0": {
+   "value": 26,
+   "names": [
+    "WEP_BS_0"
+   ]
+  },
+  "WEP_GUN_0": {
+   "value": 27,
+   "names": [
+    "WEP_GUN_0"
+   ]
+  },
+  "WEP_SD_0": {
+   "value": 28,
+   "names": [
+    "WEP_SD_0"
+   ]
+  },
+  "NORMAL_AUTO_EF01": {
+   "value": 29,
+   "names": [
+    "BA_67",
+    "NO_27"
+   ]
+  },
+  "NORMAL_AUTO_EU01": {
+   "value": 30,
+   "names": [
+    "BA_60",
+    "NO_20"
+   ]
+  },
+  "NORMAL_AUTO_ED01": {
+   "value": 31,
+   "names": [
+    "BA_61",
+    "NO_21"
+   ]
+  },
+  "NORMAL_AUTO_ED02": {
+   "value": 32,
+   "names": [
+    "BA_62",
+    "NO_23"
+   ]
+  },
+  "NORMAL_AUTO_ER01": {
+   "value": 33,
+   "names": [
+    "BA_65",
+    "NO_25"
+   ]
+  },
+  "NORMAL_AUTO_EL01": {
+   "value": 34,
+   "names": [
+    "BA_66",
+    "NO_26"
+   ]
+  },
+  "MOUTH_OPEN_01": {
+   "value": 35,
+   "names": [
+    "BA_50",
+    "NO_50"
+   ]
+  },
+  "MOUTH_OPEN_02": {
+   "value": 36,
+   "names": [
+    "BA_51",
+    "NO_51"
+   ]
+  },
+  "MOUTH_OPEN_03": {
+   "value": 37,
+   "names": [
+    "BA_52",
+    "NO_52"
+   ]
+  },
+  "MOUTH_OPEN_04": {
+   "value": 38,
+   "names": [
+    "BA_53",
+    "NO_53"
+   ]
+  },
+  "MOUTH_OPEN_05": {
+   "value": 39,
+   "names": [
+    "BA_54",
+    "NO_54"
+   ]
+  },
+  "TIPBALANCE_AUTO_R01": {
+   "value": 40,
+   "names": [
+    "BA_8",
+    "NO_8"
+   ]
+  },
+  "TIPBALANCE_AUTO_L01": {
+   "value": 41,
+   "names": [
+    "BA_9",
+    "NO_9"
+   ]
+  },
+  "RAILSLIDE_AUTO01": {
+   "value": 42,
+   "names": [
+    "BA_71",
+    "NO_61"
+   ]
+  },
+  "RAILSLIDE_AUTO02": {
+   "value": 43,
+   "names": [
+    "BA_72",
+    "NO_62"
+   ]
+  },
+  "PLEASURE_EYE00": {
+   "value": 44,
+   "names": [
+    "NO_100"
+   ]
+  },
+  "PLEASURE_EYE01": {
+   "value": 45,
+   "names": [
+    "NO_101"
+   ]
+  },
+  "PLEASURE_EYE02": {
+   "value": 46,
+   "names": [
+    "NO_102"
+   ]
+  },
+  "PREASURE_LIP00": {
+   "value": 47,
+   "names": [
+    "NO_100"
+   ]
+  },
+  "PREASURE_LIP01": {
+   "value": 48,
+   "names": [
+    "NO_102"
+   ]
+  },
+  "PREASURE_LIP02": {
+   "value": 49,
+   "names": [
+    "NO_103"
+   ]
+  },
+  "SURPRISE_EYE00": {
+   "value": 50,
+   "names": [
+    "NO_110"
+   ]
+  },
+  "SURPRISE_EYE01": {
+   "value": 51,
+   "names": [
+    "NO_111"
+   ]
+  },
+  "SURPRISE_LIP00": {
+   "value": 52,
+   "names": [
+    "NO_110"
+   ]
+  },
+  "SURPRISE_LIP01": {
+   "value": 53,
+   "names": [
+    "NO_112"
+   ]
+  },
+  "EMOTION_NO300": {
+   "value": 54,
+   "names": [
+    "NO_300"
+   ]
+  },
+  "EMOTION_NO301": {
+   "value": 55,
+   "names": [
+    "NO_301"
+   ]
+  },
+  "EMOTION_NO302": {
+   "value": 56,
+   "names": [
+    "NO_302"
+   ]
+  },
+  "EMOTION_NO350": {
+   "value": 57,
+   "names": [
+    "NO_350"
+   ]
+  },
+  "EMOTION_NO351": {
+   "value": 58,
+   "names": [
+    "NO_351"
+   ]
+  },
+  "EMOTION_NO352": {
+   "value": 59,
+   "names": [
+    "NO_352"
+   ]
+  },
+  "EMOTION_NO354": {
+   "value": 60,
+   "names": [
+    "NO_354"
+   ]
+  },
+  "EMOTION_NO400": {
+   "value": 61,
+   "names": [
+    "NO_400"
+   ]
+  },
+  "EMOTION_NO401": {
+   "value": 62,
+   "names": [
+    "NO_401"
+   ]
+  },
+  "EMOTION_NO450": {
+   "value": 63,
+   "names": [
+    "NO_450"
+   ]
+  },
+  "EMOTION_NO451": {
+   "value": 64,
+   "names": [
+    "NO_451"
+   ]
+  },
+  "EMOTION_NO452": {
+   "value": 65,
+   "names": [
+    "NO_452"
+   ]
+  },
+  "EMOTION_NO500": {
+   "value": 66,
+   "names": [
+    "NO_500"
+   ]
+  },
+  "EMOTION_NO501": {
+   "value": 67,
+   "names": [
+    "NO_501"
+   ]
+  },
+  "EMOTION_NO502": {
+   "value": 68,
+   "names": [
+    "NO_502"
+   ]
+  },
+  "NORMAL_AUTO_EC01": {
+   "value": 69,
+   "names": [
+    "BA_10",
+    "NO_1"
+   ]
+  },
+  "EMOTION_TA_DE_E_00": {
+   "value": 70,
+   "names": [
+    "TA_DE_E_00"
+   ]
+  },
+  "EMOTION_TA_DE_E_01": {
+   "value": 71,
+   "names": [
+    "TA_DE_E_01"
+   ]
+  },
+  "EMOTION_TA_DE_E_02": {
+   "value": 72,
+   "names": [
+    "TA_DE_E_02"
+   ]
+  },
+  "EMOTION_TA_DE_E_03": {
+   "value": 73,
+   "names": [
+    "TA_DE_E_03"
+   ]
+  },
+  "EMOTION_TA_DE_E_04": {
+   "value": 74,
+   "names": [
+    "TA_DE_E_04"
+   ]
+  },
+  "EMOTION_TA_DE_E_05": {
+   "value": 75,
+   "names": [
+    "TA_DE_E_05"
+   ]
+  },
+  "EMOTION_TA_DE_E_06": {
+   "value": 76,
+   "names": [
+    "TA_DE_E_06"
+   ]
+  },
+  "EMOTION_TA_DE_E_07": {
+   "value": 77,
+   "names": [
+    "TA_DE_E_07"
+   ]
+  },
+  "EMOTION_TA_DE_E_08": {
+   "value": 78,
+   "names": [
+    "TA_DE_E_08"
+   ]
+  },
+  "EMOTION_TA_DE_E_09": {
+   "value": 79,
+   "names": [
+    "TA_DE_E_09"
+   ]
+  },
+  "EMOTION_TA_DE_E_10": {
+   "value": 80,
+   "names": [
+    "TA_DE_E_10"
+   ]
+  },
+  "EMOTION_TA_DE_E_11": {
+   "value": 81,
+   "names": [
+    "TA_DE_E_11"
+   ]
+  },
+  "EMOTION_TA_DE_E_12": {
+   "value": 82,
+   "names": [
+    "TA_DE_E_12"
+   ]
+  },
+  "EMOTION_TA_DE_M_00": {
+   "value": 83,
+   "names": [
+    "TA_DE_M_00"
+   ]
+  },
+  "EMOTION_TA_DE_M_01": {
+   "value": 84,
+   "names": [
+    "TA_DE_M_01"
+   ]
+  },
+  "EMOTION_TA_DE_M_02": {
+   "value": 85,
+   "names": [
+    "TA_DE_M_02"
+   ]
+  },
+  "EMOTION_TA_DE_M_03": {
+   "value": 86,
+   "names": [
+    "TA_DE_M_03"
+   ]
+  },
+  "EMOTION_TA_SM_E_00": {
+   "value": 87,
+   "names": [
+    "TA_SM_E_00"
+   ]
+  },
+  "EMOTION_TA_SM_E_01": {
+   "value": 88,
+   "names": [
+    "TA_SM_E_01"
+   ]
+  },
+  "EMOTION_TA_SM_E_02": {
+   "value": 89,
+   "names": [
+    "TA_SM_E_02"
+   ]
+  },
+  "EMOTION_TA_SM_E_03": {
+   "value": 90,
+   "names": [
+    "TA_SM_E_03"
+   ]
+  },
+  "EMOTION_TA_SM_M_00": {
+   "value": 91,
+   "names": [
+    "TA_SM_M_00"
+   ]
+  },
+  "EMOTION_TA_SM_M_01": {
+   "value": 92,
+   "names": [
+    "TA_SM_M_01"
+   ]
+  },
+  "EMOTION_TA_SM_M_02": {
+   "value": 93,
+   "names": [
+    "TA_SM_M_02"
+   ]
+  },
+  "EMOTION_TA_SM_M_03": {
+   "value": 94,
+   "names": [
+    "TA_SM_M_03"
+   ]
+  },
+  "EMOTION_TA_AN_E_00": {
+   "value": 95,
+   "names": [
+    "TA_AN_E_00"
+   ]
+  },
+  "EMOTION_TA_AN_E_01": {
+   "value": 96,
+   "names": [
+    "TA_AN_E_01"
+   ]
+  },
+  "EMOTION_TA_AN_E_02": {
+   "value": 97,
+   "names": [
+    "TA_AN_E_02"
+   ]
+  },
+  "EMOTION_TA_AN_E_20": {
+   "value": 98,
+   "names": [
+    "TA_AN_E_20"
+   ]
+  },
+  "EMOTION_TA_AN_M_00": {
+   "value": 99,
+   "names": [
+    "TA_AN_M_00"
+   ]
+  },
+  "EMOTION_TA_AN_M_01": {
+   "value": 100,
+   "names": [
+    "TA_AN_M_01"
+   ]
+  },
+  "EMOTION_TA_AN_M_02": {
+   "value": 101,
+   "names": [
+    "TA_AN_M_02"
+   ]
+  },
+  "EMOTION_TA_AN_M_03": {
+   "value": 102,
+   "names": [
+    "TA_AN_M_03"
+   ]
+  },
+  "EMOTION_TA_SA_E_00": {
+   "value": 103,
+   "names": [
+    "TA_SA_E_00"
+   ]
+  },
+  "EMOTION_TA_SA_E_01": {
+   "value": 104,
+   "names": [
+    "TA_SA_E_01"
+   ]
+  },
+  "EMOTION_TA_SA_E_02": {
+   "value": 105,
+   "names": [
+    "TA_SA_E_02"
+   ]
+  },
+  "EMOTION_TA_SA_E_03": {
+   "value": 106,
+   "names": [
+    "TA_SA_E_03"
+   ]
+  },
+  "EMOTION_TA_SA_E_04": {
+   "value": 107,
+   "names": [
+    "TA_SA_E_04"
+   ]
+  },
+  "EMOTION_TA_SA_E_20": {
+   "value": 108,
+   "names": [
+    "TA_SA_E_20"
+   ]
+  },
+  "EMOTION_TA_SA_M_00": {
+   "value": 109,
+   "names": [
+    "TA_SA_M_00"
+   ]
+  },
+  "EMOTION_TA_SA_M_01": {
+   "value": 110,
+   "names": [
+    "TA_SA_M_01"
+   ]
+  },
+  "EMOTION_TA_SA_M_02": {
+   "value": 111,
+   "names": [
+    "TA_SA_M_02"
+   ]
+  },
+  "EMOTION_TA_SU_E_00": {
+   "value": 112,
+   "names": [
+    "TA_SU_E_00"
+   ]
+  },
+  "EMOTION_TA_SU_E_01": {
+   "value": 113,
+   "names": [
+    "TA_SU_E_01"
+   ]
+  },
+  "EMOTION_TA_SU_E_02": {
+   "value": 114,
+   "names": [
+    "TA_SU_E_02"
+   ]
+  },
+  "EMOTION_TA_SU_E_20": {
+   "value": 115,
+   "names": [
+    "TA_SU_E_20"
+   ]
+  },
+  "EMOTION_TA_SU_M_00": {
+   "value": 116,
+   "names": [
+    "TA_SU_M_00"
+   ]
+  },
+  "EMOTION_TA_SU_M_02": {
+   "value": 117,
+   "names": [
+    "TA_SU_M_02"
+   ]
+  }
+ }
+}

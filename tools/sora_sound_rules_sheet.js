@@ -1,0 +1,112 @@
+// Writes sheets/port/sora-sound-rules.json: the constants of the SEAD playback model as far as the player character needs it
+// (docs/sora-audio-spec.md). Authored rows: every value was read from base/KH3.exe (the SEAD driver SQEX::Sd, the UE plugin
+// SQEXSEAD, TresGame), from the SEAD configuration in WindowsEngine.ini, or from a converted asset; the row says which.
+// Unknown values are null, never guessed.
+//
+//   node tools/sora_sound_rules_sheet.js          write the sheet
+//   node tools/sora_sound_rules_sheet.js --check  exit 1 if the sheet on disk differs from the rows below
+//
+// ref_conf: confirmed = read at instruction level, or in the config / a converted asset;
+//           inferred  = decompiled C only (the function's verdict is in the evidence), or stock UE 4.17 behaviour.
+const fs = require('fs'), path = require('path');
+const VERSION = '1.1.0';
+const R = path.resolve(__dirname, '..');
+const C = 'confirmed', I = 'inferred', G = 'guess';
+const CFG = 'assets/KINGDOM HEARTS III/Config/Windows/WindowsEngine.ini [SQEXSEAD] ConfigString (tools/lib/sead_config.js)';
+const DET = 'assets_converted/packages/KINGDOM HEARTS III/Content/Sound/SE/_Data/MASTS/DetectioinSetting_Sora.uasset.json';
+// id, value, unit, source, evidence, ref_addr, ref_conf, note
+const rows = [
+// ---- decoding
+['codec.hca_samples_per_frame', 1024, 'count', 'CRI HCA 2.0 frame: 8 sub-frames of 128 samples', 'tools/lib/hca.js; all 8,371,878 frames of the game decode with a valid CRC (audit/sead_decode_summary.json)', '0x140045890', I, 'window and overlap-add function read as decompiled C'],
+['codec.obfuscation_key_table', '0x1487BA470', '-', 'SEAD stream reader 0x145986E00, HCA branch', 'plain[i] = table[(seed + i) & 255] ^ stored[i], seed = byte 28 of the material header; after the XOR every frame of the 11,568 obfuscated materials passes its CRC', '0x145986E00', C, 'confirmed on the data; the code was read as decompiled C'],
+['codec.sample_rate', 48000, 'Hz', 'material headers of the packed banks', 'every packed material (build/sora_pack/audio/manifest.json)', '-', C, '22 materials elsewhere in the game are 44100 Hz'],
+// ---- what plays when a sound index is started (driver SQEX::Sd)
+['select.random_roll_modulus', 101, 'count', 'RandomSound start 0x145983E10: r = rand() % 101', 'first weighted group with r <= running weight sum; a repeat of the last pick is replaced by the heaviest other group unless sound flag 0x20', '0x145983E10', C, 'instruction level per the bank research pass; CRT rand(), seeded once from the clock at SeadUpdate thread start (0x14594C2B0)'],
+['select.order_cursor_start', 0, 'index', 'OrderSound start 0x1459845C0: cursor = byte snd+1 of the loaded bank (0xFF in the file -> 0)', 'round robin over the non-fixed groups; the cursor is shared by all instances of the sound and survives until the bank is unloaded', '0x1459845C0', I, 'decompiled C; Sora\'s footsteps are OrderSounds (8 groups per surface and motion in most banks)'],
+['select.wait_random', 'min + rand() % (max - min + 1)', 'ms', 'sequence opcode 5 in 0x145982A40', 'sequence command waitRandom', '0x145982A40', C, 'instruction level per the bank research pass'],
+['track.random_value', 'min + (rand() % 1000) * 0.001 * (max - min)', 'ratio', 'track opcodes 7-10 in 0x1459B0450', 'mode 1 adds the value, mode 2 multiplies; drawn once at key-on', '0x1459B0450', I, 'decompiled C'],
+['voice.volume_clamp', [0, 1], 'ratio', 'Voice setVolume 0x145989D20', 'final linear volume', '0x145989D20', I, 'decompiled C'],
+['voice.pitch_clamp', [0.001953125, 2], 'ratio', 'Voice setPitch 0x145989BA0', 'pitch is a frequency ratio, clamped to 1/512 .. 2', '0x145989BA0', I, 'decompiled C'],
+['curve.shapes', ['t', '1-(1-t^2)^3', '1-(1-t)^2', 't^2', '2^t-1', '2-2^(1-t)'], '-', 'curve evaluation 0x14596A9C0, curve numbers 0..5', 'used by every fade and zero-one point', '0x14596A9C0', I, 'decompiled C'],
+['zeroone.aux_send_db_to_linear', 0.115129255, '1/dB', 'sequence update 0x1459831D0: exp(x * 0.115129255)', 'aux-send zero-one curves are in dB', '0x1459831D0', I, 'decompiled C'],
+['pool.se', 52, 'count', CFG + ' ctgr entry 10 "SE"', 'instance pool shared by SE_action 21, SE_weapon 22, SE_magic 23, SE_footstep 30, SE_cloth 31 and the other SE_* categories', '0x14596E140', C, 'config value; pool handling read as decompiled C: when full the lowest-priority sound (oldest on ties) is stopped unless the new one has lower priority, which is then dropped'],
+['pool.voice', 12, 'count', CFG + ' ctgr entry 3 "VOICE"', 'shared by Vo_event 101 .. Vo_BattleBOSS 105', '0x14596E140', C, 'as pool.se'],
+['pool.se_system2', 8, 'count', CFG + ' ctgr entry 12', 'own pool', '0x14596E140', C, '-'],
+['macro.same_sound_window_1', 0.067, 's', CFG + ' mcr entry 1', 'start macro 1: cancel the new sound when the same sound (bank number, sound number) started at most this long ago; macros 3 / 5 / 7 the same with 0.133 / 0.266 / 0.533 s', '0x145976BA0', C, 'config value; interpreter read as decompiled C; the filter operand is taken as seconds since start (inferred)'],
+['macro.restart_fade', 0.05, 's', CFG + ' mcr entries 2, 4, 6, 8, 11', 'older copies of the same sound are stopped with this fade', '0x145976BA0', C, '-'],
+['macro.battle_voice_fade', 0.066, 's', CFG + ' mcr entries 106, 110', 'battle voice of the same character bank: same line playing -> cancel; higher-priority line playing -> cancel; else stop the other with this fade', '0x145976BA0', C, 'Sora\'s battle voices use start macro 106 or 110 (manifest sounds[].macro_start)'],
+// ---- UE plugin: volume and placement
+['asset.volume_default', null, 'ratio', 'USQEXSEADSound / USoundWave Volume when the property is not serialized', 'most footstep and weapon assets do not store Volume', '-', G, 'stock USoundWave default is 1.0; the SQEXSEADSound constructor 0x14580BC90 was not checked for this field'],
+['asset.stop_fade_time_default', 0.5, 's', 'USQEXSEADSound ctor 0x14580BC90', 'used by Stop only when bOverrideStopFadeTime is set, else the fade is 0', '0x14580BC90', I, 'decompiled C (verdict same)'],
+['asset.looping_marker_duration', 10000, 's', 'USQEXSEADAnimNotify_PlaySound::Notify 0x145815C90', 'a sound asset with Duration == 10000 is a loop; the one-shot notify refuses it', '0x145815C90', I, 'decompiled C (verdict differs)'],
+['volume.product', 'ActiveSound.VolumeMultiplier * asset Volume * ParseParams.Volume * AudioDevice[+0xB4]', '-', 'USQEXSEADSound::Parse 0x145819CD0', 'the volume handed to SEAD; sound class volume, UE distance attenuation and concurrency ducking are not in it', '0x145819CD0', I, 'decompiled C (verdict differs); AudioDevice+0xB4 not identified'],
+['spatial.rule', '3D iff the wave instance uses spatialization and is neither a UI sound nor music', '-', 'sound source Init 0x145814480, test at 0x1458146A1', 'a sound asset without AttenuationSettings is 2D', '0x145814480', C, 'instruction level per the plugin research pass'],
+['attenuation.inner_radius', 400, 'cm', 'AttenuationShapeExtents.X of the SoundAttenuation asset; Sora\'s attenuation assets store only bAttenuate=false, so the stock default applies', 'full volume within this distance of the listener', '0x14598B5F0', I, 'stock UE 4.17 default; passed to SEAD at 0x145814735'],
+['attenuation.max_distance', 4000, 'cm', 'AttenuationShapeExtents.X + FalloffDistance (400 + 3600, stock defaults)', 'volume 0 at and beyond this distance', '0x14598B5F0', I, 'as attenuation.inner_radius'],
+['attenuation.falloff', 't = d <= inner ? 1 : max(0, (max - d) / (max - inner)); volume = curve[n](t)', '-', 'Lay sound update 0x14598B5F0; curve number = bank sound header byte +0x21 (0 = linear on Sora\'s footstep and cloth banks)', 'SEAD attenuates; UE does not (bAttenuate=false on every attenuation asset Sora\'s sounds use)', '0x14598B5F0', I, 'decompiled C (verdict same-partial); config curve 1 is 10^((1-t) * -4.8)'],
+['attenuation.doppler', 0, 'ratio', 'parameter block built at 0x145814735..0x145814802', 'no doppler', '0x145814480', C, 'instruction level per the plugin research pass'],
+['attenuation.distance_rate_lowpass', [1, 0.3], 'ratio', 'zero-one "zeroone_distance_rate" -> lowpass in the sequences of the bank (most of Sora\'s 3D sounds)', 'low-pass factor from 1.0 at the listener to 0.3 at max distance (first point curve 1)', '0x1459831D0', C, 'bank data; the factor -> cut-off mapping was not read'],
+['listener.source', 'audio device listener 0 (position, forward, negated up)', '-', 'Lay listener update 0x14580C290', 'assumed to be the camera (stock UE)', '0x14580C290', I, 'decompiled C; a native listener override was not ruled out'],
+['concurrency.footstep_rule', 'PreventNew', '-', 'ConcurrencyOverrides of the footstep and cloth sound assets', 'bOverrideConcurrency with ResolutionRule PreventNew; MaxCount not serialized (stock default 16)', '-', C, 'asset data'],
+// ---- game-driven category events (config evt section)
+['event.slow_volume', 0.8, 'ratio', CFG + ' evt STATE_SLOW_START', 'SE categories incl. footstep and cloth on the "slow" layer; pitch 0.3; fade 0.2 s; battle voices and SE_event volume 0', '0x14580EE30', C, 'config data decoded by the plugin research pass; the native event interpreter was not read'],
+['event.slow_pitch', 0.3, 'ratio', CFG + ' evt STATE_SLOW_START', 'as event.slow_volume', '0x14580EE30', C, '-'],
+['event.menu_pause_fade', 0.02, 's', CFG + ' evt STATE_MENU_OPEN', 'pauses all SE_* except SE_system and SE_LSI, VOICE and Vo_*; resume fade 0.2 s (STATE_MENU_CLOSE)', '0x14580EE30', C, '-'],
+['options.slider_fade', 0.5, 's', 'options apply 0x140EC5EC0', 'config-layer category volume = slider * master * 0.01', '0x140EC5EC0', I, 'decompiled C'],
+// ---- voices (TresGame)
+['voice.socket', 'atama', '-', 'TresAnimNotify_PlayVoice ctor 0x14055AA80: m_SocketName', 'all 191 voice notifies of Sora follow this socket with volume 1 and pitch 1', '0x140560960', C, 'constructor default at instruction level; asset data'],
+['voice.random_pick', 'r = (xorshift >> 1) % total; weighted; the last picked entry is left out', '-', '0x14056CAE0 (RNG state 0x142CFF460); last index at notify+0x84, total weight at notify+0x88', 'm_RandomVoiceAssets of TresAnimNotify_PlayVoice; the memory is per notify object (per animation asset)', '0x14056CAE0', I, 'decompiled C (verdict same)'],
+['voice.volume', 'clamp(pawn voice volume scale * m_VolumeMultiplier, 0, 1)', 'ratio', 'TresAnimNotify_PlayVoice::Notify 0x140560960', 'Sora\'s scale is 1.0', '0x140560960', C, 'instruction level per the trigger research pass'],
+['voice.group_number_field', '0x4D8', 'offset', 'voice group lookup 0x14150DC50 reads an int at pawn+0x4D8', 'the unit of the group whose m_GroupNo equals it plays; no match plays nothing (m_bPlayOnGroupNotFound is false on all of Sora\'s groups)', '0x14150DC50', I, 'decompiled C; written through the pawn anim interface (pawn+0x440) slot +0x1F0 = 0x1405A1D50 (mov [rcx+98h],edx), which the states call after starting an animation'],
+// ---- auto SE (SQEX::Sd analyzer, metres; bone positions * 0.01)
+['autose.clip_distance', 20, 'm', 'component init 0x14580FE90', 'no analysis beyond this distance from the listener', '0x14580FE90', I, 'decompiled C (verdict same-partial)'],
+['autose.heel_ratio', 1.2, 'ratio', 'default 0x14580F990', 'heel = Tibia + (Foot - Tibia) * ratio when the bone set names no heel (Sora\'s does not)', '0x14580FE90', I, 'decompiled C'],
+['autose.run_speed', 4.1666675, 'm/s', 'analyzer 0x14594E6D0', 'waist speed at or above it = running: Run instead of Walk, the short rustles instead of the long ones', '0x14594E6D0', I, 'decompiled C (verdict differs)'],
+['autose.foot_grounded_ratio', 0.2, 'ratio', 'analyzer 0x14594E6D0', 'foot grounded = body grounded and (heel.up - Base.up) < ratio * |Tibia - Foot|', '0x14594E6D0', I, 'decompiled C'],
+['autose.land_normal_air_time', 0.3, 's', 'landing detector defaults 0x145980010', 'landing with at least this much air time -> LandNormal', '0x14597D930', I, 'decompiled C (verdict same); both land types map to the same asset in FsTable_Sora'],
+['autose.land_hard_air_time', 1.5, 's', 'landing detector defaults 0x145980010', 'landing with at least this much air time -> LandHard', '0x14597D930', I, 'as above'],
+['autose.step_min_foot_speed', 0.125, 'm/s', 'foot-step detector 0x14597D600', 'foot-grounded rising edge counts as a step when the previous foot speed is above it', '0x14597D600', C, 'instruction level per the plugin research pass'],
+['autose.walk_volume_speed_range', [0, 1.5], 'm/s', 'detector defaults 0x14597FE40', 'step volume = clamp(map(range, waist speed) + map([0, 130], |0.5 v_now^2 - 0.5 v_prev^2| of the foot))', '0x14597D600', C, 'instruction level per the plugin research pass'],
+['autose.run_volume_speed_range', [0, 5], 'm/s', 'detector defaults 0x14597FE40', 'as the walk range, when running', '0x14597D600', C, '-'],
+['autose.shuffle_body_velocity', 0.08, 'm/s', DET + ' (native default 0.5 at 0x14597FE40)', 'foot shuffle: grounded on both frames and waist speed below it', '0x14597D600', C, 'asset override'],
+['autose.shuffle_foot_accel', 5.0, 'm/s^2', DET + ' (native default 2.0 at 0x14597FE40)', 'foot shuffle: |d(heel speed)/dt| above it', '0x14597D600', C, 'asset override'],
+['autose.rustle_distance', 10, 'm', 'rustle detector defaults 0x14597FED0', 'rustles only within this distance of the listener', '0x14597E180', C, 'instruction level per the plugin research pass'],
+['autose.rustle_arm_threshold_walk', 0.45, 'm/s', 'rustle detector defaults 0x14597FED0', 'elbow speed minus waist speed crossing upward -> RustleLong (walking); volume = clamp((|rel| - T) / (1 - T))', '0x14597E180', C, 'conditions at instruction level, volume from decompiled C'],
+['autose.rustle_arm_threshold_run', 0.8, 'm/s', 'rustle detector defaults 0x14597FED0', 'as above when running -> RustleShort', '0x14597E180', C, '-'],
+['autose.rustle_arm_cooldown', 0.1333, 's', 'rustle detector 0x14597E180', 'on both arms after an arm rustle', '0x14597E180', I, 'decompiled C'],
+['autose.rustle_leg_dot_threshold', 0.6, 'ratio', 'rustle detector defaults 0x14597FED0', 'dot(normalize(Tibia - Femur), normalize(Base - Waist)) crossing upward -> RustleFootLong (walking) / RustleFootShort (running); volume = clamp(knee speed / 1.0)', '0x14597E180', C, '-'],
+['autose.part_cooldown', 0.33333334, 's', 'default set at 0x14594D7A0', 'each event arms this timer on its part; events of a part with a running timer are dropped; Jump and leg rustle are exempt', '0x14594E6D0', I, 'decompiled C (verdict same)'],
+['autose.events_per_frame', 2, 'count', 'analyzer 0x14594E6D0', 'detectors run in the order UserConscious, Landing, FootStep, Rustle, WingAction, Swing, Misc; at most this many events per frame', '0x14594E6D0', I, 'decompiled C'],
+['autose.warmup_frames', 3, 'frames', 'component tick 0x145818B70', 'no events for this many frames after a hidden-state, attach or Matinee-move change', '0x145818B70', I, 'decompiled C (verdict differs)'],
+['autose.notify_state_fade_out', 0.5, 's', 'SQEXSEADAnimNotifyState_PlayAutoSe default', 'fade when the notify state ends', '0x145816230', I, 'constructor default per the trigger research pass'],
+// ---- code-driven
+['autose.volume_add_energy_range', [0, 130], 'm^2/s^2', 'foot-step detector defaults 0x14597FE40 (volumeAdd in-range)', 'step volume gets + clamp(|0.5 v_now^2 - 0.5 v_prev^2| / 130, 0, 1) of the foot bone speed', '0x14597FE40', C, 'instruction level per the plugin research pass (build/sora_tmp/audio/plugin/NOTES.md); added by the audio implementer'],
+['autose.shuffle_volume_speed_range', [-0.5, 3.0], 'm/s', 'foot-step detector defaults 0x14597FE40 (volumeShuffle in-range)', 'FootShuffle volume = clamp((waist speed + 0.5) / 3.5 + add)', '0x14597FE40', C, 'as autose.volume_add_energy_range'],
+['autose.rustle_arm_speed_max', 1.0, 'm/s', 'rustle detector defaults 0x14597FED0 (elbow relative-velocity range upper end, walk and run)', 'arm rustle volume = clamp((|rel| - T) / (1.0 - T))', '0x14597FED0', C, 'instruction level per the plugin research pass; added by the audio implementer'],
+['autose.rustle_leg_knee_speed_range', [0, 1.0], 'm/s', 'rustle detector defaults 0x14597FED0 (volumeFoot in-range)', 'leg rustle volume = clamp(knee speed / 1.0)', '0x14597FED0', C, 'as autose.rustle_arm_speed_max'],
+['ui.system_se_static_ids', [0, 1, 3, 4, 2, 2, 5], 'index', 'PlaySystemSE 0x14176F7D0: kinds 0..6 (Click, Decide, Cancel, Beep, Tab, GameHelpOpen, GameHelpMessage)', 'the ETresStaticSE id each UI system SE kind plays', '0x14176F7D0', C, 'docs/sora-audio-spec.md 5.6; added by the audio implementer'],
+['alarm.hp_threshold_percent', 25, 'percent', 'ATresCharPawnBase vf 1191 0x1405AD600: HP <= MaxHP * 25 / 100 (integer)', 'low-HP alarm (ETresStaticSE 9 = se00000_010, a loop) requested by the HUD status tick 0x1416608B0 for the player slot', '0x1405AD600', C, 'instruction level per the code research pass'],
+['alarm.start_delay', 0.8, 's', 'HUD manager request 0x14158A340: H+0x250', 'the loop starts when this delay AND 15 ticks have passed; re-armed on unpause', '0x14158A340', C, 'instruction level per the code research pass'],
+['alarm.start_delay_ticks', 15, 'frames', 'HUD manager request 0x14158A340: H+0x254', 'as alarm.start_delay', '0x14158A340', C, '-'],
+];
+
+const codeIds = new Set();
+{ const text = fs.readFileSync(path.join(R, 'sheets', 'native', 'code.json'), 'utf8'); const re = /^\["(0x[0-9A-Fa-f]+)"/gm; let m; while ((m = re.exec(text))) codeIds.add(m[1].toLowerCase()); }
+const cols = ['id', 'value', 'unit', 'source', 'evidence', 'ref_addr', 'ref_conf', 'note'];
+const seen = new Set();
+for (const r of rows) {
+  if (r.length !== cols.length) throw new Error('bad row ' + r[0]);
+  if (seen.has(r[0])) throw new Error('duplicate id ' + r[0]);
+  seen.add(r[0]);
+  if (r[5] !== '-' && !codeIds.has(r[5].toLowerCase())) { r[7] = (r[7] === '-' ? '' : r[7] + '; ') + `address ${r[5]} is not a function start in sheets/native/code`; r[5] = '-'; }
+}
+const text = `{"sheet":"sora-sound-rules","group":"port","columns":${JSON.stringify(cols)},"rows":[\n${rows.map((r) => JSON.stringify(r)).join(',\n')}\n]}\n`;
+const file = path.join(R, 'sheets', 'port', 'sora-sound-rules.json');
+if (process.argv.includes('--check')) {
+  const same = fs.existsSync(file) && fs.readFileSync(file, 'utf8') === text;
+  console.log(same ? 'sora-sound-rules: sheet on disk matches' : 'sora-sound-rules: sheet on disk DIFFERS');
+  process.exitCode = same ? 0 : 1;
+} else {
+  fs.writeFileSync(file, text);
+  console.log(`sora_sound_rules_sheet ${VERSION}: ${rows.length} rows -> sheets/port/sora-sound-rules.json (${rows.filter((r) => r[1] === null).length} unchecked)`);
+}

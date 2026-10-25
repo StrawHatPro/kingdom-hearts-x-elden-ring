@@ -1,0 +1,490 @@
+[
+ {
+  "effect": "/Game/Effects/dlc02/level/kg/kg_07/gimmick/par/vg_kg07_pow_bem2",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/anti/par/vp_ant_bld_cnt00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/anti/par/vp_ant_bld_cnt_nkm00",
+  "used_by": [
+   "nested in vp_ant_bld_cnt00 (SQEX_SpawnParticleSystem)"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/anti/par/vp_ant_bld_trn_ren00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/anti/par/vp_ant_in_sho01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/anti/par/vp_ant_rsk_rsn00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so050/par/vw_so050_bst0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so050/par/vw_so052_bst1_1",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so050/par/vw_so052_bst1_2",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so050/par/vw_so052_bst1_3",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so050/par/vw_so052_bst1_4",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so050/par/vw_so052_bst2_1",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so050/par/vw_so052_bst2_2",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so050/par/vw_so052_jwr080",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_hahen00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_hahen01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_hahen02",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_hahen03",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_han00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_han01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_han03",
+  "used_by": [
+   "nested in vw_so088_fin_zmn0 (SQEX_SpawnParticleSystem)"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_hit00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_kira00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_kira01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_loc00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_mat",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_rsn00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_rsn01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_zmn0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so110/par/vw_so112_chg_bst00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so110/par/vw_so112_jwr080",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so110/par/vw_so112_loc_smk00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so110/par/vw_so112_yin00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so190/par/vw_so192_trf_fir0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so190/par/vw_so192_trf_fns0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so190/par/vw_so192_trf_fns1",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so190/par/vw_so192_trf_fns_mgc0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so190/par/vw_so192_trf_fns_plr0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so190/par/vw_so192_trf_fns_plr1",
+  "used_by": [
+   "nested in vw_so192_trf_fns1 (SQEX_SpawnParticleSystem)"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so190/par/vw_so192_trf_fns_plr2",
+  "used_by": [
+   "nested in vw_so192_trf_fns1 (SQEX_SpawnParticleSystem)"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so190/par/vw_so192_trf_hit0",
+  "used_by": [
+   "nested in vw_so192_trf_fns0 (SQEX_SpawnParticleSystem)"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so190/par/vw_so192_trf_loc_0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc01/wep/w_so200/par/vw_so200_ehz_fls00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc01/wep/w_so200/par/vw_so200_ehz_hsk00",
+  "used_by": [
+   "nested in vw_so200_ehz_hsr00 (SQEX_SpawnParticleSystem)"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc01/wep/w_so200/par/vw_so200_ehz_hsr00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc01/wep/w_so200/par/vw_so200_ehz_lit00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc01/wep/w_so200/par/vw_so200_ehz_sls00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc01/wep/w_so200/par/vw_so200_spr_cal00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc01/wep/w_so200/par/vw_so200_spr_cal01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc01/wep/w_so200/par/vw_so200_spr_tuk00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc01/wep/w_so200/par/vw_so200_ztk_fls0",
+  "used_by": [
+   "nested in vw_so200_ztk_tuk0 (SQEX_SpawnParticleSystem)"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc01/wep/w_so200/par/vw_so200_ztk_tuk0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_hahen02",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_hahen03",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_kira00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_kira01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_zmn0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so110/par/vw_so112_jwr080",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so190/par/vw_so192_trf_fns1",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so190/par/vw_so192_trf_hit0",
+  "used_by": [
+   "nested in vw_so192_trf_fns0 (SQEX_SpawnParticleSystem)"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc01/wep/w_so200/par/vw_so200_spr_tuk00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ }
+]

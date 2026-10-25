@@ -1,0 +1,1 @@
+{"root":"audio","files":{"audio/lip.json":{"sha256":"d54e61be7566ce12de08f8fd177341d4b54a4304a740cdaa16736f28a0b891ee","kind":"json","v":2,"format":"json0","corpus":["pack:audio/lip.json","pack:party/audio/lip.json"],"template":{"$o":[0,""],"s":{"source":"build/play/donpack/audio"}},"own_values":1,"literals":1,"literals_v1":2}}}

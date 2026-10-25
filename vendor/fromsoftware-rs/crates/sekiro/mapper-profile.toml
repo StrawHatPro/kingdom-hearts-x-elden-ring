@@ -1,0 +1,79 @@
+[[vmts]]
+class = "AppMenu::ComponentProxy"
+vftable = "component_proxy_vmt"
+
+[[vmts]]
+class = "AppMenu::MenuWindow"
+vftable = "menu_window_vmt"
+
+[[vmts]]
+class = "AppMenu::SceneObjProxy"
+vftable = "scene_obj_proxy_vmt"
+
+[[vmts]]
+class = "DLIO::DLBufferedInputStream"
+vftable = "dlbuffered_input_stream_vmt"
+
+[[vmts]]
+class = "DLIO::DLPseudoAsyncInputStream"
+vftable = "dlpseudo_async_input_stream_vmt"
+
+[[vmts]]
+class = "NS_SPRJ::ParamResCap"
+vftable = "param_res_cap_vmt"
+
+[[vmts]]
+class = "NS_SPRJ::SoloParamRepositoryImp"
+vftable = "solo_param_repository_vmt"
+
+[[vmts]]
+class = "NS_SPRJ::WorldInfo"
+vftable = "world_info_vmt"
+
+[[vmts]]
+class = "NS_SPRJ::WorldRes"
+vftable = "world_res_vmt"
+
+[[patterns]]
+pattern = "48 83 ec 20 48 8d 05 ${ ' } 48 8b f9 48 89 01 48 8b ca 48 8b 02 ff 50 10"
+captures = ["", "fd4res_cap_vmt"]
+
+[[patterns]]
+pattern = "c6 47 60 00 48 8d 05 $ { ' } 48 89 07 33 f6 48 89 77 68 48 89 77 70 48 89 77 78"
+captures = ["", "fd4param_res_cap_vmt"]
+
+[[patterns]]
+pattern = "0f 29 74 24 30 40 80 fe 01 0f ? ? ? ? ? 48 8b 05 $ { ' }"
+captures = ["", "field_area_ptr"]
+
+[[patterns]]
+pattern = "c7 44 24 20 00 00 00 00 48 8b 05 $ { ' } 48 8b 58 08 8b 02"
+captures = ["", "game_data_man_ptr"]
+
+[[patterns]]
+pattern = "48 8b ce 48 8b f8 e8 $ { 48 89 0d $ { ' } c3 }"
+captures = ["", "global_hinstance"]
+
+[[patterns]]
+pattern = "45 8b cf 45 8b c6 8b d3 e8 $ { ' } e9"
+captures = ["", "lua_event_man_remove_item"]
+
+[[patterns]]
+pattern = "e8 [4] 48 8b 0d $ { ' } 4c 8d 4c 24 60 4c 8b c7"
+captures = ["", "map_item_man_ptr"]
+
+[[patterns]]
+pattern = "4c 8d 44 24 40 48 8d 54 24 50 48 8b cb e8 $ { ' }"
+captures = ["", "map_item_man_grant_item"]
+
+[[patterns]]
+pattern = "4c 8b cf 45 33 c0 41 8d 50 5d e8 $ { ' }"
+captures = ["", "register_task"]
+
+[[patterns]]
+pattern = "48 8b 9e 90 37 13 00 48 85 db 74 % { 48 89 2d $ { ' } }"
+captures = ["", "app_menu_new_menu_system_ptr"]
+
+[[patterns]]
+pattern = "48 8b 05 $ { ' } c7 80 c4 02 00 00 00 00 00 00 c3"
+captures = ["", "sprj_menu_man_ptr"]

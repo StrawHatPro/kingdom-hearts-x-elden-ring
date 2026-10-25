@@ -1,0 +1,8 @@
+[package]
+name = "kh-anim"
+description = "Sora's pose evaluation, engine-free (glam and std only): reads the Sora pack's skeleton and clips into plain keyframe arrays and produces local and component-space bone transforms in KH3 conventions. docs/sora-animation-spec.md."
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+glam = { workspace = true }

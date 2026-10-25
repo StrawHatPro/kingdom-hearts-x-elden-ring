@@ -1,0 +1,96 @@
+{
+ "sheet": "party-hurt",
+ "group": "port",
+ "columns": [
+  "id",
+  "value",
+  "unit",
+  "source",
+  "evidence",
+  "ref_addr",
+  "ref_conf",
+  "note"
+ ],
+ "rows": [
+  [
+   "hurt.recover_delay",
+   0.2,
+   "s",
+   "Damage Setup 0x141365930 @0x14136602F: state+0x138 = 0.2 (kh-core states/damage.rs param::RECOVER_DELAY, sheet sora-combat-params hit.recover_delay)",
+   "Aerial Recovery may be asked for from this long after the hit, while the reaction throws him through the air (Sora's rule, every playable character)",
+   "0x141365930",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hurt.phase_blend",
+   0.1,
+   "s",
+   "PORT DESIGN (stream HR, 2026-10-17: the user, ER_PHASE_NOTES 2026-10-16 23:40 \"Heavy hits: a real reaction ... never a frozen pose that snaps back\")",
+   "the least blend between two clips INSIDE one reaction (start -> flight loop -> down -> land); the hit itself plays its clip with the clip's own KH3 blend (none on the hit clips)",
+   "-",
+   "confirmed",
+   "KH3 plays these with blend -1 (the clip's own: 0 on most); the floor only smooths the hand-over"
+  ],
+  [
+   "hurt.leader_exit",
+   true,
+   "bool",
+   "PORT DESIGN (stream HR) on KH3's exits rule (combat spec 9.3 \"Common exits\": m_bEnableChange && the stick ends the damage state; 0x14135E188)",
+   "the LEADER (pad) leaves a damage clip at its own EnableChange notify, else at its CheckBadStat notify (where KH3 lets a status take over the get-up), with the stick or B; an AI ally plays the clip out",
+   "0x14135E188",
+   "confirmed",
+   "the friends' get-up clips carry no EnableChange: CheckBadStat is the stand-in"
+  ],
+  [
+   "hurt.lethal_blow",
+   true,
+   "bool",
+   "PORT DESIGN (stream HR, the coordinator's brief 2026-10-17: \"a lethal heavy hit should play the blow and then KO\")",
+   "a hit that knocks him out with a heavy kind (anything but a flinch) plays its blow first; the KO starts at the down clip's CheckBadStat mark (or the reaction's end); no hit lands on him meanwhile (Die's invincibility)",
+   "0x1412413C0",
+   "confirmed",
+   "KH3's Die Begin plays BadStatStunStart at once"
+  ],
+  [
+   "hurt.impact_effect",
+   true,
+   "bool",
+   "sheet sora-combat-hit-effects effect_02 (HitEffects chooser 0x140628960: a character hit of attribute NOTYPE -> /Game/Effects/system/Hit/par/VS_non_HIT0)",
+   "a hit that takes his HP spawns KH3's system hit effect VS_non_HIT0 at the contact (the attackers that hit the party are Elden Ring's or the test level's fixtures: none spawns a KH3 hit effect of its own)",
+   "0x140628960",
+   "inferred",
+   "-"
+  ],
+  [
+   "hurt.air_recovery",
+   true,
+   "bool",
+   "PORT DESIGN (stream HR) on Sora's AIR_RECOVERY (state 20; DamageView::recoverable)",
+   "a leader whose own kit has no aerial recovery move regains control with B in the recoverable window (the kits' own: Donald's Flutter, Goofy's recovery); needs Sora's AIR_RECOVERY as the kits do",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hurt.n_ex001.down_rate",
+   0.7,
+   "x",
+   "DONALD_OVERHAUL.md 5.3 (the user's design, 2026-10-22: \"Heavy hits knock him down for longer than Sora, using the shared HR hit-reaction rules with his own timings\"); stream DON-KIT",
+   "Donald's down / get-up clips (a blow's landing + get-up, the launch's down, the slam's down, the wall's land) play at this rate and the reaction's phase lasts clip length / this: he lies down 1 / 0.7 = 1.43x as long as his own KH3 clip (Goofy and Sora play theirs at 1)",
+   "-",
+   "inferred",
+   "the rate the user tunes; 1 = his KH3 clip"
+  ],
+  [
+   "hurt.n_ex001.exit_late",
+   0.35,
+   "s",
+   "DONALD_OVERHAUL.md 5.3; stream DON-KIT",
+   "the leader's quick get-up (hurt.leader_exit) opens this much later on Donald's down clips (real seconds)",
+   "-",
+   "inferred",
+   "-"
+  ]
+ ]
+}

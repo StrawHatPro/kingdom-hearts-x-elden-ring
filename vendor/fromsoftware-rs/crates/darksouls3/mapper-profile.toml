@@ -1,0 +1,83 @@
+[[vmts]]
+class = "AppMenu::GaitemSelectBaseMenu"
+vftable = "gaitem_select_base_menu_vmt"
+
+[[vmts]]
+class = "AppMenu::GaitemSelectMenu"
+vftable = "gaitem_select_menu_vmt"
+
+[[vmts]]
+class = "AppMenu::MenuWindow"
+vftable = "menu_window_vmt"
+
+[[vmts]]
+class = "NS_SPRJ::ChrIns"
+vftable = "chr_ins_vmt"
+
+[[vmts]]
+class = "NS_SPRJ::PlayerIns"
+vftable = "player_ins_vmt"
+
+[[vmts]]
+class = "NS_SPRJ::ReplayGhostIns"
+vftable = "replay_ghost_ins_vmt"
+
+[[vmts]]
+class = "NS_SPRJ::WorldInfo"
+vftable = "world_info_vmt"
+
+[[vmts]]
+class = "NS_SPRJ::WorldRes"
+vftable = "world_res_vmt"
+
+[[patterns]]
+pattern = "48 8b 05 $ { ' } 48 85 c0 74 ? 80 b8 ? ? ? ? ? 0f 95 c0 c3"
+captures = ["", "app_menu_new_menu_system_ptr"]
+
+[[patterns]]
+pattern = "48 8b 0d ${ ' } 48 85 c9 74 ? 44 8b 41 20 48 8b 49 10 48 8d 54 24 40 e8"
+captures = ["", "field_area_ptr"]
+
+[[patterns]]
+pattern = "45 33 c0 89 11 85 d2 78 1d 48 63 c2 48 83 f8 2b 73 14 48 c1 e0 04 4c 8d 05 $ { ' }"
+captures = ["", "gesture_data_store"]
+
+[[patterns]]
+pattern = "48 8b cd e8 ? ? ? ? 84 c0 74 ? 48 8b 05 $ { ' } 48 8b 48 10"
+captures = ["", "game_data_man_ptr"]
+
+[[patterns]]
+pattern = "[46] 48 8b ? ? ? ? 04 48 8b 58 10 48 85 db 0f 84 ? ? ? ? 48 81 c3 28 02 00 00"
+captures = ["lua_event_man_give_item_directly"]
+
+[[patterns]]
+pattern = "[68] 8b d6 48 8b cf e8 ? ? ? ? 85 c0 78 15 41 b0 01 8b d0 48 8b cf"
+captures = ["lua_event_man_remove_item"]
+
+[[patterns]]
+pattern = "48 8b ce 48 8b f8 e8 $ { 48 89 0d $ { ' } c3 }"
+captures = ["", "global_hinstance"]
+
+[[patterns]]
+pattern = "74 ? 41 8b 16 8b c2 25 ff ff ff 0f c1 ea 1c 48 8b 35 $ { ' }"
+captures = ["", "item_get_menu_man_ptr"]
+
+[[patterns]]
+pattern = "8b d0 41 0f b6 46 08 88 44 24 20 45 8b 4e 04 44 8b c7 48 8b ce e8 $ { ' }"
+captures = ["", "item_get_menu_man_show_item"]
+
+[[patterns]]
+pattern = "[16] 48 8d 6c 24 d9 48 81 ec 00 01 00 00 48 c7 45 cf fe ff ff ff"
+captures = ["map_item_man_grant_item"]
+
+[[patterns]]
+pattern = "48 8b 0d $ { ' } bb [4] 41 bc"
+captures = ["", "map_item_man_ptr"]
+
+[[patterns]]
+pattern = "45 33 c0 41 8d ? ? 48 83 c4 ? 5b e9 $ { ' }"
+captures = ["", "register_task"]
+ 
+[[patterns]]
+pattern = "48 8B 0D $ { ' } 33 C0 48 39 81 ? ? ? ? 0F 95 C0 C3"
+captures = ["", "sprj_menu_man_ptr"]

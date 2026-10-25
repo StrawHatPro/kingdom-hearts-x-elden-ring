@@ -1,0 +1,208 @@
+[
+ {
+  "asset": "/Game/Sound/SE/cutscene/kg/31001/se_kg702b_cut510_1800_zetta_channel",
+  "trigger": "Zettaflare: the channel (matinee 58.767 .. 69.733)",
+  "spatial": "2D",
+  "note": "cut from SE/cutscene/kg/31001/se_kg702b_cut510_1800 at the matinee kg702b times"
+ },
+ {
+  "asset": "/Game/Sound/SE/cutscene/kg/31001/se_kg702b_cut510_1800_zetta_cast",
+  "trigger": "Zettaflare: the cast, the beam, the blast and the fade (matinee 69.733 .. 79.633)",
+  "spatial": "2D",
+  "note": "cut from SE/cutscene/kg/31001/se_kg702b_cut510_1800 at the matinee kg702b times"
+ },
+ {
+  "asset": "/Game/Sound/VOICE/Localization/ja/Event/kg/kg7020241do0",
+  "trigger": "Zettaflare: Donald's effort at the channel's start (matinee 58.767)",
+  "spatial": "3D",
+  "ref": "kg702b TresInterpGroup_13 InterpTrackSound voice",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/VOICE/Localization/ja/Event/kg/kg7020250do0",
+  "trigger": "Zettaflare: Donald's \"Zettaflare!\" (matinee 70.067)",
+  "spatial": "3D",
+  "ref": "kg702b TresInterpGroup_13 InterpTrackSound voice; subtitle kg7020250do0",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/cutscene/kg/31001/se_kg702b_cut510_1800_zetta_channel5",
+  "trigger": "Zettaflare: the channel compressed to 5 s (matinee 58.767 .. 63.017 + 68.483 .. 69.733, 0.5 s crossfade)",
+  "spatial": "2D",
+  "note": "cut from SE/cutscene/kg/31001/se_kg702b_cut510_1800 at the matinee kg702b times"
+ },
+ {
+  "asset": "/Game/Sound/SE/cutscene/kg/31001/se_kg702c_cut960_zetta_end",
+  "trigger": "Zettaflare: the ending: kg702c 0 .. 11.867 (the wide shot 960, the shot behind Donald 970)",
+  "spatial": "2D",
+  "note": "cut from SE/cutscene/kg/31001/se_kg702c_cut960 at the matinee kg702c times"
+ },
+ {
+  "asset": "/Game/Sound/SE/NPC/00301_n_ex001/se00301_055",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/NPC/00301_n_ex001/se00301_059",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/NPC/00301_n_ex001/se00301_054",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/link/stitch/se00005_408",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/enemy/00510_e_bx901/se00510_059",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/link/stitch/se00005_414",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/link/stitch/se00005_412",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/link/stitch/se00005_413",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/enemy/00531_e_he001/se00531_109",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/gumi/00801/se00801_102",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/enemy/00531_e_he001/se00531_112",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/link/simba/se00005_101",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/world/00100_dw/se00100_042",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/NPC/00318_n_ex011/se00318_038",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/NPC/00318_n_ex011/se00318_036",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/NPC/00318_n_ex011/se00318_041",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/NPC/00318_n_ex011/se00318_040",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/gumi/00801/se00801_103",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/enemy/00501_e_dw401/se00501_018",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/gimmick/mi/se_g_mi_electricbox",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/common/00002_magic/se00002_208",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/enemy/00457_e_ex011/se00457_026",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/gumi/00801/se00801_109",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ },
+ {
+  "asset": "/Game/Sound/SE/enemy/00504_e_ex721/se00504_054",
+  "trigger": "(YFX) Donald Y spell sound, played by path by kh-party donald/yfx.rs",
+  "spatial": "3D",
+  "ref": "-",
+  "note": "(ZETTA) a sound a party module plays by path"
+ }
+]

@@ -1,0 +1,18 @@
+{"sheet":"sora-combat-reactions","group":"port","columns":["id","damage_kind","name","situation","anim","ref_addr","ref_conf","note"],"rows":[
+["gate","-","-","any","-","0x141439A50","confirmed","interface slot 88: refuses when slot 87 says no, the controller timer +0x8F4 > 0, pawn+0xE60 bit 17, or (light kinds only) super armor / attack kinds 0x36..0x39; else clears the queue, pushes DAMAGE (19) and calls its setup slot 114"],
+["setup","-","-","any","-","0x141365930","inferred","copies TresDamageInfo to state+0x98; state+0x88 = damage kind (the sub-step starts at 0; the handler is a delegate chosen by a jump table: sheet sora-combat-damage-handlers); HP < 1 turns SMALL into BLOW (scale 1, brake 0); hit direction, variant = hit counter & 1 (+0x140); +0x138 = 0.2 s = delay before Aerial Recovery (not an invincibility)"],
+["small.ground.front",1,"SMALL","ground, direction 0","0201 / 0205 (variant)","0x141435200","inferred","direction index 0..3 and variant chosen by the Damage state; table in the pawn"],
+["small.ground.back",1,"SMALL","ground, direction 1","0202 / 0206 (variant)","0x141435200","inferred","-"],
+["small.ground.dir2",1,"SMALL","ground, direction 2","0203","0x141435200","inferred","-"],
+["small.ground.dir3",1,"SMALL","ground, direction 3","0204","0x141435200","inferred","-"],
+["small.air",1,"SMALL","air, direction 0..3","0207 / 0208 / 0209 / 0210","0x141435200","inferred","-"],
+["blow",2,"BLOW","direction 0..3, phase 0..2","0211..0213 / 0214..0216 / 0217..0219 / 0220..0222","0x1414333A0","inferred","three phases per direction"],
+["down","-","-","index 0..3","M_0223 / M_0224 / M_0225 / M_0226","0x141433F10","inferred","WALL-HIT clips of Blow / Parabola (event interface slot 9 0x141356930: speed >= 50, angle within 30 deg of the wall normal); the id is historical"],
+["heavy","-","-","handlers","M_0227 / M_0228 / M_0230 / M_0237 / 0213 / Land / JumpNormalDownLoop / CatchEnd","0x14135D740","inferred","Damage state slots 116..124 (0x14135D740, 0x14135B300, 0x14135EEA0, 0x14135C410, 0x14135CAB0, 0x14135A870, 0x14135B150, 0x14135E260, 0x14135BDA0): one per reaction family; read in pass 2: spec 9.4, sheets sora-combat-damage-handlers / -damage-clips / -damage-params"],
+["freeze","-","bad status","pawn slot 1048 true","-","0x141439A50","inferred","state BADSTAT_FREEZE (123), time from TresDamageInfo+0x38"],
+["burn","-","bad status","pawn slot 1049 true and damage kind NONE","-","0x141439A50","inferred","state BADSTAT_BURN (124)"],
+["recover",13,"RECOVER","any","-","0x1405BB850","inferred","heals: HP += CeilToInt(amount); no reaction"],
+["without",12,"WITHOUT","any","-","0x1405BB850","inferred","damage without reaction (FUN_14064E7C0)"],
+["kill",14,"KILL","any","-","0x1405BB850","inferred","amount = current HP"],
+["die","-","-","HP < 1 after the hit","-","0x14143A190","inferred","unless pawn slot 575 0x14142F640 allows survival (item count check 0xA01); interface slot 129 pushes DIE (59). Second Chance / Withstand Combo act before, in ApplyHP 0x1405A2A00 (sheet sora-combat-hp-rules)"]
+]}

@@ -1,0 +1,5 @@
+{"sheet":"sora-combat-tick-delta","group":"port","columns":["id","mode","delta","addr","conf"],"rows":[
+["delta_01","Walking","((V.x + RM.x + Push.x), (V.y + RM.y + Push.y), 0) * dt along the floor","0x1405900B0","confirmed"],
+["delta_02","Flying","(V + RM) * dt + PushDisp; no gravity, no landing","0x14058E570","confirmed"],
+["delta_03","Falling","V.z += g * t; ((Vold + V)/2 + RM + Push) * t; lands on a walkable hit","0x14058D0C0","confirmed"]
+]}

@@ -1,0 +1,186 @@
+{
+ "sheet": "sora-camera-fade",
+ "group": "port",
+ "columns": [
+  "id",
+  "value",
+  "unit",
+  "source",
+  "evidence",
+  "ref_addr",
+  "ref_conf",
+  "note"
+ ],
+ "rows": [
+  [
+   "camfade.on",
+   true,
+   "bool",
+   "PORT DESIGN (the user, 2026-10-17, stream NF: \"KH3 fades characters that come too close to the camera; our renderers do not\" - requested features on by default)",
+   "the fade is on for every KH character drawn (Elden Ring renderer and test level)",
+   "-",
+   "confirmed",
+   "off = every character drawn whole as before"
+  ],
+  [
+   "camfade.alpha",
+   0.5,
+   "x",
+   "KH3: AActor::m_CameraFadeAlpha (actor+0x3C0), set to 0.5 by the actor defaults 0x143EA0D80 (actor+0x3C4, the current value, = 1.0); FUN_1405C9660 hands it to the fade list. No blueprint of Sora (p_ex001), Donald (n_ex001) or Goofy (n_ex002) overrides it (the 21 assets that do are enemies, gimmicks, a FriendLink projectile and PhotoHologram)",
+   "the CameraFade value a character fades to while the camera touches one of his camera volumes",
+   "0x143EA0D80",
+   "confirmed",
+   "the manager override TresCameraManager+0x2A28 is -1 (off) in its constructor 0x1405E2970; DebugSetCameraShutOutFadeAlpha is stubbed in the shipping build"
+  ],
+  [
+   "camfade.seconds_per_unit",
+   0.3,
+   "s",
+   "KH3: TresCameraManager constructor 0x1405E2970 writes +0x2A2C = 0.3 (+0x2A30 = -1: no fixed time); FUN_1405EFBE0 / FUN_1405FBFF0 start the tween with FUN_1411940B0(.., rate 1 / 0.3): duration = |to - from| x 0.3 s, mode 1 = linear (FUN_1411A0E70)",
+   "the fade runs linearly at this many seconds per unit of CameraFade: 1 -> 0.5 in 0.15 s, and back to 1 at the same pace once the camera no longer touches him",
+   "0x1405E2970",
+   "confirmed",
+   "-"
+  ],
+  [
+   "camfade.probe_radius",
+   1,
+   "cm",
+   "KH3: FUN_1405D87F0 makes its collision shape {kind 2 = sphere, 1.0} for the overlap at the camera and for the sweep from the look point (FUN_143FD5D30 / FUN_143FDC0C0, channel 4 = Camera)",
+   "the camera is a ball of this radius: a volume within it (or the look line within it) touches the camera",
+   "0x1405D87F0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "camfade.sweep",
+   true,
+   "bool",
+   "KH3: FUN_1405D87F0 also sweeps the ball from the look point to the camera and registers every overlapping camera volume (a friend between the camera and the look point fades)",
+   "a character between the camera and the look point fades too (the see-through fade)",
+   "0x1405D87F0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "camfade.player_excluded",
+   true,
+   "bool",
+   "KH3: FUN_1405EFBE0 does not fade a TresPlayerPawnBase unless the player controller says so (Controller vt+0x8A0 = controller+0x421, set only by the debug command DebugCameraShutOutFade, stubbed in the shipping build)",
+   "the character the player controls (the camera's leader) is left out of the look-line sweep (the line starts inside him)",
+   "0x1405EFBE0",
+   "confirmed",
+   "see camfade.lead_overlap for the port's addition"
+  ],
+  [
+   "camfade.lead_overlap",
+   true,
+   "bool",
+   "PORT DESIGN (stream NF): KH3's player is always Sora, and its cameras never sit inside him; in the port any character leads and a team attack's close-up (Trinity Guard's FINISH01) puts the camera inside the leader: the leader fades when the camera is INSIDE one of his volumes (never by the look-line sweep)",
+   "the leader fades when the camera is inside his own volumes",
+   "-",
+   "confirmed",
+   "the user's report (GK): \"the camera ends up inside Goofy's arm\" with Goofy leading"
+  ],
+  [
+   "camfade.limb_guard",
+   true,
+   "bool",
+   "PORT DESIGN (stream NF, the user's bar \"anything less than perfect is unacceptable\"): KH3's camera volumes cover the body and, for some, a hand; an outstretched arm or leg can reach past them. Every character also gets an overlap-only volume along each limb and the trunk (the bones of the thrown-shadow capsules, their radius + camfade.limb_margin): the camera inside any part of him fades him",
+   "the camera inside any limb fades the character (overlap only, never the look-line sweep)",
+   "-",
+   "confirmed",
+   "a character without camera volumes in sora-camera-fade-volumes gets these only"
+  ],
+  [
+   "camfade.limb_margin",
+   12,
+   "cm",
+   "PORT DESIGN (stream NF): the near plane of the cameras (Elden Ring about 10 cm, the test level 10 cm) plus 2 cm, so that no part of him is cut open by the near plane before he fades",
+   "added to each limb volume's radius",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "camfade.attached",
+   true,
+   "bool",
+   "KH3: FUN_1405FA7B0 / FUN_1405FA9C0 register the actor's Children and the actors attached to his meshes (his weapon, Goofy's shield) with the same target",
+   "his weapon / shield fades with him",
+   "0x1405FA7B0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "camfade.dither_phases",
+   6,
+   "count",
+   "KH3: the masked character materials' depth / mask shader (materials.wgsl kh_mask, first test, every KH3 character material that has the CameraFade scalar): phase = frac(trunc(x + 2 y + TemporalAAParams.x) / 6)",
+   "the screen-door has six phases along x + 2 y",
+   "-",
+   "confirmed",
+   "translated from the game's compiled shaders (p_ex001_M_mat0_Inst, DisneyOrg_Basemat, w_gu010_mat_Inst, ...)"
+  ],
+  [
+   "camfade.dither_scale",
+   0.857143,
+   "x",
+   "KH3: kh_mask, first test: phase x 0.857143 (6/7)",
+   "a pixel stays where phase x dither_scale + CameraFade - dither_bias >= 0 (CameraFade 0.5: three of the six phases, half of the pixels)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "camfade.dither_bias",
+   0.8333,
+   "x",
+   "KH3: kh_mask, first test: - 0.8333 (5/6), clip below 0",
+   "see camfade.dither_scale",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "camfade.phase_cycle",
+   4,
+   "count",
+   "PORT DESIGN (stream NF): with camfade.temporal on, the screen door turns once a frame through its 4 x 4 cells' rows (KH3 adds the TAA sample index, 0..7, so that its TAA averages the phases)",
+   "the per-frame step period of the screen door (camfade.temporal only)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "camfade.temporal",
+   false,
+   "bool",
+   "PORT DESIGN (stream NF, measured in the effects harness: a screen door that changes every frame leaves trails under a TAA that keeps history where the 3 x 3 neighbourhood mixes the character and the world, NF/shots/pass/*_temporal): the door stands still (a pixel is either always his or always the world's while the fade holds), which every TAA resolves without trails and which reads as an even see-through even without TAA",
+   "the screen door changes every frame (KH3's temporal dither) when true",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "camfade.screen_door",
+   "bayer4",
+   "text",
+   "PORT DESIGN (stream NF): the pixels kept are KH3's SHARE (camfade.dither_* : the six-phase test of the mask, 3 of 6 at CameraFade 0.5) laid out as a 4 x 4 ordered (Bayer) matrix instead of KH3's (x + 2 y) mod 6 stripes: at 0.5 a 1-pixel checkerboard, the finest even pattern, so the see-through reads smooth with or without the TAA",
+   "a pixel (x, y) stays where (bayer4(x, y) + 0.5) / 16 < the share",
+   "-",
+   "confirmed",
+   "bayer4(x, y) = 4 M(x, y) + M(x / 2, y / 2), M = ((x ^ y) & 1) x 2 + (y & 1)"
+  ],
+  [
+   "camfade.limb_bones",
+   "koshi:mune:17,mune:kubi:15,L_ude1:L_ude2:7,L_ude2:L_te:6,R_ude1:R_ude2:7,R_ude2:R_te:6,L_momo:L_sune:10,L_sune:L_ashi1:9,L_ashi1:L_ashi2:9,R_momo:R_sune:10,R_sune:R_ashi1:9,R_ashi1:R_ashi2:9,kubi:atama:20",
+   "text",
+   "PORT DESIGN (stream NF): the bones of the thrown-shadow capsules every KH character skeleton has (kh-er-render gfx.rs / gfx/party.rs caps_of; KH3 bone names), FROM:TO:RADIUS (cm), radius before the margin; the head as a ball from the neck to the head bone",
+   "the limb volumes (camfade.limb_guard)",
+   "-",
+   "confirmed",
+   "a bone a skeleton lacks is skipped; a skeleton with none of them gets one upright capsule around his bones"
+  ]
+ ]
+}

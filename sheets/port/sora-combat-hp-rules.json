@@ -1,0 +1,10 @@
+{"sheet":"sora-combat-hp-rules","group":"port","columns":["id","order","condition","result","ref_addr","ref_conf"],"rows":[
+["hp_rule_01",1,"new < 1 && pawn+0x630 bit 5 (m_bIsHpLimitOne)","new = 1","0x1405A2A00","confirmed"],
+["hp_rule_02",2,"new < 1 && pawn+0x630 bit 6 (m_bIsHpLimitOneExceptPlayerAttack) && !bReact","new = 1","0x1405A2A00","confirmed"],
+["hp_rule_03",3,"new < 1 && info+0x66 class 1 / 2 (victim objType 1) / 3 (objType 1 or 10) / 4 (objType 2)","new = 1","0x1405A2A00","confirmed"],
+["hp_rule_04",4,"HasAbility(LAST_LEAVE 44) && HP before >= 2 && new <= 0","new = 1","0x1405A2A00","confirmed"],
+["hp_rule_05",5,"HasAbility(COMBO_LEAVE 45) && (pawn+0x848 > 0 || current state == DAMAGE || next state == DAMAGE) && new <= 0","new = 1","0x1405A2A00","confirmed"],
+["hp_rule_06",6,"always (not forced)","pawn+0x848 = 0.6","0x1405A2A00","confirmed"],
+["hp_rule_07",7,"new < 1 && player pawn && pawn+0x518 bit 0","new = 1","0x1405A2A00","confirmed"],
+["hp_rule_08",8,"always","SetHP(clamp(new, 0, MaxHP)) via pawn slot 776 0x1405B9700","0x1405B9700","confirmed"]
+]}

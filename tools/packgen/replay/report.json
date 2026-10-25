@@ -1,0 +1,38 @@
+{
+ "about": "tools/packgen_recipe.js compile: what the replay recipes make and what they cannot",
+ "stats": {
+  "copy": 1421,
+  "json": 249,
+  "unresolved": 3,
+  "json_refs": 892562,
+  "json_own_values": 113179,
+  "v1_literals": 1766142,
+  "v2_literals": 129914,
+  "v2_tree_refs": 8149,
+  "text": 11,
+  "raw": 3,
+  "jsontext": 1
+ },
+ "unresolved_by_reason": {
+  "saveload (missing): binary file not in the corpus": 1,
+  "ui (the pack tools make another version): N values not in the corpus (more than 400)": 1,
+  "vfx (the pack tools make another version): Japanese text not found in the corpus": 1
+ },
+ "unresolved": [
+  {
+   "file": "saveload/textures/MenuWorldTitleER.png",
+   "why": "binary file not in the corpus",
+   "pack_tools_make_another_version": false
+  },
+  {
+   "file": "ui/sheet_rows.json",
+   "why": "602 values not in the corpus (more than 400)",
+   "pack_tools_make_another_version": true
+  },
+  {
+   "file": "vfx/triggers.json",
+   "why": "Japanese text not found in the corpus",
+   "pack_tools_make_another_version": true
+  }
+ ]
+}

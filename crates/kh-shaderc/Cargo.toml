@@ -1,0 +1,15 @@
+[package]
+name = "kh-shaderc"
+description = "Offline shader build for hosts that are not wgpu (the Elden Ring renderer): the character harness WGSL (kh-look + kh-er-render) with the translated game shaders of PACK/materials spliced in, per material variant, through naga (WGSL -> HLSL) and the Windows SDK's dxc into PACK/materials/er/*.dxil. Run: cargo run --release -p kh-shaderc."
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "kh-shaderc"
+path = "src/main.rs"
+
+[dependencies]
+kh-look = { path = "../kh-look" }
+# The same naga the test app's wgpu uses (already in the tree through Bevy).
+naga = { version = "29", features = ["wgsl-in", "hlsl-out"] }
+serde_json = "1"

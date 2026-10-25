@@ -1,0 +1,8 @@
+{"sheet":"sora-combat-velocity-flags","group":"port","columns":["id","bit","meaning","writers","readers"],"rows":[
+["c18_bit_01",0,"direct XY pending","0x140592DD0, 0x140592E10; cleared 0x14057CFE0, 0x14057D010","CalcVelocity tail 0x14057A286"],
+["c18_bit_02",1,"direct Z pending","0x140592DD0, 0x140592E40; cleared 0x14057CFE0, 0x14057D030","CalcVelocity tail 0x14057A2B3"],
+["c18_bit_03",2,"ignore body push","0x1405943A0","0x1405891D0"],
+["c18_bit_04",3,"land only on a downward step","0x140594950","0x14058D6F2, 0x14058D92D"],
+["c18_bit_05",4,"body push XY only","0x140593D50","0x140588790"],
+["c18_bit_06",5,"movement tick flag","-","0x14058CE56, 0x140595805, 0x140598360"]
+]}

@@ -1,0 +1,47 @@
+use hudhook::imgui::{TableColumnSetup, Ui};
+
+use debug::UiExt;
+use eldenring::dlio::DLFileDeviceManager;
+
+use crate::display::DebugDisplay;
+
+impl DebugDisplay for DLFileDeviceManager {
+    fn render_debug(&self, ui: &Ui) {
+        ui.debug_copiable("File Device Count", self.devices.len());
+
+        ui.header("Virtual Roots", || {
+            ui.table(
+                "dl-file-device-manager-virtual-roots",
+                [
+                    TableColumnSetup::new("Root"),
+                    TableColumnSetup::new("Mount"),
+                ],
+                self.virtual_roots.iter(),
+                |ui, _i, vr| {
+                    ui.table_next_column();
+                    ui.text(format!("{}", vr[0]));
+                    ui.table_next_column();
+                    ui.text(format!("{}", vr[1]));
+                },
+            );
+        });
+
+        ui.header("BND4 Files", || {
+            ui.table(
+                "dl-file-device-manager-bnd4-files",
+                [
+                    TableColumnSetup::new("Name"),
+                    TableColumnSetup::new("File Size"),
+                ],
+                self.bnd4_files.iter(),
+                |ui, _i, file| {
+                    ui.table_next_column();
+                    ui.text(format!("{}", file.name));
+
+                    ui.table_next_column();
+                    ui.text(file.file_size.to_string());
+                },
+            );
+        });
+    }
+}

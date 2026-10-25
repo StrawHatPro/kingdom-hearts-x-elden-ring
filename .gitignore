@@ -1,0 +1,52 @@
+# ---- Never commit game files or anything made from them (see LEGAL.md) ----
+# KH3 assets extracted / converted from your own install, and the evidence the tools write about them
+/assets/
+/assets_converted/
+/audit/
+# the asset pack, generated code and every other build output
+/build/
+/target/
+# sheets regenerated from your own KH3 install (only sheets/port is part of the repository)
+/sheets/*
+!/sheets/port/
+# machine-specific
+/tools/config.json
+/tools/third_party/ogg-vorbis-decoder/ogg-vorbis-decoder.min.js
+/node_modules/
+# your own files
+/user/
+
+# ---- The mod folder: only the profile and the launcher are part of the repository ----
+/er/*
+!/er/profiles/
+!/er/play.bat
+/er/profiles/*
+!/er/profiles/kh-sora.me3
+
+# ---- Game binaries and assets, wherever they appear ----
+*.exe
+*.dll
+*.pdb
+*.pak
+*.uasset
+*.uexp
+*.ubulk
+*.bnk
+*.wem
+*.usm
+*.glb
+*.dds
+*.wav
+*.ogg
+*.bhd
+*.bdt
+*.dcx
+*.sl2
+*.co2
+*.khsave
+*.log
+
+# downloaded and released binaries: the DirectX shader compiler, the prebuilt shader compiler, the release folder
+/tools/bin/
+/dist/
+/release-tools/sea/node_modules/

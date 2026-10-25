@@ -1,0 +1,16 @@
+{
+ "about": "tools/packgen_recipe.js compile: what the replay recipes make and what they cannot",
+ "stats": {
+  "copy": 0,
+  "json": 17,
+  "unresolved": 0,
+  "json_refs": 972,
+  "json_own_values": 338,
+  "v1_literals": 2139,
+  "v2_literals": 299,
+  "v2_tree_refs": 1,
+  "text": 7
+ },
+ "unresolved_by_reason": {},
+ "unresolved": []
+}

@@ -1,0 +1,6 @@
+{"sheet":"sora-difficulty","group":"port","columns":["id","game_level","base_hp","base_mp","hp_up","mp_up","exp_rule","player_damage","enemy_damage","enemy_attack_add","ap_add","mp_charge_time","start_abilities","note","ref_addr","ref_conf"],"rows":[
+["BEGINNER",0,90,100,[3,5,10,15,30],[3,5,10,20],"exp + ceil(0.25 * exp)",1.25,0.5,0,0,50,[],"Standard values except EXP x1.25 and the two damage factors","0x140642820","confirmed"],
+["STANDARD",1,90,100,[3,5,10,15,30],[3,5,10,20],"exp",1,1,0,0,50,[],"reference","0x140642820","confirmed"],
+["PROUD",2,90,100,[3,5,10,15,30],[3,5,10,20],"exp",1,1.5,0,0,50,[],"enemy damage x1.5 only","0x140642820","confirmed"],
+["CRITICAL",3,45,50,[1,2,5,7,15],[1,2,5,10],"ceil(0.75 * exp)",1,2,5,30,70,["CRITICAL_COUNTER","CRITICAL_CHARGE","CRITICAL_CONVERTER"],"base HP / MP halved (floor) at 0x140575D73; every HP / MP bonus roughly halved (table 0x1405864C0); enemy attack stat +5 (0x140575ECF); AP +30 (0x140E92280); MP charge +20 s (0x1405AB250); abilities granted through a victory bonus row with m_InitAbilityEquipOnCriticalMode are not granted again (0x140586280)","0x140575C80","inferred"]
+]}

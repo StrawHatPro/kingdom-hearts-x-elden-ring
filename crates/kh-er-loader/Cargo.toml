@@ -1,0 +1,14 @@
+[package]
+name = "kh-er-loader"
+description = "The small DLL me3 loads into Elden Ring (exe 2.7.1.0 or 2.7.2.0): registers frame tasks with the game and forwards them to kh_er.dll, which it loads from the same folder and loads again whenever that file changes (so the mod can be rebuilt while the game runs). build/sora_tmp/er/IMPL_ER1_STATE.md."
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[target.'cfg(windows)'.dependencies]
+eldenring = { git = "https://github.com/Dasaav-dsv/fromsoftware-rs.git", rev = "79266c9748863272dfd08d8e51f5fd413aec862d" }
+fromsoftware-shared = { git = "https://github.com/Dasaav-dsv/fromsoftware-rs.git", rev = "79266c9748863272dfd08d8e51f5fd413aec862d" }
+pelite = "0.10"
+windows-sys = { version = "0.61", features = ["Win32_System_LibraryLoader", "Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_UI_WindowsAndMessaging"] }

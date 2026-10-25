@@ -1,0 +1,11 @@
+{"sheet":"sora-combat-shape-flags","group":"port","columns":["id","group","shape","hits_world_static","ignore_ground","phys","fixed_location","size_rule","used_by_base_combo"],"rows":[
+["KB_Stick","KB_Stick","CAPSULE2 ATK_00-ATK_01","yes","yes","yes","no","radius 50","yes"],
+["KB_StickM","KB_StickM","CAPSULE2 ATK_00-ATK_01","no","no","yes","no","radius 80","yes"],
+["KB_StickL","KB_StickL","CAPSULE2 ATK_00-ATK_01","no","no","yes","no","radius 120","yes"],
+["KB_SphereSS","KB_SphereSS","SPHERE ATK_00","no","no","yes","no","radius 250","yes"],
+["KB_SphereS","KB_SphereS","SPHERE ATK_00","no","no","yes","no","radius 350","yes"],
+["SphereM","SphereM","SPHERE ATK_00","no","no","no","no","radius 550","yes"],
+["KB_FixRangeS","KB_FixRangeS","SPHERE ATK_00","no","no","no","yes","radius 350","yes"],
+["FrontImpactS","FrontImpactS","SPHERE vfx_cure + (200,0,0)","no","no","no","no","radius min(100 + 700 t, 350)","yes"],
+["KB_FixPillar","KB_FixPillar","CAPSULE1 vfx_cure + (200,0,0), rotation LOCAL","no","no","no","yes","radius min(50 + 2000 t, 300), half-length 800","yes"]
+]}

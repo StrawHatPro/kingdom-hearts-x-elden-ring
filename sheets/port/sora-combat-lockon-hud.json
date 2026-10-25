@@ -1,0 +1,6 @@
+{"sheet":"sora-combat-lockon-hud","group":"port","columns":["id","call","address","when","effect","evidence"],"rows":[
+["lockon_hud_01","Add(target, 0)","0x1415759C0","every frame for the soft target","auto cursor; no-op when present; first cursor registers the enemy HP gauge target (0x14158A860)","C"],
+["lockon_hud_02","Add(target, 1)","0x1415759C0","lock on, switch, forced lock","lock cursor; UI sound id 7 (0x14176F6B0)","C"],
+["lockon_hud_03","Remove(target)","0x14157A7A0","target change, loss, unlock, before Add(.., 1)","removes that component's cursors (type argument 8, id -1)","C"],
+["lockon_hud_04","SetLockon(comp or null)","0x1405F0140","lock on, switch, unlock","camera manager: lock-on camera start / retarget / end","C"]
+]}

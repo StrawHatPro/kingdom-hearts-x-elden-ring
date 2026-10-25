@@ -1,0 +1,158 @@
+// Writes sheets/port/sora-input-layout.json: the default input layout of the game (Xbox pad and keyboard / mouse,
+// i.GamePadDecideType = 0) with, per action, the FKey the gameplay code reads, where its default comes from, the
+// semantics of the read and the consumer. Spec text: build/sora_tmp/actions/p2_input/SPEC.md ("Default input layout").
+// Authored rows: every key assignment and key read was taken from the machine code of base/KH3.exe (evidence listings
+// and the scan tools are in build/sora_tmp/actions/p2_input/); the consumer logic is from decompiled C where the row
+// says inferred. Unknown cells are null, never guessed; "-" = determined to be none / not applicable.
+//   pad table     0x1486DAA00  30 x const FKey* (index -> EKeys static), used by the key emulation and by mini-games
+//   key table     0x1487D7790  21 slots x {main, sub} FKey (0x18 each); defaults written by 0x140EDF630
+//   game keys     0x1487D7760 attack / decide, 0x1487D7778 jump / cancel (the only two pad keys that are variables)
+//   EKeys statics 0x149C6F9F8 + 0x18 * n (engine, fixed)
+//
+//   node tools/sora_input_layout_sheet.js          write the sheet
+//   node tools/sora_input_layout_sheet.js --check  exit 1 if the sheet on disk differs from the rows below
+const fs = require('fs'), path = require('path');
+const VERSION = '1.0.0';
+const R = path.resolve(__dirname, '..');
+const INI = 'assets/KINGDOM HEARTS III/Config/DefaultInput.ini';
+const REG = 'key emulation registered by controller slot 415 0x141074520';
+const DEF = 'key table default 0x140EDF630';
+// id, fkey_addr, pad_default, key_default, key_sub, semantics, source, consumer, ref_addr, ref_conf, note
+const ROWS = [
+// ---- sticks
+['move.stick_x', '0x149C705F8', 'Gamepad_LeftX (left stick X)', 'D (+1) / A (-1)', '-', 'axis',
+  'EKeys::Gamepad_LeftX (pad table index 0); ' + REG + ': axis LeftX, positive key slot 1, negative key slot 0, modifier slot 4, scale 0.5; ' + DEF + ' slots 0 = A, 1 = D (no sub keys); ' + INI + ' line 31 AxisConfig DeadZone 0.25, Sensitivity 1, Exponent 1, bInvert False',
+  'ATresPlayerControllerSora input update: GetInputAnalogStickState(0) 0x1444333A0 -> controller+0x84C; vector (LeftY, LeftX, 0), magnitude at +0x854, inactive below 0.1', '0x1413F1AB0', 'confirmed',
+  'per-axis dead zone (stock MassageAxisInput 0x1445AF120); keyboard injects raw +-1.0 each frame while held (0x14442C190), one frame later than the pad; i.GameKeyboardDisplayType == 1 replaces slot 0 main by Q (0x140EE0870)'],
+['move.stick_y', '0x149C70610', 'Gamepad_LeftY (left stick Y, up positive)', 'W (+1) / S (-1)', '-', 'axis',
+  'EKeys::Gamepad_LeftY (pad table index 1); ' + REG + ': axis LeftY, positive key slot 2, negative key slot 3, modifier slot 4, scale 0.5; ' + DEF + ' slots 2 = W, 3 = S (no sub keys); ' + INI + ' line 32 AxisConfig DeadZone 0.25, Sensitivity 1, Exponent 1, bInvert False',
+  'ATresPlayerControllerSora input update: GetInputAnalogStickState(0) 0x1444333A0 -> controller+0x848', '0x1413F1AB0', 'confirmed',
+  'i.GameKeyboardDisplayType == 1 replaces slot 2 main by Z (0x140EE08DC)'],
+['move.walk_modifier', '0x1487D7850', '-', 'LeftAlt', '-', 'held',
+  DEF + ' slot 4 = LeftAlt, no sub key; modifier of both movement axes in 0x141074520 (scale 0x3F000000 = 0.5)',
+  'axis emulation 0x14442C190: injected value x 0.5 while the modifier is down -> 0.3333 after the 0.25 dead zone -> below the 0.8 run threshold of TryRun 0x141440030', '0x14442C190', 'confirmed',
+  'the pad has no walk button: the stick magnitude decides (walk below 0.8, movement spec 2.5)'],
+['camera.stick_x', '0x149C70628', 'Gamepad_RightX (right stick X)', 'MouseX', '-', 'axis',
+  'EKeys::Gamepad_RightX (pad table index 2); ' + INI + ' line 33 AxisConfig DeadZone 0.25, Sensitivity 1, Exponent 1; mouse: line 35 MouseX DeadZone 0, Sensitivity 0.07; mouse-to-stick emulation registered by 0x141074520 (stick index 1, scale pointer 0x1486DAAF0 = 0.5, limit pointer 0x1486DAAF4 = 3.0, both written by 0x140EDF630)',
+  'camera slot 258: GetInputAnalogStickState(1) 0x1444333A0 (camera spec 2.5)', '0x1405CD3F0', 'confirmed',
+  'mouse path 0x14442BC20 (decompiled C only): MouseX value, ignored when |x| and |y| are both below 0.01, divided by the frame time relative to 1/60, x scale, clamped to +-limit, injected as Gamepad_RightX'],
+['camera.stick_y', '0x149C70640', 'Gamepad_RightY (right stick Y)', 'MouseY (inverted)', '-', 'axis',
+  'EKeys::Gamepad_RightY (pad table index 3); ' + INI + ' line 34 AxisConfig DeadZone 0.25, Sensitivity 1, Exponent 1; mouse: line 36 MouseY DeadZone 0, Sensitivity 0.07; mouse-to-stick registration 0x141074520 sets flag bit 1 (invert Y) and clears bit 0 (invert X) at 0x1410748AC',
+  'camera slot 258: GetInputAnalogStickState(1) 0x1444333A0; the camera negates Y (0x1405CD525)', '0x1405CD3F0', 'confirmed',
+  'raw sign of Gamepad_RightY is an open item of the camera spec'],
+// ---- face buttons
+['attack', '0x1487D7760', 'Gamepad_FaceButton_Bottom (Xbox A)', 'LeftMouseButton', 'Enter', 'just-pressed',
+  'game key variable; static initialiser 0x1400C79C0 copies EKeys::Gamepad_FaceButton_Right; 0x140EDD580 with i.GamePadDecideType (0x1487D7370) <= 0 writes EKeys::Gamepad_FaceButton_Bottom; ' + REG + ' with key slot 7; ' + DEF + ' slot 7',
+  'HUD command menu: UI button 27 (decide) executes the selected command -> controller slot 678 ExecuteCommand 0x14141B470 (re-reads the key just-pressed at 0x14141B51D); direct TryAttack (request iface slot 45) in the input update when controller+0xC08 or +0xBB8 is set', '0x1413F1AB0', 'confirmed',
+  'read at 0x1413F1B9B; the two execution paths are from decompiled C'],
+['jump', '0x1487D7778', 'Gamepad_FaceButton_Right (Xbox B)', 'SpaceBar', 'BackSpace', 'just-pressed + held',
+  'game key variable; static initialiser 0x1400C7980 copies EKeys::Gamepad_FaceButton_Bottom; 0x140EDD580 with i.GamePadDecideType <= 0 writes EKeys::Gamepad_FaceButton_Right; ' + REG + ' with key slot 8; ' + DEF + ' slot 8',
+  'input update: pressed -> risk dodge (slot 61), launch attack (slot 45), JumpRequest (slot 42 0x14143D8F0); held (not on the press frame) -> TryGlide (slot 67 0x14143C5B0), JumpHeld (slot 43); pressed is dropped while LB is held or the command menu is open', '0x1413F1AB0', 'confirmed',
+  'pressed read at 0x1413F1BD9, held at 0x1413F1E65; Jump Begin 0x1413868C0 reads held again through 0x14150E670'],
+['guard_dodge', '0x149C70748', 'Gamepad_FaceButton_Left (Xbox X)', 'RightMouseButton', 'RightShift', 'just-pressed + held',
+  'EKeys::Gamepad_FaceButton_Left read directly (fixed); keyboard through ' + REG + ' (pad table index 14, key slot 5); ' + DEF + ' slot 5',
+  'input update: pressed -> TryFlow (slot 72), TryAirSlide (slot 69), then TryGuard (slot 55 0x14143C6D0) with the stick inactive or TryDodge (slot 58 0x14143AAA0) with it active; held -> GuardHeld (slot 56 0x14143CA20); pressed is dropped while LB is held', '0x1413F1AB0', 'confirmed',
+  'pressed read at 0x1413F1C15, held at 0x1413F1EA1'],
+['situation_command', '0x149C70760', 'Gamepad_FaceButton_Top (Xbox Y)', 'F', 'RightControl', 'just-pressed',
+  'EKeys::Gamepad_FaceButton_Top read directly (fixed); keyboard through ' + REG + ' (pad table index 12, key slot 6); ' + DEF + ' slot 6',
+  'HUD command menu 0x1416236C0: UI button 0 pressed -> situation command selection 0x141618A50; input update: controller slot 674 0x141404460 returns the press only when LB and RB are both up and controller+0x8C8 is not running; when it does and RT is down the update returns', '0x1413F1AB0', 'inferred',
+  'key and just-pressed read at 0x1413F1C50 (instruction level); the held read at 0x1413F1EDC is discarded; consumer from decompiled C'],
+// ---- shoulder buttons
+['shortcut_modifier', '0x149C70778', 'Gamepad_LeftShoulder (Xbox LB)', 'LeftShift', '-', 'held (UI: pressed or held)',
+  'EKeys::Gamepad_LeftShoulder read directly (fixed); keyboard through ' + REG + ' (pad table index 16, key slot 13); ' + DEF + ' slot 13, no sub key',
+  'input update 0x1413F1D75: while held (and controller slot 846 != 0x8B) the guard, situation and jump presses are cleared; HUD 0x1416220D0: UI button 4 pressed or held opens the shortcut set', '0x1413F1AB0', 'confirmed',
+  'the just-pressed read at 0x1413F1E2A calls request iface slot 101 (+0x328), meaning not determined'],
+['shortcut_1', '0x149C70730', 'LB + Gamepad_FaceButton_Right (Xbox B)', 'LeftShift + LeftMouseButton', 'LeftShift + Enter', 'just-pressed (UI state 1)',
+  'UI pad poll 0x14158E390: UI button 2 = physical Gamepad_FaceButton_Right or key slot 7 main / sub, read from the viewport client raw key map by 0x14158F000 (not through the decide / cancel variables)',
+  'HUD 0x1416220D0: with LB, UI button 2 -> shortcut index 0 -> 0x14161E050 / ExecuteShortcut 0x14161D450', '0x1416220D0', 'inferred',
+  'button order of the test: 2, 0, 3, 1 (0x1416223E1..0x141622427); decompiled C for the dispatch'],
+['shortcut_2', '0x149C70760', 'LB + Gamepad_FaceButton_Top (Xbox Y)', 'LeftShift + F', 'LeftShift + RightControl', 'just-pressed (UI state 1)',
+  'UI pad poll 0x14158E390: UI button 0 = EKeys::Gamepad_FaceButton_Top (keyboard via the emulation, key slot 6)',
+  'HUD 0x1416220D0: with LB, UI button 0 -> shortcut index 1 -> ExecuteShortcut 0x14161D450', '0x1416220D0', 'inferred', '-'],
+['shortcut_3', '0x149C70748', 'LB + Gamepad_FaceButton_Left (Xbox X)', 'LeftShift + RightMouseButton', 'LeftShift + RightShift', 'just-pressed (UI state 1)',
+  'UI pad poll 0x14158E390: UI button 3 = EKeys::Gamepad_FaceButton_Left (keyboard via the emulation, key slot 5)',
+  'HUD 0x1416220D0: with LB, UI button 3 -> shortcut index 2 -> ExecuteShortcut 0x14161D450', '0x1416220D0', 'inferred', '-'],
+['shortcut_4', '0x149C70718', 'LB + Gamepad_FaceButton_Bottom (Xbox A)', 'LeftShift + SpaceBar', 'LeftShift + BackSpace', 'just-pressed (UI state 1)',
+  'UI pad poll 0x14158E390: UI button 1 = physical Gamepad_FaceButton_Bottom or key slot 8 main / sub, read from the viewport client raw key map by 0x14158F000',
+  'HUD 0x1416220D0: with LB, UI button 1 -> shortcut index 3 -> ExecuteShortcut 0x14161D450', '0x1416220D0', 'inferred',
+  'which command each shortcut index holds (three sets, save data) was not read'],
+['lock_on', '0x149C70790', 'Gamepad_RightShoulder (Xbox RB), tap', 'R', '-', 'held, timed: tap = released within 0.2667 s',
+  'EKeys::Gamepad_RightShoulder read directly (fixed); keyboard through ' + REG + ' (pad table index 19, key slot 16); ' + DEF + ' slot 16, no sub key',
+  'input update 0x1413F1CC4 (IsInputKeyDown) -> controller slot 712 0x1413F0700(held, dt): hold time at +0x938; on release with 0 < time <= 0.26666668 the tap flag +0x934 is set for that frame; target search slot 714 0x141404E50 reads it through slot 711 and locks the candidate (manual lock +0x960)', '0x1413F0700', 'confirmed',
+  'timer and tap flag at instruction level; the use in the target search is decompiled C; the held flag is forced 0 in states 95, 96, 103, 144, 145, 150 and on input lock'],
+['shotlock_aim', '0x149C70790', 'Gamepad_RightShoulder (Xbox RB), hold', 'R', '-', 'held',
+  'same key as lock_on',
+  'controller slot 800 0x1414165E0(held, dt), called from the input update when pawn vt+0xD70() == 1: aim mode opens when the hold timer +0xA0C exceeds 0.26666668 s (0x14141908D); inside it attack just-pressed (0x1414189A1) and Gamepad_FaceButton_Left just-pressed (0x141418C77) are read', '0x1414165E0', 'inferred',
+  'magic spec S2; key reads inside at instruction level'],
+['lock_on_target_change', '0x149C707C0', 'Gamepad_RightTrigger (Xbox RT), tap', 'E', '-', 'held, timed: tap = released within 0.2667 s',
+  'EKeys::Gamepad_RightTrigger read directly (fixed); keyboard through ' + REG + ' (pad table index 20, key slot 17); ' + DEF + ' slot 17, no sub key',
+  'input update 0x1413F1CFF (IsInputKeyDown) -> controller slot 713 0x1413F0D00(held, dt): timer +0x940, tap flag +0x93E on release within 0.26666668 s, hold flags +0x93C / +0x93D after it; target search 0x141404E50 reads the tap through slot 728 and steps through the candidate list +0x9E8 when no RB tap came the same frame', '0x1413F0D00', 'inferred',
+  'timer logic at instruction level; called only when pawn vt+0xD70() == 1; use in the search is decompiled C'],
+['rt_hold_mode', '0x149C707C0', 'Gamepad_RightTrigger (Xbox RT), hold', 'E', '-', 'held longer than 0.2667 s',
+  'same key as lock_on_target_change',
+  'target search 0x141404E50: hold flag (slot 727, +0x93C) and request iface vt+0x5F8() != 0 -> controller+0x968 = 1, then slot 715 0x141406F80 runs every frame until the flag drops', '0x141404E50', 'guess',
+  'what this mode is was not determined (decompiled C only)'],
+['left_trigger', '0x149C707A8', 'Gamepad_LeftTrigger (Xbox LT)', 'C', '-', 'just-pressed + held',
+  'EKeys::Gamepad_LeftTrigger read directly (fixed); keyboard through ' + REG + ' (pad table index 17, key slot 14); ' + DEF + ' slot 14, no sub key',
+  'input update: held (0x1413F1DB0) and pressed (0x1413F1DEC) are arguments of the swim input (request iface slot 223, +0x6F8); HUD command menu 0x1416220D0 / 0x1416236C0: UI button 6 pressed -> 0x14162BAF0(hud, 1, ..) when hud+0x9C8 is 0', '0x1413F1AB0', 'inferred',
+  'key reads at instruction level; the HUD action behind 0x14162BAF0 was not determined'],
+// ---- command menu
+['menu.up', '0x149C707D8', 'Gamepad_DPad_Up', 'Up', 'MouseScrollUp', 'just-pressed (UI state 1)',
+  'UI pad poll 0x14158E390: UI button 10 = EKeys::Gamepad_DPad_Up; keyboard through ' + REG + ' (pad table index 24, key slot 9); ' + DEF + ' slot 9',
+  'HUD command menu 0x1416236C0: cursor -1 (0x141627CF0(hud, -1)); 0x1416220D0 reads the same button', '0x1416236C0', 'inferred',
+  'UI state: 1 pressed, 2 released, 3 held; repeat flag after 0.6 s then every 0.06 s (0x14158EED0), not used by the pressed test 0x141583B80; the settings copy 0x140EDE4E0 does not write the sub key of slot 9'],
+['menu.down', '0x149C707F0', 'Gamepad_DPad_Down', 'Down', 'MouseScrollDown', 'just-pressed (UI state 1)',
+  'UI pad poll 0x14158E390: UI button 11 = EKeys::Gamepad_DPad_Down; keyboard through ' + REG + ' (pad table index 25, key slot 10); ' + DEF + ' slot 10',
+  'HUD command menu 0x1416236C0: cursor +1 (0x141627CF0(hud, 1))', '0x1416236C0', 'inferred', 'the settings copy 0x140EDE4E0 does not write the sub key of slot 10'],
+['menu.left', '0x149C70820', 'Gamepad_DPad_Left', 'Left', 'ThumbMouseButton', 'just-pressed (UI state 1)',
+  'UI pad poll 0x14158E390: UI button 13 = EKeys::Gamepad_DPad_Left; keyboard through ' + REG + ' (pad table index 26, key slot 11); ' + DEF + ' slot 11',
+  'HUD command menu 0x1416236C0: leaves the sub-menu (hud+0x6EC == 1)', '0x1416236C0', 'inferred', '-'],
+['menu.right', '0x149C70808', 'Gamepad_DPad_Right', 'Right', 'ThumbMouseButton2', 'just-pressed (UI state 1)',
+  'UI pad poll 0x14158E390: UI button 12 = EKeys::Gamepad_DPad_Right; keyboard through ' + REG + ' (pad table index 27, key slot 12); ' + DEF + ' slot 12',
+  'HUD command menu 0x1416236C0: enters the sub-menu of the entry / confirms inside it', '0x1416236C0', 'inferred', '-'],
+['menu.confirm', '0x1487D7760', 'Gamepad_FaceButton_Bottom (Xbox A)', 'LeftMouseButton', 'Enter', 'just-pressed (UI state 1)',
+  'UI pad poll 0x14158E390: UI button 27 = the attack / decide key variable 0x1487D7760 (see attack)',
+  'HUD command menu 0x1416236C0: executes the entry under the cursor', '0x1416236C0', 'inferred', 'i.GamePadDecideType >= 1 swaps this with menu.cancel'],
+['menu.cancel', '0x1487D7778', 'Gamepad_FaceButton_Right (Xbox B)', 'SpaceBar', 'BackSpace', 'just-pressed (UI state 1)',
+  'UI pad poll 0x14158E390: UI button 28 = the jump / cancel key variable 0x1487D7778 (see jump)',
+  'HUD command menu 0x1416236C0: closes the sub-menu (hud+0x6EC == 1)', '0x1416236C0', 'inferred', '-'],
+// ---- camera, system
+['camera_reset', '0x149C706A0', 'Gamepad_RightThumbstick (Xbox R3)', 'RightAlt', 'MiddleMouseButton', 'action, IE_Pressed',
+  INI + ' line 38 ActionMappings ActionCameraReset = Gamepad_RightThumbstick; bound in SetupInputComponent 0x1414160F0 (event byte 0 at 0x14141620A) to 0x14140ECC0; keyboard through ' + REG + ' (pad table index 21, key slot 18); ' + DEF + ' slot 18',
+  'handler 0x14140ECC0 -> camera slot 244 Reset(snap = false) (camera spec 2.8)', '0x14140ECC0', 'inferred',
+  'the only ActionMapping the game binds; the same function binds the axes "Turn" and "LookUp", which have no AxisMappings in the ini files'],
+['left_thumbstick', '0x149C70688', 'Gamepad_LeftThumbstick (Xbox L3)', 'X', '-', null,
+  'EKeys::Gamepad_LeftThumbstick (pad table index 18); keyboard through ' + REG + ' (key slot 15); ' + DEF + ' slot 15, no sub key',
+  null, '-', 'guess', 'no read by the Sora controller or the HUD command menu was found (UI button 8 is polled); used by mini-games (0x140F3EC80, 0x1413D3330); ' + INI + ' line 12 binds it to a debug exec command'],
+['hold_camera', '0x149C706B8', 'Gamepad_Special_Left (Xbox View)', 'N', 'Three', 'just-pressed',
+  'EKeys::Gamepad_Special_Left read directly (fixed); keyboard through ' + REG + ' (pad table index 28, key slot 19); ' + DEF + ' slot 19',
+  'input update 0x1413F1F14 -> pawn slot 1349 0x14143D630: when pawn vt+0x2A20() allows, state 144 HOLD_CAMERA (request iface 0x1405B9FE0(0x90)); inside the state 0x141392400 / 0x14138A3D0 / 0x1413885A0 / camera 0x1405F84F0 read RB, attack, X, LB, D-pad, RT, LT, R3, View and jump', '0x14143D630', 'inferred',
+  'key read at instruction level; ' + INI + ' line 39 ActionCameraPreview = Gamepad_Special_Left is not bound by any code (the name is not in the executable), line 9 is a debug exec binding'],
+['pause', '0x149C70700', 'Gamepad_Special_Right (Xbox Menu)', 'M', 'Four', 'just-pressed (UI state 1)',
+  'UI pad poll 0x14158E390: UI button 22 = EKeys::Gamepad_Special_Right; keyboard through ' + REG + ' (pad table index 29, key slot 20); ' + DEF + ' slot 20',
+  'UI manager tick 0x1415B0ED0 (0x1415B1483): pressed -> 0x1441B6B80 (sets bit 0x40 at +0xA50 of the target object)', '0x1415B0ED0', 'inferred',
+  'the Sora input update reads the key just-pressed at 0x1413F1C8C and discards the result; what the 0x40 bit starts was not traced'],
+['any_key', '0x149C6F9F8', 'any', 'any', '-', 'just-pressed',
+  'EKeys::AnyKey read directly', 'input update 0x1413F1F79: controller+0x878 bit 5 = pressed this frame (also set when the stick becomes active or turns by 90 degrees or more) -> request iface slot 37 (+0x128)', '0x1413F1AB0', 'inferred', '-'],
+// ---- storage
+['config.decide_type', '0x1487D7370', '-', '-', '-', '-',
+  'cvar i.GamePadDecideType (registered 0x1400C8B40, default 0); UTresGameSettings.GamePadDecideType (u8, +0x50, default 0 by 0x140EE0CA0); applied by 0x140EDD580: >= 1 -> attack / decide = Gamepad_FaceButton_Right and jump / cancel = Gamepad_FaceButton_Bottom, else the reverse',
+  'swaps only the two key variables 0x1487D7760 / 0x1487D7778; every other pad button is a fixed EKeys static', '0x140EDD580', 'confirmed', '-'],
+['config.key_table', '0x1487D7790', '-', '-', '-', '-',
+  'key table: 21 slots x {main FKey, sub FKey}; defaults 0x140EDF630; stored in UTresGameSettings.KeyConfigMain (+0x80, 21 FKey) and KeyConfigSub (+0x278, 21 FKey), flag KeyConfigCustom (+0x58); settings -> table 0x140EDE4E0 (called by the apply function 0x140EC5EC0), table -> settings 0x140ECAFE0',
+  'order of the settings arrays (table slot): 7 attack, 8 jump, 5 guard, 6 situation, 14 LT, 13 LB, 17 RT, 16 RB, 2 up, 3 down, 0 left, 1 right, 4 walk, 15 L3, 18 R3, 9 / 10 / 11 / 12 D-pad up / down / left / right, 20 start, 19 select', '0x140EDE4E0', 'confirmed',
+  'the pad itself cannot be rebound except through i.GamePadDecideType'],
+];
+const COLUMNS = ['id', 'fkey_addr', 'pad_default', 'key_default', 'key_sub', 'semantics', 'source', 'consumer', 'ref_addr', 'ref_conf', 'note'];
+const ids = new Set();
+for (const r of ROWS) { if (r.length !== COLUMNS.length) throw new Error('row width: ' + r[0]); if (ids.has(r[0])) throw new Error('duplicate id: ' + r[0]); ids.add(r[0]); }
+const name = 'sora-input-layout';
+const out = JSON.stringify({ sheet: name, group: 'port', columns: COLUMNS }).replace(/\}$/, ',"rows":[\n') + ROWS.map((r) => JSON.stringify(r)).join(',\n') + '\n]}\n';
+const file = path.join(R, 'sheets/port', name + '.json');
+if (process.argv.includes('--check')) {
+  const same = fs.existsSync(file) && fs.readFileSync(file, 'utf8') === out;
+  console.log(same ? name + ': ' + ROWS.length + ' rows, current' : name + ': sheet differs from tools/sora_input_layout_sheet.js ' + VERSION);
+  process.exit(same ? 0 : 1);
+}
+fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, out);
+console.log(name + ': ' + ROWS.length + ' rows written (tools/sora_input_layout_sheet.js ' + VERSION + ')');

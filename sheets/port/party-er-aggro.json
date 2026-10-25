@@ -1,0 +1,30 @@
+{
+"sheet":"party-er-aggro",
+"group":"port",
+"columns":["id","value","unit","source","evidence","ref_addr","ref_conf","note"],
+"rows":[
+["aggro.reach",3000,"cm","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","a member farther than 30 m from an enemy is no candidate (the leader always is); about twice target.engage_range","-","guess","-"],
+["aggro.base",1.0,"score","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","every candidate starts with this, so a member nobody has a reason to choose is still chosen now and then (no permanent lock)","-","guess","-"],
+["aggro.w_near",1.5,"score","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","who is close: the strongest single reason, as KH3's and Elden Ring's own target searches pick by distance","-","guess","near = 1 at the enemy, 0 at aggro.near_range"],
+["aggro.near_range",1500,"cm","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","15 m: inside it nearness counts (the party fights within target.engage_range 8 m)","-","guess","-"],
+["aggro.w_front",0.75,"score","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","who is in front of the enemy (the cosine of its facing to him, 0 behind): it keeps on what it is looking at","-","guess","-"],
+["aggro.w_damage",1.5,"score","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","who hurt it: his share of the party's damage on it in the window, each hit counting less as it ages (Elden Ring weighs damage too: NpcThinkParam targetSysDmgEffectRate)","-","guess","0..1 share"],
+["aggro.damage_window",10,"s","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","hits older than this are forgotten","-","guess","-"],
+["aggro.w_last_hit",1.0,"score","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","who hit it last (within aggro.last_hit_window)","-","guess","-"],
+["aggro.last_hit_window",3,"s","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","-","-","guess","-"],
+["aggro.w_cast",1.0,"score","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","who is casting: Donald's spells draw attention (a cast begun within aggro.out_of_sight_cast of party-don-progression)","-","guess","-"],
+["aggro.w_leader",0.5,"score","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","the leader's fair share: with the party in formation he takes about 40 % of the attention (unit test aggro_without_abilities_...)","-","guess","-"],
+["aggro.w_current",1.0,"score","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","its current target: hysteresis, no flip-flop at a re-roll","-","guess","-"],
+["aggro.w_crowd",1.0,"score","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","attention spread over the party: minus the share of the other engaged enemies already on him","-","guess","-"],
+["aggro.hold_min",5,"s","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","a choice is held at least this long (a roll between the two), unless an ability or a provocation re-makes it","-","guess","-"],
+["aggro.hold_max",10,"s","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","-","-","guess","-"],
+["aggro.switch_min",2,"s","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","never two switches of one enemy closer than this (a provocation waits)","-","guess","-"],
+["aggro.provoke",0.08,"share of HP max","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","another member who dealt this share of the enemy's maximum HP within the window re-makes its choice early","-","guess","-"],
+["aggro.refresh",4,"s","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","the hate hit is fired again this often while a choice holds (the enemy may drift back)","-","guess","-"],
+["aggro.gap",0.1,"s","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","at least this between two of the director's hate hits (the bullet slots are shared with every hit)","-","guess","-"],
+["aggro.engaged_for",8,"s","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","an enemy stays engaged this long after the last sign (a hit either way, an attack seen near a member); only engaged enemies are steered (a hate hit never starts a fight)","-","guess","-"],
+["aggro.engage_near",1500,"cm","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","an enemy seen in an attack animation within this of a member is engaged","-","guess","-"],
+["aggro.hit_phys",1,"attack value","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","the hate hit: the game's minimum (as party.taunt_phys), no poise, no stamina, dmgLevel 0","-","guess","-"],
+["aggro.lethal_margin",2.0,"factor","HOST CHOICE of the ER party phase, stream AGGRO (2026-10-23; not game data of either game)","a party hit whose Elden Ring value times this reaches the enemy's HP stays the player's bullet (the game's own kill credit)","-","guess","-"]
+]
+}

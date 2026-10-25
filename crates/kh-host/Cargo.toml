@@ -1,0 +1,30 @@
+[package]
+name = "kh-host"
+description = "The host-independent half of a host of Sora (the Bevy test app AND the Elden Ring mod): the seam queues of kh_core::Audio / kh_core::Effects, the audio glue between kh-core and kh-audio (bones and sockets of the step's pose, the per-command and per-step rules), the device output of kh-audio's mixer (rodio / cpal, default output device) incl. a non-blocking threaded output that survives device changes, and the offline render. No Bevy, no game SDK. FIX ONCE: what both hosts do is here. build/sora_tmp/er/IMPL_ER_FX_STATE.md."
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+kh-gendata = { path = "../kh-gendata" }
+kh-core = { path = "../kh-core" }
+kh-anim = { path = "../kh-anim" }
+kh-audio = { path = "../kh-audio" }
+# The effect evaluator behind the kh_core::Effects seam (vfx.rs).
+kh-vfx = { path = "../kh-vfx" }
+# (hud) The game HUD: the Scaleform timeline player and software rasteriser (engine-free).
+kh-ui = { path = "../kh-ui" }
+# (CV1) the conversation camera's shot kinds and director (conv.rs)
+kh-camera = { path = "../kh-camera" }
+# (IMPL_ER21) The camp menu's character picture: the UI actor's light rig (menu_portrait.rs).
+kh-look = { path = "../kh-look" }
+glam = { workspace = true }
+# (prize) KH3's prize orbs: the engine-free simulation the hosts share (prize.rs).
+kh-prize = { path = "../kh-prize" }
+# The same rodio (and through it cpal: WASAPI shared mode on Windows) the test app plays through.
+rodio = { version = "0.22", default-features = false, features = ["playback"] }
+# The loadout sheet (kh-app's reader, shared as source by rig.rs).
+serde_json = "1"
+
+# (GOOFY-GG) examples/gg_guard_hud.rs drives the GUARD bar with the real meter (kh-party guard.rs)
+[dev-dependencies]
+kh-party = { path = "../kh-party" }

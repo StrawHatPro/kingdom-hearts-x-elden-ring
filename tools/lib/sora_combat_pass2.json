@@ -1,0 +1,9001 @@
+{
+ "note": "Pass-2 rows of Sora's melee combat (docs/sora-combat-spec.md revision 2): parameter rows and tables authored by the six second-pass research strands (A request path, B movement, C hits, D targeting, E being hit, F Second Form and situation commands). Read by tools/sora_combat_sheet.js. Every ref_addr is a function start of sheets/native/code.",
+ "params": [
+  {
+   "strand": "A",
+   "row": [
+    "attack.cancel_delay",
+    0.133333,
+    "s",
+    "Attack Tick 0x141341340 @0x141341684: +0x254 += dt; comiss with 0x146903A28",
+    "time after the first hit window opened (state+0x164) until state+0x234 bit 7 is raised; bit 7 is what the guard (0x1414296EF), dodge (0x141428190), air-slide (0x141425D3E) gates and the swim exit test",
+    "0x141341340",
+    "confirmed",
+    "replaces swim.exit_delay: same constant, real meaning = cancel window. Not counted for the last finisher (state+0x141) or kinds with +0x234 bit 8; m_bEnableChange raises the bit at once. Same constant as row swim.exit_delay"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "attack.whiff_air.command_cooldown",
+    0.6,
+    "s",
+    "pawn ctor 0x141423210 @0x141423D9E: MyCommandCoolDownTime (pawn+0xC68) = 0x3F19999A; applied by pawn slot 981 0x141432780 from Attack End 0x141335A30",
+    "pawn+0xE34; CanAttack / CanLaunch / CanUseCommand refuse while > 0; counted down in the pawn tick 0x141449CD0",
+    "0x141335120",
+    "confirmed",
+    "only when state+0x18C > 0 (air-mode attack with no landed hit) and the next state is not an attack / cast / weapon change; no blueprint override in p_ex001_Pawn / PawnBase"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "attack.whiff_air.airslide_cooldown",
+    0.6,
+    "s",
+    "ctor @0x141423DA8: MyAirSlideCoolDownTime (pawn+0xC6C); Attack End @0x1413357C8 -> pawn vt+0x1E18 (pawn+0xE38)",
+    "air slide refused while pawn+0xE38 > 0",
+    "0x141335120",
+    "confirmed",
+    "End, airborne branch, state+0x234 bit 13 (hit landed) clear; written even when another attack follows"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "attack.whiff_air.airguard_cooldown",
+    0.333333,
+    "s",
+    "ctor @0x141423DB2: MyAirGuardCoolDownTime (pawn+0xC70) = 0x3EAAAA9F; Attack End @0x1413357DE -> pawn vt+0x1E28 (pawn+0xE3C)",
+    "air guard refused while pawn+0xE3C > 0",
+    "0x141335120",
+    "confirmed",
+    "same condition as the air-slide cool-down"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "attack.air.cooldown_arm",
+    0.6,
+    "s",
+    "PlayAttack 0x1413378B0 tail: state+0x18C = 0.6 for air-mode kinds (first pass); cleared by End when a hit landed (0x1413357B2)",
+    "state+0x18C > 0 at End = arm the command cool-down",
+    "0x1413378B0",
+    "inferred",
+    "the write in PlayAttack was not re-read in pass 2; the readers in End are instruction level. Same constant as row air.hold_time"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "attack.hit_confirm.required",
+    1,
+    "bool",
+    "CanAttack 0x141426330 @0x141426729: cmp byte [iface+0x9D8],0 (= pawn+0xE28)",
+    "a chained attack / attack after a cast / launch needs a landed hit in this chain, unless COMBO_MASTER (30) which writes the byte at 0x141426401",
+    "0x141426330",
+    "confirmed",
+    "byte reset by pawn slot 981 at the end of the chain; set by on-hit handlers 0x141341B10 / 0x141343B00, magic OnShot 0x14137BB30"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "attack.request.phase",
+    "U",
+    "phase",
+    "HUD command menu MainSel update 0x1416220D0 @0x141622513 (pad button 27 pressed) -> ctrl slot 682 0x141401F80 -> slot 680 0x14140EAA0 -> executor 0x14141B470 @0x14141B5E7 -> TryAttack",
+    "the normal attack press is issued in the UI tick (group DuringPhysics), after the state tick of the frame",
+    "0x1416220D0",
+    "confirmed",
+    "frame order C -> M -> pawn -> S -> U; SetState / PushState take effect in S of the next frame. The controller's direct call 0x1413F257D is link / attraction mode only"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "attack.request.extra_latency_frames",
+    1,
+    "frames",
+    "derived from attack.request.phase",
+    "compared with first-pass section 3.5",
+    "0x1416220D0",
+    "inferred",
+    "tick-group order from docs/sora-ui-spec.md (UI manager tick function, group 5)"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "command.kind.attack",
+    27,
+    "ETresCommandKind",
+    "0x141622517: mov r14d,1Bh",
+    "kind passed to CanExecuteCommand / ExecuteCommand for the Attack row",
+    "0x1416220D0",
+    "confirmed",
+    "0x15 SNEEZE when hud+0xA59; hud+0x9A8 when it is 0xAA, 0xAF..0xB2 or 0xF3"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "command.attack.reaction_block",
+    0,
+    "s",
+    "executor 0x14141B470 branch 0x14141B5E7 has no write of ctrl+0x8F4 and no call of ctrl slot 676",
+    "an attack command neither blocks reactions nor arms the command cool-down",
+    "0x14141B470",
+    "confirmed",
+    "answers strand E open point 4"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "command.grand_magic.cooldown",
+    0.1,
+    "s",
+    "executor @0x14141B825: movss xmm1,[0x145C87D00]; call vt+0x1520 (slot 676 0x141415A50); @0x14141B844 ctrl+0x8F4 = 0x3DCCCCCD",
+    "ctrl+0x8C8 command cool-down and ctrl+0x8F4 reaction block after a grand magic command (kinds 0x20,0x24,0x28,0x2C,0x30,0x6E..0x7C)",
+    "0x14141B470",
+    "confirmed",
+    "gates every command incl. the attack through slot 681 0x1413EC9F0; ordinary magic (branch 0x14141B631) sets neither"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "command.reaction_cooldown_time",
+    1.5,
+    "s",
+    "p_ex001_PawnBase class defaults: MyReactionCoolDownTime = 1.5 (native 1.0, ctor @0x141423DBC)",
+    "ctrl slot 676 replaces its argument by 1.0 only when this value is exactly 1.0",
+    "0x141415A50",
+    "confirmed",
+    "asset: Blueprints/Player/p_ex001/p_ex001_PawnBase; with 1.5 the argument is used unchanged. Same constant as row reaction.cooldown"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "launch.unique_id",
+    1,
+    "ETresChrUniqueID",
+    "CanLaunch 0x14142B3F0 @0x14142B40A: cmp byte [iface+0x1A0],1 (= pawn+0x5F0 m_ChrUniqueID); ATresPlayerPawnSora ctor 0x1413E7580 @0x1413E761B writes 1",
+    "launch attacks are Sora-only; the gate is true for Sora",
+    "0x14142B3F0",
+    "confirmed",
+    "TRES_CHR_UID_SORA"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "launch.stock_available",
+    1,
+    "count",
+    "CanLaunch @0x14142B54E / 0x14142B55F: pawn+0xE50 == 1 || pawn+0xE54 == 1",
+    "stock values: equipped count (0 or 1) at combo start, 2 after use",
+    "0x14142B3F0",
+    "confirmed",
+    "loaded by Decide (combo == 0) and by pawn slot 981"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "launch.groundbreaker_dz_max",
+    100,
+    "cm",
+    "Decide 0x14134ACA0 @0x14134B06D: comiss 100,[state+0x1D0]; ja",
+    "kind 0x1D when pawn+0xE50 != 1, or pawn+0xE54 == 1 && bAir && dz < 100; else 0x1C",
+    "0x14134ACA0",
+    "confirmed",
+    "Same constant as row decide.launch_air_dz"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "launch.rising_dirz",
+    1000,
+    "cm/s",
+    "Decide @0x14134B096: state+0x1D4 = 0x447A0000; state+0x1DD = 1",
+    "fixed DirZ of kind 0x1C started on the ground",
+    "0x14134ACA0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "launch.combo_after",
+    0,
+    "count",
+    "Decide @0x14134B0D7: state+0x128 = 0; pawn vt+0x1D50(0)",
+    "the launch attack resets the combo count; the chain continues",
+    "0x14134ACA0",
+    "confirmed",
+    "TryLaunch 0x14143EAE0 first sets next.combo = 1 and pawn+0xE18 = 1"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "recoil.travel",
+    400,
+    "cm",
+    "Attack slot 129 0x141331AF0 @0x141331B86: Reflect+0x98 = 0x43C80000",
+    "REFLECT (66) pushed from an attack whose hit was repelled",
+    "0x141331AF0",
+    "confirmed",
+    "same value as the guard-side entry 0x14143CE75 (actions spec)"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "counter.forced_kind.default",
+    33,
+    "attack kind",
+    "TryAttack 0x141437330 @0x141437E28: forcedKind = 0x21",
+    "guard counter with the window open and neither REVENGEIMPACT nor REVENGEDIVE",
+    "0x141437330",
+    "confirmed",
+    "0x23 with ability 5 (@0x141437E68), 0x24 with ability 6 (@0x141437E47), 0x25 for form kinds 0x86,0x87,0x8E,0x8F,0x92,0x93,0xDD..0xE0"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "just_guard.timer_countdown_fn",
+    "0x1413F85D0",
+    "-",
+    "controller slot 636 0x1413F85D0: ctrl+0x89C -= dt, floor 0",
+    "the countdown the actions spec had not located",
+    "0x1413F85D0",
+    "confirmed",
+    "the value is the address of the countdown function (this row records the function only)"
+   ]
+  },
+  {
+   "strand": "A",
+   "row": [
+    "friend_finish.active_for_solo",
+    0,
+    "bool",
+    "pawn slot 1304 0x141430A60 @0x141430AC8..0x141430B51: returns unless sum(AbilityCount(190..194)) * pawn+0x148C * 10 != 0, and needs party members 0xB / 0xC",
+    "called by Decide one step before the last",
+    "0x141430A60",
+    "confirmed",
+    "unison roll; no effect without party members"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "attack.move.skip_calc_velocity",
+    1,
+    "bool",
+    "PlayAttack 0x1413378B0 @0x14133AC7B: pawn vt+0x16D8(1) -> component vt+0xA40 0x14057E740 (+0xA3C bit 2); CalcVelocity 0x1405795F0 @0x140579658 jumps to the tail 0x14057A286",
+    "during every Attack state the body of CalcVelocity (braking, friction, input acceleration, speed clamp) is skipped; Velocity = what the state wrote",
+    "0x1413378B0",
+    "confirmed",
+    "cleared by Attack End @0x14133568C; no stick influence in any mode"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "attack.move.begin_stop",
+    1,
+    "bool",
+    "Attack Begin 0x141333210 @0x141333408: unless state+0x234 bit 12: pawn vt+0x16E8 (StopMovement)",
+    "Velocity and Acceleration zero at the start of each attack",
+    "0x141333210",
+    "confirmed",
+    "bit 12 = slide kinds that carry their entry speed"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "traction.xy.speed",
+    800,
+    "cm/s",
+    "traction 0x141349CC0 @0x141349E41 / 0x14134A2F9: target speed while the window is open and dxy > stop_dist",
+    "x MyAttackFirstAirMoveRate (pawn+0xBB0 = 1.5) for the first attack of an air combo",
+    "0x141349CC0",
+    "confirmed",
+    "state+0x150 overrides when non-zero. Same constant as row traction.speed"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "traction.xy.rate_open",
+    0.2,
+    "per 60 Hz tick",
+    "@0x141349F64: approach rate with a positive target",
+    "v += (target - v) * min(rate * dt * 60, 1) (slot 135 0x1413364D0)",
+    "0x141349CC0",
+    "confirmed",
+    "x 1.5 (0.3) for the first air attack. Same constant as row traction.rate_on"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "traction.xy.rate_stop",
+    0.5,
+    "per 60 Hz tick",
+    "@0x14134A34B: rate toward 0 on the ground, inside the stop distance, and for the first air attack",
+    "-",
+    "0x141349CC0",
+    "confirmed",
+    "Same constant as row traction.rate_off_ground"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "traction.xy.rate_stop_air",
+    0.1,
+    "per 60 Hz tick",
+    "@0x14134A337..0x14134A345: rate toward 0 for air-mode attacks (state+0x1DF) that are not the first air attack, window closed",
+    "-",
+    "0x141349CC0",
+    "confirmed",
+    "inside the stop distance with the window open still uses 0.5. Same constant as row traction.rate_off_air"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "traction.approach_snap",
+    0.0003,
+    "cm/s",
+    "slot 135 0x1413364D0: |delta| < 0.0003 -> returns the target",
+    "-",
+    "0x1413364D0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "traction.dxy_max",
+    800,
+    "cm",
+    "@0x141349EED: minss with 800",
+    "clamp of the horizontal distance used by the XY and root-scale channels",
+    "0x141349CC0",
+    "confirmed",
+    "Same constant as row traction.dist_clamp"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "traction.dz_clamp",
+    500,
+    "cm",
+    "@0x141349E7C / 0x141349EC3: clamp(d.z, -500, 500)",
+    "vertical offset used by the Z channel",
+    "0x141349CC0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "traction.z.decay_rate",
+    10,
+    "1/s",
+    "@0x14134A667: DirZ -= dt * DirZ * 10 in phase 2",
+    "written to Velocity.z each tick while DirZ != 0",
+    "0x141349CC0",
+    "confirmed",
+    "no write once DirZ == 0. Same constant as row traction.z_decay"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "traction.z.rearm_gain",
+    5,
+    "1/s",
+    "@0x14134A6DB: DirZ = clamp(dzc * 5, -1200, 1200) when |dzc| > 30 (phase 2 -> 1 with state+0x23C bit 3)",
+    "-",
+    "0x141349CC0",
+    "confirmed",
+    "Same constant as row traction.z_initial_gain"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "traction.dive.blend",
+    0.25,
+    "-",
+    "@0x14134A7F7: vz = min(vz0, DirZ) + DirZ * 0.25",
+    "dive kinds (state+0x1DE)",
+    "0x141349CC0",
+    "confirmed",
+    "lands when the ground probe (range 800) is < 1.0"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "traction.scale.inside",
+    0.1,
+    "-",
+    "@0x14134A51A / 0x14134A461: root scale 0.1 for bit-16 kinds inside the stop distance and for bit-15 kinds",
+    "-",
+    "0x141349CC0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "root_scale.clamp",
+    "none",
+    "-",
+    "anim instance vt+0x428 0x14056B420 stores the pair unclamped; montage advance 0x143F4EA20 @0x143F4EB47 multiplies translation by (s.x, s.x, s.y, 0)",
+    "no clamp exists anywhere on the root-scale path",
+    "0x14056B420",
+    "confirmed",
+    "only PlayAttack's start scale of slide kinds is clamped (0.1 .. max)"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "air_attack.gravity_scale",
+    0.1,
+    "-",
+    "PlayAttack @0x14133A8C1: pawn vt+0x1650(0.1)",
+    "GravityScale of an air-mode attack until TresEnableChange (slot 128 0x14134D510 restores the class default 1.5)",
+    "0x1413378B0",
+    "confirmed",
+    "gravity itself is disabled until the traction window closes. Same constant as row air.gravity_scale"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "air_attack.mode_start",
+    5,
+    "EMovementMode",
+    "PlayAttack @0x14133A8ED: SetMovementMode(5, false)",
+    "Flying",
+    "0x1413378B0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "air_attack.mode_after_window",
+    3,
+    "EMovementMode",
+    "traction @0x14134A937: gravity on + SetMovementMode(3, false) when the Z channel's window closes; slot 128 @0x14134D57D at TresEnableChange",
+    "Falling",
+    "0x141349CC0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "air_attack.fall_accel_window_to_change",
+    -98,
+    "cm/s^2",
+    "-980 x 0.1",
+    "free-fall acceleration between the window end and TresEnableChange when DirZ == 0",
+    "0x141349CC0",
+    "inferred",
+    "derived; -1470 after TresEnableChange (GravityScale 1.5)"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "target_lead.time",
+    0.266667,
+    "s",
+    "TargetMetrics 0x141330D30 @0x141330E25: f64 0x14871E340 = 1/30 converted to f32, x 8, x measured velocity (pawn vt+0xE28 = component+0x9A0)",
+    "lead applied to the target position for dist / dz / DirZ",
+    "0x141330D30",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "level.rate",
+    12,
+    "1/s",
+    "Attack slot 114 0x1413417F0: pawn vt+0xDC8(dt*12), vt+0xDB8(dt*12)",
+    "pitch / roll levelling per tick",
+    "0x1413417F0",
+    "confirmed",
+    "dt*60 with the pitch-facing bit (state+0x1F4 bit 5)"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "body_push.level_sora",
+    4,
+    "ETresBodyPushPowerLevel",
+    "p_ex001_BaseParamData m_BodyPushPower = PPL_50; component default @0x14062F52E",
+    "push weight: lower level than the other 1.0, equal 0.5, higher 0",
+    "0x140637430",
+    "inferred",
+    "asset value confirmed; the weight rule is decompiled C"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "body_push.capsule_blocks_pawns",
+    0,
+    "bool",
+    "DefaultEngine.ini 1397 (TresPlayerPawn: Pawn / TresEnemyPawn / TresSpecialPawn = Ignore), 1346 (TresEnemyPawn ignores Pawn)",
+    "the capsule sweep never stops at a pawn",
+    "0x14057AE30",
+    "confirmed",
+    "asset; ref = the encroach check, which also excludes pawns"
+   ]
+  },
+  {
+   "strand": "B",
+   "row": [
+    "body_push.shape_radius",
+    50,
+    "cm",
+    "p_ex001_PawnBase TresBodyColl0 primitive #1: capsule radius 50, half height 90 at mesh (0,0,90), m_bEnablePush",
+    "Sora's push body",
+    "0x14057ABD0",
+    "confirmed",
+    "asset (strand E table hurt_shapes); ref = the movement-side consumer"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.trace_channel",
+    23,
+    "ECollisionChannel",
+    "sweep 0x14062A920: trace channel argument 0x17 = ECC_GameTraceChannel10 \"TresAtkCollision\" (DefaultEngine.ini line 621)",
+    "constant 0x17 at every sweep call of the function",
+    "0x14062A920",
+    "confirmed",
+    "object channel of hurt shapes is TresBodyCollision (24); of attack shapes TresAtkBody (26)"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.sweep_ignore_channels",
+    "4,14,15,16,17,19,20,23",
+    "channel list",
+    "0x14062A920: response container all Overlap, then Ignore for Camera, TresEquip, TresProjectile, TresPrize, TresTrigger, TresReactor, TresSound, TresAtkCollision",
+    "lea edx,[r8+N] before each call of 0x14443F9F0",
+    "0x14062A920",
+    "confirmed",
+    "always ignored"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.sweep_ignore_pawn_roots",
+    "2,28,29,30",
+    "channel list",
+    "0x14062A920: ignored unless prim+0x985 bit 5 (m_bEnablePawnRootCollision): Pawn, TresEnemyPawn, TresSpecialPawn, TresWorldUnique",
+    "same",
+    "0x14062A920",
+    "confirmed",
+    "no keyblade shape enables pawn-root collision"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.sweep_world_static_needs_maphit",
+    2,
+    "ETresAtkCollMapHitType min",
+    "0x14062A920 ignores channel 0 unless prim+0x985 bit 1; 0x140642CA0 sets the bit when m_MapHitType >= 2",
+    "cmp [rdi+0DCh],2 / cmovae at 0x140642CEF",
+    "0x140642CA0",
+    "confirmed",
+    "of the keyblade groups only KB_Stick (IGNORE_GROUND) qualifies"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.degenerate_radius",
+    0.0001,
+    "cm",
+    "prim slot 336 0x140643F40: radius <= 0.0001 → line trace instead of a shape sweep",
+    "decompiled C constant",
+    "0x140643F40",
+    "inferred",
+    "not reached by keyblade shapes"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.capsule_min_half_length",
+    0.5,
+    "cm",
+    "prim update 0x140647950, CAPSULE2: halfLength = max(|end2 - end1| / 2, 0.5)",
+    "decompiled C; shape is a PhysX capsule (radius, half segment length)",
+    "0x140647950",
+    "inferred",
+    "-"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.first_tick_zero_sweep",
+    1,
+    "bool",
+    "prim update tail 0x1406489A6: when prim+0x984 bit 2 is clear the previous centre / size / end points are set to the current ones",
+    "instructions 0x14064899D-0x140648A08",
+    "0x140647950",
+    "confirmed",
+    "the first tick of a window tests in place"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.max_touches",
+    512,
+    "count",
+    "0x144526380: PhysX sweep buffer of 0x200 touches",
+    "decompiled C (SQEX_PhysXCollision.cpp)",
+    "0x144526380",
+    "inferred",
+    "-"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.exec_rate_roll_scale",
+    0.0000059604645,
+    "percent per unit",
+    "apply 0x140618940 step 12: roll = (xorshift128 >> 8) * 5.9604645e-6 (0x145D73AC0), hit fails when roll > rate; rate >= 100 skips the roll, rate <= 0 never hits",
+    "instructions 0x140619CCB-0x140619D2F",
+    "0x140618940",
+    "confirmed",
+    "RNG 0x142CFF460 (engine xorshift128); every row used by Sora has rate 100: never rolled"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.exec_rate_fail_records_victim",
+    1,
+    "bool",
+    "apply 0x140618940: a failed m_DamageExecRate roll (and an immune damage kind) adds the victim to the hit list",
+    "jump target 0x14061A29A → 0x1406180B0",
+    "0x140618940",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.bad_status_roll_scale",
+    0.0000059604645,
+    "percent per unit",
+    "apply step 18: bad status kept iff m_BadStatusGenRate >= roll; rolled only when the kind is set and rate < 100",
+    "instructions 0x140619EC8-0x140619F34",
+    "0x140618940",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.map_floor_cos",
+    0.6427876353263855,
+    "cos",
+    "apply map gate: a map hit with dot((0,0,1), ImpactNormal) >= cos 50 deg is discarded (owner notify answered 0)",
+    "constant 0x145D3F958, comiss / jae at 0x140619B59",
+    "0x140618940",
+    "confirmed",
+    "for Sora the Attack state answers first (hit.state_floor_cos)"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.state_floor_cos",
+    0.656059,
+    "cos",
+    "Attack state map-hit handler 0x141342760: returns 1 (ignore) when dot(Up, ImpactNormal) >= 0.656059",
+    "decompiled C constant",
+    "0x141342760",
+    "inferred",
+    "cos 49 deg"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.state_ceiling_cos",
+    -0.8660254,
+    "cos",
+    "Attack state map-hit handler 0x141342760: ceilings (dot <= -0.8660254) are ignored",
+    "decompiled C constant",
+    "0x141342760",
+    "inferred",
+    "-"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.state_low_wall_height",
+    45,
+    "cm",
+    "Attack state map-hit handler 0x141342760: phys shapes ignore map hits not above pawn local z + 45",
+    "decompiled C constant",
+    "0x141342760",
+    "inferred",
+    "-"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.weapon_map_height_limit",
+    50,
+    "cm",
+    "ATresWeaponBase ctor 0x141777570: MyAtkColl height limit on (comp+0x95C bit 3), comp+0x960 = 50; apply discards a map hit with ownerRoot.z + 50 >= ImpactPoint.z for phys shapes when the owner notify answered 0",
+    "movss xmm2,[50.0]; mov dl,1; call 0x1406279A0 at 0x1417778A0; compare at 0x140619BDC",
+    "0x141777570",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.nearest_only_initial",
+    2,
+    "hit time",
+    "apply 0x140618940: best time starts at 2.0 for nearest-only components (comp+0x968 bit 1)",
+    "decompiled C constant; compare 0x140619D5D",
+    "0x140618940",
+    "inferred",
+    "bit not set by the constructor"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.counter_byte_max",
+    99,
+    "count",
+    "Activate 0x140625500: the four counter bytes S+0x58..+0x5B are clamped to 0..99 into info+0x52..+0x55",
+    "decompiled C",
+    "0x140625500",
+    "inferred",
+    "-"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.default_row_power",
+    1,
+    "x",
+    "FTresAttackDataTable ctor 0x140570870 (static default row 0x1487CAB50): m_Power 1.0, kind SMALL (1), attribute PHYSICAL, power scale 1.0, exec rate 100, rest 0",
+    "whole function",
+    "0x140570870",
+    "confirmed",
+    "used when a window names no row of the table and the shape has no default row"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.rate_clamp_max",
+    100,
+    "percent",
+    "row → primitive 0x140645900: m_BadStatusGenRate and m_DamageExecRate are clamped to [0, 100]",
+    "comiss / minss with 100.0 (0x145C87D40)",
+    "0x140645900",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.reflect_clash_only_first_swing",
+    1,
+    "bool",
+    "Attack state pre-processor 0x141343800: combo count >= 1 sets activation flag S+0x5C bit 1 → Activate zeroes the reflect level and sets \"no clash\"",
+    "cmp eax,1; jl; or cl,2 at 0x141343A81; decompiled C of 0x140625500",
+    "0x141343800",
+    "confirmed",
+    "rows with m_ReflectLevel > 0 matter only for the first attack of a combo"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.clash_stronger_result",
+    3,
+    "ETresReactionResultType",
+    "apply clash pass: result = REFLECT (3) when the other shape reflect level exceeds mine, else GUARD_REFLECT (4); my m_ReflectReaction STAGGER → 3, GUARD → 4, NOREACTION → 0",
+    "instructions 0x14061925D-0x1406192A3",
+    "0x140618940",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "hit.reflect1_level_pivot",
+    2,
+    "reflect level",
+    "Classify 0x14061FE20, body type REFLECT1: d = 2 - m_ReflectLevel; d > 0 attacker REFLECT, d < 0 victim REFLECT",
+    "instructions 0x1406201A2-0x1406201C1",
+    "0x14061FE20",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "knockback.degenerate_sq",
+    1e-8,
+    "cm^2",
+    "knockback direction 0x14061EA30: zero vector when the squared length is below 1e-8",
+    "decompiled C constant",
+    "0x14061EA30",
+    "inferred",
+    "-"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "knockback.initial",
+    "1,0,0",
+    "vector",
+    "0x14061EA30: output preset from 0x14871E3B0",
+    "movsd / mov at function entry, data read",
+    "0x14061EA30",
+    "confirmed",
+    "kept only by SPECIFIC when the notify does not overwrite it"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "knockback.flattened",
+    0,
+    "bool",
+    "0x14061EA30: all cases normalise the full 3D difference",
+    "decompiled C",
+    "0x14061EA30",
+    "inferred",
+    "direction includes the height difference of the two roots"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "gain.hitstop_applied",
+    0,
+    "bool",
+    "no caller of pawn slot 1374 0x141444090 exists in the image; ATresGameMode slot 359 0x1415246C0 is gated by gameMode+0x4738 which only exec DebugEnableHitStop sets",
+    "exhaustive scan for call / jmp [reg+0x2AF0]; whole functions 0x141444090, 0x1415246C0, 0x141520180, 0x141520690; ctor store at 0x14151981D",
+    "0x141444090",
+    "confirmed",
+    "supersedes hitstop.small / hitstop.big: both values exist but are never used"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "gain.focus_per_hit",
+    0,
+    "points",
+    "Sora on-damage notify 0x141442DE0: AddFocus(pawn+0xD00 MyFocusPointAddHit) only when > 0; ctor 0x141423210 stores 0 and the p_ex001 blueprints do not set it",
+    "instructions 0x141442F11-0x141442F37; ctor store 0x141423D45; blueprint dumps",
+    "0x141442DE0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "gain.style_needs_hp_loss",
+    1,
+    "bool",
+    "0x141442DE0: AddStylePoint((float)m_FormPoint, 1, commandKind) only when the victim lost HP (or belongs to the class tested by 0x1405AD4A0)",
+    "instructions 0x141442E26-0x141442F0E",
+    "0x141442DE0",
+    "confirmed",
+    "the call comes from the victim HP code 0x1405A2A00 through the causer notify slot 31"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "gain.style_form_up_bonus",
+    0.2,
+    "x added",
+    "AddStylePoint 0x1413E9000: multiplier += 0.2 with ability FORM_UP (71)",
+    "addss with 0x145C9C4CC at 0x1413E9258",
+    "0x1413E9000",
+    "confirmed",
+    "Same constant as row form.gauge.form_up_bonus"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "gain.style_default_kind",
+    27,
+    "ETresCommandKind",
+    "AddStylePoint 0x1413E9000: command kind 0 is treated as ATTACK (27) for the level lookup and the per-group totals",
+    "mov ebp,1Bh; cmovne ebp,r14d",
+    "0x1413E9000",
+    "confirmed",
+    "Same constant as row form.gauge.default_cmd"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "gain.style_bonus_halving",
+    0.5,
+    "x",
+    "AddStylePoint 0x1413E9000: ctrl+0xB48 *= 0.5 on every gain while the gauge is > 0; set to 1.0 (2.0 and points doubled in form kind 0x9A) when the gauge is 0",
+    "instructions 0x1413E9268-0x1413E92C2",
+    "0x1413E9000",
+    "confirmed",
+    "the stored factor is not applied to the gain inside this function. Same constant as row form.gauge.chain_decay"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "gain.style_blocked_state",
+    138,
+    "ETresStateID",
+    "AddStylePoint 0x1413E9000 returns at once in state 138 (RAILSLIDE_MI)",
+    "cmp eax,8Ah at 0x1413E90BA",
+    "0x1413E9000",
+    "confirmed",
+    "Same constant as row form.gauge.no_gain_state"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "effect.random_offset_radius",
+    0,
+    "cm",
+    "chooser 0x140628960: random offset only when comp+0x8E0 > 0; component ctor 0x140616C90 zero; property absent from w_so_KeybladeBase / w_so010_Wep",
+    "decompiled C + asset",
+    "0x140628960",
+    "inferred",
+    "-"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "effect.sound_volume",
+    1,
+    "x",
+    "chooser 0x140628960: PlaySoundAtLocation(sound, position, zero rotation, 1.0, 1.0, 0)",
+    "decompiled C (0x3f800000 arguments)",
+    "0x140628960",
+    "inferred",
+    "pitch 1.0"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "effect.no_sound_result",
+    3,
+    "ETresReactionResultType",
+    "chooser 0x140628960: no hit sound when the attacker result is REFLECT (3)",
+    "decompiled C",
+    "0x140628960",
+    "inferred",
+    "-"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "effect.map_hit_uses_window_sound",
+    0,
+    "bool",
+    "chooser 0x140628960: on a map hit the primitive hit sound is used only when the hit component simulates physics",
+    "decompiled C",
+    "0x140628960",
+    "inferred",
+    "Kingdom Key wall hits are silent"
+   ]
+  },
+  {
+   "strand": "C",
+   "row": [
+    "effect.critical_flag_ever_set",
+    0,
+    "bool",
+    "apply step 16: info.critical comes from 0x14041F340 which returns false",
+    "whole function (xor al,al; ret)",
+    "0x14041F340",
+    "confirmed",
+    "the critical effect of the chooser is dead for this path"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "target.near_range",
+    900,
+    "cm",
+    "0x1414162A0: mov dword [ctrl+970h],44610000h; = pawn MyAutoLockonLimit (pawn+0xC88, ctor 0x141423210 @0x141423DEE; reset slot 738 0x141410FD0 copies pawn slot 1328)",
+    "soft-target range: the current target is kept / shown while the best candidate's adjusted distance <= this (0x141406DC8 comiss / jbe); non-Enemy owners only within half of it (0x1414050C4); a HIGH-priority candidate overrides the score below it (0x141405886)",
+    "0x141404E50",
+    "confirmed",
+    "first pass called it near range; no blueprint override in p_ex001_PawnBase / p_ex001_Pawn"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "target.min_dist",
+    150,
+    "cm",
+    "0x1414162A0: mov dword [ctrl+974h],43160000h; = pawn MyAutoLockonNear (pawn+0xC8C)",
+    "floor of the range-adjusted distance: search: dist < 150 -> d3*0.01 + 150 (0x1414056DB); locked: max(d - range, 150) (0x141406238)",
+    "0x141404E50",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "target.max_range",
+    3500,
+    "cm",
+    "0x1414162A0: mov dword [ctrl+978h],455AC000h; = pawn MyManualLockonLimit (pawn+0xC90)",
+    "RB tap locks only while bestDist < this (0x141406D54); the candidate (+0x9AC) exists only below it (0x1414059A6)",
+    "0x141404E50",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "target.lock_off_range",
+    4200,
+    "cm",
+    "0x1414162A0: mov dword [ctrl+97Ch],45834000h; = pawn MyManualLockonOff (pawn+0xC94)",
+    "a manual lock is dropped when the range-adjusted distance exceeds it (0x14140625D comiss / ja)",
+    "0x141404E50",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "target.switch_range",
+    2400,
+    "cm",
+    "0x1414162A0: mov dword [ctrl+9C8h],45160000h",
+    "candidates with dist < this enter the switch list while locked (0x1414058EA)",
+    "0x141404E50",
+    "confirmed",
+    "no reflected source"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "target.switch_max",
+    6,
+    "count",
+    "0x1414162A0: mov dword [ctrl+9CCh],6",
+    "the distance-sorted switch list is truncated to this many entries (0x1414062C6)",
+    "0x141404E50",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "target.facing_weight",
+    1.8,
+    "-",
+    "0x141404E50: movss xmm15,[1466BDE28h] = 1.8; score = (1.8 - dot2D(facing, dirToTarget)) * dist (0x14140586C)",
+    "lowest score wins; facing = pawn root forward flattened (0x1414052C5..0x141405403)",
+    "0x141404E50",
+    "confirmed",
+    "factor is 1.0 in dive-fall targeting (ctrl+0x969)"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "target.origin_push",
+    30,
+    "cm",
+    "0x141404E50: movss xmm0,[145C87D34h] = 30; origin = pawn.slot1058() + facing * 30 (0x141405408)",
+    "-",
+    "0x141404E50",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "target.origin_height",
+    100,
+    "cm",
+    "0x141448550: addss xmm0,[145C87D40h] = 100 on the root location z (0x14144866C)",
+    "search origin and line-of-sight start are 100 cm above the actor origin",
+    "0x141448550",
+    "confirmed",
+    "ride states use the accompany pawn's position instead"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "target.crowd_range",
+    400,
+    "cm",
+    "0x141404E50: comiss xmm7,[145D02630h] = 400; d3 < 400 -> ctrl+0x95C++ (0x1414056A0)",
+    "raw 3D distance from the search origin, counted before the Enemy / priority / line-of-sight tests",
+    "0x141404E50",
+    "confirmed",
+    "slot 726 returns min(count,1) with ctrl+0x96C bit 1. Same constant as row decide.crowd_radius"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "target.non_enemy_range_factor",
+    0.5,
+    "-",
+    "0x141404E50: [ctrl+970h] * 0.5 (0x1414050C4); owner not tagged Enemy and dist > 450 -> skipped (0x14140571A)",
+    "-",
+    "0x141404E50",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "target.near_remap_factor",
+    0.01,
+    "-",
+    "0x141404E50: movss xmm13,[145CADFC4h] = 0.01; dist = d3*0.01 + 150 when the range-adjusted distance is below 150",
+    "-",
+    "0x141404E50",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "target.initial_best_margin",
+    5000,
+    "cm",
+    "0x141404E50: addss xmm8,[145CBFE78h] = 5000: bestScore = bestDist = ctrl+0x978 + 5000 before the loop",
+    "-",
+    "0x141404E50",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "target.tap_time",
+    0.26666668,
+    "s",
+    "slot 712 0x1413F0700 / slot 713 0x1413F0D00: comiss with [14687B7F0h] = 0.26666668",
+    "RB / RT count as a tap when released after at most this hold time; the flag lasts one frame",
+    "0x1413F0700",
+    "confirmed",
+    "16 frames at 60 Hz"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "target.los_channel",
+    15,
+    "ECC",
+    "0x1413F0750: mov r9d,0Fh (line trace test, channel ECC_GameTraceChannel2 = TresProjectile); responses all Ignore, then channels 0, 1, 18 = Block (0x1413F09B9..0x1413F09F6)",
+    "trace tag Lockon; Sora and the target owner chain ignored",
+    "0x1413F0750",
+    "confirmed",
+    "control flow from decompiled C"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "target.dive_range_xy",
+    1000,
+    "cm",
+    "pawn ctor 0x141423210: mov dword [pawn+0BC8h],447A0000h (MyDiveFallLockonRangeXY)",
+    "dive-fall targeting (ctrl+0x969): |dxy| <= this",
+    "0x141423210",
+    "confirmed",
+    "not base ground combat"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "target.dive_limit_z",
+    3500,
+    "cm",
+    "pawn ctor 0x141423210: mov dword [pawn+0BCCh],455AC000h (MyDiveFallLockonLimitZ)",
+    "dive-fall targeting: -this <= dz <= 0",
+    "0x141423210",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.blend_time",
+    0.5,
+    "s",
+    "TresCameraNormal slot 251 0x14060AB70: transition {3F000000h, 3, 40000000h} at 0x14060AC70 (end of the old lock-on camera) and 0x14060ADB6 (start of the new)",
+    "blend between the free camera and the lock-on camera actor, both directions",
+    "0x14060AB70",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.blend_exponent",
+    2,
+    "-",
+    "0x14060AB70: 40000000h in the same transition struct; function id 3",
+    "ease exponent of the blend",
+    "0x14060AB70",
+    "confirmed",
+    "function id 3 not decoded"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.distance_min",
+    400,
+    "cm",
+    "0x14060A930 copies the normal camera class default m_Distance (0x1405EC6A0) into the lock-on camera; also ctor 0x1405FC7E0 +0x800 = 43C80000h",
+    "lower bound of the framing distance (0x1406100D0)",
+    "0x1405FC7E0",
+    "confirmed",
+    "manager+0x2918 (SetLockonNearLimit) overrides when > 0"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.distance_rate",
+    8,
+    "1/s",
+    "TresCameraNormalLoc ctor 0x1405FC7E0: mov dword [this+448h],41000000h",
+    "distance smoothing rate (normal camera: 4.0)",
+    "0x1405FC7E0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.base_pitch_offset",
+    -20,
+    "deg",
+    "TresCameraNormal ctor 0x1405FC450: m_LockonRotation.pitch (+0x928) = C1A00000h; copied to the lock-on camera's m_Rotation by 0x14060A930",
+    "added to the look-at rotation when its pitch >= -10",
+    "0x1405FC450",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.base_pitch_floor",
+    -10,
+    "deg",
+    "slot 299 0x140606190: movss xmm6,[145D02634h] = -10; mov dword [rdi],0C1200000h",
+    "look pitch >= -10: base pitch = max(look - 20, -10); look pitch < -10: base = look",
+    "0x140606190",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.look_yaw_bias",
+    0.08,
+    "deg",
+    "slot 312 0x140613300: addss xmm0,[145D3A000h] = 0.08 after atan2 * 57.29578",
+    "-",
+    "0x140613300",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.pitch_min",
+    -70,
+    "deg",
+    "TresCameraNormal ctor 0x1405FC450: m_LockonLimitPitchMin (+0x910) = C28C0000h",
+    "-",
+    "0x1405FC450",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.pitch_max",
+    20,
+    "deg",
+    "TresCameraNormal ctor 0x1405FC450: m_LockonLimitPitchMax (+0x914) = 41A00000h",
+    "-",
+    "0x1405FC450",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.yaw_limit",
+    120,
+    "deg",
+    "TresCameraNormal ctor 0x1405FC450: m_LockonLimitYawMax (+0x918) = 42F00000h",
+    "yaw limit around the look-at yaw (clamp 0x140611760, decompiled C)",
+    "0x1405FC450",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.stick_far_dist",
+    2500,
+    "cm",
+    "BP_TresCameraNormal_ex001 m_RotationSpeedMaxDistance (native 1000, ctor 0x1405FC450 +0x91C)",
+    "stick speed scale reaches lockon_cam.stick_far_rate at this distance to the target (slot 266 0x140607390)",
+    "0x140607390",
+    "confirmed",
+    "asset value; formula from decompiled C"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.stick_near_dist",
+    500,
+    "cm",
+    "BP_TresCameraNormal_ex001 m_RotationSpeedMinDistance (native 200, +0x920)",
+    "stick speed scale 1.0 at or below this distance",
+    "0x140607390",
+    "confirmed",
+    "asset value"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.stick_far_rate",
+    0.45,
+    "-",
+    "BP_TresCameraNormal_ex001 m_RotationSpeedMaxRate (native 0.5, +0x924)",
+    "-",
+    "0x140607390",
+    "confirmed",
+    "asset value"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.auto_low_dist",
+    300,
+    "cm",
+    "BP_TresCameraNormal_ex001 m_LockonAutoRotationLowDist (native 0, +0x938); read at 0x1405FFD7A",
+    "k = 0 at or below",
+    "0x1405FFA60",
+    "confirmed",
+    "asset value"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.auto_high_dist",
+    3000,
+    "cm",
+    "BP_TresCameraNormal_ex001 m_LockonAutoRotationHighDist (native 0, +0x93C); read at 0x1405FFD67",
+    "k = 1 at or above; XY distance (m_bLockonAutoRotationDist3 clear)",
+    "0x1405FFA60",
+    "confirmed",
+    "asset value"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.auto_rate_gain",
+    6,
+    "-",
+    "0x1405FFA60: mulss [145C9C504h] = 6 at 0x140600194 / 0x1406001A7",
+    "follow rate *= 1 + 5k; the velocity term is blended toward (m_TargetMaxSpeed, 0, 0) by k",
+    "0x1405FFA60",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.offscreen_snap",
+    1,
+    "NDC",
+    "0x140611170: |x| > 1 or |y| > 1 or w <= 0 of the projected target with no stick and stickWait <= 0 -> rotTarget = base",
+    "-",
+    "0x140611170",
+    "inferred",
+    "decompiled C; constant 1.0 read"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.lead_factor",
+    0.24,
+    "-",
+    "0x1406100D0: [0x3E75C28F] = 0.24 x screen-position length x owner velocity, for player and target",
+    "-",
+    "0x1406100D0",
+    "inferred",
+    "decompiled C; constant read"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.target_jump_speed",
+    3000,
+    "cm/s",
+    "0x1406100D0: dt * 3000 threshold on the target point's movement; above it the point is approached with rate 6.0",
+    "-",
+    "0x1406100D0",
+    "inferred",
+    "decompiled C; constants read"
+   ]
+  },
+  {
+   "strand": "D",
+   "row": [
+    "lockon_cam.framing_start",
+    0.5,
+    "-",
+    "0x1405DEFA0: start distance = |T - P| * 0.5 / sin(FOV * 0.008726646) from the midpoint, then 0x1405E0590 x4",
+    "-",
+    "0x1405DEFA0",
+    "inferred",
+    "decompiled C; the fitting rule 0x1405E0590 not read"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.small.power",
+    550,
+    "cm/s",
+    "Damage state slot 127 0x1413518D0: reads m_SmallDamagePower (+0x40) of the PlayerDamageCommonParam class default object",
+    "/Game/Blueprints/Player/PlayerDamageCommonParam = 550 (native default 450, ctor 0x14064C130)",
+    "0x1413518D0",
+    "confirmed",
+    "multiplied by the hit's m_DamagePowerScale; horizontal speed along the knock direction"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.small.brake",
+    0.9,
+    "per frame at 60 Hz",
+    "Damage state slot 128 0x141351860: reads m_SmallDamageBrake (+0x44) of the PlayerDamageCommonParam class default object",
+    "/Game/Blueprints/Player/PlayerDamageCommonParam = 0.9 (native default 0.95, ctor 0x14064C130)",
+    "0x141351860",
+    "confirmed",
+    "the hit's m_DamageBrakeParam replaces it when > 0; applied as v *= brake^(dt*60) every tick on the ground"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.small.start_falling_speed",
+    150,
+    "cm/s",
+    "Damage state slot 129 0x141351950: reads m_SmallDamageStartFallingSpeed (+0x48) of the PlayerDamageCommonParam class default object",
+    "/Game/Blueprints/Player/PlayerDamageCommonParam = 150 (native default 100, ctor 0x14064C130)",
+    "0x141351950",
+    "confirmed",
+    "air hit: gravity returns when the horizontal speed is at or below this"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.small.air_velocity_z",
+    0,
+    "cm/s",
+    "Damage state slot 130 0x141351010: reads m_AirSmallDamageVelocityZ (+0x4C) of the PlayerDamageCommonParam class default object",
+    "native default 0 (ctor 0x14064C130); not overridden by /Game/Blueprints/Player/PlayerDamageCommonParam",
+    "0x141351010",
+    "confirmed",
+    "0 on the ground"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.blow.power",
+    2000,
+    "cm/s",
+    "Damage state slot 131 0x141351270: reads m_AirBlowDamagePower (+0x60) of the PlayerDamageCommonParam class default object",
+    "native default 2000 (ctor 0x14064C130); not overridden by /Game/Blueprints/Player/PlayerDamageCommonParam",
+    "0x141351270",
+    "confirmed",
+    "the player state reads m_AirBlowDamagePower for ground and air; m_BlowDamagePower (1500) is not read; x m_DamagePowerScale"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.blow.velocity_z_ground",
+    300,
+    "cm/s",
+    "Damage state slot 132 0x141351340: reads m_BlowDamageVelocityZ (+0x50) of the PlayerDamageCommonParam class default object",
+    "/Game/Blueprints/Player/PlayerDamageCommonParam = 300 (native default 125, ctor 0x14064C130)",
+    "0x141351340",
+    "confirmed",
+    "hit taken on the ground"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.blow.velocity_z_air",
+    300,
+    "cm/s",
+    "Damage state slot 132 0x141351340: reads m_AirBlowDamageVelocityZ (+0x5C) of the PlayerDamageCommonParam class default object",
+    "/Game/Blueprints/Player/PlayerDamageCommonParam = 300 (native default 125, ctor 0x14064C130)",
+    "0x141351340",
+    "confirmed",
+    "hit taken in the air"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.blow.brake_ground",
+    0.95,
+    "per frame at 60 Hz",
+    "Damage state slot 133 0x1413511D0: reads m_BlowDamageBrake (+0x58) of the PlayerDamageCommonParam class default object",
+    "/Game/Blueprints/Player/PlayerDamageCommonParam = 0.95 (native default 0.85, ctor 0x14064C130)",
+    "0x1413511D0",
+    "confirmed",
+    "row brake replaces it when > 0; horizontal every tick, vertical while gravity is off"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.blow.brake_air",
+    0.95,
+    "per frame at 60 Hz",
+    "Damage state slot 133 0x1413511D0: reads m_AirBlowDamageBrake (+0x64) of the PlayerDamageCommonParam class default object",
+    "/Game/Blueprints/Player/PlayerDamageCommonParam = 0.95 (native default 0.85, ctor 0x14064C130)",
+    "0x1413511D0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.blow.air_start_brake_time",
+    0,
+    "s",
+    "Damage state slot 136 0x141350F90: reads m_AirBlowDamageStartBrakeTime (+0x68) of the PlayerDamageCommonParam class default object",
+    "native default 0 (ctor 0x14064C130); not overridden by /Game/Blueprints/Player/PlayerDamageCommonParam",
+    "0x141350F90",
+    "confirmed",
+    "0 on the ground; time in sub-step 3 before the flight phase"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.blow.start_falling_speed",
+    700,
+    "cm/s",
+    "Damage state slot 137 0x1413512E0: reads m_BlowDamageStartFallingSpeed (+0x6C) of the PlayerDamageCommonParam class default object",
+    "/Game/Blueprints/Player/PlayerDamageCommonParam = 700 (native default 100, ctor 0x14064C130)",
+    "0x1413512E0",
+    "confirmed",
+    "gravity returns when the horizontal speed is at or below this"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.toss.power",
+    1500,
+    "cm/s",
+    "Damage state slot 138 0x141351A40: reads m_TossDamagePower (+0x70) of the PlayerDamageCommonParam class default object",
+    "native default 1500 (ctor 0x14064C130); not overridden by /Game/Blueprints/Player/PlayerDamageCommonParam",
+    "0x141351A40",
+    "confirmed",
+    "vertical launch speed x m_DamagePowerScale"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.toss.flight_duration",
+    0.2,
+    "s",
+    "Damage state slot 139 0x1413519E0: reads m_TossDamageFlightDuration (+0x74) of the PlayerDamageCommonParam class default object",
+    "/Game/Blueprints/Player/PlayerDamageCommonParam = 0.2 (native default 1, ctor 0x14064C130)",
+    "0x1413519E0",
+    "confirmed",
+    "hover timer at the apex; it is decremented twice per tick (handler 0x14135F0F0 and Tick 0x1413554AD), so it lasts half this long"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.toss.fall_gravity_scale",
+    1,
+    "x",
+    "Damage state slot 140 0x141351980: reads m_TossDamageFallGravityScale (+0x78) of the PlayerDamageCommonParam class default object",
+    "native default 1 (ctor 0x14064C130); not overridden by /Game/Blueprints/Player/PlayerDamageCommonParam",
+    "0x141351980",
+    "confirmed",
+    "GravityScale of the fall"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.launch.power",
+    2500,
+    "cm/s",
+    "Damage state slot 141 0x141351590: reads m_LaunchDamagePower (+0x7C) of the PlayerDamageCommonParam class default object",
+    "/Game/Blueprints/Player/PlayerDamageCommonParam = 2500 (native default 0, ctor 0x14064C130)",
+    "0x141351590",
+    "confirmed",
+    "x m_DamagePowerScale; replaced by the row's m_DamageEffectTime when that is > 0 (0x14135C410 sub-step 0)"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.launch.flight_duration",
+    0.2,
+    "s",
+    "Damage state slot 142 0x141351530: reads m_LaunchDamageFlightDuration (+0x80) of the PlayerDamageCommonParam class default object",
+    "/Game/Blueprints/Player/PlayerDamageCommonParam = 0.2 (native default 0, ctor 0x14064C130)",
+    "0x141351530",
+    "confirmed",
+    "halved in effect like the toss value"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.launch.fall_gravity_scale",
+    1,
+    "x",
+    "Damage state slot 143 0x1413514D0: reads m_LaunchDamageFallGravityScale (+0x84) of the PlayerDamageCommonParam class default object",
+    "/Game/Blueprints/Player/PlayerDamageCommonParam = 1 (native default 0, ctor 0x14064C130)",
+    "0x1413514D0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.parabola.power",
+    1500,
+    "cm/s",
+    "Damage state slot 144 0x1413517E0: reads m_ParabolaDamagePower (+0x98) of the PlayerDamageCommonParam class default object",
+    "native default 1500 (ctor 0x14064C130); not overridden by /Game/Blueprints/Player/PlayerDamageCommonParam",
+    "0x1413517E0",
+    "confirmed",
+    "speed along the launch angle x m_DamagePowerScale"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.parabola.angle",
+    45,
+    "deg",
+    "Damage state slot 145 0x141351690: reads m_ParabolaDamageAngle (+0x9C) of the PlayerDamageCommonParam class default object",
+    "native default 45 (ctor 0x14064C130); not overridden by /Game/Blueprints/Player/PlayerDamageCommonParam",
+    "0x141351690",
+    "confirmed",
+    "the row's m_DamageParabolaAngle replaces it when > 0"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.parabola.brake",
+    0.98,
+    "per frame at 60 Hz",
+    "Damage state slot 146 0x141351710: reads m_ParabolaDamageBrake (+0xA0) of the PlayerDamageCommonParam class default object",
+    "native default 0.98 (ctor 0x14064C130); not overridden by /Game/Blueprints/Player/PlayerDamageCommonParam",
+    "0x141351710",
+    "confirmed",
+    "row brake replaces it when > 0; horizontal only, while faster than the limit"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.parabola.limit_brake",
+    300,
+    "cm/s",
+    "Damage state slot 147 0x141351780: reads m_ParabolaDamageLimitBrake (+0xA4) of the PlayerDamageCommonParam class default object",
+    "native default 300 (ctor 0x14064C130); not overridden by /Game/Blueprints/Player/PlayerDamageCommonParam",
+    "0x141351780",
+    "confirmed",
+    "at or below this horizontal speed: no brake and the wall hit is disarmed"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.beat.power",
+    2500,
+    "cm/s",
+    "Damage state slot 148 0x141351090: reads m_BeatDamagePower (+0x88) of the PlayerDamageCommonParam class default object",
+    "/Game/Blueprints/Player/PlayerDamageCommonParam = 2500 (native default 1500, ctor 0x14064C130)",
+    "0x141351090",
+    "confirmed",
+    "downward speed x m_DamagePowerScale"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.beat.rebound",
+    1000,
+    "cm/s",
+    "Damage state slot 149 0x141351110: reads m_BeatDamageRebound (+0x8C) of the PlayerDamageCommonParam class default object",
+    "/Game/Blueprints/Player/PlayerDamageCommonParam = 1000 (native default 1500, ctor 0x14064C130)",
+    "0x141351110",
+    "confirmed",
+    "upward speed of the bounce"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.beat.rebound_gravity_scale",
+    3,
+    "x",
+    "Damage state slot 150 0x141351170: reads m_BeatDamageReboundGravityScale (+0x90) of the PlayerDamageCommonParam class default object",
+    "native default 3 (ctor 0x14064C130); not overridden by /Game/Blueprints/Player/PlayerDamageCommonParam",
+    "0x141351170",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.wall.angle",
+    30,
+    "deg",
+    "Damage state slot 134 0x14043A5D0: returns the constant 30.0",
+    "wall hit when knock . wallNormal <= -cos(angle) (0x141356930); the asset value m_BlowDmgWallHitAngle 60 is not read by the player state",
+    "0x14043A5D0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.wall.min_speed",
+    50,
+    "cm/s",
+    "Damage state slot 135 0x14043A5E0: returns the constant 50.0",
+    "minimum horizontal speed for the wall hit; asset m_BlowDmgWallHitSpeed 350 not read",
+    "0x14043A5E0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.recover_delay",
+    0.2,
+    "s",
+    "Damage Setup 0x141365930 @0x14136602F: state+0x138 = 0.2 (0.46666 when state+0x1C0 bit 3, a bit with no writer)",
+    "Aerial Recovery is possible when state+0x12C (time since the hit) > state+0x138 in an airborne sub-step",
+    "0x141365930",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.turn_alpha_rate",
+    30,
+    "1/s",
+    "handlers: pawn vt+0xDB0(rot, dt * 30) e.g. 0x14135D9C5, 0x14135B8B6, 0x14135CB0D",
+    "facing blend toward the held yaw",
+    "0x14135D740",
+    "confirmed",
+    "alpha = dt * 30 (0.5 per frame at 60 Hz)"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.brake_rate",
+    60,
+    "1/s",
+    "powf(brake, dt * 60): 0x14135DA34, 0x14135BA4B, 0x140431E10",
+    "brakes are per-frame factors at 60 Hz",
+    "0x140431E10",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.move_length_rate",
+    60,
+    "1/s",
+    "FUN_14135FD80: velocity = unit direction * m_DamageMoveLength * 60",
+    "decompiled C",
+    "0x14135FD80",
+    "inferred",
+    "only for rows with m_DamageMoveLength > 0"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.blow.min_flight_time",
+    0.6,
+    "s",
+    "Blow 0x14135B300 @0x14135B99C: state+0x130 = 0.6 when the flight phase starts",
+    "the landing (or the 50 cm drop) is only acted on after this time",
+    "0x14135B300",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.blow.drop_exit",
+    50,
+    "cm",
+    "Blow 0x14135B300 @0x14135BC41: actor Z < start Z - 50 without a landing -> the state finishes",
+    "-",
+    "0x14135B300",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.toss.rise_gravity_scale",
+    3,
+    "x",
+    "Toss 0x14135EEA0 @0x14135EF4B / Launch 0x14135C410 @0x14135C4EA: GravityScale(3.0) with the launch",
+    "-",
+    "0x14135EEA0",
+    "confirmed",
+    "same in Launch"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.toss.hover_gravity_scale",
+    0.25,
+    "x",
+    "Toss @0x14135F0A7 / Launch @0x14135C65F: GravityScale(0.25) when Velocity.Z <= 0",
+    "-",
+    "0x14135EEA0",
+    "confirmed",
+    "same in Launch"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.toss.fall_timeout",
+    1,
+    "s",
+    "Toss @0x14135F1B4: state+0x130 = 1.0 for the fall; the state finishes in the air when it runs out",
+    "-",
+    "0x14135EEA0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.launch.fall_timeout",
+    1.2,
+    "s",
+    "Launch @0x14135C77E: state+0x130 = 1.2",
+    "-",
+    "0x14135C410",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.parabola.loop_time",
+    0.5,
+    "s",
+    "Parabola 0x14135CAB0 @0x14135D17C: state+0x130 = 0.5 after the start clip; then m_bEnableChange is forced",
+    "-",
+    "0x14135CAB0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.parabola.air_timeout",
+    2,
+    "s",
+    "Parabola @0x14135D1F2: state+0x130 = 2.0; the state finishes in the air when it runs out",
+    "-",
+    "0x14135CAB0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.beat.trace_range",
+    2500,
+    "cm",
+    "Beat 0x14135A870 @0x14135A99E: ground trace range below Sora",
+    "used to slide Sora out from under the attacker",
+    "0x14135A870",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.beat.radius_factor",
+    0.7071,
+    "x",
+    "Beat @0x14135AB13: 0.7071 * own radius + 0.7071 * instigator radius, divided by the fall time",
+    "arithmetic of the landing point read in the decompiled C",
+    "0x14135A870",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.beat.land_blend",
+    0.13,
+    "s",
+    "Beat @0x14135AF77: Play(\"M_0227\", blendIn 0.13, effect group 0xC7C)",
+    "-",
+    "0x14135A870",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.dir.front_half_angle",
+    45,
+    "deg",
+    "pawn vt+0x23F0 0x1405A94E0: |delta yaw| <= 45 -> index 0; 45..135 -> 2; -135..-45 -> 3; else 1",
+    "delta = yaw(-hitDir) - actor yaw",
+    "0x1405A94E0",
+    "confirmed",
+    "two-way variant 0x1405A9790: |delta| <= 90 -> 0 else 1"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hp.combo_leave_window",
+    0.6,
+    "s",
+    "ApplyHP 0x1405A2A00 @0x1405A2BA2: pawn+0x848 = 0.6 on every non-forced damage; tested > 0 @0x1405A2B90",
+    "COMBO_LEAVE (45): lethal hit leaves 1 HP when the timer runs or the current / next state is DAMAGE; timer tick 0x1405AF5B0 @0x1405AF814",
+    "0x1405A2A00",
+    "confirmed",
+    "Withstand Combo"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hp.last_leave_min_hp",
+    2,
+    "HP",
+    "ApplyHP @0x1405A2B3E: HasAbility(44) && HP before >= 2 && new <= 0 -> new = 1",
+    "LAST_LEAVE (44)",
+    "0x1405A2A00",
+    "confirmed",
+    "Second Chance"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "hit.reaction_block_after_command",
+    0.1,
+    "s",
+    "controller+0x8F4 = 0.1 at 0x14141B844 (command executor) and the command functions 0x14140E9F0 ..; counted down in 0x1413F80F0; tested in the gate @0x141439D9A",
+    "while > 0 the reaction gate refuses (damage still applies)",
+    "0x14141B470",
+    "confirmed",
+    "Same constant as row form.exec_block_time"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "recovery.command_time",
+    2,
+    "s",
+    "AirSlide slot 113 0x14134C5E0 @0x14134C608: FUN_141414350(ctrl, AirSlide+0xAC, 2.0, 0)",
+    "time the BLOWCOUNTER reaction command is offered after an Aerial Recovery",
+    "0x14134C5E0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "recovery.blow_counter_command",
+    2,
+    "ETresCommandKind",
+    "AirSlide::Begin 0x141332930 (recovery variant, HasAbility(2)): AirSlide+0xAC = 2",
+    "decompiled C",
+    "0x141332930",
+    "inferred",
+    "BLOWCOUNTER"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "recovery.blow_counter_attack_kind",
+    39,
+    "attack kind",
+    "AirSlide::Begin 0x141332930: AirSlide+0xB0 = 0x27; TryAttack from AIR_SLIDE uses it as forcedKind",
+    "decompiled C",
+    "0x141332930",
+    "inferred",
+    "0x27 BlowCounter, clip 1294"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "die.speed",
+    2000,
+    "cm/s",
+    "Die Tick 0x1413733D0 @0x141373926: horizontal velocity = away direction * 2000",
+    "-",
+    "0x1413733D0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "die.velocity_z",
+    125,
+    "cm/s",
+    "Die Tick @0x141373948",
+    "-",
+    "0x1413733D0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "die.brake",
+    0.95,
+    "per frame at 60 Hz",
+    "Die Tick @0x141373E68: powf(0.95, dt * 60) on the horizontal velocity while the flag state+0x120 bit 0",
+    "-",
+    "0x1413733D0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "die.phase1_time",
+    0.5,
+    "s",
+    "Die Tick sub-step 1: state+0x124 = 0.5 after the second clip starts",
+    "decompiled C",
+    "0x1413733D0",
+    "inferred",
+    "then StopMovement"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "revive.no_damage_time",
+    1,
+    "s",
+    "item effect 0x1405BE820 case 0xA01 @0x1405BEDBA: pawn+0x638 = 1.0",
+    "IsNoDamage (0x1405AD200) is true while pawn+0x638 > 0; timer tick 0x1405BC470",
+    "0x1405BE820",
+    "confirmed",
+    "auto-revive (item 0xA01)"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "revive.hp_fraction",
+    0.5,
+    "x MaxHP",
+    "item effect 0x1405BE820 case 0xA01: HP = Ceil(MaxHP * 0.5) when item 0x905 is absent",
+    "decompiled C",
+    "0x1405BE820",
+    "inferred",
+    "-"
+   ]
+  },
+  {
+   "strand": "E",
+   "row": [
+    "gravity.base",
+    980,
+    "cm/s^2",
+    "movement spec 4.3 (GetGravityZ 0x140582270): 980 * GravityScale",
+    "used for the derived heights of Toss / Launch / Beat",
+    "0x140582270",
+    "inferred",
+    "restated from the movement spec, not re-read"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.max",
+    100,
+    "points",
+    "pawn MyStylePointMax (pawn+0xCA8); the gauge tick uses 100 when the property is <= 0",
+    "ctor 0x141423BDE mov [rdi+0CA8h],64h; 0x14141C6FD cvtdq2ps / fallback 0x145C87D40 = 100.0",
+    "0x141423210",
+    "confirmed",
+    "gauge value = controller+0xB40 (f32). Same constant as row style.max"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.add_rate",
+    1,
+    "factor",
+    "pawn MyStylePointAddRate (+0xCAC)",
+    "ctor 0x141423BE8; read at 0x1413E9203",
+    "0x1413E9000",
+    "confirmed",
+    "Same constant as row style.add_rate"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.add_rate_lv0",
+    1,
+    "factor",
+    "pawn MyStylePointAddRateLv0 (+0xCB0): no form active (TresCmdData[form].Param1 == 0)",
+    "ctor 0x141423BF2; read at 0x1413E91E3",
+    "0x1413E9000",
+    "confirmed",
+    "Lv = Param1 of the current form command row, read through controller slots 846 / 847. Same constant as row style.add_rate_lv0"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.add_rate_lv1",
+    0.8,
+    "factor",
+    "pawn MyStylePointAddRateLv1 (+0xCB4): first form active (Second Form: CHANGE_L1 Param1 = 1)",
+    "ctor 0x141423BFC (0x3F4CCCCD); read at 0x1413E91F7",
+    "0x1413E9000",
+    "confirmed",
+    "Same constant as row style.add_rate_lv1"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.add_rate_lv2",
+    0.55,
+    "factor",
+    "pawn MyStylePointAddRateLv2 (+0xCB8): second-stage form active (Param1 == 2); not reachable with the Kingdom Key",
+    "ctor 0x141423C06 (0x3F0CCCCD); read at 0x1413E91ED",
+    "0x1413E9000",
+    "confirmed",
+    "Same constant as row style.add_rate_lv2"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.critical_add_rate",
+    1,
+    "factor",
+    "pawn CriticalModeStylePointAddRate (+0xCC0), used instead of add_rate when pawn vt+0x8D0() (critical mode) is true",
+    "ctor 0x141423C17; read at 0x1413E91AC",
+    "0x1413E9000",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.critical_add_rate_lv0",
+    0.5,
+    "factor",
+    "pawn CriticalModeStylePointAddRateLv0 (+0xCC4)",
+    "ctor 0x141423C21; read at 0x1413E9181",
+    "0x1413E9000",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.critical_add_rate_lv1",
+    0.8,
+    "factor",
+    "pawn CriticalModeStylePointAddRateLv1 (+0xCC8)",
+    "ctor 0x141423C2B; read at 0x1413E9195",
+    "0x1413E9000",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.critical_add_rate_lv2",
+    0.55,
+    "factor",
+    "pawn CriticalModeStylePointAddRateLv2 (+0xCCC)",
+    "ctor 0x141423C35; read at 0x1413E918B",
+    "0x1413E9000",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.critical_charge_rate",
+    1.3,
+    "factor",
+    "pawn CriticalChargeStylePointAddRate (+0xCD8): multiplier base in critical mode with ability 0x69 CRITICAL_CHARGE while pawn vt+0x17E0() (MP charge) is true",
+    "ctor 0x141423C53 (0x3FA66666); read at 0x1413E91CE",
+    "0x1413E9000",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.form_up_bonus",
+    0.2,
+    "factor",
+    "added to the multiplier with ability 0x47 (71 FORM_UP)",
+    "0x1413E925F addss xmm9,[0x145C9C4CC] = 0.2 after has(0x47)",
+    "0x1413E9000",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.chain_first",
+    1,
+    "factor",
+    "factor of the first add after a gauge tick (controller+0xB48); 2.0 when the current form is 0x9A",
+    "0x1413E92A4 / 0x1413E92B8",
+    "0x1413E9000",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.chain_decay",
+    0.5,
+    "factor",
+    "every further add before the next gauge tick multiplies the factor by 0.5 (pending +0xB44 > 0)",
+    "0x1413E927F mulss xmm7,[0x145C9C4D0] = 0.5",
+    "0x1413E9000",
+    "confirmed",
+    "several hits in one frame count 1, 1/2, 1/4, ..."
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.default_cmd",
+    27,
+    "ETresCommandKind",
+    "command kind used when the hit carries none (ATTACK)",
+    "0x1413E9148 mov ebp,1Bh; cmovne ebp,r14d",
+    "0x1413E9000",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.no_gain_state",
+    138,
+    "ETresStateID",
+    "no gain while the pawn state is RAILSLIDE_MI",
+    "0x1413E90BA cmp eax,8Ah",
+    "0x1413E9000",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.dec_start_time",
+    20,
+    "s",
+    "pawn MyStylePointDecStartTime (+0xCE0): blueprint p_ex001 value (constructor default 10)",
+    "ctor 0x141423C64 = 10.0; class default read from the pawn CDO dump build/sora_tmp/loco_pawn_cdo.txt = 20; copied to controller+0xB4C at 0x1413E92F2",
+    "0x1413E9000",
+    "confirmed",
+    "asset value; the code only copies the property. Same constant as row style.dec_start_time"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.dec_interval",
+    1,
+    "s",
+    "pawn MyStylePointDecInterval (+0xCE4)",
+    "ctor 0x141423C6E; read at 0x14141C8B9",
+    "0x14141C4F0",
+    "confirmed",
+    "Same constant as row style.dec_interval"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.dec_amount",
+    5,
+    "points",
+    "pawn MyStylePointDec (+0xCE8): blueprint value (constructor default 10)",
+    "ctor 0x141423C78 = 10.0; CDO dump = 5; subtracted at 0x14141C8CD",
+    "0x14141C4F0",
+    "confirmed",
+    "asset value. Same constant as row style.dec"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.auto_add_interval",
+    1,
+    "s",
+    "accumulator controller+0xB74 of the flag-5 auto gain",
+    "0x1413F1472 comiss xmm6,[0x145C87D0C] = 1.0",
+    "0x1413F0ED0",
+    "confirmed",
+    "runs only when game flag 5 (0x1405AD350) is set, !pawn vt+0x1ED8() and pawn vt+0x2A88(); meaning of the flag not determined"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.gauge.auto_add_points",
+    3,
+    "points",
+    "points added per interval by the flag-5 auto gain (type 3: no rate scaling)",
+    "0x1413F1489 movss xmm1,[0x145C87D10] = 3.0; r8d = 3",
+    "0x1413F0ED0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.kingdom_key.command",
+    148,
+    "ETresCommandKind",
+    "command enqueued at a full gauge for weapon type 1 with form stage 0 (CHANGE_L1)",
+    "0x1413F0ED0 second weapon-type switch: case 1, controller+0xB34 == 0 -> edx = 0x94; call [rax+1578h] with time -1.0",
+    "0x1413F0ED0",
+    "confirmed",
+    "weapon type = pawn slot 601 (equipment vt+0x428)(-1); 0x10 -> 0x96, 0x11 -> 0x97, 0x12 -> 0x95, 0x13 -> 0x98"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.command.life",
+    30,
+    "s",
+    "TresCmdData row 148 CHANGE_L1 Param0: lifetime of the formchange command in the queue",
+    "asset Load/Common/TresCmdData; read at 0x14140DB22 (row+0x24, Type == 4)",
+    "0x14140DA40",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.command.life_per_form_time",
+    0.2,
+    "factor",
+    "lifetime multiplier per copy of ability 0x31 (49 FORM_TIME): t *= 1 + 0.2 n",
+    "0x14140DB76 mov edx,31h -> 0x14140DD3E mulss 0.2, addss 1.0",
+    "0x14140DA40",
+    "confirmed",
+    "applies to the command lifetime, not to the form duration"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.command.life_cap",
+    99.9,
+    "s",
+    "cap of every situation-command lifetime",
+    "0x14140DD5E minss xmm6,[0x14609D398] = 99.9",
+    "0x14140DA40",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.duration",
+    30,
+    "s",
+    "TresCmdData row 148 Param3 (row+0x30): form time; controller+0xB58 (full) and +0xB54 (remaining)",
+    "0x14141ADF8 mov eax,[rcx+rdx*8+30h]; asset value 30",
+    "0x14141A9D0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.duration_default",
+    30,
+    "s",
+    "form time when Param3 <= 0",
+    "0x14141ADD9 mov [rbx+0B58h],41F00000h; 0x14141ADFC movss xmm0,[0x145C87D34] = 30.0",
+    "0x14141A9D0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.level",
+    1,
+    "index",
+    "TresCmdData row 148 Param1 (row+0x28): stored in controller+0xB34 at form start and returned by controller slot 847 for the gauge rate",
+    "0x14141ADCD call [rax+1A78h] -> 0x141401160 mov eax,[rax+rcx*8+28h]",
+    "0x14141A9D0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.exec_block_time",
+    0.1,
+    "s",
+    "controller+0x8F4 written after a formchange or finish command was accepted",
+    "0x14141B9F1 / 0x14141B972 mov dword ptr [rbx+8F4h],3DCCCCCDh",
+    "0x14141B470",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.attack_state",
+    90,
+    "ETresStateID",
+    "attack state id while the form is 0x94..0x98 (COMBO_LIMIT)",
+    "0x141432F00 jump table 0x14143316C: cases 0x94..0x98 -> 0x1414330EA mov edi,5Ah",
+    "0x141432F00",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.max_combo",
+    6,
+    "count",
+    "MaxCombo in forms 0x94..0x98 (also 0x82, 0x86, 0x87, 0x9A); Combo Plus is not added",
+    "0x141433570 table -> 0x1414335F7 mov eax,6",
+    "0x141433570",
+    "confirmed",
+    "Same constant as row combo.second_form_max"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.finishers",
+    3,
+    "count",
+    "Finishers in forms 0x94..0x98 (also 0x86, 0x87)",
+    "0x141433A60 table -> 0x141433ADF mov eax,3",
+    "0x141433A60",
+    "confirmed",
+    "Same constant as row combo.second_form_finishers"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.wear_form",
+    5,
+    "ETresCharWearForm",
+    "wear form set by STYLECHANGE for forms 0x94..0x98 (TRES_WEAR_FORM_05)",
+    "0x1413CBC54 mov word ptr [rbx+98h],105h (wear form 5, flag byte 1); applied in Tick sub-step 3 through pawn vt+0x1498",
+    "0x1413CBA70",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.world_slow_rate",
+    0.1,
+    "factor",
+    "time rate of object types mask 0x419C (ENEMY, GIMMICK, AVATAR, MAP, BG, PHYSX) during STYLECHANGE until StyleChangeEnd starts, and at the start of a finish command",
+    "0x14140E5A2 movss xmm3,[0x145C87D00] = 0.1; r8d = 419Ch",
+    "0x14140E500",
+    "confirmed",
+    "type names per docs/sora-magic-spec.md"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.stylechange.face_time",
+    0.2,
+    "s",
+    "STYLECHANGE Reset: facing timer state+0x9C",
+    "0x1413D0C60 mov dword ptr [rbx+9Ch],3E4CCCCDh",
+    "0x1413D0C50",
+    "confirmed",
+    "the paths of Second Form zero it at sub-step 0, so no facing turn happens"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.stylechange.turn_gain",
+    12,
+    "1/s",
+    "per-tick turn helpers pawn vt+0xDC8 / vt+0xDB8 (dt * 12)",
+    "0x1413D3AFC mulss xmm6,[0x145E8629C] = 12.0",
+    "0x1413D3AC0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.finish.level_max",
+    3,
+    "level",
+    "highest finish level (controller+0xB64)",
+    "0x141414C76 mov r8d,3; cmovle",
+    "0x141414C70",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.finish.cmd_lv1",
+    171,
+    "ETresCommandKind",
+    "finish command of level 1 (LM_STUNIMPACT)",
+    "0x141414CDE mov dword ptr [rcx+0B68h],0ABh",
+    "0x141414C70",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.finish.cmd_lv2",
+    172,
+    "ETresCommandKind",
+    "finish command of level 2 (LM_SONICRAVE)",
+    "0x141414CCE ... 0ACh",
+    "0x141414C70",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.finish.cmd_lv3",
+    173,
+    "ETresCommandKind",
+    "finish command of level 3 (LM_LASTARCANUM); 174 LM_UNIONDISCODE when the form is 0x95",
+    "0x141414CA7 ... 0ADh; 0x141414CB7 cmp eax,95h -> 0AEh",
+    "0x141414C70",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.finish.offset_time",
+    3,
+    "s",
+    "pawn MyStyleFinishOffsetTime (+0xCEC): minimum form time when the finish command first appears, and the form-time extension per further full gauge",
+    "ctor 0x141423C82 (0x40400000); read at 0x1413EE2CB and 0x1413EE2ED",
+    "0x1413EE030",
+    "confirmed",
+    "extension capped at the full duration controller+0xB58"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.finish.offset_time_weapon_change",
+    1,
+    "s",
+    "pawn MyStyleFinishOffsetTimeWeaponChange (+0xCF0): minimum when called with bWeaponChange",
+    "ctor 0x141423C8C; read at 0x1413EE2C1",
+    "0x1413EE030",
+    "confirmed",
+    "keyblade switching only"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.finish.stylefinish_state",
+    33,
+    "ETresStateID",
+    "state set by TryStyleFinish for 171..174 (STYLEFINISH)",
+    "0x141447840 default / fall-through mov edx,21h -> SetState 0x1405B9FE0",
+    "0x141447840",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.finish.sonicrave.dash_root_len",
+    1100,
+    "cm",
+    "0x1413E1FC0: mov dword [state+1D8h],44898000h (0x1413E2143, 0x1413E245C)",
+    "0x1413E1FC0: *(state+0x1D8) = 0x44898000",
+    "0x1413E1FC0",
+    "confirmed",
+    "constant taken from the decompiled C (hex literal). Read at instruction level at the merge (spec 10.9)"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.finish.sonicrave.end_root_len",
+    1200,
+    "cm",
+    "0x1413E1FC0: mov dword [state+1D8h],44960000h (0x1413E2236)",
+    "0x1413E1FC0: 0x44960000",
+    "0x1413E1FC0",
+    "confirmed",
+    "Read at instruction level at the merge (spec 10.9)"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.finish.sonicrave.dashes_before_finish",
+    5,
+    "count",
+    "0x1413E1FC0: cmp dword [state+128h],6 / jl (0x1413E21DB): LMEX_FINISH is offered from the dash that makes the count 6 (the first dash is 1)",
+    "0x1413E1FC0: 5 < state+0x128 -> 0xB0",
+    "0x1413E1FC0",
+    "confirmed",
+    "Read at instruction level at the merge (spec 10.9)"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.finish.lastarcanum.windows_before_break",
+    5,
+    "count",
+    "0x1413E1800: cmp eax,6 / jl (0x1413E1D2E): LMEX_BREAK is offered when state+0x128 reaches 6",
+    "0x1413E1800: 5 < state+0x128 -> slot 162(0xB1)",
+    "0x1413E1800",
+    "confirmed",
+    "Read at instruction level at the merge (spec 10.9)"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.finish.lastarcanum.root_len",
+    "700 / 200 / 190 / 180 / 160 / 150 / 200 (330 airborne)",
+    "cm",
+    "0x1413E1800: 0x442F0000, 0x43480000, 0x433E0000, 0x43340000, 0x43200000, 0x43160000, 0x43480000 / 0x43A50000 written to state+0x1D8 by sub-step (jump table 0x1413E1FA0)",
+    "0x1413E1800 hex literals 0x442F0000, 0x43480000, 0x433E0000, 0x43340000, 0x43200000, 0x43160000, 0x43480000, 0x43A50000",
+    "0x1413E1800",
+    "confirmed",
+    "Read at instruction level at the merge (spec 10.9)"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.finish.stop_dist",
+    "160 (Last Arcanum) / 0 (Sonic Rave)",
+    "cm",
+    "0x1413E1800: mov dword [state+24Ch],43200000h (0x1413E1DE9); 0x1413E1FC0: mov [state+24Ch],0 (0x1413E242A)",
+    "0x1413E1800: 0x43200000; 0x1413E1FC0: 0",
+    "0x1413E1800",
+    "confirmed",
+    "Read at instruction level at the merge (spec 10.9)"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.end.block_states",
+    "12,13,14,15,16,18,20,31,33,34,35,36,37,38,39,75..90,156,157,159,160,161",
+    "ETresStateID list",
+    "the form does not end by time-out while the queued next state or the current state is one of these (or pawn+0xE60 bit 17 is set)",
+    "0x141401D10 jump tables 0x141401E38/E40 and 0x141401ED8/EE0, decoded",
+    "0x141401D10",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "form.end.time_break_status",
+    19,
+    "ETresBadStatusType",
+    "bad status TRES_BADSTAT_TIME_BREAK subtracts its time from the form time and the action-command time",
+    "0x1405B7C50 kind 0x13 -> pawn slot 1052 0x141424700 -> controller slot 876 0x1413E9D30",
+    "0x1413E9D30",
+    "inferred",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "queue.capacity",
+    6,
+    "entries",
+    "counted situation commands in the HUD list (HUD+0x6F8), not counting the style-gauge entry and the two single slots",
+    "0x141615B47 cmp ebx,6; jl",
+    "0x1416158F0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "queue.evict_min_total",
+    0.1,
+    "s",
+    "on overflow the first entry (list order, indices 0..5) whose total time is at least this is removed",
+    "0x141615B54 movss xmm0,[0x145C87D00]; comiss xmm0,[r10+rax+14h]; jbe -> remove",
+    "0x1416158F0",
+    "confirmed",
+    "untimed entries (total -1) are never evicted"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "queue.start_delay",
+    0.5,
+    "s",
+    "time before an entry's countdown starts (entry+0x1C)",
+    "0x141615C0E movss xmm0,[0x145C9C4D0]",
+    "0x1416158F0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "queue.appear_time",
+    0.2,
+    "s",
+    "time before an entry can be selected (entry+0x20); 0 for classes 2 / 0xB and ex-kind entries",
+    "0x141615C2C movss xmm0,[0x145C9C4CC]",
+    "0x1416158F0",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "queue.class.formchange",
+    3,
+    "class",
+    "HUD class of TresCmdData Type 4 Cate 14 rows",
+    "0x141619E60 (Cate 0x0E -> 3)",
+    "0x141619E60",
+    "inferred",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "queue.class.finish",
+    4,
+    "class",
+    "HUD class of Type 4 Cate 15 / 16 rows: single slot B (HUD+0x7C8), not counted, no HUD countdown",
+    "0x141619E60; mask 0x1854 at 0x141615AAC; 0x141630AF0 ticks only +0x7E4 / +0x7E8 of slot B",
+    "0x141619E60",
+    "inferred",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "queue.class.reaction",
+    2,
+    "class",
+    "HUD class of Type 1 rows (commands 1..26) and Type 4 Cate 13: single slot A (HUD+0x770)",
+    "0x141619E60 jump table 0x14161A150: Type 1 -> 0x141619F0B mov ebx,2",
+    "0x141619E60",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "queue.class.grand_magic",
+    1,
+    "class",
+    "HUD class of Type 4 Cate 11 rows (110..126, 231): counted list entry",
+    "0x141619E60 (Cate 0x0B -> 1)",
+    "0x141619E60",
+    "inferred",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "queue.life.grand_magic",
+    20,
+    "s",
+    "TresCmdData Param0 of rows 110..126; x (1 + 0.2 n) with ability 0x48 (72 MAGIC_TIME)",
+    "asset; 0x14140DD22 mov edx,48h",
+    "0x14140DA40",
+    "confirmed",
+    "-"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "queue.life.attraction",
+    40,
+    "s",
+    "TresCmdData Param0 of rows 186..191; x (1 + 0.2 n) with ability 0x2F (47 ATTRACTION_TIME)",
+    "asset; 0x14140DBEA mov edx,2Fh",
+    "0x14140DA40",
+    "confirmed",
+    "producer needs marked enemies: stub"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "queue.life.team_attack",
+    30,
+    "s",
+    "TresCmdData Param0 of rows 193..210 unless the caller passes a time; x (1 + 0.5 n) with the friend's ability 0xC5 (197 COMBI_TIME)",
+    "asset; 0x14140DCE7 mov edx,0C5h",
+    "0x14140DA40",
+    "inferred",
+    "producer needs party members: stub"
+   ]
+  },
+  {
+   "strand": "F",
+   "row": [
+    "combo.carry_time",
+    0.5,
+    "s",
+    "pawn+0x10E4 set by TresPlayerState_WeaponChange (state 32) when it ends with state+0x8C set and nothing queued",
+    "0x1413CF876 / 0x1413D9FB6 movss ..,[0x145C9C4D0] = 0.5; pawn slot 749 0x141112B50",
+    "0x1413CF7D0",
+    "confirmed",
+    "keyblade switching only; STYLECHANGE and STYLEFINISH never write it"
+   ]
+  },
+  {
+   "strand": "M",
+   "row": [
+    "form.finish.sonicrave.root_scale_factor",
+    2,
+    "-",
+    "0x1413E1FC0 @0x1413E22AB-0x1413E2323: addss xmm1,xmm1 / divss xmm1,[state+1D8h] / call 0x1405A1D30",
+    "at each dash start with a valid target: horizontal root scale = 2 * |target location.xy - self.xy| / root length (1100, 1200 for the finish dash); vertical 1.0; no clamp",
+    "0x1413E1FC0",
+    "confirmed",
+    "the root-scale channel of the traction update is off for the finish commands; the value stays for the whole dash"
+   ]
+  },
+  {
+   "strand": "M",
+   "row": [
+    "form.finish.lastarcanum.end_drop_height",
+    50,
+    "cm",
+    "0x1413E1800 @0x1413E1C71-0x1413E1C82: ground probe 0x14063A650(pawn, 0, 800), comiss with 50",
+    "the last clip is M_1434 (root length 330) when the probe distance is > 50, else M_1433 (200); the result is pre-set to 0, so no ground within 800 cm gives M_1433",
+    "0x1413E1800",
+    "confirmed",
+    "layout of the probe result: decompiled C"
+   ]
+  },
+  {
+   "strand": "M",
+   "row": [
+    "form.finish.gravity_scale",
+    0.1,
+    "-",
+    "0x1413E1FC0 @0x1413E2543, 0x1413E1800 @0x1413E1D65: pawn.vt+0x1650(0.1)",
+    "Sonic Rave and Last Arcanum run in Flying mode (SetMovementMode 5) with GravityScale 0.1; restored to the class default at their end",
+    "0x1413E1FC0",
+    "confirmed",
+    "Stun Impact does not change mode or scale"
+   ]
+  },
+  {
+   "strand": "P3",
+   "row": [
+    "chase.command",
+    12,
+    "ETresCommandKind",
+    "Attack on-contact 0x141341B10 @0x141342070: state slot 141 (0x14134C660) with 0xC -> 0x141414350(ctrl, 12, 1.0, 0)",
+    "the reaction command shown while Final Blow (REVENGE_EX) is armed: TRES_CMD_KIND_REVENGESLASH2",
+    "0x141341B10",
+    "confirmed",
+    "decompiled C; the constant 0xC is the call argument"
+   ]
+  },
+  {
+   "strand": "P3",
+   "row": [
+    "chase.prompt_time",
+    1,
+    "s",
+    "Attack slot 141 0x14134C660: 0x141414350(ctrl, kind, 1.0, 0)",
+    "how long the reaction command of the armed chase is shown",
+    "0x14134C660",
+    "confirmed",
+    "verdict same"
+   ]
+  },
+  {
+   "strand": "P3",
+   "row": [
+    "chase.warp_delay",
+    0.2,
+    "s",
+    "docs/sora-combat-spec.md 6.7 (Attack Reset 0x14133D230: +0x260 = 0.2; slot 117 0x14134AA80 counts +0x258 down)",
+    "the chase attack (kind 0x22) starts with a countdown before the teleport and the clip",
+    "0x14134AA80",
+    "inferred",
+    "the copy +0x260 -> +0x258 was not located; the value is Reset's"
+   ]
+  },
+  {
+   "strand": "P3",
+   "row": [
+    "chase.warp_distance",
+    150,
+    "cm",
+    "Attack slot 117 0x14134AA80: state.vt+0x440(&location, 150.0 (0x43160000), 100.0 (0x42C80000)) -> slot 136 0x141337320",
+    "the teleport ends this far short of the target's lock point, on the line from Sora (kind 0x22: no random angle)",
+    "0x14134AA80",
+    "confirmed",
+    "decompiled C; slot 136 has verdict not-compiled"
+   ]
+  },
+  {
+   "strand": "P3",
+   "row": [
+    "chase.warp_drop",
+    100,
+    "cm",
+    "Attack slot 117 0x14134AA80: second argument 100.0 (0x42C80000)",
+    "and this far below it",
+    "0x14134AA80",
+    "confirmed",
+    "-"
+   ]
+  }
+ ],
+ "tables": {
+  "sora-combat-can-attack": {
+   "strand": "A",
+   "table": "can_attack",
+   "section": "3.2",
+   "what": "CanAttack 0x141426330 (request interface slot 44): the condition per current state id",
+   "note": null,
+   "cols": [
+    "id",
+    "state_ids",
+    "condition",
+    "addr",
+    "conf"
+   ],
+   "rows": [
+    [
+     "can_attack_01",
+     "pre",
+     "controller exists; !slot989; slot1336; pawn+0xE34 <= 0; has(30) -> pawn+0xE28 = 1; queued id not in {19,32,59,61,62}",
+     "0x141426330",
+     "confirmed"
+    ],
+    [
+     "can_attack_02",
+     "1",
+     "!(Idle+0x9C > 0) (always true)",
+     "0x14142645D",
+     "confirmed"
+    ],
+    [
+     "can_attack_03",
+     "2,4,5,11,26,34-39,98",
+     "true",
+     "0x141426EDF",
+     "confirmed"
+    ],
+    [
+     "can_attack_04",
+     "3",
+     "!(Jump+0x98 == 2 && Velocity.z > 0)",
+     "0x1414264B9",
+     "confirmed"
+    ],
+    [
+     "can_attack_05",
+     "9,10,21,23,24",
+     "queued state is not an Attack",
+     "0x141426C38",
+     "confirmed"
+    ],
+    [
+     "can_attack_06",
+     "12,13,14,75-90,100,156,157,159,160,161,171",
+     "queued not Attack; +0x143 == 0; +0x164 != 0; +0x84 & 0x20; (combo < MaxCombo || +0x234 & 0x200000); pawn+0xE28 != 0; !(pawn+0xE48 bit 5)",
+     "0x141426587",
+     "confirmed"
+    ],
+    [
+     "can_attack_07",
+     "15",
+     "(queued not Attack && pawn.slot605(-1) && Guard+0xDC != 0 && Guard+0x84 & 0x20) || ctrl+0x8A0 > 0 || (queued == null && Guard+0xDC != 0 && Guard+0x84 & 0x20)",
+     "0x141426832",
+     "confirmed"
+    ],
+    [
+     "can_attack_08",
+     "16,111",
+     "m_bEnableChange",
+     "0x141426993",
+     "confirmed"
+    ],
+    [
+     "can_attack_09",
+     "17",
+     "RiskDodge+0xD8 & 1 && !(RiskDodge+0xC8 & 4)",
+     "0x141426A34",
+     "confirmed"
+    ],
+    [
+     "can_attack_10",
+     "18",
+     "queued not Attack; !(Magic+0xD8 & 0x10); Magic+0xD0 > 0; Magic+0xB4 < MaxCombo; pawn+0xE28 != 0; !(pawn+0xE48 bit 5)",
+     "0x141426669",
+     "confirmed"
+    ],
+    [
+     "can_attack_11",
+     "19",
+     "queued == null; Damage+0x90 == 0; sub in {1,2,7,8,9,10}; m_bEnableChange",
+     "0x14142674F",
+     "confirmed"
+    ],
+    [
+     "can_attack_12",
+     "20",
+     "flags +0xA8: bit 7 -> false; bit 6 -> true; else m_bEnableChange",
+     "0x141426927",
+     "confirmed"
+    ],
+    [
+     "can_attack_13",
+     "32",
+     "sub != 0 && pawn+0xE28 != 0",
+     "0x141426527",
+     "confirmed"
+    ],
+    [
+     "can_attack_14",
+     "122",
+     "queued == null && m_bEnableChange",
+     "0x1414267D6",
+     "confirmed"
+    ],
+    [
+     "can_attack_15",
+     "final",
+     "!(pawn+0xE60 bit 17) (not applied to state 102)",
+     "0x141426EDF",
+     "confirmed"
+    ]
+   ]
+  },
+  "sora-combat-try-attack": {
+   "strand": "A",
+   "table": "try_attack",
+   "section": "3.3",
+   "what": "TryAttack 0x141437330 (slot 45): queue operation and writes per current state id",
+   "note": null,
+   "cols": [
+    "id",
+    "state_ids",
+    "queueing",
+    "writes",
+    "addr",
+    "conf"
+   ],
+   "rows": [
+    [
+     "try_attack_01",
+     "1,2 (3 fallthrough)",
+     "SetState",
+     "combo carry if pawn+0x10E4 > 0; counter-window upgrade W; bAir = !OnGround; target; pawn+0xE18 = combo",
+     "0x1414375F1",
+     "confirmed"
+    ],
+    [
+     "try_attack_02",
+     "4,5",
+     "SetState",
+     "as 1 with bAir = 1",
+     "0x141437912",
+     "confirmed"
+    ],
+    [
+     "try_attack_03",
+     "12,13,14,75-90,156,157,159-161,171",
+     "PushState",
+     "cur+0x143 = 1; next.combo = cur.combo + 1; bAir, target, reach (+0x154), +0x1F0, +0x1F4 bit 0 copied; pawn+0xE18; unison bit",
+     "0x141437ADA",
+     "confirmed"
+    ],
+    [
+     "try_attack_04",
+     "15",
+     "SetState",
+     "target = stored attacker component; if ctrl+0x8A0 > 0: just-guard bit, forcedKind 0x21/0x23/0x24/0x25, close window",
+     "0x141437D5E",
+     "confirmed"
+    ],
+    [
+     "try_attack_05",
+     "16",
+     "SetState",
+     "W; bAir; target",
+     "0x1414379F6",
+     "inferred"
+    ],
+    [
+     "try_attack_06",
+     "17",
+     "PushState",
+     "CounterUsed; bAir; target = dodged attacker; forcedKind = RiskDodge+0xE0; just-guard bit from RiskDodge+0xD8 bit 1",
+     "0x141437EFA",
+     "confirmed"
+    ],
+    [
+     "try_attack_07",
+     "18",
+     "PushState",
+     "Magic+0xD8 |= 0x10; combo = Magic+0xB4 + 1; bAir = Magic+0xD8 & 1; target",
+     "0x141437BEA",
+     "confirmed"
+    ],
+    [
+     "try_attack_08",
+     "20",
+     "PushState",
+     "W; bAir; target from AirSlide+0x98; forcedKind = AirSlide+0xB0",
+     "0x14143804E",
+     "inferred"
+    ]
+   ]
+  },
+  "sora-combat-attack-exits": {
+   "strand": "A",
+   "table": "attack_exits",
+   "section": "5.3",
+   "what": "what can end a TresPlayerState_Attack, with the gate that decides it",
+   "note": null,
+   "cols": [
+    "id",
+    "exit",
+    "gate",
+    "condition",
+    "mechanism",
+    "conf"
+   ],
+   "rows": [
+    [
+     "exit_01",
+     "clip end",
+     "Tick 0x141341340",
+     "AnimEnded",
+     "DoChain",
+     "confirmed"
+    ],
+    [
+     "exit_02",
+     "attack / cast / launch",
+     "CanAttack / CanMagic / CanLaunch",
+     "accepted request (+0x143) then m_bEnableChange",
+     "DoChain to the pushed state",
+     "confirmed"
+    ],
+    [
+     "exit_03",
+     "guard",
+     "0x1414294C0 @0x1414296EF",
+     "Attack+0x234 & 0x80",
+     "SetState",
+     "confirmed"
+    ],
+    [
+     "exit_04",
+     "dodge roll",
+     "0x141427CC0 @0x141428190",
+     "OnGround && Attack+0x234 & 0x80",
+     "SetState",
+     "confirmed"
+    ],
+    [
+     "exit_05",
+     "air slide",
+     "0x141425780 @0x141425D3E",
+     "Attack+0x234 & 0x80",
+     "SetState",
+     "confirmed"
+    ],
+    [
+     "exit_06",
+     "jump",
+     "0x14142A3D0 -> 0x14142AA45",
+     "never",
+     "-",
+     "confirmed"
+    ],
+    [
+     "exit_07",
+     "run",
+     "0x14142CE00 -> 0x14142D180",
+     "never",
+     "-",
+     "confirmed"
+    ],
+    [
+     "exit_08",
+     "swim",
+     "Tick",
+     "in water && Attack+0x234 & 0x80 && +0x143 == 0",
+     "PushState(102) + DoChain",
+     "confirmed"
+    ],
+    [
+     "exit_09",
+     "recoil",
+     "slot 129 0x141331AF0",
+     "state+0x264 bit 0",
+     "REFLECT (66) or guard-hit entry + DoChain",
+     "confirmed"
+    ]
+   ]
+  },
+  "sora-combat-attack-end": {
+   "strand": "A",
+   "table": "attack_end",
+   "section": "5.4",
+   "what": "TresPlayerState_Attack::End 0x141335120 as ordered steps",
+   "note": null,
+   "cols": [
+    "id",
+    "order",
+    "condition",
+    "action",
+    "addr",
+    "conf"
+   ],
+   "rows": [
+    [
+     "end_01",
+     1,
+     "always",
+     "state+0x234 &= ~0x1000000; slot139(0) weapon effect group off; slot142(0) Body reaction restore",
+     "0x141335224",
+     "confirmed"
+    ],
+    [
+     "end_02",
+     2,
+     "always",
+     "pawn vt+0x1388(0,1,0); level pitch if +0x1F4 & 0x20; skip-CalcVelocity off (vt+0x16D8(0)); MaxWalkSpeed, MaxAcceleration defaults; pawn+0x630 bit 2 = 0",
+     "0x14133550F",
+     "confirmed"
+    ],
+    [
+     "end_03",
+     3,
+     "queued id != 12",
+     "pawn slot 1303 (unison request cleared)",
+     "0x141335713",
+     "confirmed"
+    ],
+    [
+     "end_04",
+     4,
+     "always",
+     "gravity on (vt+0x1728(1))",
+     "0x141335720",
+     "confirmed"
+    ],
+    [
+     "end_05",
+     5,
+     "not in water, OnGround, +0x16C == 0, !(+0x234 & 4)",
+     "SetMovementMode(Walking, bStop = true)",
+     "0x14133578B",
+     "confirmed"
+    ],
+    [
+     "end_06",
+     6,
+     "not in water, OnGround, +0x234 & 4",
+     "SetMovementMode(Falling, bStop = true)",
+     "0x14133577E",
+     "confirmed"
+    ],
+    [
+     "end_07",
+     7,
+     "not in water, not OnGround",
+     "SetMovementMode(Falling, bStop = false); hit landed (+0x234 & 0x2000) ? +0x18C = 0 : pawn+0xE38 = 0.6, pawn+0xE3C = 0.3333",
+     "0x141335798",
+     "confirmed"
+    ],
+    [
+     "end_08",
+     8,
+     "always",
+     "GravityScale = class default (vt+0x1658)",
+     "0x1413357ED",
+     "confirmed"
+    ],
+    [
+     "end_09",
+     9,
+     "queued is an Attack",
+     "chase bit / target / just-guard bit forwarded; counters +0x12C, +0x138 forwarded (zeroed first unless +0x13C & 5)",
+     "0x14133582E",
+     "confirmed"
+    ],
+    [
+     "end_10",
+     10,
+     "queued is a FireMagic",
+     "counters to Magic+0xB8 / +0xC4 (same reset)",
+     "0x141335910",
+     "confirmed"
+    ],
+    [
+     "end_11",
+     11,
+     "queued id 32 or 162",
+     "counters to pawn+0xE1C / +0xE20 (same reset)",
+     "0x1413359E6",
+     "confirmed"
+    ],
+    [
+     "end_12",
+     12,
+     "any other / none",
+     "pawn slot 981(+0x18C > 0): combo memory reset, launch stocks reloaded, command cool-down 0.6 if arg; counters kept only if hit landed && +0x18C <= 0",
+     "0x141335A30",
+     "confirmed"
+    ],
+    [
+     "end_13",
+     13,
+     "queued is not a guard-hit Guard",
+     "reaction command off (slot141(0)); ctrl+0x878 bit 9 = 0",
+     "0x141335B3F",
+     "confirmed"
+    ],
+    [
+     "end_14",
+     14,
+     "always",
+     "cancel driven move (vt+0x22E8); finishEnd -> pawn+0xE60 bit 19 = 1",
+     "0x141335B93",
+     "confirmed"
+    ]
+   ]
+  },
+  "sora-combat-controller-order": {
+   "strand": "A",
+   "table": "controller_order",
+   "section": "3.1.2",
+   "what": "order of the combat calls in the controller input update 0x1413F1AB0",
+   "note": null,
+   "cols": [
+    "id",
+    "order",
+    "call",
+    "slot_or_addr",
+    "conf"
+   ],
+   "rows": [
+    [
+     "order_01",
+     1,
+     "lock-on (RB)",
+     "ctrl slot 712 0x1413F0700",
+     "confirmed"
+    ],
+    [
+     "order_02",
+     2,
+     "aim (RB) / target change (RT) when player controlled",
+     "slots 800, 713",
+     "confirmed"
+    ],
+    [
+     "order_03",
+     3,
+     "target search; current target",
+     "slots 714 0x141404E50, 717, 721, 722",
+     "confirmed"
+    ],
+    [
+     "order_04",
+     4,
+     "restricted mode branch (ctrl+0xA10)",
+     "0x1413F2495",
+     "confirmed"
+    ],
+    [
+     "order_05",
+     5,
+     "direct attack (link / attraction only)",
+     "0x1413F257D",
+     "confirmed"
+    ],
+    [
+     "order_06",
+     6,
+     "slots 829, 841, 900",
+     "0x14141C4F0, 0x1413F9990, 0x1413FCC10",
+     "confirmed"
+    ],
+    [
+     "order_07",
+     7,
+     "LB / lock / HUD masks on guard, triangle, jump presses",
+     "0x1413F25C5..0x1413F26C0",
+     "confirmed"
+    ],
+    [
+     "order_08",
+     8,
+     "situation command (triangle)",
+     "ctrl slot 674 0x141404460",
+     "confirmed"
+    ],
+    [
+     "order_09",
+     9,
+     "guard press: TryFlow, TryAirSlide, TryDodge | TryGuard",
+     "iface +0x240, +0x228, +0x1D0 | +0x1B8",
+     "confirmed"
+    ],
+    [
+     "order_10",
+     10,
+     "jump press: TryRiskDodge, TryAttack(target, 1) launch, JumpRequest",
+     "iface +0x1E8, +0x168 (0x1413F27F5), +0x150",
+     "confirmed"
+    ],
+    [
+     "order_11",
+     11,
+     "jump held: TryGlide, JumpHeld",
+     "iface +0x218, +0x158",
+     "confirmed"
+    ],
+    [
+     "order_12",
+     12,
+     "stick: MoveInput, TryRun",
+     "iface +0x118, +0x140",
+     "confirmed"
+    ],
+    [
+     "order_13",
+     13,
+     "(UI tick) attack / magic / item decide",
+     "0x1416220D0 -> ctrl slots 682, 680, 678",
+     "confirmed"
+    ]
+   ]
+  },
+  "sora-combat-tick-delta": {
+   "strand": "B",
+   "table": "tick_delta",
+   "section": "6.1.3",
+   "what": "displacement of one movement tick during an attack, per movement mode",
+   "note": null,
+   "cols": [
+    "id",
+    "mode",
+    "delta",
+    "addr",
+    "conf"
+   ],
+   "rows": [
+    [
+     "delta_01",
+     "Walking",
+     "((V.x + RM.x + Push.x), (V.y + RM.y + Push.y), 0) * dt along the floor",
+     "0x1405900B0",
+     "confirmed"
+    ],
+    [
+     "delta_02",
+     "Flying",
+     "(V + RM) * dt + PushDisp; no gravity, no landing",
+     "0x14058E570",
+     "confirmed"
+    ],
+    [
+     "delta_03",
+     "Falling",
+     "V.z += g * t; ((Vold + V)/2 + RM + Push) * t; lands on a walkable hit",
+     "0x14058D0C0",
+     "confirmed"
+    ]
+   ]
+  },
+  "sora-combat-velocity-flags": {
+   "strand": "B",
+   "table": "c18_bits",
+   "section": "6.1.2",
+   "what": "bits of the movement component flag byte +0xC18 (direct-velocity record and body-push switches)",
+   "note": null,
+   "cols": [
+    "id",
+    "bit",
+    "meaning",
+    "writers",
+    "readers"
+   ],
+   "rows": [
+    [
+     "c18_bit_01",
+     0,
+     "direct XY pending",
+     "0x140592DD0, 0x140592E10; cleared 0x14057CFE0, 0x14057D010",
+     "CalcVelocity tail 0x14057A286"
+    ],
+    [
+     "c18_bit_02",
+     1,
+     "direct Z pending",
+     "0x140592DD0, 0x140592E40; cleared 0x14057CFE0, 0x14057D030",
+     "CalcVelocity tail 0x14057A2B3"
+    ],
+    [
+     "c18_bit_03",
+     2,
+     "ignore body push",
+     "0x1405943A0",
+     "0x1405891D0"
+    ],
+    [
+     "c18_bit_04",
+     3,
+     "land only on a downward step",
+     "0x140594950",
+     "0x14058D6F2, 0x14058D92D"
+    ],
+    [
+     "c18_bit_05",
+     4,
+     "body push XY only",
+     "0x140593D50",
+     "0x140588790"
+    ],
+    [
+     "c18_bit_06",
+     5,
+     "movement tick flag",
+     "-",
+     "0x14058CE56, 0x140595805, 0x140598360"
+    ]
+   ]
+  },
+  "sora-combat-air-timeline": {
+   "strand": "B",
+   "table": "air_timeline",
+   "section": "6.6",
+   "what": "movement-mode timeline of an air-mode attack",
+   "note": null,
+   "cols": [
+    "id",
+    "order",
+    "event",
+    "effect",
+    "addr",
+    "conf"
+   ],
+   "rows": [
+    [
+     "air_01",
+     1,
+     "Begin / PlayAttack",
+     "V = 0; +0x234 |= 4|0x10; GravityScale 0.1; gravity disabled; Flying; +0x18C = 0.6; skip flag",
+     "0x14133A8BA",
+     "confirmed"
+    ],
+    [
+     "air_02",
+     2,
+     "before the window",
+     "hang: root motion only",
+     "0x14058E570",
+     "confirmed"
+    ],
+    [
+     "air_03",
+     3,
+     "window open",
+     "XY homing; Z = dzc * z_gain by the sign rule else current",
+     "0x14134A740",
+     "confirmed"
+    ],
+    [
+     "air_04",
+     4,
+     "window closes",
+     "gravity enabled; Falling; XY decay 0.1 (0.5 first air); Z pinned to decaying DirZ while != 0",
+     "0x14134A902",
+     "confirmed"
+    ],
+    [
+     "air_05",
+     5,
+     "TresEnableChange",
+     "GravityScale default; gravity on; Falling",
+     "0x14134D52E",
+     "confirmed"
+    ],
+    [
+     "air_06",
+     6,
+     "End",
+     "gravity on; scale default; skip flag off; airborne: Falling keep V; grounded: Falling+stop (air-mode) or Walking+stop",
+     "0x141335720",
+     "confirmed"
+    ]
+   ]
+  },
+  "sora-combat-push-weight": {
+   "strand": "B",
+   "table": "push_weight",
+   "section": "6.5",
+   "what": "body-push weight by push level (UTresBodyCollComponent 0x140637430)",
+   "note": null,
+   "cols": [
+    "id",
+    "case",
+    "weight",
+    "conf"
+   ],
+   "rows": [
+    [
+     "push_01",
+     "my level 9 or unpushable state",
+     0,
+     "inferred"
+    ],
+    [
+     "push_02",
+     "my level < other's",
+     1,
+     "inferred"
+    ],
+    [
+     "push_03",
+     "equal",
+     0.5,
+     "inferred"
+    ],
+    [
+     "push_04",
+     "my level > other's",
+     0,
+     "inferred"
+    ]
+   ]
+  },
+  "sora-combat-prim-flags": {
+   "strand": "C",
+   "table": "prim_flags",
+   "section": "8.0",
+   "what": "flag bytes +0x984..+0x987 of UTresAtkCollPrimitive",
+   "note": "flag bytes of UTresAtkCollPrimitive; byte = offset in the primitive",
+   "cols": [
+    "id",
+    "byte",
+    "bit",
+    "meaning",
+    "set_by",
+    "ref_addr",
+    "ref_conf"
+   ],
+   "rows": [
+    [
+     "prim_flag_01",
+     "0x984",
+     0,
+     "active",
+     "Enable",
+     "0x1406468A0",
+     "confirmed"
+    ],
+    [
+     "prim_flag_02",
+     "0x984",
+     1,
+     "updated this tick",
+     "component update",
+     "0x14062CA80",
+     "confirmed"
+    ],
+    [
+     "prim_flag_03",
+     "0x984",
+     2,
+     "positions initialised",
+     "update tail; cleared by Enable",
+     "0x140647950",
+     "confirmed"
+    ],
+    [
+     "prim_flag_04",
+     "0x984",
+     3,
+     "m_bDisableSweep",
+     "init",
+     "0x140642CA0",
+     "confirmed"
+    ],
+    [
+     "prim_flag_05",
+     "0x984",
+     4,
+     "damage formula noBonus argument",
+     "slot 335",
+     "0x1406469B0",
+     "confirmed"
+    ],
+    [
+     "prim_flag_06",
+     "0x984",
+     5,
+     "victim may refuse (actor iface slot 16)",
+     "activation flag S+0x5C bit 6",
+     "0x140625500",
+     "inferred"
+    ],
+    [
+     "prim_flag_07",
+     "0x984",
+     6,
+     "m_bIgnoreParentScale",
+     "init",
+     "0x140642CA0",
+     "confirmed"
+    ],
+    [
+     "prim_flag_08",
+     "0x984",
+     7,
+     "copy of m_bIsPhysAttackCollision",
+     "slot 334",
+     "0x1406457E0",
+     "confirmed"
+    ],
+    [
+     "prim_flag_09",
+     "0x985",
+     0,
+     "m_bIsPhysAttackCollision",
+     "init",
+     "0x140642CA0",
+     "confirmed"
+    ],
+    [
+     "prim_flag_10",
+     "0x985",
+     1,
+     "m_MapHitType >= HITMAP: sweep includes WorldStatic",
+     "init",
+     "0x140642CA0",
+     "confirmed"
+    ],
+    [
+     "prim_flag_11",
+     "0x985",
+     2,
+     "m_MapHitType == IGNORE_GROUND",
+     "init",
+     "0x140642CA0",
+     "confirmed"
+    ],
+    [
+     "prim_flag_12",
+     "0x985",
+     3,
+     "m_MapHitType == PHYSOBJ_NOHIT: sweep ignores PhysicsBody",
+     "init",
+     "0x140642CA0",
+     "confirmed"
+    ],
+    [
+     "prim_flag_13",
+     "0x985",
+     4,
+     "m_bDisableTakeDamage",
+     "init",
+     "0x140642CA0",
+     "confirmed"
+    ],
+    [
+     "prim_flag_14",
+     "0x985",
+     5,
+     "m_bEnablePawnRootCollision",
+     "init",
+     "0x140642CA0",
+     "confirmed"
+    ],
+    [
+     "prim_flag_15",
+     "0x985",
+     6,
+     "m_bAbsoluteOffset1",
+     "init",
+     "0x140642CA0",
+     "confirmed"
+    ],
+    [
+     "prim_flag_16",
+     "0x985",
+     7,
+     "m_bAbsoluteOffset2",
+     "init",
+     "0x140642CA0",
+     "confirmed"
+    ],
+    [
+     "prim_flag_17",
+     "0x986",
+     0,
+     "m_bDisableLocation1Attach",
+     "init",
+     "0x140642CA0",
+     "confirmed"
+    ],
+    [
+     "prim_flag_18",
+     "0x986",
+     1,
+     "m_bDisableLocation2Attach",
+     "init",
+     "0x140642CA0",
+     "confirmed"
+    ],
+    [
+     "prim_flag_19",
+     "0x986",
+     4,
+     "row m_TeamCheckType != NORMAL",
+     "row → primitive",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "prim_flag_20",
+     "0x986",
+     5,
+     "row m_TeamCheckType == SAME_ZERO",
+     "row → primitive",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "prim_flag_21",
+     "0x986",
+     6,
+     "m_bDisableCharHit",
+     "init",
+     "0x140642CA0",
+     "confirmed"
+    ],
+    [
+     "prim_flag_22",
+     "0x986",
+     7,
+     "no clash (reflect level <= 0, or after the first swing)",
+     "init / row / Activate",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "prim_flag_23",
+     "0x987",
+     1,
+     "map-hit-reflect window open",
+     "TresAnimNotifyState_AttackEnableMapHitReflect",
+     "0x140625C00",
+     "confirmed"
+    ],
+    [
+     "prim_flag_24",
+     "0x987",
+     2,
+     "hit-effect colour override",
+     "Activate",
+     "0x140646970",
+     "confirmed"
+    ],
+    [
+     "prim_flag_25",
+     "0x987",
+     3,
+     "hit-effect alpha override",
+     "Activate",
+     "0x140646950",
+     "confirmed"
+    ]
+   ]
+  },
+  "sora-combat-activation": {
+   "strand": "C",
+   "table": "activation_struct",
+   "section": "8.2.1",
+   "what": "the 0x70-byte activation struct passed from the attack notify to Activate 0x140625500",
+   "note": "0x70-byte struct passed from the attack notify to Activate",
+   "cols": [
+    "id",
+    "offset",
+    "type",
+    "content",
+    "source",
+    "ref_addr",
+    "ref_conf"
+   ],
+   "rows": [
+    [
+     "act_01",
+     "0x00",
+     "FName",
+     "group name",
+     "notify CollisionGrpName",
+     "0x140561F40",
+     "confirmed"
+    ],
+    [
+     "act_02",
+     "0x08",
+     "bit0",
+     "1",
+     "constant",
+     "0x140561F40",
+     "confirmed"
+    ],
+    [
+     "act_03",
+     "0x10",
+     "FName",
+     "group name",
+     "notify CollisionGrpName",
+     "0x140561F40",
+     "confirmed"
+    ],
+    [
+     "act_04",
+     "0x18",
+     "FName",
+     "attack row name",
+     "notify m_AttackDataIDName (state may rename)",
+     "0x140561F40",
+     "confirmed"
+    ],
+    [
+     "act_05",
+     "0x20",
+     "f32",
+     "re-hit interval",
+     "notify AttackInterval",
+     "0x140561F40",
+     "confirmed"
+    ],
+    [
+     "act_06",
+     "0x24",
+     "bit0",
+     "override hit-effect group",
+     "notify m_bOverrideHitEffect",
+     "0x140561F40",
+     "confirmed"
+    ],
+    [
+     "act_07",
+     "0x28",
+     "FName",
+     "hit-effect group",
+     "notify m_HitEffectGrpName",
+     "0x140561F40",
+     "confirmed"
+    ],
+    [
+     "act_08",
+     "0x30",
+     "weak ptr",
+     "hit sound",
+     "notify m_HitSEAsset",
+     "0x140561F40",
+     "confirmed"
+    ],
+    [
+     "act_09",
+     "0x38",
+     "u32",
+     "weapon hit-sound alias",
+     "notify m_WeaponHitSEAliasID",
+     "0x140561F40",
+     "confirmed"
+    ],
+    [
+     "act_10",
+     "0x3C",
+     "bits0-1",
+     "colour / alpha override",
+     "notify",
+     "0x140561F40",
+     "confirmed"
+    ],
+    [
+     "act_11",
+     "0x40",
+     "16 bytes",
+     "colour",
+     "notify m_OverrideHitEffectColor",
+     "0x140561F40",
+     "confirmed"
+    ],
+    [
+     "act_12",
+     "0x50",
+     "i32",
+     "command kind",
+     "pawn slot 959 (if > 0)",
+     "0x141443D70",
+     "confirmed"
+    ],
+    [
+     "act_13",
+     "0x54",
+     "i32",
+     "shoot-flow kind",
+     "pawn slot 960 (if > 0)",
+     "0x141443D70",
+     "confirmed"
+    ],
+    [
+     "act_14",
+     "0x58",
+     "u8",
+     "→ info+0x52",
+     "Attack state +0x128 (combo count)",
+     "0x141343800",
+     "confirmed"
+    ],
+    [
+     "act_15",
+     "0x59",
+     "u8",
+     "→ info+0x53",
+     "Attack state +0x12C",
+     "0x141343800",
+     "confirmed"
+    ],
+    [
+     "act_16",
+     "0x5A",
+     "u8",
+     "→ info+0x54 (formula combo step)",
+     "Attack state +0x130",
+     "0x141343800",
+     "confirmed"
+    ],
+    [
+     "act_17",
+     "0x5B",
+     "u8",
+     "→ info+0x55",
+     "Attack state +0x134",
+     "0x141343800",
+     "confirmed"
+    ],
+    [
+     "act_18",
+     "0x5C",
+     "bit0",
+     "→ info.finish",
+     "Attack state finishEnd (+0x141)",
+     "0x141343800",
+     "confirmed"
+    ],
+    [
+     "act_19",
+     "0x5C",
+     "bit1",
+     "→ reflect level 0 + no clash",
+     "Attack state combo >= 1",
+     "0x141343800",
+     "confirmed"
+    ],
+    [
+     "act_20",
+     "0x5C",
+     "bit2",
+     "→ bad-status rate 0",
+     "-",
+     "0x140625500",
+     "inferred"
+    ],
+    [
+     "act_21",
+     "0x5C",
+     "bit3",
+     "→ info.aerial",
+     "Attack state +0x234 bit 2 (air mode)",
+     "0x141343800",
+     "confirmed"
+    ],
+    [
+     "act_22",
+     "0x5C",
+     "bit5",
+     "→ info.fullMpBurst",
+     "-",
+     "0x140625500",
+     "inferred"
+    ],
+    [
+     "act_23",
+     "0x5C",
+     "bit6",
+     "→ prim+0x984 bit 5",
+     "-",
+     "0x140625500",
+     "inferred"
+    ],
+    [
+     "act_24",
+     "0x5C",
+     "bit7",
+     "m_bIgnoreComboCountUp",
+     "notify",
+     "0x140561F40",
+     "confirmed"
+    ],
+    [
+     "act_25",
+     "0x5D",
+     "bit0",
+     "→ info.justGuard",
+     "Attack state +0x23C bit 0",
+     "0x141343800",
+     "confirmed"
+    ],
+    [
+     "act_26",
+     "0x5D",
+     "bit1",
+     "take over hit lists",
+     "notify m_bTakeOverHitList",
+     "0x140561F40",
+     "confirmed"
+    ],
+    [
+     "act_27",
+     "0x60",
+     "FName",
+     "take-over group",
+     "notify m_TakeOverHitListGrpName",
+     "0x140561F40",
+     "confirmed"
+    ],
+    [
+     "act_28",
+     "0x68",
+     "bits0-1",
+     "calc type / survive rule present",
+     "-",
+     "0x140625500",
+     "inferred"
+    ],
+    [
+     "act_29",
+     "0x6C",
+     "i32",
+     "m_ComboCountUpParam",
+     "notify",
+     "0x140561F40",
+     "confirmed"
+    ]
+   ]
+  },
+  "sora-combat-reaction-rules": {
+   "strand": "C",
+   "table": "reaction_rules",
+   "section": "8.2.6",
+   "what": "Classify 0x14061FE20: victim result and attacker result by the body reaction type of the hit shape",
+   "note": "Classify 0x14061FE20. body_type = ETresBodyCollReactionType after the guard remap; w / x = victim says the attribute is weak / nullified; g = rapid-fire row and victim slot 15; results = ETresReactionResultType. GUARDED = (GUARD, REFLECT) with clash enabled and m_ReflectReaction DEFAULT / STAGGER, (GUARD, GUARD_REFLECT) with GUARD, (GUARD, NOREACTION) with NOREACTION or when clash is off",
+   "cols": [
+    "id",
+    "body_type",
+    "condition",
+    "victim_result",
+    "attacker_result",
+    "no_react",
+    "recorded",
+    "clear_bad_status",
+    "ref_addr",
+    "ref_conf"
+   ],
+   "rows": [
+    [
+     "classify_01",
+     "no body interface",
+     "reflect window closed",
+     "DAMAGE",
+     "NOREACTION",
+     "no",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_02",
+     "no body interface",
+     "reflect window open, actor null or m_DefaultAttackHitResponse in {GUARD, REFLECT}",
+     "DAMAGE",
+     "REFLECT",
+     "no",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_03",
+     "no body interface",
+     "reflect window open, other actor",
+     "DAMAGE",
+     "NOREACTION",
+     "no",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_04",
+     "any",
+     "prim+0x984 bit 5 and victim slot 16(0x10)",
+     "NONE",
+     "NONE",
+     "no",
+     "yes",
+     "yes",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_05",
+     "armoured",
+     "armor power > 0 or w, armour left <= 0",
+     "ARMOR_BREAK",
+     "NOREACTION",
+     "no",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_06",
+     "armoured",
+     "armor power <= 0 and not w",
+     "NONE",
+     "NOREACTION",
+     "yes",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_07",
+     "1 NO_REACTION",
+     "x",
+     "NONE",
+     "NOREACTION",
+     "yes",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_08",
+     "1 NO_REACTION",
+     "w",
+     "DAMAGE",
+     "NOREACTION",
+     "no",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_09",
+     "1 NO_REACTION",
+     "else (sets noReactBodyCorrection)",
+     "NOREACTION",
+     "NOREACTION",
+     "no",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_10",
+     "2 STRONG",
+     "w",
+     "DAMAGE",
+     "NOREACTION",
+     "no",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_11",
+     "2 STRONG",
+     "x",
+     "NONE",
+     "NOREACTION",
+     "yes",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_12",
+     "2 STRONG",
+     "g",
+     "NOREACTION",
+     "NOREACTION",
+     "no",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_13",
+     "2 STRONG",
+     "else: reaction power left > 0 → 8 if power > 1 else 7; left <= 0 → 10 if power > 0 else 9",
+     "STRONG_BODY_DAMAGE1..4",
+     "NOREACTION",
+     "no",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_14",
+     "3 GUARD",
+     "w, or kind CATCH / BIND, or ignoreGuard",
+     "DAMAGE",
+     "NOREACTION",
+     "no",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_15",
+     "5 GUARD_NOREACT",
+     "w, or kind CATCH / BIND, or ignoreGuard",
+     "NOREACTION",
+     "NOREACTION",
+     "no",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_16",
+     "3 GUARD / 5 GUARD_NOREACT",
+     "x",
+     "NONE",
+     "NOREACTION",
+     "yes",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_17",
+     "3 GUARD / 5 GUARD_NOREACT",
+     "else",
+     "GUARD",
+     "GUARDED",
+     "no",
+     "yes",
+     "yes",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_18",
+     "4 WEAK_GUARD",
+     "x",
+     "NONE",
+     "NOREACTION",
+     "yes",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_19",
+     "4 WEAK_GUARD",
+     "weakGuard row, not w, not ignoreGuard",
+     "GUARD",
+     "GUARDED",
+     "no",
+     "yes",
+     "yes",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_20",
+     "4 WEAK_GUARD",
+     "else",
+     "DAMAGE (NOREACTION if g and not w)",
+     "NOREACTION",
+     "no",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_21",
+     "6 INVINCIBLE",
+     "w",
+     "DAMAGE",
+     "NOREACTION",
+     "no",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_22",
+     "7 INVINCIBLE_NOREACT",
+     "w",
+     "NOREACTION",
+     "NOREACTION",
+     "no",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_23",
+     "6 / 7",
+     "not w",
+     "NONE",
+     "NOREACTION",
+     "yes",
+     "yes",
+     "yes",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_24",
+     "8 GHOST",
+     "w",
+     "DAMAGE",
+     "NOREACTION",
+     "no",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_25",
+     "9 GHOST_NOREACT",
+     "w",
+     "NOREACTION",
+     "NOREACTION",
+     "no",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_26",
+     "8 / 9",
+     "not w",
+     "NONE",
+     "NONE",
+     "no",
+     "no",
+     "yes",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_27",
+     "10 REFLECT1",
+     "w",
+     "DAMAGE",
+     "NOREACTION",
+     "no",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_28",
+     "10 REFLECT1",
+     "x",
+     "NONE",
+     "NOREACTION",
+     "yes",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_29",
+     "10 REFLECT1",
+     "clash off",
+     "DAMAGE (NOREACTION if g)",
+     "NOREACTION",
+     "no",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_30",
+     "10 REFLECT1",
+     "clash on: reflect level < 2 → attacker REFLECT; > 2 → victim REFLECT; == 2 both GUARD_REFLECT; then m_ReflectReaction",
+     "GUARD_REFLECT / REFLECT",
+     "GUARD_REFLECT / REFLECT / NONE",
+     "no",
+     "yes",
+     "yes",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_31",
+     "11 GHOST_INVINCIBLE",
+     "always",
+     "NONE",
+     "NONE",
+     "no",
+     "yes",
+     "yes",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_32",
+     "0 DEFAULT / other",
+     "x",
+     "NONE",
+     "NOREACTION",
+     "yes",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "classify_33",
+     "0 DEFAULT / other",
+     "else",
+     "DAMAGE (NOREACTION if g and not w)",
+     "NOREACTION",
+     "no",
+     "yes",
+     "no",
+     "0x14061FE20",
+     "confirmed"
+    ]
+   ]
+  },
+  "sora-combat-knockback-dir": {
+   "strand": "C",
+   "table": "knockback_dir",
+   "section": "8.7",
+   "what": "knockback direction by m_KnockbackType (0x14061EA30)",
+   "note": "0x14061EA30; victim = hit actor root location (hit component location when the actor is null); norm = 3D unit vector, zero when |v|^2 < 1e-8",
+   "cols": [
+    "id",
+    "type",
+    "name",
+    "direction",
+    "ref_addr",
+    "ref_conf"
+   ],
+   "rows": [
+    [
+     "knockback_01",
+     0,
+     "NORMAL",
+     "norm(victim - root of (comp+0x890 actor ?: instigator ?: owner))",
+     "0x14061EA30",
+     "inferred"
+    ],
+    [
+     "knockback_02",
+     1,
+     "VELOCITY",
+     "GetVelocity() of comp+0x890 actor ?: owner, not normalised",
+     "0x14061EA30",
+     "inferred"
+    ],
+    [
+     "knockback_03",
+     2,
+     "ATK_COLLISION",
+     "norm(victim - lerp(prevCentre, centre, clamp(hit.Time, 0, 1)))",
+     "0x14061EA30",
+     "inferred"
+    ],
+    [
+     "knockback_04",
+     3,
+     "INSTIGATOR_PAWN",
+     "norm(victim - root of the pawn of the instigator controller); none → as NORMAL",
+     "0x14061EA30",
+     "inferred"
+    ],
+    [
+     "knockback_05",
+     4,
+     "IMPACT_LOCATION",
+     "norm(victim - hit.ImpactPoint)",
+     "0x14061EA30",
+     "confirmed"
+    ],
+    [
+     "knockback_06",
+     5,
+     "SPECIFIC",
+     "(1,0,0), overwritable by notify slot 29 of comp+0x890 actor ?: instigator ?: owner",
+     "0x14061EA30",
+     "inferred"
+    ]
+   ]
+  },
+  "sora-combat-damage-info": {
+   "strand": "C",
+   "table": "damage_info_delivered",
+   "section": "8.7",
+   "what": "TresDamageInfo as delivered inside FTresPointDamageEvent (+0xA8)",
+   "note": "TresDamageInfo inside FTresPointDamageEvent (+0xA8); event: +0x08 DamageTypeClass, +0x10 Damage, +0x14 ShotDirection, +0x20 FHitResult (0x88)",
+   "cols": [
+    "id",
+    "offset",
+    "field",
+    "source",
+    "ref_addr",
+    "ref_conf"
+   ],
+   "rows": [
+    [
+     "info_01",
+     "0x00",
+     "m_AttackDataIDName",
+     "row name",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_02",
+     "0x08",
+     "m_CommandKind",
+     "pawn slot 959 at activation, if <= 0xFD",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_03",
+     "0x09",
+     "m_ShootFlowKind",
+     "pawn slot 960, if <= 0x2C",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_04",
+     "0x0A",
+     "m_DamageKind",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_05",
+     "0x0B",
+     "m_DamageAttribute",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_06",
+     "0x0C",
+     "m_AttackSrcPower",
+     "row m_Power",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_07",
+     "0x10",
+     "m_DamagePowerScale",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_08",
+     "0x14",
+     "m_DamageParabolaAngle",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_09",
+     "0x18",
+     "m_DamageMoveLength",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_10",
+     "0x1C",
+     "m_DamageBrakeParam",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_11",
+     "0x20",
+     "m_DamageEffectTime",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_12",
+     "0x24",
+     "m_KnockbackType",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_13",
+     "0x28",
+     "m_KnockbackDir",
+     "computed per hit (table knockback_dir)",
+     "0x140618940",
+     "confirmed"
+    ],
+    [
+     "info_14",
+     "0x34",
+     "m_BadStatusKind",
+     "row; cleared by a failed rate roll, a guard, DisableTakeDamage",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_15",
+     "0x38",
+     "m_BadStatusEffectTime",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_16",
+     "0x3C",
+     "m_BadStatusEffectParam",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_17",
+     "0x40",
+     "byte",
+     "owner base-param byte +0x7D",
+     "0x140625500",
+     "inferred"
+    ],
+    [
+     "info_18",
+     "0x44",
+     "m_ReactionPower",
+     "row m_ReactionPowerValue",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_19",
+     "0x48",
+     "m_ArmorAttackPower",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_20",
+     "0x4C",
+     "m_FormPoint",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_21",
+     "0x50 bit0",
+     "m_bIsMagicAttack",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_22",
+     "0x50 bit1",
+     "m_bIsFinishAttack",
+     "Attack state finishEnd",
+     "0x140625500",
+     "inferred"
+    ],
+    [
+     "info_23",
+     "0x50 bit2",
+     "m_bIsKillerAttack",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_24",
+     "0x50 bit3",
+     "m_bIsIgnoreGuard",
+     "row m_bIsIvalidGuard",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_25",
+     "0x50 bit4",
+     "m_bIsRapidFireAttack",
+     "row m_bIsRapidFire",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_26",
+     "0x50 bit5",
+     "m_bIsCriticalHit",
+     "never set (stub)",
+     "0x14041F340",
+     "confirmed"
+    ],
+    [
+     "info_27",
+     "0x50 bit6",
+     "m_bIsArmorDamage",
+     "Classify on an armoured victim",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "info_28",
+     "0x50 bit7",
+     "m_bIsAerialAttack",
+     "Attack state air mode",
+     "0x140625500",
+     "inferred"
+    ],
+    [
+     "info_29",
+     "0x51 bit0",
+     "m_bIsAttractionDamage",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_30",
+     "0x51 bit1",
+     "m_bIsCounterAttack",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_31",
+     "0x51 bit2",
+     "m_bIsJustGuardAttack",
+     "Attack state just-guard attack",
+     "0x140625500",
+     "inferred"
+    ],
+    [
+     "info_32",
+     "0x51 bit3",
+     "m_bIsEnableWeakGuardAttack",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_33",
+     "0x51 bit4",
+     "m_bIsEnableFullMpBurst",
+     "activation flag",
+     "0x140625500",
+     "inferred"
+    ],
+    [
+     "info_34",
+     "0x51 bit5",
+     "m_bIsEnableMagicDraw",
+     "attacker MAGIC_DRAW (60) and magic row",
+     "0x140618940",
+     "confirmed"
+    ],
+    [
+     "info_35",
+     "0x51 bit6",
+     "m_bIsEnableNoReactBodyCorrection",
+     "Classify, body NO_REACTION",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "info_36",
+     "0x52",
+     "counter 0",
+     "Attack state +0x128 (combo count), clamp 0..99; 1 from the row loader before activation",
+     "0x140625500",
+     "inferred"
+    ],
+    [
+     "info_37",
+     "0x53",
+     "counter 1",
+     "Attack state +0x12C",
+     "0x140625500",
+     "inferred"
+    ],
+    [
+     "info_38",
+     "0x54",
+     "counter 2 = combo step of the damage formula",
+     "Attack state +0x130",
+     "0x140625500",
+     "inferred"
+    ],
+    [
+     "info_39",
+     "0x55",
+     "counter 3",
+     "Attack state +0x134",
+     "0x140625500",
+     "inferred"
+    ],
+    [
+     "info_40",
+     "0x58",
+     "m_RevengePoint",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_41",
+     "0x5C",
+     "armour left",
+     "victim actor-interface slot 70",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "info_42",
+     "0x60",
+     "victim result",
+     "Classify",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "info_43",
+     "0x61",
+     "attacker result",
+     "Classify",
+     "0x14061FE20",
+     "confirmed"
+    ],
+    [
+     "info_44",
+     "0x62",
+     "m_ReflectReaction",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_45",
+     "0x63",
+     "m_ReflectLevel (i8)",
+     "row; 0 after the first swing of a combo",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_46",
+     "0x64",
+     "m_PhysForceLv",
+     "row",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_47",
+     "0x65",
+     "calc type",
+     "0 (activation S+0x69 otherwise)",
+     "0x140645900",
+     "confirmed"
+    ],
+    [
+     "info_48",
+     "0x66",
+     "survive rule",
+     "0 (activation S+0x6A otherwise)",
+     "0x140645900",
+     "confirmed"
+    ]
+   ]
+  },
+  "sora-combat-shape-flags": {
+   "strand": "C",
+   "table": "kb_shape_flags",
+   "section": "8.1",
+   "what": "the keyblade shape groups with the flags their shape data produces (0x140642CA0)",
+   "note": "derived from w_so_KeybladeBase TresAtkColl0 with the flag mapping of 0x140642CA0",
+   "cols": [
+    "id",
+    "group",
+    "shape",
+    "hits_world_static",
+    "ignore_ground",
+    "phys",
+    "fixed_location",
+    "size_rule",
+    "used_by_base_combo"
+   ],
+   "rows": [
+    [
+     "KB_Stick",
+     "KB_Stick",
+     "CAPSULE2 ATK_00-ATK_01",
+     "yes",
+     "yes",
+     "yes",
+     "no",
+     "radius 50",
+     "yes"
+    ],
+    [
+     "KB_StickM",
+     "KB_StickM",
+     "CAPSULE2 ATK_00-ATK_01",
+     "no",
+     "no",
+     "yes",
+     "no",
+     "radius 80",
+     "yes"
+    ],
+    [
+     "KB_StickL",
+     "KB_StickL",
+     "CAPSULE2 ATK_00-ATK_01",
+     "no",
+     "no",
+     "yes",
+     "no",
+     "radius 120",
+     "yes"
+    ],
+    [
+     "KB_SphereSS",
+     "KB_SphereSS",
+     "SPHERE ATK_00",
+     "no",
+     "no",
+     "yes",
+     "no",
+     "radius 250",
+     "yes"
+    ],
+    [
+     "KB_SphereS",
+     "KB_SphereS",
+     "SPHERE ATK_00",
+     "no",
+     "no",
+     "yes",
+     "no",
+     "radius 350",
+     "yes"
+    ],
+    [
+     "SphereM",
+     "SphereM",
+     "SPHERE ATK_00",
+     "no",
+     "no",
+     "no",
+     "no",
+     "radius 550",
+     "yes"
+    ],
+    [
+     "KB_FixRangeS",
+     "KB_FixRangeS",
+     "SPHERE ATK_00",
+     "no",
+     "no",
+     "no",
+     "yes",
+     "radius 350",
+     "yes"
+    ],
+    [
+     "FrontImpactS",
+     "FrontImpactS",
+     "SPHERE vfx_cure + (200,0,0)",
+     "no",
+     "no",
+     "no",
+     "no",
+     "radius min(100 + 700 t, 350)",
+     "yes"
+    ],
+    [
+     "KB_FixPillar",
+     "KB_FixPillar",
+     "CAPSULE1 vfx_cure + (200,0,0), rotation LOCAL",
+     "no",
+     "no",
+     "no",
+     "yes",
+     "radius min(50 + 2000 t, 300), half-length 800",
+     "yes"
+    ]
+   ]
+  },
+  "sora-combat-hit-effects": {
+   "strand": "C",
+   "table": "hit_effect_choice",
+   "section": "8.6",
+   "what": "hit effect and hit sound of the Kingdom Key per case (chooser 0x140628960 on w_so010_Wep m_HitEffects)",
+   "note": "chooser 0x140628960 applied to w_so010_Wep m_HitEffects entry None",
+   "cols": [
+    "id",
+    "case",
+    "effect",
+    "sound",
+    "ref_conf"
+   ],
+   "rows": [
+    [
+     "effect_01",
+     "character or prop, attribute PHYSICAL",
+     "/Game/Effects/wep/w_so010/par/vw_so010_hit0 (+ vw_so010_str0 for phys shapes)",
+     "window hit sound (notify asset, else enumset_hit_w_so010[alias])",
+     "inferred"
+    ],
+    [
+     "effect_02",
+     "character or prop, attribute NOTYPE",
+     "/Game/Effects/system/Hit/par/VS_non_HIT0 (+ vw_so010_str0 for phys shapes)",
+     "window hit sound",
+     "inferred"
+    ],
+    [
+     "effect_03",
+     "character or prop, FIRE / BLIZZARD / THUNDER / WATER / AERO / DARK",
+     "vs_fir_hit0 / vs_blz_hit0 / vs_thd_hit0 / vs_wat_hit0 / vs_win_hit0 / vs_dak_hit1",
+     "window hit sound",
+     "inferred"
+    ],
+    [
+     "effect_04",
+     "map (KB_Stick only)",
+     "/Game/Effects/wep/w_so010/par/VW_SO010_WHT0",
+     "none",
+     "inferred"
+    ],
+    [
+     "effect_05",
+     "victim result GUARD / GUARD_REFLECT",
+     "victim body-interface slot 78 effect, else the manager common guard effect",
+     "none from the chooser",
+     "inferred"
+    ],
+    [
+     "effect_06",
+     "victim result NONE on an ENEMY with noReact",
+     "victim body-interface slot 79 effect, else the manager default",
+     "none from the chooser",
+     "inferred"
+    ],
+    [
+     "effect_07",
+     "attacker result REFLECT reaching the chooser",
+     "as the first rows",
+     "none",
+     "inferred"
+    ]
+   ]
+  },
+  "sora-combat-attacker-events": {
+   "strand": "C",
+   "table": "attacker_events",
+   "section": "8.5",
+   "what": "everything the attacker side does per hit, in order",
+   "note": "everything the attacker side does per hit, in order",
+   "cols": [
+    "id",
+    "when",
+    "action",
+    "ref_addr",
+    "ref_conf"
+   ],
+   "rows": [
+    [
+     "gain_01",
+     "contact (result != NONE)",
+     "pawn+0x6C8 = ImpactPoint",
+     "0x1405B2710",
+     "confirmed"
+    ],
+    [
+     "gain_02",
+     "contact, attacker result REFLECT / GUARD_REFLECT / GUARD",
+     "Attack state recoil record: +0x264 |= 1, +0x268 = result, +0x270 = victim (map hit: only combo 0, no target)",
+     "0x141341B10",
+     "inferred"
+    ],
+    [
+     "gain_03",
+     "contact, other results",
+     "pawn+0xE24 += 1; pawn+0xE28 = 1; state+0x13C |= 4; state+0x234 |= 0x2000; revenge-chase arming for kinds 0x21 / 0x23 / 0x24 / 0x25",
+     "0x141341B10",
+     "inferred"
+    ],
+    [
+     "gain_04",
+     "contact, just-guard attack",
+     "spawn pawn+0x1540 effect at the impact",
+     "0x1414471A0",
+     "confirmed"
+    ],
+    [
+     "gain_05",
+     "victim lost HP",
+     "AddStylePoint((float)m_FormPoint, 1, commandKind)",
+     "0x141442DE0",
+     "confirmed"
+    ],
+    [
+     "gain_06",
+     "victim lost HP, ctrl+0xA08 bit 1",
+     "target HP gauge refresh 0x14158A860",
+     "0x141442DE0",
+     "confirmed"
+    ],
+    [
+     "gain_07",
+     "victim lost HP or not",
+     "AddFocus(MyFocusPointAddHit) when > 0 (0 for Sora)",
+     "0x141442DE0",
+     "confirmed"
+    ],
+    [
+     "gain_08",
+     "never",
+     "hit-stop, camera shake, force feedback",
+     "-",
+     "confirmed"
+    ]
+   ]
+  },
+  "sora-combat-lockon-fields": {
+   "strand": "D",
+   "table": "lockon_controller_fields",
+   "section": "7.1",
+   "what": "lock-on state on TresPlayerControllerSora",
+   "note": null,
+   "cols": [
+    "id",
+    "offset",
+    "type",
+    "init",
+    "accessor",
+    "meaning",
+    "evidence"
+   ],
+   "rows": [
+    [
+     "+0x934",
+     "+0x934",
+     "u8",
+     "0",
+     "slot 711 get / slot 712 0x1413F0700 update",
+     "RB tap flag (one frame)",
+     "I"
+    ],
+    [
+     "+0x938",
+     "+0x938",
+     "f32",
+     "0",
+     "slot 712",
+     "RB hold time",
+     "I"
+    ],
+    [
+     "+0x93C",
+     "+0x93C",
+     "u8",
+     "0",
+     "slot 727",
+     "RT hold flag (set once past 0.2667 s)",
+     "I"
+    ],
+    [
+     "+0x93D",
+     "+0x93D",
+     "u8",
+     "0",
+     "slot 713 0x1413F0D00",
+     "RT hold latch",
+     "I"
+    ],
+    [
+     "+0x93E",
+     "+0x93E",
+     "u8",
+     "0",
+     "slot 728",
+     "RT tap flag (one frame)",
+     "I"
+    ],
+    [
+     "+0x940",
+     "+0x940",
+     "f32",
+     "0",
+     "slot 713",
+     "RT hold time",
+     "I"
+    ],
+    [
+     "+0x944",
+     "+0x944",
+     "weak ptr TresCharPawnBase",
+     "null",
+     "-",
+     "pawn of the locked target",
+     "I"
+    ],
+    [
+     "+0x94C",
+     "+0x94C",
+     "weak ptr TresCharPawnBase",
+     "null",
+     "slot 731 set, slot 732 clear",
+     "pawn of the attack target",
+     "I"
+    ],
+    [
+     "+0x95C",
+     "+0x95C",
+     "i32",
+     "0",
+     "slot 726",
+     "targets within 400 cm",
+     "I"
+    ],
+    [
+     "+0x960",
+     "+0x960",
+     "u8",
+     "0",
+     "slot 720",
+     "manual lock active",
+     "I"
+    ],
+    [
+     "+0x964",
+     "+0x964",
+     "i32",
+     "0",
+     "-",
+     "switch index",
+     "I"
+    ],
+    [
+     "+0x968",
+     "+0x968",
+     "u8",
+     "0",
+     "slot 729",
+     "shooter mode aiming",
+     "I"
+    ],
+    [
+     "+0x969",
+     "+0x969",
+     "u8",
+     "0",
+     "0x141413F70",
+     "dive-fall targeting",
+     "I"
+    ],
+    [
+     "+0x96C bit 1",
+     "+0x96C bit 1",
+     "flag",
+     "0",
+     "slot 786 BP_SetNearTargetSingle",
+     "crowd count reported as at most 1",
+     "I"
+    ],
+    [
+     "+0x970",
+     "+0x970",
+     "f32",
+     "900",
+     "slots 735 / 736 / 738",
+     "MyAutoLockonLimit",
+     "I"
+    ],
+    [
+     "+0x974",
+     "+0x974",
+     "f32",
+     "150",
+     "slot 737",
+     "MyAutoLockonNear",
+     "I"
+    ],
+    [
+     "+0x978",
+     "+0x978",
+     "f32",
+     "3500",
+     "slots 739 / 740 / 741",
+     "MyManualLockonLimit",
+     "I"
+    ],
+    [
+     "+0x97C",
+     "+0x97C",
+     "f32",
+     "4200",
+     "slot 739",
+     "MyManualLockonOff",
+     "I"
+    ],
+    [
+     "+0x98D",
+     "+0x98D",
+     "u8",
+     "1",
+     "slot 756 set",
+     "manual lock permitted (1 of 2)",
+     "I"
+    ],
+    [
+     "+0x991",
+     "+0x991",
+     "u8",
+     "1",
+     "slot 757 set",
+     "manual lock permitted (2 of 2); slot 755 = both",
+     "I"
+    ],
+    [
+     "+0x98E",
+     "+0x98E",
+     "u8",
+     "0",
+     "slot 758 get / 759 set",
+     "auto lock-on disabled",
+     "I"
+    ],
+    [
+     "+0x98F",
+     "+0x98F",
+     "u8",
+     "0",
+     "slot 760 get / 761 set",
+     "gimmick lock-on disabled",
+     "I"
+    ],
+    [
+     "+0x990",
+     "+0x990",
+     "u8",
+     "0",
+     "slot 762 get / 763 set",
+     "soft-target-only mode",
+     "I"
+    ],
+    [
+     "+0x994",
+     "+0x994",
+     "weak ptr TresLockonTargetComponent",
+     "null",
+     "slot 722; slot 721 = owner pawn",
+     "current target",
+     "I"
+    ],
+    [
+     "+0x99C",
+     "+0x99C",
+     "weak ptr TresLockonTargetComponent",
+     "null",
+     "slot 731 set / 734 get",
+     "attack target (pins the current target)",
+     "I"
+    ],
+    [
+     "+0x9AC",
+     "+0x9AC",
+     "weak ptr TresLockonTargetComponent",
+     "null",
+     "slot 723",
+     "best candidate within 3500",
+     "I"
+    ],
+    [
+     "+0x9C4",
+     "+0x9C4",
+     "u8",
+     "0",
+     "slot 790 set / 791 clear",
+     "multi-lock mode",
+     "C"
+    ],
+    [
+     "+0x9C8",
+     "+0x9C8",
+     "f32",
+     "2400",
+     "-",
+     "switch list range",
+     "I"
+    ],
+    [
+     "+0x9CC",
+     "+0x9CC",
+     "i32",
+     "6",
+     "-",
+     "switch list maximum",
+     "I"
+    ],
+    [
+     "+0x9E8",
+     "+0x9E8",
+     "TArray of {f32 dist, weak null, weak component} (20 bytes)",
+     "empty",
+     "-",
+     "switch list",
+     "I"
+    ],
+    [
+     "+0xA10",
+     "+0xA10",
+     "i32",
+     "-",
+     "slot 800 0x1414165E0",
+     "shotlock state; != 0 freezes the target update",
+     "I"
+    ],
+    [
+     "+0x878 bit 6",
+     "+0x878 bit 6",
+     "flag",
+     "0",
+     "0x14140E610 (UI)",
+     "input lock; freezes the target update",
+     "I"
+    ]
+   ]
+  },
+  "sora-combat-lockon-slots": {
+   "strand": "D",
+   "table": "lockon_component_slots",
+   "section": "7.9",
+   "what": "virtual functions of TresLockonTargetComponent (vtable 0x146628970) the targeting code calls",
+   "note": null,
+   "cols": [
+    "id",
+    "slot",
+    "vt_offset",
+    "address",
+    "meaning",
+    "evidence"
+   ],
+   "rows": [
+    [
+     "lockon_slot_01",
+     336,
+     "0xA80",
+     "0x140F96570",
+     "Targetable: comp+0x868 bit 0 && m_bPermissionLockOn && owner valid && owner.vt+0x698()",
+     "I"
+    ],
+    [
+     "lockon_slot_02",
+     338,
+     "0xA90",
+     "0x140846E10",
+     "m_LockonPriority (comp+0x874)",
+     "I"
+    ],
+    [
+     "lockon_slot_03",
+     350,
+     "0xAF0",
+     "0x140F50950",
+     "m_AutoLockOnRange (comp+0x888)",
+     "I"
+    ],
+    [
+     "lockon_slot_04",
+     351,
+     "0xAF8",
+     "0x140F50C30",
+     "m_ShootLockOnRange (comp+0x88C)",
+     "I"
+    ],
+    [
+     "lockon_slot_05",
+     354,
+     "0xB10",
+     "0x140F28770",
+     "m_bRushSuppression (comp+0x898 bit 0)",
+     "I"
+    ],
+    [
+     "lockon_slot_06",
+     355,
+     "0xB18",
+     "0x140F27A90",
+     "m_CloseRange (comp+0x89C)",
+     "I"
+    ],
+    [
+     "lockon_slot_07",
+     362,
+     "0xB50",
+     "0x140F95CA0",
+     "LookAtPosition: owner.vt+0x710(m_ViewTargetIndex) when index >= 0, else Location",
+     "I"
+    ],
+    [
+     "lockon_slot_08",
+     369,
+     "0xB88",
+     "0x140ACF250",
+     "Location: component world location (comp+0x2B0)",
+     "I"
+    ],
+    [
+     "lockon_slot_09",
+     93,
+     "0x2E8",
+     "0x140F960B0",
+     "BeginPlay: register with ATresGameMode vt+0xA78",
+     "C"
+    ],
+    [
+     "lockon_slot_10",
+     96,
+     "0x300",
+     "0x140F9D100",
+     "EndPlay: unregister with ATresGameMode vt+0xA80",
+     "C"
+    ],
+    [
+     "lockon_slot_11",
+     "-",
+     "-",
+     "0x140F75F30",
+     "Team: comp+0x868 bit 1 ? owner team : comp+0x86C",
+     "I"
+    ]
+   ]
+  },
+  "sora-combat-lockon-hud": {
+   "strand": "D",
+   "table": "lockon_hud_calls",
+   "section": "7.11",
+   "what": "HUD calls of the lock-on code",
+   "note": null,
+   "cols": [
+    "id",
+    "call",
+    "address",
+    "when",
+    "effect",
+    "evidence"
+   ],
+   "rows": [
+    [
+     "lockon_hud_01",
+     "Add(target, 0)",
+     "0x1415759C0",
+     "every frame for the soft target",
+     "auto cursor; no-op when present; first cursor registers the enemy HP gauge target (0x14158A860)",
+     "C"
+    ],
+    [
+     "lockon_hud_02",
+     "Add(target, 1)",
+     "0x1415759C0",
+     "lock on, switch, forced lock",
+     "lock cursor; UI sound id 7 (0x14176F6B0)",
+     "C"
+    ],
+    [
+     "lockon_hud_03",
+     "Remove(target)",
+     "0x14157A7A0",
+     "target change, loss, unlock, before Add(.., 1)",
+     "removes that component's cursors (type argument 8, id -1)",
+     "C"
+    ],
+    [
+     "lockon_hud_04",
+     "SetLockon(comp or null)",
+     "0x1405F0140",
+     "lock on, switch, unlock",
+     "camera manager: lock-on camera start / retarget / end",
+     "C"
+    ]
+   ]
+  },
+  "sora-combat-damage-params": {
+   "strand": "E",
+   "table": "damage_common_param",
+   "section": "9.3",
+   "what": "PlayerDamageCommonParam (TresDamageCommonParam): native default, asset value and the value the player uses",
+   "note": "offset in the TresDamageCommonParam object; native default from ctor 0x14064C130; asset = Blueprints/Player/PlayerDamageCommonParam (null = not overridden); read_by_slot = Damage state getter slot (null = not read by the player Damage handlers read here)",
+   "cols": [
+    "id",
+    "name",
+    "offset",
+    "native_default",
+    "asset_value",
+    "player_value",
+    "read_by_slot"
+   ],
+   "rows": [
+    [
+     "m_SmallDamagePower",
+     "m_SmallDamagePower",
+     "0x40",
+     450,
+     550,
+     550,
+     127
+    ],
+    [
+     "m_SmallDamageBrake",
+     "m_SmallDamageBrake",
+     "0x44",
+     0.95,
+     0.9,
+     0.9,
+     128
+    ],
+    [
+     "m_SmallDamageStartFallingSpeed",
+     "m_SmallDamageStartFallingSpeed",
+     "0x48",
+     100,
+     150,
+     150,
+     129
+    ],
+    [
+     "m_AirSmallDamageVelocityZ",
+     "m_AirSmallDamageVelocityZ",
+     "0x4C",
+     0,
+     "-",
+     0,
+     130
+    ],
+    [
+     "m_BlowDamageVelocityZ",
+     "m_BlowDamageVelocityZ",
+     "0x50",
+     125,
+     300,
+     300,
+     132
+    ],
+    [
+     "m_BlowDamagePower",
+     "m_BlowDamagePower",
+     "0x54",
+     5000,
+     1500,
+     1500,
+     "-"
+    ],
+    [
+     "m_BlowDamageBrake",
+     "m_BlowDamageBrake",
+     "0x58",
+     0.85,
+     0.95,
+     0.95,
+     133
+    ],
+    [
+     "m_AirBlowDamageVelocityZ",
+     "m_AirBlowDamageVelocityZ",
+     "0x5C",
+     125,
+     300,
+     300,
+     132
+    ],
+    [
+     "m_AirBlowDamagePower",
+     "m_AirBlowDamagePower",
+     "0x60",
+     2000,
+     "-",
+     2000,
+     131
+    ],
+    [
+     "m_AirBlowDamageBrake",
+     "m_AirBlowDamageBrake",
+     "0x64",
+     0.85,
+     0.95,
+     0.95,
+     133
+    ],
+    [
+     "m_AirBlowDamageStartBrakeTime",
+     "m_AirBlowDamageStartBrakeTime",
+     "0x68",
+     0,
+     "-",
+     0,
+     136
+    ],
+    [
+     "m_BlowDamageStartFallingSpeed",
+     "m_BlowDamageStartFallingSpeed",
+     "0x6C",
+     100,
+     700,
+     700,
+     137
+    ],
+    [
+     "m_TossDamagePower",
+     "m_TossDamagePower",
+     "0x70",
+     1500,
+     "-",
+     1500,
+     138
+    ],
+    [
+     "m_TossDamageFlightDuration",
+     "m_TossDamageFlightDuration",
+     "0x74",
+     1,
+     0.2,
+     0.2,
+     139
+    ],
+    [
+     "m_TossDamageFallGravityScale",
+     "m_TossDamageFallGravityScale",
+     "0x78",
+     1,
+     "-",
+     1,
+     140
+    ],
+    [
+     "m_LaunchDamagePower",
+     "m_LaunchDamagePower",
+     "0x7C",
+     0,
+     2500,
+     2500,
+     141
+    ],
+    [
+     "m_LaunchDamageFlightDuration",
+     "m_LaunchDamageFlightDuration",
+     "0x80",
+     0,
+     0.2,
+     0.2,
+     142
+    ],
+    [
+     "m_LaunchDamageFallGravityScale",
+     "m_LaunchDamageFallGravityScale",
+     "0x84",
+     0,
+     1,
+     1,
+     143
+    ],
+    [
+     "m_BeatDamagePower",
+     "m_BeatDamagePower",
+     "0x88",
+     1500,
+     2500,
+     2500,
+     148
+    ],
+    [
+     "m_BeatDamageRebound",
+     "m_BeatDamageRebound",
+     "0x8C",
+     1500,
+     1000,
+     1000,
+     149
+    ],
+    [
+     "m_BeatDamageReboundGravityScale",
+     "m_BeatDamageReboundGravityScale",
+     "0x90",
+     3,
+     "-",
+     3,
+     150
+    ],
+    [
+     "m_MerrygoroundDamagePower",
+     "m_MerrygoroundDamagePower",
+     "0x94",
+     700,
+     "-",
+     700,
+     "-"
+    ],
+    [
+     "m_ParabolaDamagePower",
+     "m_ParabolaDamagePower",
+     "0x98",
+     1500,
+     "-",
+     1500,
+     144
+    ],
+    [
+     "m_ParabolaDamageAngle",
+     "m_ParabolaDamageAngle",
+     "0x9C",
+     45,
+     "-",
+     45,
+     145
+    ],
+    [
+     "m_ParabolaDamageBrake",
+     "m_ParabolaDamageBrake",
+     "0xA0",
+     0.98,
+     "-",
+     0.98,
+     146
+    ],
+    [
+     "m_ParabolaDamageLimitBrake",
+     "m_ParabolaDamageLimitBrake",
+     "0xA4",
+     300,
+     "-",
+     300,
+     147
+    ],
+    [
+     "m_SwirlUpPower",
+     "m_SwirlUpPower",
+     "0xA8",
+     1300,
+     1400,
+     1400,
+     "-"
+    ],
+    [
+     "m_SwirlUpPowerRand",
+     "m_SwirlUpPowerRand",
+     "0xAC",
+     0,
+     100,
+     100,
+     "-"
+    ],
+    [
+     "m_SwirlUpFlightDuration",
+     "m_SwirlUpFlightDuration",
+     "0xB0",
+     1,
+     1.5,
+     1.5,
+     "-"
+    ],
+    [
+     "m_SwirlUpFallGravityScale",
+     "m_SwirlUpFallGravityScale",
+     "0xB4",
+     1,
+     "-",
+     1,
+     "-"
+    ],
+    [
+     "m_BadStatBurnMoveSpeed",
+     "m_BadStatBurnMoveSpeed",
+     "0xB8",
+     480,
+     300,
+     300,
+     "-"
+    ],
+    [
+     "m_BadStatBurnGravityScale",
+     "m_BadStatBurnGravityScale",
+     "0xBC",
+     5,
+     2,
+     2,
+     "-"
+    ],
+    [
+     "m_BadStatBurnJumpHeightMax",
+     "m_BadStatBurnJumpHeightMax",
+     "0xC0",
+     350,
+     200,
+     200,
+     "-"
+    ],
+    [
+     "m_BadStatBurnJumpHeightMin",
+     "m_BadStatBurnJumpHeightMin",
+     "0xC4",
+     50,
+     200,
+     200,
+     "-"
+    ],
+    [
+     "m_VikingShipPower",
+     "m_VikingShipPower",
+     "0xC8",
+     1500,
+     "-",
+     1500,
+     "-"
+    ],
+    [
+     "m_VikingShipTargetHeight",
+     "m_VikingShipTargetHeight",
+     "0xCC",
+     300,
+     "-",
+     300,
+     "-"
+    ],
+    [
+     "m_VikingShipCorrectPower",
+     "m_VikingShipCorrectPower",
+     "0xD0",
+     1,
+     "-",
+     1,
+     "-"
+    ],
+    [
+     "m_VikingShipBrake",
+     "m_VikingShipBrake",
+     "0xD4",
+     0.98,
+     "-",
+     0.98,
+     "-"
+    ],
+    [
+     "m_VikingShipLimitBrake",
+     "m_VikingShipLimitBrake",
+     "0xD8",
+     300,
+     "-",
+     300,
+     "-"
+    ],
+    [
+     "m_BadStatCloudInputLight",
+     "m_BadStatCloudInputLight",
+     "0xDC",
+     0.5,
+     1,
+     1,
+     "-"
+    ],
+    [
+     "m_BadStatCloudInputLightInterval",
+     "m_BadStatCloudInputLightInterval",
+     "0xE0",
+     2,
+     5,
+     5,
+     "-"
+    ],
+    [
+     "m_BadStatCloudInputHeavy",
+     "m_BadStatCloudInputHeavy",
+     "0xE4",
+     0.2,
+     0.5,
+     0.5,
+     "-"
+    ],
+    [
+     "m_BadStatCloudInputHeavyInterval",
+     "m_BadStatCloudInputHeavyInterval",
+     "0xE8",
+     0.4,
+     1,
+     1,
+     "-"
+    ],
+    [
+     "m_GuardHitBackPowerLv1",
+     "m_GuardHitBackPowerLv1",
+     "0xEC",
+     300,
+     "-",
+     300,
+     "-"
+    ],
+    [
+     "m_GuardHitBackPowerLv2",
+     "m_GuardHitBackPowerLv2",
+     "0xF0",
+     1000,
+     "-",
+     1000,
+     "-"
+    ],
+    [
+     "m_GuardHitBackPowerLv3",
+     "m_GuardHitBackPowerLv3",
+     "0xF4",
+     3000,
+     "-",
+     3000,
+     "-"
+    ]
+   ]
+  },
+  "sora-combat-damage-handlers": {
+   "strand": "E",
+   "table": "damage_handlers",
+   "section": "9.3",
+   "what": "TresPlayerState_Damage: damage kind -> handler, with the exits each handler allows",
+   "note": "attack_out = CanAttack DAMAGE branch (0x141426330); jump_out = jump gate (0x14142A3D0); aerial_recovery = JumpRequest (0x14143D8F0) with ability 1 and state+0x8E",
+   "cols": [
+    "id",
+    "damage_kinds",
+    "handler",
+    "slot",
+    "ref_addr",
+    "attack_out",
+    "jump_out",
+    "aerial_recovery",
+    "clips",
+    "ref_conf"
+   ],
+   "rows": [
+    [
+     "Small",
+     "1 SMALL and every kind not listed below (0, 3-6, 11-18, 23-40)",
+     "Small",
+     116,
+     "0x14135D740",
+     "kind 1 only: m_bEnableChange",
+     "kind 1 only: m_bEnableChange",
+     "no",
+     "0201-0204 (0205/0206 alternate), air 0207-0210, landing clip / Land",
+     "confirmed"
+    ],
+    [
+     "Blow",
+     "2 BLOW, 21 SHIELD_BLOW",
+     "Blow",
+     117,
+     "0x14135B300",
+     "kind 2: m_bEnableChange",
+     "kind 2: m_bEnableChange, or recoverable + ability 1",
+     "kind 2: yes",
+     "0211+3i (start), 0212+3i (loop), 0213+3i (down / get-up); wall M_0223-M_0226",
+     "confirmed"
+    ],
+    [
+     "Toss",
+     "7 TOSS, 22 SHIELD_TOSS",
+     "Toss",
+     118,
+     "0x14135EEA0",
+     "kind 7: m_bEnableChange",
+     "kind 7: recoverable + ability 1",
+     "kind 7: yes",
+     "M_0227, M_0228 (loop), M_0237 (fall loop), 0213 (get-up)",
+     "confirmed"
+    ],
+    [
+     "Launch",
+     "8 LAUNCH",
+     "Launch",
+     119,
+     "0x14135C410",
+     "m_bEnableChange",
+     "recoverable + ability 1",
+     "yes",
+     "as Toss",
+     "confirmed"
+    ],
+    [
+     "Parabola",
+     "10 PARABOLA",
+     "Parabola",
+     120,
+     "0x14135CAB0",
+     "m_bEnableChange (forced 0.5 s after the start clip)",
+     "recoverable + ability 1",
+     "yes",
+     "as Blow",
+     "confirmed"
+    ],
+    [
+     "Beat",
+     "9 BEAT",
+     "Beat",
+     121,
+     "0x14135A870",
+     "m_bEnableChange (never set by its clips)",
+     "m_bEnableChange (never set)",
+     "no",
+     "M_0230 (fall loop), M_0227 (impact), M_0228 (bounce loop)",
+     "confirmed"
+    ],
+    [
+     "Frozen",
+     "bad status FREEZE fallback",
+     "Frozen",
+     122,
+     "0x14135B150",
+     "no",
+     "no",
+     "no",
+     "-",
+     "inferred"
+    ],
+    [
+     "Suction",
+     "19 SUCTION",
+     "Suction",
+     123,
+     "0x14135E260",
+     "no",
+     "sub-step 4",
+     "no",
+     "Small and Blow clips",
+     "inferred"
+    ],
+    [
+     "Eat",
+     "20 EAT",
+     "Eat",
+     124,
+     "0x14135BDA0",
+     "no",
+     "no",
+     "no",
+     "CatchEnd and others",
+     "inferred"
+    ],
+    [
+     "PuddingEat",
+     "41 PUDDING_EAT",
+     "PuddingEat",
+     125,
+     "0x14135D680",
+     "no",
+     "no",
+     "no",
+     "PuddingEat",
+     "inferred"
+    ]
+   ]
+  },
+  "sora-combat-damage-clips": {
+   "strand": "E",
+   "table": "damage_clips",
+   "section": "9.4",
+   "what": "clips of the hit reactions with length, change point and the play mode the handler passes",
+   "note": "AnimSet names of p_ex001_AnimSet; lengths and notifies from S5_anims_all.json; play_mode as passed by the handler (0 / 2 one-shot, 1 / 3 loop); none of these clips has root motion translation or a body-collision notify",
+   "cols": [
+    "id",
+    "anim",
+    "clip",
+    "length_s",
+    "enable_change_s",
+    "play_mode",
+    "role"
+   ],
+   "rows": [
+    [
+     "0201",
+     "0201",
+     "0201",
+     1.1667,
+     0.4667,
+     2,
+     "Small ground, attacker in front (index 0), variant 0"
+    ],
+    [
+     "0202",
+     "0202",
+     "0202",
+     1.1667,
+     0.4667,
+     2,
+     "Small ground, attacker behind (index 1), variant 0"
+    ],
+    [
+     "0203",
+     "0203",
+     "0203",
+     1.1667,
+     0.4667,
+     2,
+     "Small ground, attacker right (index 2)"
+    ],
+    [
+     "0204",
+     "0204",
+     "0204",
+     1.1667,
+     0.4667,
+     2,
+     "Small ground, attacker left (index 3)"
+    ],
+    [
+     "0205",
+     "0205",
+     "0205",
+     1.1667,
+     0.4667,
+     2,
+     "Small ground index 0, variant 1 (every second consecutive hit)"
+    ],
+    [
+     "0206",
+     "0206",
+     "0206",
+     1.1667,
+     0.4667,
+     2,
+     "Small ground index 1, variant 1"
+    ],
+    [
+     "0207",
+     "0207",
+     "0207",
+     0.6,
+     0.4667,
+     2,
+     "Small air index 0"
+    ],
+    [
+     "0208",
+     "0208",
+     "0208",
+     0.6,
+     0.4667,
+     2,
+     "Small air index 1"
+    ],
+    [
+     "0209",
+     "0209",
+     "0209",
+     0.6,
+     0.4667,
+     2,
+     "Small air index 2"
+    ],
+    [
+     "0210",
+     "0210",
+     "0210",
+     0.6,
+     0.4667,
+     2,
+     "Small air index 3"
+    ],
+    [
+     "0211",
+     "0211",
+     "0211",
+     0.1,
+     "-",
+     2,
+     "Blow / Parabola / Die start, index 0"
+    ],
+    [
+     "0212",
+     "0212",
+     "0212",
+     0.3333,
+     "-",
+     3,
+     "flight loop, index 0"
+    ],
+    [
+     "0213",
+     "0213",
+     "0213",
+     0.8333,
+     0.6,
+     2,
+     "down and get-up, index 0; also the Toss / Launch landing"
+    ],
+    [
+     "0214",
+     "0214",
+     "0214",
+     0.1,
+     "-",
+     2,
+     "start, index 1"
+    ],
+    [
+     "0215",
+     "0215",
+     "0215",
+     0.3333,
+     "-",
+     3,
+     "flight loop, index 1"
+    ],
+    [
+     "0216",
+     "0216",
+     "0216",
+     0.8333,
+     0.6,
+     2,
+     "down and get-up, index 1"
+    ],
+    [
+     "0217",
+     "0217",
+     "0217",
+     0.1,
+     "-",
+     2,
+     "start, index 2"
+    ],
+    [
+     "0218",
+     "0218",
+     "0218",
+     0.3333,
+     "-",
+     3,
+     "flight loop, index 2"
+    ],
+    [
+     "0219",
+     "0219",
+     "0219",
+     0.9333,
+     0.6,
+     2,
+     "down and get-up, index 2"
+    ],
+    [
+     "0220",
+     "0220",
+     "0220",
+     0.1,
+     "-",
+     2,
+     "start, index 3"
+    ],
+    [
+     "0221",
+     "0221",
+     "0221",
+     0.3333,
+     "-",
+     3,
+     "flight loop, index 3"
+    ],
+    [
+     "0222",
+     "0222",
+     "0222",
+     0.9333,
+     0.6,
+     2,
+     "down and get-up, index 3"
+    ],
+    [
+     "M_0223",
+     "M_0223",
+     "0223",
+     0.7,
+     "-",
+     2,
+     "wall hit index 0"
+    ],
+    [
+     "M_0224",
+     "M_0224",
+     "0224",
+     0.7,
+     "-",
+     2,
+     "wall hit index 1"
+    ],
+    [
+     "M_0225",
+     "M_0225",
+     "0225",
+     0.7,
+     "-",
+     2,
+     "wall hit index 2"
+    ],
+    [
+     "M_0226",
+     "M_0226",
+     "0226",
+     0.7,
+     "-",
+     2,
+     "wall hit index 3"
+    ],
+    [
+     "M_0227",
+     "M_0227",
+     "0227",
+     0.1,
+     "-",
+     0,
+     "Toss / Launch start; Beat ground impact (blend-in 0.13)"
+    ],
+    [
+     "M_0228",
+     "M_0228",
+     "0228",
+     0.4667,
+     "-",
+     1,
+     "Toss / Launch rise loop; Beat bounce loop"
+    ],
+    [
+     "M_0230",
+     "M_0230",
+     "0230",
+     0.4667,
+     "-",
+     1,
+     "Beat fall loop"
+    ],
+    [
+     "M_0237",
+     "M_0237",
+     "0237",
+     0.4667,
+     "-",
+     1,
+     "Toss / Launch fall loop"
+    ],
+    [
+     "Land",
+     "Land",
+     "-",
+     0.4,
+     0.0991,
+     2,
+     "fallback landing clip of Small"
+    ],
+    [
+     "AirRecovery",
+     "AirRecovery",
+     "0291",
+     0.5,
+     0.2667,
+     2,
+     "Aerial Recovery (AIR_SLIDE state)"
+    ]
+   ]
+  },
+  "sora-combat-hurt-shapes": {
+   "strand": "E",
+   "table": "hurt_shapes",
+   "section": "9.10",
+   "what": "the 13 TresBodyCollPrimitive templates of p_ex001_PawnBase (Sora's hurt, push and camera bodies)",
+   "note": "TresBodyCollPrimitive templates of p_ex001_PawnBase (p_ex001_Pawn overrides none); missing properties filled with the native defaults of ctor 0x14062F560 (SPHERE, size.x 50, damage on, push on, camera off, reaction DEFAULT); size semantics (radius / half height) not determined",
+   "cols": [
+    "id",
+    "variable",
+    "group_name",
+    "ignore_none_group",
+    "shape",
+    "size_x",
+    "size_y",
+    "size_z",
+    "socket",
+    "loc_x",
+    "loc_y",
+    "loc_z",
+    "rot_pitch",
+    "rot_yaw",
+    "rot_roll",
+    "damage",
+    "push",
+    "camera",
+    "reaction_type",
+    "template_export"
+   ],
+   "rows": [
+    [
+     "TresBodyCollPrimitive1",
+     "TresBodyCollPrimitive1",
+     "None",
+     "no",
+     "CAPSULE",
+     50,
+     0,
+     90,
+     "-",
+     0,
+     0,
+     90,
+     0,
+     0,
+     0,
+     "no",
+     "yes",
+     "no",
+     "TRES_BODY_RT_DEFAULT",
+     "TresBodyCollPrimitive_0"
+    ],
+    [
+     "TresBodyCollPrimitive2",
+     "TresBodyCollPrimitive2",
+     "None",
+     "no",
+     "CAPSULE",
+     50,
+     0,
+     90,
+     "Center",
+     0,
+     15,
+     0,
+     0,
+     0,
+     90,
+     "yes",
+     "no",
+     "no",
+     "TRES_BODY_RT_DEFAULT",
+     "TresBodyCollPrimitive_6"
+    ],
+    [
+     "TresBodyCollPrimitive3",
+     "TresBodyCollPrimitive3",
+     "Camera",
+     "no",
+     "CAPSULE",
+     30,
+     0,
+     60,
+     "hara1",
+     -10,
+     0,
+     0,
+     90,
+     0,
+     0,
+     "no",
+     "no",
+     "yes",
+     "TRES_BODY_RT_DEFAULT",
+     "TresBodyCollPrimitive3_GEN_VARIABLE"
+    ],
+    [
+     "TresBodyCollPrimitive4",
+     "TresBodyCollPrimitive4",
+     "Guard",
+     "yes",
+     "CAPSULE",
+     51,
+     0,
+     91,
+     "-",
+     0,
+     2,
+     90,
+     0,
+     0,
+     0,
+     "yes",
+     "no",
+     "no",
+     "TRES_BODY_RT_GUARD",
+     "TresBodyCollPrimitive4_GEN_VARIABLE"
+    ],
+    [
+     "TresBodyCollPrimitive5",
+     "TresBodyCollPrimitive5",
+     "Camera",
+     "no",
+     "SPHERE",
+     23,
+     0,
+     0,
+     "atama",
+     10,
+     -2,
+     0,
+     0,
+     0,
+     0,
+     "no",
+     "no",
+     "yes",
+     "TRES_BODY_RT_DEFAULT",
+     "TresBodyCollPrimitive5_GEN_VARIABLE"
+    ],
+    [
+     "TresBodyCollPrimitive6",
+     "TresBodyCollPrimitive6",
+     "BaymaxRide",
+     "yes",
+     "SPHERE",
+     120,
+     0,
+     0,
+     "-",
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     "yes",
+     "no",
+     "no",
+     "TRES_BODY_RT_DEFAULT",
+     "TresBodyCollPrimitive6_GEN_VARIABLE"
+    ],
+    [
+     "TresBodyCollPrimitive7",
+     "TresBodyCollPrimitive7",
+     "Camera",
+     "no",
+     "CAPSULE",
+     10,
+     0,
+     23,
+     "R_ashi1",
+     8,
+     10,
+     0,
+     0,
+     0,
+     90,
+     "no",
+     "no",
+     "yes",
+     "TRES_BODY_RT_DEFAULT",
+     "TresBodyCollPrimitive7_GEN_VARIABLE"
+    ],
+    [
+     "TresBodyCollPrimitive8",
+     "TresBodyCollPrimitive8",
+     "Camera",
+     "no",
+     "CAPSULE",
+     10,
+     0,
+     23,
+     "L_ashi1",
+     8,
+     10,
+     0,
+     0,
+     0,
+     90,
+     "no",
+     "no",
+     "yes",
+     "TRES_BODY_RT_DEFAULT",
+     "TresBodyCollPrimitive8_GEN_VARIABLE"
+    ],
+    [
+     "TresBodyCollPrimitive9",
+     "TresBodyCollPrimitive9",
+     "Camera",
+     "no",
+     "CAPSULE",
+     20,
+     0,
+     35,
+     "R_sune",
+     15,
+     0,
+     0,
+     90,
+     0,
+     0,
+     "no",
+     "no",
+     "yes",
+     "TRES_BODY_RT_DEFAULT",
+     "TresBodyCollPrimitive9_GEN_VARIABLE"
+    ],
+    [
+     "TresBodyCollPrimitive10",
+     "TresBodyCollPrimitive10",
+     "Camera",
+     "no",
+     "CAPSULE",
+     20,
+     0,
+     35,
+     "L_sune",
+     15,
+     0,
+     0,
+     90,
+     0,
+     0,
+     "no",
+     "no",
+     "yes",
+     "TRES_BODY_RT_DEFAULT",
+     "TresBodyCollPrimitive10_GEN_VARIABLE"
+    ],
+    [
+     "TresBodyCollPrimitive11",
+     "TresBodyCollPrimitive11",
+     "Camera",
+     "no",
+     "CAPSULE",
+     12,
+     0,
+     25,
+     "R_ude2",
+     18,
+     0,
+     0,
+     90,
+     0,
+     0,
+     "no",
+     "no",
+     "yes",
+     "TRES_BODY_RT_DEFAULT",
+     "TresBodyCollPrimitive11_GEN_VARIABLE"
+    ],
+    [
+     "TresBodyCollPrimitive12",
+     "TresBodyCollPrimitive12",
+     "Camera",
+     "no",
+     "CAPSULE",
+     12,
+     0,
+     25,
+     "L_ude2",
+     18,
+     0,
+     0,
+     90,
+     0,
+     0,
+     "no",
+     "no",
+     "yes",
+     "TRES_BODY_RT_DEFAULT",
+     "TresBodyCollPrimitive12_GEN_VARIABLE"
+    ],
+    [
+     "TresBodyCollPrimitive13",
+     "TresBodyCollPrimitive13",
+     "GuardBody",
+     "yes",
+     "CAPSULE",
+     50,
+     0,
+     90,
+     "-",
+     0,
+     0,
+     90,
+     0,
+     0,
+     0,
+     "yes",
+     "no",
+     "no",
+     "WEAK_GUARD",
+     "TresBodyCollPrimitive13_GEN_VARIABLE"
+    ]
+   ]
+  },
+  "sora-combat-hp-rules": {
+   "strand": "E",
+   "table": "hp_rules",
+   "section": "9.7",
+   "what": "ApplyHP 0x1405A2A00: the rules applied to new = HP - Floor(amount), in order",
+   "note": "ApplyHP 0x1405A2A00, evaluated top to bottom on new = HP - Floor(amount) when the call is not forced",
+   "cols": [
+    "id",
+    "order",
+    "condition",
+    "result",
+    "ref_addr",
+    "ref_conf"
+   ],
+   "rows": [
+    [
+     "hp_rule_01",
+     1,
+     "new < 1 && pawn+0x630 bit 5 (m_bIsHpLimitOne)",
+     "new = 1",
+     "0x1405A2A00",
+     "confirmed"
+    ],
+    [
+     "hp_rule_02",
+     2,
+     "new < 1 && pawn+0x630 bit 6 (m_bIsHpLimitOneExceptPlayerAttack) && !bReact",
+     "new = 1",
+     "0x1405A2A00",
+     "confirmed"
+    ],
+    [
+     "hp_rule_03",
+     3,
+     "new < 1 && info+0x66 class 1 / 2 (victim objType 1) / 3 (objType 1 or 10) / 4 (objType 2)",
+     "new = 1",
+     "0x1405A2A00",
+     "confirmed"
+    ],
+    [
+     "hp_rule_04",
+     4,
+     "HasAbility(LAST_LEAVE 44) && HP before >= 2 && new <= 0",
+     "new = 1",
+     "0x1405A2A00",
+     "confirmed"
+    ],
+    [
+     "hp_rule_05",
+     5,
+     "HasAbility(COMBO_LEAVE 45) && (pawn+0x848 > 0 || current state == DAMAGE || next state == DAMAGE) && new <= 0",
+     "new = 1",
+     "0x1405A2A00",
+     "confirmed"
+    ],
+    [
+     "hp_rule_06",
+     6,
+     "always (not forced)",
+     "pawn+0x848 = 0.6",
+     "0x1405A2A00",
+     "confirmed"
+    ],
+    [
+     "hp_rule_07",
+     7,
+     "new < 1 && player pawn && pawn+0x518 bit 0",
+     "new = 1",
+     "0x1405A2A00",
+     "confirmed"
+    ],
+    [
+     "hp_rule_08",
+     8,
+     "always",
+     "SetHP(clamp(new, 0, MaxHP)) via pawn slot 776 0x1405B9700",
+     "0x1405B9700",
+     "confirmed"
+    ]
+   ]
+  },
+  "sora-combat-hit-blocks": {
+   "strand": "E",
+   "table": "hit_block_sources",
+   "section": "9.6",
+   "what": "everything that can stop a hit on Sora from damaging or staggering him",
+   "note": "everything that can stop a hit on Sora from damaging or staggering him",
+   "cols": [
+    "id",
+    "source",
+    "storage",
+    "set_by",
+    "tested_in",
+    "effect",
+    "ref_addr",
+    "ref_conf"
+   ],
+   "rows": [
+    [
+     "block_01",
+     "reaction type of the hit shape",
+     "pawn+0x619 / MyBodyColl; arrives as info+0x60",
+     "state code via FUN_1405B8B00 (no clip notify exists for Sora)",
+     "TakeDamage 0x1405BB850",
+     "3..6 no damage; 3/4/5 guard handlers; 1 no reaction",
+     "0x1405BB850",
+     "inferred"
+    ],
+    [
+     "block_02",
+     "IsNoDamage",
+     "pawn+0x15B4 == 0x0B; pawn+0x630 bit 4; pawn+0x638 > 0; pawn+0x518 bit 0; cinematic state; game flag",
+     "script flags; pawn+0x638 = 1.0 by the auto-revive",
+     "TakeDamage (pawn vt+0x2080 0x141435AC0 / 0x1405AD200)",
+     "no HP loss, reaction still happens",
+     "0x141435AC0",
+     "confirmed"
+    ],
+    [
+     "block_03",
+     "IsNoReaction",
+     "pawn+0x630 bit 3; pawn+0x518 bit 0; cinematic; game flag",
+     "script flags",
+     "TakeDamage (pawn vt+0x2070 0x1405AD1A0)",
+     "HP loss, no reaction",
+     "0x1405AD1A0",
+     "confirmed"
+    ],
+    [
+     "block_04",
+     "IsInvincible",
+     "pawn+0xE44 > 0; pawn+0x630 bit 2; pawn+0x634 bit 2; pawn+0x518 bit 0; cinematic; game flag",
+     "pawn vt+0x1E48 from link states, ShootFlow, StyleFinish only",
+     "pawn vt+0x2060 0x141435A90 / 0x1405AD120 (callers not read)",
+     null,
+     "0x141435A90",
+     "confirmed"
+    ],
+    [
+     "block_05",
+     "reaction block after a command",
+     "controller+0x8F4 (0.1 s)",
+     "command execution 0x14141B470 and others",
+     "reaction gate 0x141439A50",
+     "no reaction, damage applies",
+     "0x141439A50",
+     "confirmed"
+    ],
+    [
+     "block_06",
+     "command lock",
+     "pawn+0xE60 bit 17",
+     "script / volumes",
+     "reaction gate",
+     "no reaction, damage applies",
+     "0x141439A50",
+     "confirmed"
+    ],
+    [
+     "block_07",
+     "no-flinch states",
+     "iface slot 195 0x141436AA0: JUMP with Jump+0xF8 != 0, states 21..25, 138; attack kinds 0x36..0x39",
+     "-",
+     "reaction gate, kinds 0, 1, 5, 6, 9, >= 11 only",
+     "no reaction, damage applies",
+     "0x141436AA0",
+     "confirmed"
+    ]
+   ]
+  },
+  "sora-combat-form-clips": {
+   "strand": "F",
+   "table": "form_clips",
+   "section": "10.4",
+   "what": "clips of the formchange, the Second Form finishers and the finish commands with their gameplay notifies",
+   "note": "AnimSet name -> clip of p_ex001_AnimSet with the gameplay notifies (source build/sora_tmp/combat/S5_anims_all.json = converted clips); null = notify absent",
+   "cols": [
+    "id",
+    "anim",
+    "clip",
+    "length_s",
+    "root_motion",
+    "root_fwd_cm",
+    "root_up_cm",
+    "enable_input_s",
+    "enable_change_s",
+    "traction_s",
+    "face_at_s",
+    "hit_windows",
+    "other_notify_classes"
+   ],
+   "rows": [
+    [
+     "StyleChange",
+     "StyleChange",
+     "1401",
+     0.8333,
+     "no",
+     0,
+     0,
+     "-",
+     "-",
+     "-",
+     "-",
+     0,
+     "BpEvent FaceAnim SQEXSEADAnimNotifyState_AttachSound Bonamik_CharaWind Bonamik_ChangeGroupParams PlayWeaponSwingSE AttachEffect SQEXSEADAnimNotify_PlaySound"
+    ],
+    [
+     "StyleChangeLoop",
+     "StyleChangeLoop",
+     "1402",
+     1,
+     "no",
+     0,
+     0,
+     "-",
+     "-",
+     "-",
+     "-",
+     0,
+     "FaceAnim Bonamik_CharaWind Bonamik_ChangeGroupParams"
+    ],
+    [
+     "StyleChangeEnd",
+     "StyleChangeEnd",
+     "1403",
+     1.4,
+     "no",
+     0,
+     0,
+     "-",
+     "0.9667",
+     "-",
+     "-",
+     1,
+     "Bonamik_CharaWind Bonamik_ChangeGroupParams FaceAnim LandAnimPose SQEXSEADAnimNotify_PlaySound PlayVoice AttachEffect AttachEffect BpEvent"
+    ],
+    [
+     "StyleChangeEasy",
+     "StyleChangeEasy",
+     "1403",
+     1.4,
+     "no",
+     0,
+     0,
+     "-",
+     "0.9667",
+     "-",
+     "-",
+     1,
+     "Bonamik_CharaWind Bonamik_ChangeGroupParams FaceAnim LandAnimPose SQEXSEADAnimNotify_PlaySound PlayVoice AttachEffect AttachEffect BpEvent"
+    ],
+    [
+     "M_1411",
+     "M_1411",
+     "1411",
+     1.6333,
+     "yes",
+     742.0946,
+     0,
+     "0.7333",
+     "1.2",
+     "0.5333-0.7",
+     "-",
+     2,
+     "IK FaceAnim FaceAnimLip PlayVoice FaceAnimEye SQEXSEADAnimNotify_PlaySound PlayWeaponSwingSE AttachEffect AttachEffect"
+    ],
+    [
+     "M_1412",
+     "M_1412",
+     "1412",
+     1.3,
+     "yes",
+     38.2429,
+     0,
+     "0.5",
+     "0.8667",
+     "-",
+     "-",
+     2,
+     "FaceAnim FaceAnimEye PlayVoice FaceAnimLip AttachEffect PlayWeaponSwingSE IK"
+    ],
+    [
+     "M_1413",
+     "M_1413",
+     "1413",
+     1.8333,
+     "yes",
+     98.8316,
+     0,
+     "0.6333",
+     "1.6667",
+     "-",
+     "-",
+     1,
+     "IK FaceAnim PlayVoice FaceAnimLip FaceAnimEye AttachEffect PlayWeaponSwingSE BpEvent"
+    ],
+    [
+     "M_1414",
+     "M_1414",
+     "1414",
+     1.6667,
+     "yes",
+     416.0004,
+     0,
+     "0.7667",
+     "1.2",
+     "0.0667-0.7667",
+     "-",
+     2,
+     "LandAnimPose FaceAnim PlayVoice FaceAnimEye FaceAnimLip PlayWeaponSwingSE AttachEffect"
+    ],
+    [
+     "M_1415",
+     "M_1415",
+     "1415",
+     1.9667,
+     "no",
+     0,
+     0,
+     "1.0333",
+     "1.4667",
+     "0.1333-0.7333",
+     "-",
+     4,
+     "LandAnimPose FaceAnim FaceAnimLip PlayWeaponSwingSE PlayVoice AttachEffect FaceAnimEye AttachEffect"
+    ],
+    [
+     "M_1416",
+     "M_1416",
+     "1416",
+     2.3667,
+     "no",
+     0,
+     0,
+     "1.7",
+     "2.2",
+     "-",
+     "-",
+     2,
+     "BpEvent LandAnimPose FaceAnim PlayVoice FaceAnimLip FaceAnimEye AttachEffect PlayWeaponSwingSE"
+    ],
+    [
+     "M_1421",
+     "M_1421",
+     "1421",
+     1.5667,
+     "yes",
+     60,
+     0,
+     "0.7",
+     "1.4667",
+     "-",
+     "-",
+     1,
+     "BpEvent AttachEffect FaceAnim SQEXSEADAnimNotifyState_AttachSound FaceAnimLip PlayVoice IK"
+    ],
+    [
+     "M_1422",
+     "M_1422",
+     "1422",
+     1.5667,
+     "yes",
+     60,
+     0,
+     "0.7",
+     "1.4667",
+     "-",
+     "-",
+     1,
+     "BpEvent LandAnimPose AttachEffect FaceAnim SQEXSEADAnimNotifyState_AttachSound FaceAnimLip PlayVoice"
+    ],
+    [
+     "M_1423",
+     "M_1423",
+     "1423",
+     0.4,
+     "no",
+     0,
+     0,
+     "-",
+     "-",
+     "-",
+     "-",
+     0,
+     "BpEvent FaceAnim SQEXSEADAnimNotifyState_AttachSound PlayVoice FaceAnimLip FaceAnimEye AttachEffect"
+    ],
+    [
+     "M_1424",
+     "M_1424",
+     "1424",
+     0.4,
+     "no",
+     0,
+     0,
+     "-",
+     "-",
+     "-",
+     "-",
+     0,
+     "BpEvent FaceAnim LandAnimPose SQEXSEADAnimNotifyState_AttachSound PlayVoice FaceAnimEye FaceAnimLip AttachEffect"
+    ],
+    [
+     "M_1425",
+     "M_1425",
+     "1425",
+     0.7,
+     "yes",
+     1099.3091,
+     0,
+     "0.0001",
+     "0.5003",
+     "0.0001-0.3",
+     "-",
+     1,
+     "AttachEffect LandAnimPose FaceAnimLip FaceAnimEye PlayWeaponSwingSE PlayVoice FaceAnim"
+    ],
+    [
+     "M_1426",
+     "M_1426",
+     "1426",
+     1.3,
+     "yes",
+     1199.309,
+     0,
+     "0.4333",
+     "1.2",
+     "0.4667-0.7",
+     "-",
+     1,
+     "BpEvent LandAnimPose FaceAnimLip FaceAnimEye PlayVoice AttachEffect AttachEffect PlayWeaponSwingSE FaceAnim"
+    ],
+    [
+     "M_1427",
+     "M_1427",
+     "1427",
+     2.4333,
+     "yes",
+     700,
+     0,
+     "1.5667",
+     "1.9",
+     "0.3-1.4002 / 1.6-1.8",
+     "1.4333",
+     7,
+     "LandAnimPose AttachEffect SQEXSEADAnimNotifyState_AttachSound FaceAnimLip FaceAnimEye PlayVoice PlayWeaponSwingSE AttachEffect"
+    ],
+    [
+     "M_1428",
+     "M_1428",
+     "1428",
+     0.8667,
+     "yes",
+     248.8194,
+     0,
+     "0.2333",
+     "0.4",
+     "0.2333-0.4333",
+     "-",
+     1,
+     "LandAnimPose FaceAnimLip FaceAnimEye PlayVoice PlayWeaponSwingSE SQEXSEADAnimNotify_PlaySound AttachEffect"
+    ],
+    [
+     "M_1429",
+     "M_1429",
+     "1429",
+     0.7333,
+     "yes",
+     250.0565,
+     0,
+     "0.0667",
+     "0.3333",
+     "0.1-0.3",
+     "-",
+     1,
+     "LandAnimPose FaceAnimLip FaceAnimEye PlayVoice PlayWeaponSwingSE SQEXSEADAnimNotify_PlaySound AttachEffect FaceAnim"
+    ],
+    [
+     "M_1430",
+     "M_1430",
+     "1430",
+     0.8667,
+     "yes",
+     249.0981,
+     0,
+     "0.0667",
+     "0.3667",
+     "0.0333-0.2333",
+     "-",
+     1,
+     "LandAnimPose FaceAnimLip FaceAnimEye PlayWeaponSwingSE PlayVoice SQEXSEADAnimNotify_PlaySound AttachEffect FaceAnim"
+    ],
+    [
+     "M_1431",
+     "M_1431",
+     "1431",
+     0.9,
+     "yes",
+     180,
+     0,
+     "0.1",
+     "0.3667",
+     "0.0333-0.2667",
+     "-",
+     1,
+     "LandAnimPose FaceAnimLip FaceAnimEye PlayVoice SQEXSEADAnimNotify_PlaySound PlayWeaponSwingSE AttachEffect FaceAnim"
+    ],
+    [
+     "M_1432",
+     "M_1432",
+     "1432",
+     1.0333,
+     "yes",
+     150,
+     0,
+     "0.2333",
+     "0.5",
+     "0.0333-0.3333",
+     "-",
+     1,
+     "LandAnimPose FaceAnimLip FaceAnimEye PlayVoice PlayWeaponSwingSE SQEXSEADAnimNotify_PlaySound AttachEffect FaceAnim"
+    ],
+    [
+     "M_1433",
+     "M_1433",
+     "1433",
+     2.2333,
+     "yes",
+     200,
+     0,
+     "1.0333",
+     "2.1333",
+     "0.1-0.9 / 1.1667-1.4667",
+     "1.1333",
+     2,
+     "BpEvent FaceAnimLip FaceAnimEye PlayVoice PlayWeaponSwingSE AttachEffect PlayWeaponSwingSE AttachEffect IK FaceAnim"
+    ],
+    [
+     "M_1434",
+     "M_1434",
+     "1434",
+     2.1333,
+     "yes",
+     329.7054,
+     0,
+     "1.0333",
+     "1.9667",
+     "0.1-0.9 / 1.1502-1.4502",
+     "1.1333",
+     2,
+     "BpEvent LandAnimPose FaceAnimLip FaceAnimEye PlayVoice SQEXSEADAnimNotify_PlaySound PlayWeaponSwingSE AttachEffect PlayWeaponSwingSE AttachEffect FaceAnim"
+    ],
+    [
+     "M_1435",
+     "M_1435",
+     "1435",
+     5.0333,
+     "yes",
+     0,
+     350,
+     "-",
+     "4.9333",
+     "0.0001-0.5",
+     "-",
+     8,
+     "BpEvent FaceAnim AttachEffect SQEXSEADAnimNotifyState_AttachSound PlayVoice SQEXSEADAnimNotify_PlaySound"
+    ]
+   ]
+  },
+  "sora-combat-form-commands": {
+   "strand": "F",
+   "table": "form_commands",
+   "section": "10.1",
+   "what": "rows of Load/Common/TresCmdData (TresCommandKindData) used by attack, formchange, finish and grand-magic commands",
+   "note": "rows of Load/Common/TresCmdData (struct TresCommandKindData, 0x48 bytes: Type +0x18, Cate +0x19, Attr +0x1B, Param0 +0x24 = queue lifetime s for Type 4, Param1 +0x28 = form level, Param3 +0x30 = form duration s)",
+   "cols": [
+    "id",
+    "kind",
+    "enum",
+    "Type",
+    "Cate",
+    "Attr",
+    "Local",
+    "Param0",
+    "Param1",
+    "Param2",
+    "Param3",
+    "LocKey"
+   ],
+   "rows": [
+    [
+     "ATTACK",
+     27,
+     "ATTACK",
+     3,
+     8,
+     0,
+     255,
+     100,
+     200,
+     0,
+     0,
+     "kh3_system.command.attack"
+    ],
+    [
+     "FINISH_AN2",
+     109,
+     "FINISH_AN2",
+     4,
+     15,
+     10,
+     34,
+     0,
+     0,
+     0,
+     0,
+     "kh3_system.situation.discension"
+    ],
+    [
+     "S_FIRA",
+     110,
+     "S_FIRA",
+     4,
+     11,
+     1,
+     51,
+     20,
+     0,
+     0,
+     0,
+     "kh3_system.command.fira"
+    ],
+    [
+     "S_FIRAGA",
+     111,
+     "S_FIRAGA",
+     4,
+     11,
+     1,
+     52,
+     20,
+     0,
+     0,
+     0,
+     "kh3_system.command.firaga"
+    ],
+    [
+     "S_FIRAGAN",
+     112,
+     "S_FIRAGAN",
+     4,
+     11,
+     1,
+     53,
+     20,
+     0,
+     0,
+     0,
+     "kh3_system.command.firagan"
+    ],
+    [
+     "S_BLIZZARA",
+     113,
+     "S_BLIZZARA",
+     4,
+     11,
+     2,
+     54,
+     20,
+     0,
+     0,
+     0,
+     "kh3_system.command.blizzara"
+    ],
+    [
+     "S_BLIZZAGA",
+     114,
+     "S_BLIZZAGA",
+     4,
+     11,
+     2,
+     55,
+     20,
+     0,
+     0,
+     0,
+     "kh3_system.command.blizzaga"
+    ],
+    [
+     "S_BLIZZAGAN",
+     115,
+     "S_BLIZZAGAN",
+     4,
+     11,
+     2,
+     56,
+     20,
+     0,
+     0,
+     0,
+     "kh3_system.command.blizzagan"
+    ],
+    [
+     "S_THUNDARA",
+     116,
+     "S_THUNDARA",
+     4,
+     11,
+     3,
+     57,
+     20,
+     0,
+     0,
+     0,
+     "kh3_system.command.thundara"
+    ],
+    [
+     "S_THUNDAGA",
+     117,
+     "S_THUNDAGA",
+     4,
+     11,
+     3,
+     58,
+     20,
+     0,
+     0,
+     0,
+     "kh3_system.command.thundaga"
+    ],
+    [
+     "S_THUNDAGAN",
+     118,
+     "S_THUNDAGAN",
+     4,
+     11,
+     3,
+     59,
+     20,
+     0,
+     0,
+     0,
+     "kh3_system.command.thundagan"
+    ],
+    [
+     "S_WATARA",
+     119,
+     "S_WATARA",
+     4,
+     11,
+     4,
+     60,
+     20,
+     0,
+     0,
+     0,
+     "kh3_system.command.watara"
+    ],
+    [
+     "S_WATAGA",
+     120,
+     "S_WATAGA",
+     4,
+     11,
+     4,
+     61,
+     20,
+     0,
+     0,
+     0,
+     "kh3_system.command.wataga"
+    ],
+    [
+     "S_WATAGAN",
+     121,
+     "S_WATAGAN",
+     4,
+     11,
+     4,
+     62,
+     20,
+     0,
+     0,
+     0,
+     "kh3_system.command.watagan"
+    ],
+    [
+     "S_AERORA",
+     122,
+     "S_AERORA",
+     4,
+     11,
+     5,
+     63,
+     20,
+     0,
+     0,
+     0,
+     "kh3_system.command.aerora"
+    ],
+    [
+     "S_AEROGA",
+     123,
+     "S_AEROGA",
+     4,
+     11,
+     5,
+     64,
+     20,
+     0,
+     0,
+     0,
+     "kh3_system.command.aeroga"
+    ],
+    [
+     "S_AEROGAN",
+     124,
+     "S_AEROGAN",
+     4,
+     11,
+     5,
+     65,
+     20,
+     0,
+     0,
+     0,
+     "kh3_system.command.aerogan"
+    ],
+    [
+     "S_CURAGAN",
+     125,
+     "S_CURAGAN",
+     4,
+     11,
+     7,
+     66,
+     20,
+     0,
+     0,
+     0,
+     "kh3_system.command.curagan"
+    ],
+    [
+     "S_DARKFIRAGA",
+     126,
+     "S_DARKFIRAGA",
+     4,
+     11,
+     6,
+     67,
+     20,
+     0,
+     0,
+     0,
+     "kh3_system.command.darkfiraga"
+    ],
+    [
+     "CHANGE_KB",
+     127,
+     "CHANGE_KB",
+     4,
+     14,
+     10,
+     81,
+     0,
+     0,
+     0,
+     0,
+     "kh3_system.situation.change_kb"
+    ],
+    [
+     "CHANGE_AN",
+     139,
+     "CHANGE_AN",
+     4,
+     14,
+     10,
+     93,
+     30,
+     1,
+     0,
+     30,
+     "kh3_system.situation.change_un"
+    ],
+    [
+     "CHANGE_L1",
+     148,
+     "CHANGE_L1",
+     4,
+     14,
+     10,
+     102,
+     30,
+     1,
+     0,
+     30,
+     "kh3_system.situation.change_l1"
+    ],
+    [
+     "CHANGE_L2",
+     149,
+     "CHANGE_L2",
+     4,
+     14,
+     10,
+     103,
+     30,
+     1,
+     0,
+     30,
+     "kh3_system.situation.change_l2"
+    ],
+    [
+     "CHANGE_L3",
+     150,
+     "CHANGE_L3",
+     4,
+     14,
+     10,
+     104,
+     30,
+     1,
+     0,
+     30,
+     "kh3_system.situation.change_l3"
+    ],
+    [
+     "CHANGE_L4",
+     151,
+     "CHANGE_L4",
+     4,
+     14,
+     10,
+     105,
+     30,
+     1,
+     0,
+     30,
+     "kh3_system.situation.change_l4"
+    ],
+    [
+     "CHANGE_L5",
+     152,
+     "CHANGE_L5",
+     4,
+     14,
+     10,
+     106,
+     30,
+     1,
+     0,
+     30,
+     "kh3_system.situation.change_l6"
+    ],
+    [
+     "FINISH",
+     155,
+     "FINISH",
+     4,
+     15,
+     10,
+     121,
+     0,
+     0,
+     0,
+     0,
+     "kh3_system.situation.change_finish"
+    ],
+    [
+     "FINISH_AN",
+     165,
+     "FINISH_AN",
+     4,
+     15,
+     10,
+     131,
+     100,
+     0,
+     0,
+     0,
+     "kh3_system.situation.change_finish"
+    ],
+    [
+     "LM_STUNIMPACT",
+     171,
+     "LM_STUNIMPACT",
+     4,
+     15,
+     10,
+     137,
+     100,
+     0,
+     0,
+     0,
+     "kh3_system.situation.lm_stunimpact"
+    ],
+    [
+     "LM_SONICRAVE",
+     172,
+     "LM_SONICRAVE",
+     4,
+     15,
+     10,
+     138,
+     100,
+     0,
+     0,
+     0,
+     "kh3_system.situation.lm_sonicrave"
+    ],
+    [
+     "LM_LASTARCANUM",
+     173,
+     "LM_LASTARCANUM",
+     4,
+     15,
+     10,
+     139,
+     100,
+     0,
+     0,
+     0,
+     "kh3_system.situation.lm_lastarcanum"
+    ],
+    [
+     "LM_UNIONDISCODE",
+     174,
+     "LM_UNIONDISCODE",
+     4,
+     15,
+     10,
+     140,
+     100,
+     0,
+     0,
+     0,
+     "kh3_system.situation.lmex_ux"
+    ],
+    [
+     "LMEX_RAVE",
+     175,
+     "LMEX_RAVE",
+     4,
+     16,
+     10,
+     141,
+     0,
+     0,
+     0,
+     0,
+     "kh3_system.situation.lmex_rave"
+    ],
+    [
+     "LMEX_FINISH",
+     176,
+     "LMEX_FINISH",
+     4,
+     16,
+     10,
+     142,
+     0,
+     0,
+     0,
+     0,
+     "kh3_system.situation.lmex_finish"
+    ],
+    [
+     "LMEX_BREAK",
+     177,
+     "LMEX_BREAK",
+     4,
+     16,
+     10,
+     143,
+     0,
+     0,
+     0,
+     0,
+     "kh3_system.situation.lmex_break"
+    ],
+    [
+     "LMEX_THEEND",
+     178,
+     "LMEX_THEEND",
+     4,
+     16,
+     10,
+     144,
+     0,
+     0,
+     0,
+     0,
+     "kh3_system.situation.lmex_theend"
+    ],
+    [
+     "RISKCHARGE",
+     179,
+     "RISKCHARGE",
+     4,
+     15,
+     10,
+     145,
+     0,
+     0,
+     0,
+     0,
+     "kh3_system.situation.riskcharge"
+    ],
+    [
+     "AF_JETCOASTER_BM",
+     186,
+     "AF_JETCOASTER_BM",
+     4,
+     17,
+     10,
+     161,
+     40,
+     0,
+     0,
+     20,
+     "kh3_system.situation.af_jetcoaster_bm"
+    ],
+    [
+     "AF_VIKINGSHIP",
+     187,
+     "AF_VIKINGSHIP",
+     4,
+     17,
+     10,
+     162,
+     40,
+     0,
+     0,
+     20,
+     "kh3_system.situation.af_vikingship"
+    ],
+    [
+     "AF_TEACUP",
+     188,
+     "AF_TEACUP",
+     4,
+     17,
+     10,
+     163,
+     40,
+     0,
+     0,
+     20,
+     "kh3_system.situation.af_teacup"
+    ],
+    [
+     "AF_SHOOTINGRIDE",
+     189,
+     "AF_SHOOTINGRIDE",
+     4,
+     17,
+     10,
+     164,
+     40,
+     0,
+     0,
+     20,
+     "kh3_system.situation.af_shootingride"
+    ],
+    [
+     "AF_MERRYGOROUND",
+     190,
+     "AF_MERRYGOROUND",
+     4,
+     17,
+     10,
+     165,
+     40,
+     0,
+     0,
+     20,
+     "kh3_system.situation.af_merrygoround"
+    ],
+    [
+     "AF_WATERRIDE",
+     191,
+     "AF_WATERRIDE",
+     4,
+     17,
+     10,
+     166,
+     40,
+     0,
+     0,
+     20,
+     "kh3_system.situation.af_waterride"
+    ],
+    [
+     "AF_FINISH",
+     192,
+     "AF_FINISH",
+     4,
+     17,
+     10,
+     167,
+     0,
+     0,
+     0,
+     0,
+     "kh3_system.situation.af_finish"
+    ],
+    [
+     "FR_SHIELDGUARDIAN",
+     193,
+     "FR_SHIELDGUARDIAN",
+     4,
+     18,
+     10,
+     171,
+     30,
+     0,
+     0,
+     30,
+     "kh3_system.situation.fr_shieldguardian"
+    ],
+    [
+     "FR_GOOFYSHOOT",
+     195,
+     "FR_GOOFYSHOOT",
+     4,
+     18,
+     10,
+     173,
+     30,
+     0,
+     0,
+     0,
+     "kh3_system.situation.fr_goofyshoot"
+    ],
+    [
+     "FR_CALLMETEOR",
+     207,
+     "FR_CALLMETEOR",
+     4,
+     18,
+     10,
+     185,
+     30,
+     0,
+     0,
+     0,
+     "kh3_system.situation.fr_callmeteor"
+    ],
+    [
+     "FR_FLAREFORCE",
+     208,
+     "FR_FLAREFORCE",
+     4,
+     18,
+     10,
+     186,
+     30,
+     0,
+     0,
+     0,
+     "kh3_system.situation.fr_flareforce"
+    ],
+    [
+     "S_FINISH",
+     211,
+     "S_FINISH",
+     4,
+     18,
+     10,
+     189,
+     0,
+     0,
+     0,
+     0,
+     "kh3_system.situation.lastray"
+    ],
+    [
+     "FR_FINISH",
+     214,
+     "FR_FINISH",
+     4,
+     18,
+     10,
+     192,
+     0,
+     0,
+     0,
+     0,
+     "kh3_system.situation.fr_finish"
+    ]
+   ]
+  },
+  "sora-combat-finish-levels": {
+   "strand": "F",
+   "table": "finish_levels",
+   "section": "10.6",
+   "what": "finish level -> command -> per-command tick of TresPlayerState_StyleFinish",
+   "note": "finish level (controller+0xB64) -> command (controller+0xB68) -> per-command tick of TresPlayerState_StyleFinish (vtable 0x146947A28)",
+   "cols": [
+    "id",
+    "level",
+    "command",
+    "enum",
+    "state_slot",
+    "function",
+    "clips",
+    "extra_commands",
+    "evidence"
+   ],
+   "rows": [
+    [
+     "LM_STUNIMPACT",
+     1,
+     171,
+     "LM_STUNIMPACT",
+     152,
+     "0x1413E2630",
+     "M_1421 (ground) / M_1422 (air)",
+     "-",
+     "I for the mapping (0x141414C70, thunk 0x1404EFAB0 jmp [rax+4C0h]); C for the body"
+    ],
+    [
+     "LM_SONICRAVE",
+     2,
+     172,
+     "LM_SONICRAVE",
+     153,
+     "0x1413E1FC0",
+     "M_1423 (ground) / M_1424 (air) -> M_1425 per dash -> M_1426",
+     "175 LMEX_RAVE (per dash), 176 LMEX_FINISH (after more than 5 dashes)",
+     "I mapping (thunk 0x1404EFABC jmp [rax+4C8h]); C body"
+    ],
+    [
+     "LM_LASTARCANUM",
+     3,
+     173,
+     "LM_LASTARCANUM",
+     154,
+     "0x1413E1800",
+     "M_1427 -> M_1428..M_1432 -> M_1433 (ground) / M_1434 (air)",
+     "177 LMEX_BREAK (x5), 178 LMEX_THEEND",
+     "I mapping (thunk 0x1404EFAC8 jmp [rax+4D0h]); C body"
+    ],
+    [
+     "LM_UNIONDISCODE",
+     3,
+     174,
+     "LM_UNIONDISCODE",
+     155,
+     "0x1413E2810",
+     "M_1435",
+     "-",
+     "form 0x95 only (not the Kingdom Key); body not read"
+    ]
+   ]
+  },
+  "sora-combat-form-abilities": {
+   "strand": "F",
+   "table": "form_abilities",
+   "section": "10.5",
+   "what": "abilities added while wear form TRES_WEAR_FORM_05 (Second Form) is worn",
+   "note": "equipment-counter copies added while the wear form is worn (0x140E87610 over p_ex001_FormAbility.m_Data[wear form].m_Ability)",
+   "cols": [
+    "id",
+    "wear_form",
+    "ability",
+    "ability_id",
+    "copies",
+    "source"
+   ],
+   "rows": [
+    [
+     "HIGHJUMP",
+     "TRES_WEAR_FORM_05",
+     "HIGHJUMP",
+     16,
+     1,
+     "Blueprints/Player/p_ex001/p_ex001_FormAbility"
+    ],
+    [
+     "OVERCOME",
+     "TRES_WEAR_FORM_05",
+     "OVERCOME",
+     179,
+     1,
+     "Blueprints/Player/p_ex001/p_ex001_FormAbility"
+    ],
+    [
+     "COMBO_MASTER",
+     "TRES_WEAR_FORM_05",
+     "COMBO_MASTER",
+     30,
+     1,
+     "Blueprints/Player/p_ex001/p_ex001_FormAbility"
+    ],
+    [
+     "MASTER_DRAW",
+     "TRES_WEAR_FORM_05",
+     "MASTER_DRAW",
+     61,
+     1,
+     "Blueprints/Player/p_ex001/p_ex001_FormAbility"
+    ],
+    [
+     "LUCK_UP",
+     "TRES_WEAR_FORM_05",
+     "LUCK_UP",
+     39,
+     1,
+     "Blueprints/Player/p_ex001/p_ex001_FormAbility"
+    ],
+    [
+     "MP_HASTE",
+     "TRES_WEAR_FORM_05",
+     "MP_HASTE",
+     53,
+     1,
+     "Blueprints/Player/p_ex001/p_ex001_FormAbility"
+    ]
+   ]
+  },
+  "sora-combat-queue-classes": {
+   "strand": "F",
+   "table": "queue_classes",
+   "section": "11.1",
+   "what": "where each kind of command goes in the HUD command part (classifier 0x141619E60)",
+   "note": "where each kind of command goes in the HUD (classifier 0x141619E60; containers of 0x1416158F0)",
+   "cols": [
+    "id",
+    "cmd_type",
+    "cate",
+    "kinds",
+    "hud_class",
+    "container",
+    "counted",
+    "hud_countdown",
+    "producer",
+    "sora_only"
+   ],
+   "rows": [
+    [
+     "queue_class_01",
+     1,
+     "any",
+     "1..26 (REFLECTGUARD .. FR_GOOFY2)",
+     "2 as a kind; entered as ex-kind entries (type 2): ex kinds 1..3 -> 5, 5 / 9 / 13 -> 6, others 2",
+     "single slot: A (HUD+0x770) for class 2, B (HUD+0x7C8) for the ex kinds classed 5 / 6 [C]",
+     "no",
+     "no (controller prompt timer ctrl+0x8A0)",
+     "reaction prompt: controller 0x1414145C0 -> hud 0x141575640 / 0x14158C180 (other strands: guard, damage, risk dodge); not through NotifySetActionCommand",
+     "yes for 1..21"
+    ],
+    [
+     "queue_class_02",
+     4,
+     13,
+     "76..108 context (SAVE, TALK, OPEN, CHECK, ...)",
+     "2 (0x0B / 0x0C / 0x10 for 82, 83, 84, 87, 88)",
+     "slot A",
+     "no",
+     "no",
+     "level objects",
+     "needs level objects"
+    ],
+    [
+     "queue_class_03",
+     4,
+     14,
+     "127..154, 221..224 formchange",
+     3,
+     "list (HUD+0x760)",
+     "yes",
+     "yes",
+     "gauge full: controller slot 830 0x1413F0ED0",
+     "yes (148 for the Kingdom Key)"
+    ],
+    [
+     "queue_class_04",
+     4,
+     15,
+     "155..174, 179..185, 225..228 finish",
+     4,
+     "slot B (HUD+0x7C8)",
+     "no",
+     "no (lives with the form time)",
+     "controller slot 837 0x1413EE030",
+     "yes (171..173)"
+    ],
+    [
+     "queue_class_05",
+     4,
+     16,
+     "170, 175..178, 243 finish extras",
+     4,
+     "slot B extra (0x14158C180)",
+     "no",
+     "no",
+     "StyleFinish slot 162 0x1413E3690 during a finish",
+     "yes (175..178)"
+    ],
+    [
+     "queue_class_06",
+     4,
+     11,
+     "110..126, 231 grand magic",
+     1,
+     "list",
+     "yes",
+     "yes",
+     "gauge full: controller slot 838 0x1413ED500 (docs/sora-magic-spec.md part I section 7)",
+     "yes"
+    ],
+    [
+     "queue_class_07",
+     4,
+     17,
+     "186..191 attraction (192 AF_FINISH: class 6)",
+     5,
+     "list",
+     "yes",
+     "yes",
+     "attraction marks on enemies",
+     "no (marked enemies)"
+    ],
+    [
+     "queue_class_08",
+     4,
+     18,
+     "193..210, 237..242 team attacks (211, 214, 241: class 6)",
+     7,
+     "list",
+     "yes",
+     "yes",
+     "friend gauge / friend AI",
+     "no (party members)"
+    ],
+    [
+     "queue_class_09",
+     3,
+     19,
+     "69..75 links",
+     10,
+     "list",
+     "yes",
+     "yes",
+     "link menu",
+     "no (out of scope)"
+    ],
+    [
+     "queue_class_10",
+     5,
+     25,
+     "253 SHOOTFLOW",
+     8,
+     "list",
+     "yes",
+     "yes",
+     "shotlock / athletic flow",
+     "see magic spec part F"
+    ]
+   ]
+  },
+  "sora-combat-form-fields": {
+   "strand": "F",
+   "table": "controller_fields",
+   "section": "10.1",
+   "what": "style-gauge and formchange fields of the player controller",
+   "note": "TresPlayerControllerBase fields of the style system (unreflected; names are this strand's)",
+   "cols": [
+    "id",
+    "offset",
+    "type",
+    "name",
+    "accessor",
+    "meaning"
+   ],
+   "rows": [
+    [
+     "+0x87C",
+     "+0x87C",
+     "i32",
+     "exec_cmd",
+     "written only by ExecuteCommand 0x14140EAA0",
+     "command being executed"
+    ],
+    [
+     "+0x888",
+     "+0x888",
+     "i32",
+     "special_cmd",
+     "NotifySetSpecialCommand 0x14140E600",
+     "0x8B = anti form active"
+    ],
+    [
+     "+0x8F0",
+     "+0x8F0",
+     "f32",
+     "finish_time",
+     "written by slot 837",
+     "time given to the last finish command"
+    ],
+    [
+     "+0x8F4",
+     "+0x8F4",
+     "f32",
+     "exec_block",
+     "written by the executor",
+     "0.1 s after an accepted command"
+    ],
+    [
+     "+0xB34",
+     "+0xB34",
+     "i32",
+     "form_level",
+     "slot 847 result at form start",
+     "0 no form, 1 first form, 2 second-stage form"
+    ],
+    [
+     "+0xB38",
+     "+0xB38",
+     "i32",
+     "form_cmd",
+     "getter slot 846 0x14066D3A0",
+     "current form command kind (0x94 in Second Form), 0 = none"
+    ],
+    [
+     "+0xB3C",
+     "+0xB3C",
+     "i32",
+     "hud_form_cmd",
+     "0x14140C040",
+     "form shown by the HUD banner"
+    ],
+    [
+     "+0xB40",
+     "+0xB40",
+     "f32",
+     "gauge",
+     "getter slot 849",
+     "style points 0..MyStylePointMax"
+    ],
+    [
+     "+0xB44",
+     "+0xB44",
+     "f32",
+     "pending",
+     "",
+     "points added since the last gauge tick"
+    ],
+    [
+     "+0xB48",
+     "+0xB48",
+     "f32",
+     "chain",
+     "",
+     "multi-add factor (1, 0.5, 0.25, ...)"
+    ],
+    [
+     "+0xB4C",
+     "+0xB4C",
+     "f32",
+     "dec_start",
+     "getter slot 850",
+     "time until decay starts"
+    ],
+    [
+     "+0xB50",
+     "+0xB50",
+     "f32",
+     "dec_interval",
+     "",
+     "time until the next decay step"
+    ],
+    [
+     "+0xB54",
+     "+0xB54",
+     "f32",
+     "form_time_left",
+     "getter slot 851, setter slot 852",
+     "remaining form time"
+    ],
+    [
+     "+0xB58",
+     "+0xB58",
+     "f32",
+     "form_time_full",
+     "",
+     "form duration (cap of the extensions)"
+    ],
+    [
+     "+0xB5C",
+     "+0xB5C",
+     "u8",
+     "change_cmd_pending",
+     "getter slot 855",
+     "a formchange command is in the HUD"
+    ],
+    [
+     "+0xB5D",
+     "+0xB5D",
+     "u8",
+     "finish_cmd_pending",
+     "getter slot 856",
+     "a finish command has been given"
+    ],
+    [
+     "+0xB60",
+     "+0xB60",
+     "i32",
+     "style_fix",
+     "DebugSetStyleFix 0x1413F3C10",
+     "form held: no formchange command, no countdown, finish does not end the form"
+    ],
+    [
+     "+0xB64",
+     "+0xB64",
+     "i32",
+     "finish_level",
+     "getter slot 854, setter slot 853",
+     "0..3"
+    ],
+    [
+     "+0xB68",
+     "+0xB68",
+     "i32",
+     "finish_cmd",
+     "setter slot 853",
+     "0, 171, 172, 173 (174)"
+    ],
+    [
+     "+0xB6C / +0xB70",
+     "+0xB6C / +0xB70",
+     "f32 x2",
+     "action_time / action_total",
+     "getter slot 870, setter slot 871",
+     "time of the \"set action command\" (HUD banner), drained by TIME_BREAK"
+    ],
+    [
+     "+0xB74",
+     "+0xB74",
+     "f32",
+     "auto_add_acc",
+     "",
+     "1-second accumulator of the flag-5 auto gain"
+    ],
+    [
+     "+0xB78",
+     "+0xB78",
+     "u8",
+     "flags",
+     "bit 0 BP_NotifyPauseSituationTimer 0x1413EA450; bit 2 getter slot 865; bit 3 getter slot 873",
+     "bit 0 form countdown paused; bit 3 form time ran out this tick"
+    ],
+    [
+     "+0xB98",
+     "+0xB98",
+     "TArray<f32>[8]",
+     "element_points",
+     "",
+     "points per command Attr (grand magic roll)"
+    ],
+    [
+     "+0xBA8",
+     "+0xBA8",
+     "TArray<i32>[8]",
+     "element_last_cmd",
+     "",
+     "highest command kind per Attr"
+    ],
+    [
+     "+0xBB8 / +0xC08 / +0xC09 / +0xC18",
+     "+0xBB8 / +0xC08 / +0xC09 / +0xC18",
+     "u8 x4",
+     "link / attraction / team / (unknown) active",
+     "getters slots 879, 890, 894, 902",
+     "the gauge tick discards pending points while any is set"
+    ]
+   ]
+  }
+ }
+}

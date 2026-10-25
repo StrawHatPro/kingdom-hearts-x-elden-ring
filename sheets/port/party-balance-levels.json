@@ -1,0 +1,1797 @@
+{
+ "sheet": "party-balance-levels",
+ "group": "port",
+ "columns": [
+  "id",
+  "chara",
+  "level",
+  "strength",
+  "magic",
+  "defense",
+  "source"
+ ],
+ "rows": [
+  [
+   "n_ex001.1",
+   "n_ex001",
+   1,
+   5,
+   15,
+   6,
+   "PORT DESIGN (stream BAL; THE USER 2026-10-16 23:50, ER_PHASE_NOTES \"balance Donald and Goofy like Sora\"): round(ratio x (Sora's sora-levels row + the Kingdom Key 4 / 3 / 0)) - his starting weapon 3 / 4 / 0 (Strength / Magic / Defense), with party-balance n_ex001.lead.strength_ratio 0.55 / magic_ratio 1.25 / defense_ratio 0.8; built by tools/party_balance_sheet.js"
+  ],
+  [
+   "n_ex001.2",
+   "n_ex001",
+   2,
+   5,
+   16,
+   7,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 2 = 11 / 13 / 9"
+  ],
+  [
+   "n_ex001.3",
+   "n_ex001",
+   3,
+   6,
+   16,
+   7,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 3 = 12 / 13 / 9"
+  ],
+  [
+   "n_ex001.4",
+   "n_ex001",
+   4,
+   6,
+   17,
+   7,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 4 = 12 / 14 / 9"
+  ],
+  [
+   "n_ex001.5",
+   "n_ex001",
+   5,
+   6,
+   17,
+   8,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 5 = 12 / 14 / 10"
+  ],
+  [
+   "n_ex001.6",
+   "n_ex001",
+   6,
+   6,
+   19,
+   8,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 6 = 13 / 15 / 10"
+  ],
+  [
+   "n_ex001.7",
+   "n_ex001",
+   7,
+   6,
+   20,
+   9,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 7 = 13 / 16 / 11"
+  ],
+  [
+   "n_ex001.8",
+   "n_ex001",
+   8,
+   7,
+   20,
+   9,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 8 = 14 / 16 / 11"
+  ],
+  [
+   "n_ex001.9",
+   "n_ex001",
+   9,
+   7,
+   21,
+   10,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 9 = 14 / 17 / 12"
+  ],
+  [
+   "n_ex001.10",
+   "n_ex001",
+   10,
+   7,
+   21,
+   10,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 10 = 15 / 17 / 12"
+  ],
+  [
+   "n_ex001.11",
+   "n_ex001",
+   11,
+   7,
+   22,
+   10,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 11 = 15 / 18 / 13"
+  ],
+  [
+   "n_ex001.12",
+   "n_ex001",
+   12,
+   8,
+   22,
+   10,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 12 = 16 / 18 / 13"
+  ],
+  [
+   "n_ex001.13",
+   "n_ex001",
+   13,
+   8,
+   24,
+   11,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 13 = 16 / 19 / 14"
+  ],
+  [
+   "n_ex001.14",
+   "n_ex001",
+   14,
+   9,
+   24,
+   12,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 14 = 17 / 19 / 15"
+  ],
+  [
+   "n_ex001.15",
+   "n_ex001",
+   15,
+   9,
+   25,
+   12,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 15 = 17 / 20 / 15"
+  ],
+  [
+   "n_ex001.16",
+   "n_ex001",
+   16,
+   9,
+   25,
+   13,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 16 = 18 / 20 / 16"
+  ],
+  [
+   "n_ex001.17",
+   "n_ex001",
+   17,
+   9,
+   26,
+   13,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 17 = 18 / 21 / 16"
+  ],
+  [
+   "n_ex001.18",
+   "n_ex001",
+   18,
+   10,
+   26,
+   14,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 18 = 19 / 21 / 17"
+  ],
+  [
+   "n_ex001.19",
+   "n_ex001",
+   19,
+   10,
+   27,
+   14,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 19 = 20 / 22 / 17"
+  ],
+  [
+   "n_ex001.20",
+   "n_ex001",
+   20,
+   10,
+   27,
+   14,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 20 = 20 / 22 / 18"
+  ],
+  [
+   "n_ex001.21",
+   "n_ex001",
+   21,
+   11,
+   29,
+   14,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 21 = 21 / 23 / 18"
+  ],
+  [
+   "n_ex001.22",
+   "n_ex001",
+   22,
+   11,
+   30,
+   14,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 22 = 21 / 24 / 18"
+  ],
+  [
+   "n_ex001.23",
+   "n_ex001",
+   23,
+   11,
+   31,
+   15,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 23 = 22 / 25 / 19"
+  ],
+  [
+   "n_ex001.24",
+   "n_ex001",
+   24,
+   11,
+   31,
+   16,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 24 = 22 / 25 / 20"
+  ],
+  [
+   "n_ex001.25",
+   "n_ex001",
+   25,
+   12,
+   31,
+   17,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 25 = 23 / 25 / 21"
+  ],
+  [
+   "n_ex001.26",
+   "n_ex001",
+   26,
+   12,
+   32,
+   17,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 26 = 23 / 26 / 21"
+  ],
+  [
+   "n_ex001.27",
+   "n_ex001",
+   27,
+   12,
+   32,
+   18,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 27 = 24 / 26 / 22"
+  ],
+  [
+   "n_ex001.28",
+   "n_ex001",
+   28,
+   12,
+   34,
+   18,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 28 = 24 / 27 / 22"
+  ],
+  [
+   "n_ex001.29",
+   "n_ex001",
+   29,
+   13,
+   34,
+   18,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 29 = 25 / 27 / 23"
+  ],
+  [
+   "n_ex001.30",
+   "n_ex001",
+   30,
+   13,
+   35,
+   18,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 30 = 25 / 28 / 23"
+  ],
+  [
+   "n_ex001.31",
+   "n_ex001",
+   31,
+   14,
+   35,
+   19,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 31 = 26 / 28 / 24"
+  ],
+  [
+   "n_ex001.32",
+   "n_ex001",
+   32,
+   14,
+   36,
+   19,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 32 = 26 / 29 / 24"
+  ],
+  [
+   "n_ex001.33",
+   "n_ex001",
+   33,
+   14,
+   36,
+   20,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 33 = 27 / 29 / 25"
+  ],
+  [
+   "n_ex001.34",
+   "n_ex001",
+   34,
+   14,
+   37,
+   20,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 34 = 27 / 30 / 25"
+  ],
+  [
+   "n_ex001.35",
+   "n_ex001",
+   35,
+   15,
+   37,
+   21,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 35 = 28 / 30 / 26"
+  ],
+  [
+   "n_ex001.36",
+   "n_ex001",
+   36,
+   15,
+   39,
+   21,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 36 = 28 / 31 / 26"
+  ],
+  [
+   "n_ex001.37",
+   "n_ex001",
+   37,
+   15,
+   39,
+   22,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 37 = 29 / 31 / 27"
+  ],
+  [
+   "n_ex001.38",
+   "n_ex001",
+   38,
+   16,
+   40,
+   22,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 38 = 30 / 32 / 27"
+  ],
+  [
+   "n_ex001.39",
+   "n_ex001",
+   39,
+   16,
+   40,
+   22,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 39 = 30 / 32 / 28"
+  ],
+  [
+   "n_ex001.40",
+   "n_ex001",
+   40,
+   16,
+   41,
+   22,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 40 = 31 / 33 / 28"
+  ],
+  [
+   "n_ex001.41",
+   "n_ex001",
+   41,
+   16,
+   42,
+   23,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 41 = 31 / 34 / 29"
+  ],
+  [
+   "n_ex001.42",
+   "n_ex001",
+   42,
+   17,
+   42,
+   23,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 42 = 32 / 34 / 29"
+  ],
+  [
+   "n_ex001.43",
+   "n_ex001",
+   43,
+   17,
+   44,
+   24,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 43 = 32 / 35 / 30"
+  ],
+  [
+   "n_ex001.44",
+   "n_ex001",
+   44,
+   17,
+   44,
+   25,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 44 = 33 / 35 / 31"
+  ],
+  [
+   "n_ex001.45",
+   "n_ex001",
+   45,
+   17,
+   45,
+   26,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 45 = 33 / 36 / 32"
+  ],
+  [
+   "n_ex001.46",
+   "n_ex001",
+   46,
+   18,
+   45,
+   26,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 46 = 34 / 36 / 32"
+  ],
+  [
+   "n_ex001.47",
+   "n_ex001",
+   47,
+   18,
+   46,
+   26,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 47 = 34 / 37 / 33"
+  ],
+  [
+   "n_ex001.48",
+   "n_ex001",
+   48,
+   18,
+   46,
+   26,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 48 = 35 / 37 / 33"
+  ],
+  [
+   "n_ex001.49",
+   "n_ex001",
+   49,
+   18,
+   47,
+   27,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 49 = 35 / 38 / 34"
+  ],
+  [
+   "n_ex001.50",
+   "n_ex001",
+   50,
+   19,
+   47,
+   27,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 50 = 36 / 38 / 34"
+  ],
+  [
+   "n_ex001.51",
+   "n_ex001",
+   51,
+   19,
+   49,
+   27,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 51 = 36 / 39 / 34"
+  ],
+  [
+   "n_ex001.52",
+   "n_ex001",
+   52,
+   20,
+   49,
+   28,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 52 = 37 / 39 / 35"
+  ],
+  [
+   "n_ex001.53",
+   "n_ex001",
+   53,
+   20,
+   50,
+   28,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 53 = 37 / 40 / 35"
+  ],
+  [
+   "n_ex001.54",
+   "n_ex001",
+   54,
+   20,
+   50,
+   29,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 54 = 38 / 40 / 36"
+  ],
+  [
+   "n_ex001.55",
+   "n_ex001",
+   55,
+   20,
+   51,
+   29,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 55 = 38 / 41 / 36"
+  ],
+  [
+   "n_ex001.56",
+   "n_ex001",
+   56,
+   21,
+   51,
+   30,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 56 = 39 / 41 / 37"
+  ],
+  [
+   "n_ex001.57",
+   "n_ex001",
+   57,
+   21,
+   52,
+   30,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 57 = 40 / 42 / 37"
+  ],
+  [
+   "n_ex001.58",
+   "n_ex001",
+   58,
+   21,
+   52,
+   30,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 58 = 40 / 42 / 38"
+  ],
+  [
+   "n_ex001.59",
+   "n_ex001",
+   59,
+   22,
+   54,
+   30,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 59 = 41 / 43 / 38"
+  ],
+  [
+   "n_ex001.60",
+   "n_ex001",
+   60,
+   22,
+   55,
+   31,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 60 = 41 / 44 / 39"
+  ],
+  [
+   "n_ex001.61",
+   "n_ex001",
+   61,
+   22,
+   55,
+   31,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 61 = 42 / 44 / 39"
+  ],
+  [
+   "n_ex001.62",
+   "n_ex001",
+   62,
+   22,
+   56,
+   32,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 62 = 42 / 45 / 40"
+  ],
+  [
+   "n_ex001.63",
+   "n_ex001",
+   63,
+   23,
+   56,
+   33,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 63 = 43 / 45 / 41"
+  ],
+  [
+   "n_ex001.64",
+   "n_ex001",
+   64,
+   23,
+   57,
+   33,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 64 = 43 / 46 / 41"
+  ],
+  [
+   "n_ex001.65",
+   "n_ex001",
+   65,
+   23,
+   57,
+   34,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 65 = 44 / 46 / 42"
+  ],
+  [
+   "n_ex001.66",
+   "n_ex001",
+   66,
+   23,
+   59,
+   34,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 66 = 44 / 47 / 42"
+  ],
+  [
+   "n_ex001.67",
+   "n_ex001",
+   67,
+   24,
+   59,
+   34,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 67 = 45 / 47 / 43"
+  ],
+  [
+   "n_ex001.68",
+   "n_ex001",
+   68,
+   24,
+   60,
+   34,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 68 = 45 / 48 / 43"
+  ],
+  [
+   "n_ex001.69",
+   "n_ex001",
+   69,
+   25,
+   60,
+   35,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 69 = 46 / 48 / 44"
+  ],
+  [
+   "n_ex001.70",
+   "n_ex001",
+   70,
+   25,
+   61,
+   35,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 70 = 46 / 49 / 44"
+  ],
+  [
+   "n_ex001.71",
+   "n_ex001",
+   71,
+   25,
+   61,
+   36,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 71 = 47 / 49 / 45"
+  ],
+  [
+   "n_ex001.72",
+   "n_ex001",
+   72,
+   25,
+   62,
+   36,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 72 = 47 / 50 / 45"
+  ],
+  [
+   "n_ex001.73",
+   "n_ex001",
+   73,
+   26,
+   62,
+   37,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 73 = 48 / 50 / 46"
+  ],
+  [
+   "n_ex001.74",
+   "n_ex001",
+   74,
+   26,
+   64,
+   37,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 74 = 48 / 51 / 46"
+  ],
+  [
+   "n_ex001.75",
+   "n_ex001",
+   75,
+   26,
+   64,
+   38,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 75 = 49 / 51 / 47"
+  ],
+  [
+   "n_ex001.76",
+   "n_ex001",
+   76,
+   27,
+   65,
+   38,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 76 = 50 / 52 / 47"
+  ],
+  [
+   "n_ex001.77",
+   "n_ex001",
+   77,
+   27,
+   65,
+   38,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 77 = 50 / 52 / 48"
+  ],
+  [
+   "n_ex001.78",
+   "n_ex001",
+   78,
+   27,
+   66,
+   38,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 78 = 51 / 53 / 48"
+  ],
+  [
+   "n_ex001.79",
+   "n_ex001",
+   79,
+   27,
+   67,
+   39,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 79 = 51 / 54 / 49"
+  ],
+  [
+   "n_ex001.80",
+   "n_ex001",
+   80,
+   28,
+   67,
+   39,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 80 = 52 / 54 / 49"
+  ],
+  [
+   "n_ex001.81",
+   "n_ex001",
+   81,
+   28,
+   69,
+   40,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 81 = 52 / 55 / 50"
+  ],
+  [
+   "n_ex001.82",
+   "n_ex001",
+   82,
+   28,
+   69,
+   41,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 82 = 53 / 55 / 51"
+  ],
+  [
+   "n_ex001.83",
+   "n_ex001",
+   83,
+   28,
+   70,
+   41,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 83 = 53 / 56 / 51"
+  ],
+  [
+   "n_ex001.84",
+   "n_ex001",
+   84,
+   29,
+   70,
+   42,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 84 = 54 / 56 / 52"
+  ],
+  [
+   "n_ex001.85",
+   "n_ex001",
+   85,
+   29,
+   71,
+   42,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 85 = 54 / 57 / 52"
+  ],
+  [
+   "n_ex001.86",
+   "n_ex001",
+   86,
+   29,
+   71,
+   42,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 86 = 55 / 57 / 53"
+  ],
+  [
+   "n_ex001.87",
+   "n_ex001",
+   87,
+   29,
+   72,
+   42,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 87 = 55 / 58 / 53"
+  ],
+  [
+   "n_ex001.88",
+   "n_ex001",
+   88,
+   30,
+   72,
+   43,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 88 = 56 / 58 / 54"
+  ],
+  [
+   "n_ex001.89",
+   "n_ex001",
+   89,
+   30,
+   74,
+   43,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 89 = 56 / 59 / 54"
+  ],
+  [
+   "n_ex001.90",
+   "n_ex001",
+   90,
+   31,
+   74,
+   44,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 90 = 57 / 59 / 55"
+  ],
+  [
+   "n_ex001.91",
+   "n_ex001",
+   91,
+   31,
+   75,
+   44,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 91 = 57 / 60 / 55"
+  ],
+  [
+   "n_ex001.92",
+   "n_ex001",
+   92,
+   31,
+   75,
+   45,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 92 = 58 / 60 / 56"
+  ],
+  [
+   "n_ex001.93",
+   "n_ex001",
+   93,
+   31,
+   76,
+   45,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 93 = 58 / 61 / 56"
+  ],
+  [
+   "n_ex001.94",
+   "n_ex001",
+   94,
+   32,
+   76,
+   46,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 94 = 59 / 61 / 57"
+  ],
+  [
+   "n_ex001.95",
+   "n_ex001",
+   95,
+   32,
+   77,
+   46,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 95 = 60 / 62 / 57"
+  ],
+  [
+   "n_ex001.96",
+   "n_ex001",
+   96,
+   32,
+   77,
+   46,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 96 = 60 / 62 / 58"
+  ],
+  [
+   "n_ex001.97",
+   "n_ex001",
+   97,
+   33,
+   79,
+   46,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 97 = 61 / 63 / 58"
+  ],
+  [
+   "n_ex001.98",
+   "n_ex001",
+   98,
+   33,
+   80,
+   47,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 98 = 61 / 64 / 59"
+  ],
+  [
+   "n_ex001.99",
+   "n_ex001",
+   99,
+   33,
+   80,
+   47,
+   "PORT DESIGN (stream BAL, as row n_ex001.1): Sora's row 99 = 62 / 64 / 59"
+  ],
+  [
+   "n_ex002.1",
+   "n_ex002",
+   1,
+   8,
+   0,
+   9,
+   "PORT DESIGN (stream BAL; THE USER 2026-10-16 23:50, ER_PHASE_NOTES \"balance Donald and Goofy like Sora\"): round(ratio x (Sora's sora-levels row + the Kingdom Key 4 / 3 / 0)) - his starting weapon 4 / 0 / 0 (Strength / Magic / Defense), with party-balance n_ex002.lead.strength_ratio 0.83 / magic_ratio 0 / defense_ratio 1.15; built by tools/party_balance_sheet.js"
+  ],
+  [
+   "n_ex002.2",
+   "n_ex002",
+   2,
+   8,
+   0,
+   10,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 2 = 11 / 13 / 9"
+  ],
+  [
+   "n_ex002.3",
+   "n_ex002",
+   3,
+   9,
+   0,
+   10,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 3 = 12 / 13 / 9"
+  ],
+  [
+   "n_ex002.4",
+   "n_ex002",
+   4,
+   9,
+   0,
+   10,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 4 = 12 / 14 / 9"
+  ],
+  [
+   "n_ex002.5",
+   "n_ex002",
+   5,
+   9,
+   0,
+   12,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 5 = 12 / 14 / 10"
+  ],
+  [
+   "n_ex002.6",
+   "n_ex002",
+   6,
+   10,
+   0,
+   12,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 6 = 13 / 15 / 10"
+  ],
+  [
+   "n_ex002.7",
+   "n_ex002",
+   7,
+   10,
+   0,
+   13,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 7 = 13 / 16 / 11"
+  ],
+  [
+   "n_ex002.8",
+   "n_ex002",
+   8,
+   11,
+   0,
+   13,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 8 = 14 / 16 / 11"
+  ],
+  [
+   "n_ex002.9",
+   "n_ex002",
+   9,
+   11,
+   0,
+   14,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 9 = 14 / 17 / 12"
+  ],
+  [
+   "n_ex002.10",
+   "n_ex002",
+   10,
+   12,
+   0,
+   14,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 10 = 15 / 17 / 12"
+  ],
+  [
+   "n_ex002.11",
+   "n_ex002",
+   11,
+   12,
+   0,
+   15,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 11 = 15 / 18 / 13"
+  ],
+  [
+   "n_ex002.12",
+   "n_ex002",
+   12,
+   13,
+   0,
+   15,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 12 = 16 / 18 / 13"
+  ],
+  [
+   "n_ex002.13",
+   "n_ex002",
+   13,
+   13,
+   0,
+   16,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 13 = 16 / 19 / 14"
+  ],
+  [
+   "n_ex002.14",
+   "n_ex002",
+   14,
+   13,
+   0,
+   17,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 14 = 17 / 19 / 15"
+  ],
+  [
+   "n_ex002.15",
+   "n_ex002",
+   15,
+   13,
+   0,
+   17,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 15 = 17 / 20 / 15"
+  ],
+  [
+   "n_ex002.16",
+   "n_ex002",
+   16,
+   14,
+   0,
+   18,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 16 = 18 / 20 / 16"
+  ],
+  [
+   "n_ex002.17",
+   "n_ex002",
+   17,
+   14,
+   0,
+   18,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 17 = 18 / 21 / 16"
+  ],
+  [
+   "n_ex002.18",
+   "n_ex002",
+   18,
+   15,
+   0,
+   20,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 18 = 19 / 21 / 17"
+  ],
+  [
+   "n_ex002.19",
+   "n_ex002",
+   19,
+   16,
+   0,
+   20,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 19 = 20 / 22 / 17"
+  ],
+  [
+   "n_ex002.20",
+   "n_ex002",
+   20,
+   16,
+   0,
+   21,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 20 = 20 / 22 / 18"
+  ],
+  [
+   "n_ex002.21",
+   "n_ex002",
+   21,
+   17,
+   0,
+   21,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 21 = 21 / 23 / 18"
+  ],
+  [
+   "n_ex002.22",
+   "n_ex002",
+   22,
+   17,
+   0,
+   21,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 22 = 21 / 24 / 18"
+  ],
+  [
+   "n_ex002.23",
+   "n_ex002",
+   23,
+   18,
+   0,
+   22,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 23 = 22 / 25 / 19"
+  ],
+  [
+   "n_ex002.24",
+   "n_ex002",
+   24,
+   18,
+   0,
+   23,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 24 = 22 / 25 / 20"
+  ],
+  [
+   "n_ex002.25",
+   "n_ex002",
+   25,
+   18,
+   0,
+   24,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 25 = 23 / 25 / 21"
+  ],
+  [
+   "n_ex002.26",
+   "n_ex002",
+   26,
+   18,
+   0,
+   24,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 26 = 23 / 26 / 21"
+  ],
+  [
+   "n_ex002.27",
+   "n_ex002",
+   27,
+   19,
+   0,
+   25,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 27 = 24 / 26 / 22"
+  ],
+  [
+   "n_ex002.28",
+   "n_ex002",
+   28,
+   19,
+   0,
+   25,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 28 = 24 / 27 / 22"
+  ],
+  [
+   "n_ex002.29",
+   "n_ex002",
+   29,
+   20,
+   0,
+   26,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 29 = 25 / 27 / 23"
+  ],
+  [
+   "n_ex002.30",
+   "n_ex002",
+   30,
+   20,
+   0,
+   26,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 30 = 25 / 28 / 23"
+  ],
+  [
+   "n_ex002.31",
+   "n_ex002",
+   31,
+   21,
+   0,
+   28,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 31 = 26 / 28 / 24"
+  ],
+  [
+   "n_ex002.32",
+   "n_ex002",
+   32,
+   21,
+   0,
+   28,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 32 = 26 / 29 / 24"
+  ],
+  [
+   "n_ex002.33",
+   "n_ex002",
+   33,
+   22,
+   0,
+   29,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 33 = 27 / 29 / 25"
+  ],
+  [
+   "n_ex002.34",
+   "n_ex002",
+   34,
+   22,
+   0,
+   29,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 34 = 27 / 30 / 25"
+  ],
+  [
+   "n_ex002.35",
+   "n_ex002",
+   35,
+   23,
+   0,
+   30,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 35 = 28 / 30 / 26"
+  ],
+  [
+   "n_ex002.36",
+   "n_ex002",
+   36,
+   23,
+   0,
+   30,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 36 = 28 / 31 / 26"
+  ],
+  [
+   "n_ex002.37",
+   "n_ex002",
+   37,
+   23,
+   0,
+   31,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 37 = 29 / 31 / 27"
+  ],
+  [
+   "n_ex002.38",
+   "n_ex002",
+   38,
+   24,
+   0,
+   31,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 38 = 30 / 32 / 27"
+  ],
+  [
+   "n_ex002.39",
+   "n_ex002",
+   39,
+   24,
+   0,
+   32,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 39 = 30 / 32 / 28"
+  ],
+  [
+   "n_ex002.40",
+   "n_ex002",
+   40,
+   25,
+   0,
+   32,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 40 = 31 / 33 / 28"
+  ],
+  [
+   "n_ex002.41",
+   "n_ex002",
+   41,
+   25,
+   0,
+   33,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 41 = 31 / 34 / 29"
+  ],
+  [
+   "n_ex002.42",
+   "n_ex002",
+   42,
+   26,
+   0,
+   33,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 42 = 32 / 34 / 29"
+  ],
+  [
+   "n_ex002.43",
+   "n_ex002",
+   43,
+   26,
+   0,
+   35,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 43 = 32 / 35 / 30"
+  ],
+  [
+   "n_ex002.44",
+   "n_ex002",
+   44,
+   27,
+   0,
+   36,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 44 = 33 / 35 / 31"
+  ],
+  [
+   "n_ex002.45",
+   "n_ex002",
+   45,
+   27,
+   0,
+   37,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 45 = 33 / 36 / 32"
+  ],
+  [
+   "n_ex002.46",
+   "n_ex002",
+   46,
+   28,
+   0,
+   37,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 46 = 34 / 36 / 32"
+  ],
+  [
+   "n_ex002.47",
+   "n_ex002",
+   47,
+   28,
+   0,
+   38,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 47 = 34 / 37 / 33"
+  ],
+  [
+   "n_ex002.48",
+   "n_ex002",
+   48,
+   28,
+   0,
+   38,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 48 = 35 / 37 / 33"
+  ],
+  [
+   "n_ex002.49",
+   "n_ex002",
+   49,
+   28,
+   0,
+   39,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 49 = 35 / 38 / 34"
+  ],
+  [
+   "n_ex002.50",
+   "n_ex002",
+   50,
+   29,
+   0,
+   39,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 50 = 36 / 38 / 34"
+  ],
+  [
+   "n_ex002.51",
+   "n_ex002",
+   51,
+   29,
+   0,
+   39,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 51 = 36 / 39 / 34"
+  ],
+  [
+   "n_ex002.52",
+   "n_ex002",
+   52,
+   30,
+   0,
+   40,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 52 = 37 / 39 / 35"
+  ],
+  [
+   "n_ex002.53",
+   "n_ex002",
+   53,
+   30,
+   0,
+   40,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 53 = 37 / 40 / 35"
+  ],
+  [
+   "n_ex002.54",
+   "n_ex002",
+   54,
+   31,
+   0,
+   41,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 54 = 38 / 40 / 36"
+  ],
+  [
+   "n_ex002.55",
+   "n_ex002",
+   55,
+   31,
+   0,
+   41,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 55 = 38 / 41 / 36"
+  ],
+  [
+   "n_ex002.56",
+   "n_ex002",
+   56,
+   32,
+   0,
+   43,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 56 = 39 / 41 / 37"
+  ],
+  [
+   "n_ex002.57",
+   "n_ex002",
+   57,
+   33,
+   0,
+   43,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 57 = 40 / 42 / 37"
+  ],
+  [
+   "n_ex002.58",
+   "n_ex002",
+   58,
+   33,
+   0,
+   44,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 58 = 40 / 42 / 38"
+  ],
+  [
+   "n_ex002.59",
+   "n_ex002",
+   59,
+   33,
+   0,
+   44,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 59 = 41 / 43 / 38"
+  ],
+  [
+   "n_ex002.60",
+   "n_ex002",
+   60,
+   33,
+   0,
+   45,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 60 = 41 / 44 / 39"
+  ],
+  [
+   "n_ex002.61",
+   "n_ex002",
+   61,
+   34,
+   0,
+   45,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 61 = 42 / 44 / 39"
+  ],
+  [
+   "n_ex002.62",
+   "n_ex002",
+   62,
+   34,
+   0,
+   46,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 62 = 42 / 45 / 40"
+  ],
+  [
+   "n_ex002.63",
+   "n_ex002",
+   63,
+   35,
+   0,
+   47,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 63 = 43 / 45 / 41"
+  ],
+  [
+   "n_ex002.64",
+   "n_ex002",
+   64,
+   35,
+   0,
+   47,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 64 = 43 / 46 / 41"
+  ],
+  [
+   "n_ex002.65",
+   "n_ex002",
+   65,
+   36,
+   0,
+   48,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 65 = 44 / 46 / 42"
+  ],
+  [
+   "n_ex002.66",
+   "n_ex002",
+   66,
+   36,
+   0,
+   48,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 66 = 44 / 47 / 42"
+  ],
+  [
+   "n_ex002.67",
+   "n_ex002",
+   67,
+   37,
+   0,
+   49,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 67 = 45 / 47 / 43"
+  ],
+  [
+   "n_ex002.68",
+   "n_ex002",
+   68,
+   37,
+   0,
+   49,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 68 = 45 / 48 / 43"
+  ],
+  [
+   "n_ex002.69",
+   "n_ex002",
+   69,
+   38,
+   0,
+   51,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 69 = 46 / 48 / 44"
+  ],
+  [
+   "n_ex002.70",
+   "n_ex002",
+   70,
+   38,
+   0,
+   51,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 70 = 46 / 49 / 44"
+  ],
+  [
+   "n_ex002.71",
+   "n_ex002",
+   71,
+   38,
+   0,
+   52,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 71 = 47 / 49 / 45"
+  ],
+  [
+   "n_ex002.72",
+   "n_ex002",
+   72,
+   38,
+   0,
+   52,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 72 = 47 / 50 / 45"
+  ],
+  [
+   "n_ex002.73",
+   "n_ex002",
+   73,
+   39,
+   0,
+   53,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 73 = 48 / 50 / 46"
+  ],
+  [
+   "n_ex002.74",
+   "n_ex002",
+   74,
+   39,
+   0,
+   53,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 74 = 48 / 51 / 46"
+  ],
+  [
+   "n_ex002.75",
+   "n_ex002",
+   75,
+   40,
+   0,
+   54,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 75 = 49 / 51 / 47"
+  ],
+  [
+   "n_ex002.76",
+   "n_ex002",
+   76,
+   41,
+   0,
+   54,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 76 = 50 / 52 / 47"
+  ],
+  [
+   "n_ex002.77",
+   "n_ex002",
+   77,
+   41,
+   0,
+   55,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 77 = 50 / 52 / 48"
+  ],
+  [
+   "n_ex002.78",
+   "n_ex002",
+   78,
+   42,
+   0,
+   55,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 78 = 51 / 53 / 48"
+  ],
+  [
+   "n_ex002.79",
+   "n_ex002",
+   79,
+   42,
+   0,
+   56,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 79 = 51 / 54 / 49"
+  ],
+  [
+   "n_ex002.80",
+   "n_ex002",
+   80,
+   42,
+   0,
+   56,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 80 = 52 / 54 / 49"
+  ],
+  [
+   "n_ex002.81",
+   "n_ex002",
+   81,
+   42,
+   0,
+   57,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 81 = 52 / 55 / 50"
+  ],
+  [
+   "n_ex002.82",
+   "n_ex002",
+   82,
+   43,
+   0,
+   59,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 82 = 53 / 55 / 51"
+  ],
+  [
+   "n_ex002.83",
+   "n_ex002",
+   83,
+   43,
+   0,
+   59,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 83 = 53 / 56 / 51"
+  ],
+  [
+   "n_ex002.84",
+   "n_ex002",
+   84,
+   44,
+   0,
+   60,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 84 = 54 / 56 / 52"
+  ],
+  [
+   "n_ex002.85",
+   "n_ex002",
+   85,
+   44,
+   0,
+   60,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 85 = 54 / 57 / 52"
+  ],
+  [
+   "n_ex002.86",
+   "n_ex002",
+   86,
+   45,
+   0,
+   61,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 86 = 55 / 57 / 53"
+  ],
+  [
+   "n_ex002.87",
+   "n_ex002",
+   87,
+   45,
+   0,
+   61,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 87 = 55 / 58 / 53"
+  ],
+  [
+   "n_ex002.88",
+   "n_ex002",
+   88,
+   46,
+   0,
+   62,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 88 = 56 / 58 / 54"
+  ],
+  [
+   "n_ex002.89",
+   "n_ex002",
+   89,
+   46,
+   0,
+   62,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 89 = 56 / 59 / 54"
+  ],
+  [
+   "n_ex002.90",
+   "n_ex002",
+   90,
+   47,
+   0,
+   63,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 90 = 57 / 59 / 55"
+  ],
+  [
+   "n_ex002.91",
+   "n_ex002",
+   91,
+   47,
+   0,
+   63,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 91 = 57 / 60 / 55"
+  ],
+  [
+   "n_ex002.92",
+   "n_ex002",
+   92,
+   47,
+   0,
+   64,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 92 = 58 / 60 / 56"
+  ],
+  [
+   "n_ex002.93",
+   "n_ex002",
+   93,
+   47,
+   0,
+   64,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 93 = 58 / 61 / 56"
+  ],
+  [
+   "n_ex002.94",
+   "n_ex002",
+   94,
+   48,
+   0,
+   66,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 94 = 59 / 61 / 57"
+  ],
+  [
+   "n_ex002.95",
+   "n_ex002",
+   95,
+   49,
+   0,
+   66,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 95 = 60 / 62 / 57"
+  ],
+  [
+   "n_ex002.96",
+   "n_ex002",
+   96,
+   49,
+   0,
+   67,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 96 = 60 / 62 / 58"
+  ],
+  [
+   "n_ex002.97",
+   "n_ex002",
+   97,
+   50,
+   0,
+   67,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 97 = 61 / 63 / 58"
+  ],
+  [
+   "n_ex002.98",
+   "n_ex002",
+   98,
+   50,
+   0,
+   68,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 98 = 61 / 64 / 59"
+  ],
+  [
+   "n_ex002.99",
+   "n_ex002",
+   99,
+   51,
+   0,
+   68,
+   "PORT DESIGN (stream BAL, as row n_ex002.1): Sora's row 99 = 62 / 64 / 59"
+  ]
+ ]
+}

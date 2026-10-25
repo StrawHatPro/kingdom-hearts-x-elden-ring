@@ -1,0 +1,11 @@
+{"sheet":"sora-combat-attack-exits","group":"port","columns":["id","exit","gate","condition","mechanism","conf"],"rows":[
+["exit_01","clip end","Tick 0x141341340","AnimEnded","DoChain","confirmed"],
+["exit_02","attack / cast / launch","CanAttack / CanMagic / CanLaunch","accepted request (+0x143) then m_bEnableChange","DoChain to the pushed state","confirmed"],
+["exit_03","guard","0x1414294C0 @0x1414296EF","Attack+0x234 & 0x80","SetState","confirmed"],
+["exit_04","dodge roll","0x141427CC0 @0x141428190","OnGround && Attack+0x234 & 0x80","SetState","confirmed"],
+["exit_05","air slide","0x141425780 @0x141425D3E","Attack+0x234 & 0x80","SetState","confirmed"],
+["exit_06","jump","0x14142A3D0 -> 0x14142AA45","never","-","confirmed"],
+["exit_07","run","0x14142CE00 -> 0x14142D180","never","-","confirmed"],
+["exit_08","swim","Tick","in water && Attack+0x234 & 0x80 && +0x143 == 0","PushState(102) + DoChain","confirmed"],
+["exit_09","recoil","slot 129 0x141331AF0","state+0x264 bit 0","REFLECT (66) or guard-hit entry + DoChain","confirmed"]
+]}

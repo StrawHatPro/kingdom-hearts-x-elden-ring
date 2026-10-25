@@ -1,0 +1,9 @@
+{"sheet":"sora-combat-hit-blocks","group":"port","columns":["id","source","storage","set_by","tested_in","effect","ref_addr","ref_conf"],"rows":[
+["block_01","reaction type of the hit shape","pawn+0x619 / MyBodyColl; arrives as info+0x60","state code via FUN_1405B8B00 (no clip notify exists for Sora)","TakeDamage 0x1405BB850","3..6 no damage; 3/4/5 guard handlers; 1 no reaction","0x1405BB850","inferred"],
+["block_02","IsNoDamage","pawn+0x15B4 == 0x0B; pawn+0x630 bit 4; pawn+0x638 > 0; pawn+0x518 bit 0; cinematic state; game flag","script flags; pawn+0x638 = 1.0 by the auto-revive","TakeDamage (pawn vt+0x2080 0x141435AC0 / 0x1405AD200)","no HP loss, reaction still happens","0x141435AC0","confirmed"],
+["block_03","IsNoReaction","pawn+0x630 bit 3; pawn+0x518 bit 0; cinematic; game flag","script flags","TakeDamage (pawn vt+0x2070 0x1405AD1A0)","HP loss, no reaction","0x1405AD1A0","confirmed"],
+["block_04","IsInvincible","pawn+0xE44 > 0; pawn+0x630 bit 2; pawn+0x634 bit 2; pawn+0x518 bit 0; cinematic; game flag","pawn vt+0x1E48 from link states, ShootFlow, StyleFinish only","pawn vt+0x2060 0x141435A90 / 0x1405AD120 (callers not read)",null,"0x141435A90","confirmed"],
+["block_05","reaction block after a command","controller+0x8F4 (0.1 s)","command execution 0x14141B470 and others","reaction gate 0x141439A50","no reaction, damage applies","0x141439A50","confirmed"],
+["block_06","command lock","pawn+0xE60 bit 17","script / volumes","reaction gate","no reaction, damage applies","0x141439A50","confirmed"],
+["block_07","no-flinch states","iface slot 195 0x141436AA0: JUMP with Jump+0xF8 != 0, states 21..25, 138; attack kinds 0x36..0x39","-","reaction gate, kinds 0, 1, 5, 6, 9, >= 11 only","no reaction, damage applies","0x141436AA0","confirmed"]
+]}

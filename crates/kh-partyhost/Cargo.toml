@@ -1,0 +1,23 @@
+[package]
+name = "kh-partyhost"
+description = "The engine-free party host (Donald, Goofy, AI Sora) that the Bevy test level and the Elden Ring mod both drive: the party runtime (spawn / remove, the test loadout, levels from the shared EXP, the step order, Sora's heals, the HUD and camp-menu feeds, edits, AI settings, words), leader routing and AI Sora, the party poser (anim-set rows, grid samples, sockets, look-at, face rows, Bonamik, KineDriver). No Bevy, no files, no clocks. build/sora_tmp/er/party/ER_PARTY_PLAN.md stream S0; contract docs/party-contracts.md section ER."
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+kh-gendata = { path = "../kh-gendata" }
+glam = { workspace = true }
+kh-core = { path = "../kh-core" }
+kh-party = { path = "../kh-party" }
+kh-ai = { path = "../kh-ai" }
+kh-host = { path = "../kh-host" }
+kh-anim = { path = "../kh-anim" }
+kh-camera = { path = "../kh-camera" }
+# (ER party S6) the prize getters' types (progression.rs: the P2 prize rules shared by both hosts)
+kh-prize = { path = "../kh-prize" }
+# The poser's anim-set rows / sockets (the pack's manifest JSON, read by the host) and the party-test sheet rows.
+serde_json = "1"
+
+# (DON-UI) the offline frame test / tool of Donald's HUD (tests/don_hud_frames.rs, examples/don_hud.rs) draws the HUD movies
+[dev-dependencies]
+kh-ui = { path = "../kh-ui" }

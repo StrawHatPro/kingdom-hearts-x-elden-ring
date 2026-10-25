@@ -1,0 +1,15 @@
+{"sheet":"sora-combat-controller-order","group":"port","columns":["id","order","call","slot_or_addr","conf"],"rows":[
+["order_01",1,"lock-on (RB)","ctrl slot 712 0x1413F0700","confirmed"],
+["order_02",2,"aim (RB) / target change (RT) when player controlled","slots 800, 713","confirmed"],
+["order_03",3,"target search; current target","slots 714 0x141404E50, 717, 721, 722","confirmed"],
+["order_04",4,"restricted mode branch (ctrl+0xA10)","0x1413F2495","confirmed"],
+["order_05",5,"direct attack (link / attraction only)","0x1413F257D","confirmed"],
+["order_06",6,"slots 829, 841, 900","0x14141C4F0, 0x1413F9990, 0x1413FCC10","confirmed"],
+["order_07",7,"LB / lock / HUD masks on guard, triangle, jump presses","0x1413F25C5..0x1413F26C0","confirmed"],
+["order_08",8,"situation command (triangle)","ctrl slot 674 0x141404460","confirmed"],
+["order_09",9,"guard press: TryFlow, TryAirSlide, TryDodge | TryGuard","iface +0x240, +0x228, +0x1D0 | +0x1B8","confirmed"],
+["order_10",10,"jump press: TryRiskDodge, TryAttack(target, 1) launch, JumpRequest","iface +0x1E8, +0x168 (0x1413F27F5), +0x150","confirmed"],
+["order_11",11,"jump held: TryGlide, JumpHeld","iface +0x218, +0x158","confirmed"],
+["order_12",12,"stick: MoveInput, TryRun","iface +0x118, +0x140","confirmed"],
+["order_13",13,"(UI tick) attack / magic / item decide","0x1416220D0 -> ctrl slots 682, 680, 678","confirmed"]
+]}

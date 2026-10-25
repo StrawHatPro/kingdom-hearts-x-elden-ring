@@ -1,0 +1,10 @@
+[package]
+name = "kh-look"
+description = "The engine-free half of Sora's character look, shared by the Bevy test app (kh-app) and the Elden Ring renderer (kh-er-render): the uniform expressions of the material constant buffers, the parameter collections and KHS presets, the bone -> parameter table, the light rig and reflection environment, and the WGSL harness text both hosts splice the translated game shaders into. No Bevy, no GPU API."
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+kh-anim = { path = "../kh-anim" }
+glam = { workspace = true }
+serde_json = "1"

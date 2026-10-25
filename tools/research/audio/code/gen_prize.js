@@ -1,0 +1,8 @@
+// Prize blueprints: CDO m_SoundGet / m_SoundBound resolved. Writes prize_sounds.json
+const L=require('./lib');const fs=require('fs'),path=require('path');const dir=path.join(L.PK,'Blueprints/Prize');const out=[];
+for(const f of fs.readdirSync(dir)){if(!f.endsWith('.uasset.json'))continue;const n=f.replace('.uasset.json','');const pkg=L.loadPkg('Blueprints/Prize/'+n);const cdo=pkg.exports.find(e=>/^Default__/.test(e.objectName));if(!cdo)continue;const p=L.exportProps(pkg,cdo)||{};
+ const bp=pkg.exports.find(e=>e.class==='BlueprintGeneratedClass');const sup=bp?L.ref(pkg,bp.superIndex!==undefined?bp.superIndex:null):null;
+ const row={prize:n,parent:(cdo.class||''),native_super:sup};for(const k of ['m_SoundGet','m_SoundBound']){const a=p[k]?String(p[k]).replace(/\..*$/,''):null;const s=a?L.soundInfo(a):null;row[k]=a;row[k+'_bank']=s&&s.reference_bank;row[k+'_index']=s&&s.sound_index;row[k+'_bank_file']=s&&s.bank_file;row[k+'_volume']=s&&s.volume;row[k+'_atten']=s&&s.attenuation;row[k+'_dur']=s&&s.duration;}
+ row.other_sound_props=Object.keys(p).filter(k=>/Sound|SE|Voice/.test(k)&&!/m_SoundGet|m_SoundBound/.test(k)).map(k=>k+'='+p[k]);row.imports_sound=pkg.imports.filter(i=>/SQEXSEADSound$|SoundBase/.test(i.className)).map(i=>i.objectName);out.push(row);}
+fs.writeFileSync(path.join(__dirname,'prize_sounds.json'),JSON.stringify(out,null,1));
+for(const r of out)console.log([r.prize,r.native_super,(r.m_SoundGet||'-').split('/').pop()+'#'+r.m_SoundGet_index,(r.m_SoundBound||'-').split('/').pop()+'#'+r.m_SoundBound_index,r.m_SoundGet_atten&&r.m_SoundGet_atten.split('/').pop(),r.imports_sound.join(',')].join(' | '));

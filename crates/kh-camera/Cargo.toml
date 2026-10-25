@@ -1,0 +1,13 @@
+[package]
+name = "kh-camera"
+description = "Kingdom Hearts III's field camera (TresCameraNormal, FUN_1406033C0), engine-free: glam and std only. docs/sora-camera-spec.md."
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[dependencies]
+# (PACKGEN) the generated tables made from KH3 data, read at run time (release builds)
+kh-gendata = { path = "../kh-gendata" }
+glam = { workspace = true }
+# For the `World` trait (sphere sweeps are capsule sweeps whose half height is the radius).
+kh-core = { path = "../kh-core" }

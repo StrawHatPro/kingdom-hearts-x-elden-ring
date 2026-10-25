@@ -1,0 +1,1529 @@
+{
+ "about": "the owner ids of the party effect table (tools/packgen_recipe.js shaders): KH_KEEP_OWNER_IDS of tools/sora_vfx_shaders.js",
+ "owners": {
+  "o_ex162_mat": {
+   "id": 0,
+   "asset": "/Game/Character/obj/o_ex162/mdl/mat0/o_ex162_mat"
+  },
+  "o_ex213_mat0": {
+   "id": 1,
+   "asset": "/Game/Character/obj/o_ex213/mdl/mat0/o_ex213_mat0"
+  },
+  "gmt_mesh_sub_mfsa": {
+   "id": 2,
+   "asset": "/Game/Effects/NPC/n_bx202/mat/gmt_mesh_sub_mfsa"
+  },
+  "gmt_spk_00k": {
+   "id": 3,
+   "asset": "/Game/Effects/NPC/n_bx202/mat/gmt_spk_00k"
+  },
+  "ymt_mtr_lit_00o": {
+   "id": 4,
+   "asset": "/Game/Effects/NPC/n_ex001/mat/ymt_mtr_lit_00o"
+  },
+  "mmt_key_ora_00sa": {
+   "id": 5,
+   "asset": "/Game/Effects/NPC/n_ex009/mat/mmt_key_ora_00sa"
+  },
+  "smt_att_ksk_00k": {
+   "id": 6,
+   "asset": "/Game/Effects/PC/Attraction/Attraction_com/mat/smt_att_ksk_00k"
+  },
+  "smt_sho_uv_0k": {
+   "id": 7,
+   "asset": "/Game/Effects/PC/Attraction/Attraction_com/mat/smt_sho_uv_0k"
+  },
+  "sdc_prs_00a": {
+   "id": 8,
+   "asset": "/Game/Effects/PC/Attraction/PirateShip/mat/sdc_prs_00a"
+  },
+  "imt_rng_gry00sa": {
+   "id": 9,
+   "asset": "/Game/Effects/PC/Free_f/mat/imt_rng_gry00sa"
+  },
+  "imi_glw_01msk": {
+   "id": 10,
+   "asset": "/Game/Effects/PC/VerticalDrop/mat/imi_glw_01msk"
+  },
+  "imt_thd_01sa": {
+   "id": 11,
+   "asset": "/Game/Effects/PC/VerticalDrop/mat/imt_thd_01sa"
+  },
+  "xmt_awa_00k": {
+   "id": 12,
+   "asset": "/Game/Effects/PC/sea/sea_com/mat/xmt_awa_00k"
+  },
+  "xmt_dis_01k": {
+   "id": 13,
+   "asset": "/Game/Effects/PC/sea/sea_com/mat/xmt_dis_01k"
+  },
+  "xmt_ksk_00fsla": {
+   "id": 14,
+   "asset": "/Game/Effects/PC/sea/sea_com/mat/xmt_ksk_00fsla"
+  },
+  "xmt_sib_00k": {
+   "id": 15,
+   "asset": "/Game/Effects/PC/sea/sea_com/mat/xmt_sib_00k"
+  },
+  "smt_wbl_ice_lit_00o": {
+   "id": 16,
+   "asset": "/Game/Effects/PC/sea/water_magic/mat/smt_wbl_ice_lit_00o"
+  },
+  "smt_wbl_miz_00a": {
+   "id": 17,
+   "asset": "/Game/Effects/PC/sea/water_magic/mat/smt_wbl_miz_00a"
+  },
+  "smt_wbl_sho_00a": {
+   "id": 18,
+   "asset": "/Game/Effects/PC/sea/water_magic/mat/smt_wbl_sho_00a"
+  },
+  "tmt_wat_00a": {
+   "id": 19,
+   "asset": "/Game/Effects/PC/sea/water_magic/mat/tmt_wat_00a"
+  },
+  "tmt_wat_01a": {
+   "id": 20,
+   "asset": "/Game/Effects/PC/sea/water_magic/mat/tmt_wat_01a"
+  },
+  "smi_aqu_rng_c0sk": {
+   "id": 21,
+   "asset": "/Game/Effects/PC_aqua/mat/smi_aqu_rng_c0sk"
+  },
+  "smt_aqu_syl_dom_03a": {
+   "id": 22,
+   "asset": "/Game/Effects/PC_aqua/mat/smt_aqu_syl_dom_03a"
+  },
+  "smt_aqu_syl_dom_06k": {
+   "id": 23,
+   "asset": "/Game/Effects/PC_aqua/mat/smt_aqu_syl_dom_06k"
+  },
+  "smt_aqu_syl_dom_07a": {
+   "id": 24,
+   "asset": "/Game/Effects/PC_aqua/mat/smt_aqu_syl_dom_07a"
+  },
+  "smt_aqu_syl_loc_00k": {
+   "id": 25,
+   "asset": "/Game/Effects/PC_aqua/mat/smt_aqu_syl_loc_00k"
+  },
+  "smt_aqu_syl_rng_00k": {
+   "id": 26,
+   "asset": "/Game/Effects/PC_aqua/mat/smt_aqu_syl_rng_00k"
+  },
+  "fmt_oce_00fsa": {
+   "id": 27,
+   "asset": "/Game/Effects/d_magic/ariel/mat/fmt_oce_00fsa"
+  },
+  "fmt_rpl_bse_00r1a": {
+   "id": 28,
+   "asset": "/Game/Effects/d_magic/ariel/mat/fmt_rpl_bse_00r1a"
+  },
+  "fmt_wtr_ygm_lit_00a": {
+   "id": 29,
+   "asset": "/Game/Effects/d_magic/ariel/mat/fmt_wtr_ygm_lit_00a"
+  },
+  "omt_uvpxl_msk": {
+   "id": 30,
+   "asset": "/Game/Effects/d_magic/d_com/mat/omt_uvpxl_msk"
+  },
+  "fmi_gpu_sub_csk": {
+   "id": 31,
+   "asset": "/Game/Effects/d_magic/ralph/mat/fmi_gpu_sub_csk"
+  },
+  "odc_jmp_zmn0": {
+   "id": 32,
+   "asset": "/Game/Effects/d_magic/simba/mat/odc_jmp_zmn0"
+  },
+  "omt_smk_brk_00a": {
+   "id": 33,
+   "asset": "/Game/Effects/d_magic/simba/mat/omt_smk_brk_00a"
+  },
+  "hmt_wat_lit_00a": {
+   "id": 34,
+   "asset": "/Game/Effects/dlc02/level/rg/rg_01/mat/hmt_wat_lit_00a"
+  },
+  "tdc_hol_00a": {
+   "id": 35,
+   "asset": "/Game/Effects/enemy/e_dw401/mat/tdc_hol_00a"
+  },
+  "tmt_lensflare_00k": {
+   "id": 36,
+   "asset": "/Game/Effects/enemy/e_dw401/mat/tmt_lensflare_00k"
+  },
+  "kmt_til_1a": {
+   "id": 37,
+   "asset": "/Game/Effects/enemy/e_ex004/mat/kmt_til_1a"
+  },
+  "kmt_wat_plr_00k": {
+   "id": 38,
+   "asset": "/Game/Effects/enemy/e_ex004/mat/kmt_wat_plr_00k"
+  },
+  "nmt_cad_lit_00o": {
+   "id": 39,
+   "asset": "/Game/Effects/enemy/e_ex110/mat/nmt_cad_lit_00o"
+  },
+  "mmt_ora_00sa": {
+   "id": 40,
+   "asset": "/Game/Effects/enemy/e_ex201/mat/mmt_ora_00sa"
+  },
+  "smt_e_ex305_wrp_00a": {
+   "id": 41,
+   "asset": "/Game/Effects/enemy/e_ex305/mat/smt_e_ex305_wrp_00a"
+  },
+  "kmt_gpu_sub_nmsa": {
+   "id": 42,
+   "asset": "/Game/Effects/enemy/e_ex325/mat/kmt_gpu_sub_nmsa"
+  },
+  "ndc_dpn_yam_00a": {
+   "id": 43,
+   "asset": "/Game/Effects/enemy/e_ex407/mat/ndc_dpn_yam_00a"
+  },
+  "omt_bbb_00a": {
+   "id": 44,
+   "asset": "/Game/Effects/enemy/e_ex761/mat/omt_bbb_00a"
+  },
+  "gmt_snw_lit_00o": {
+   "id": 45,
+   "asset": "/Game/Effects/enemy/e_fz903/mat/gmt_snw_lit_00o"
+  },
+  "gmt_snw_smk00a": {
+   "id": 46,
+   "asset": "/Game/Effects/enemy/e_fz903/mat/gmt_snw_smk00a"
+  },
+  "kmt_tir_00a": {
+   "id": 47,
+   "asset": "/Game/Effects/enemy/enemy_com/mat/kmt_tir_00a"
+  },
+  "hmt_miz_awa_00k": {
+   "id": 48,
+   "asset": "/Game/Effects/level/ca/ca_02/mat/hmt_miz_awa_00k"
+  },
+  "hmt_wat_lit_00a@49": {
+   "id": 49,
+   "asset": "/Game/Effects/level/ca/cacom/ship/mat/hmt_wat_lit_00a"
+  },
+  "fmt_elc_bse_04a": {
+   "id": 50,
+   "asset": "/Game/Effects/level/ew/ew_01/mat/fmt_elc_bse_04a"
+  },
+  "fmt_wat_wal_02a": {
+   "id": 51,
+   "asset": "/Game/Effects/level/ew/ew_01/mat/fmt_wat_wal_02a"
+  },
+  "hmt_sbk_lit_80k": {
+   "id": 52,
+   "asset": "/Game/Effects/level/ex/mat/hmt_sbk_lit_80k"
+  },
+  "hmt_wat_lit_12a": {
+   "id": 53,
+   "asset": "/Game/Effects/level/ex/mat/hmt_wat_lit_12a"
+  },
+  "mdc_uzu_00a": {
+   "id": 54,
+   "asset": "/Game/Effects/level/ex/mat/mdc_uzu_00a"
+  },
+  "mmt_lin_00k": {
+   "id": 55,
+   "asset": "/Game/Effects/level/ex/mat/mmt_lin_00k"
+  },
+  "mmt_noi_00_fslk": {
+   "id": 56,
+   "asset": "/Game/Effects/level/ex/mat/mmt_noi_00_fslk"
+  },
+  "mmt_sho_00sla": {
+   "id": 57,
+   "asset": "/Game/Effects/level/ex/mat/mmt_sho_00sla"
+  },
+  "mmt_sho_01_fslk": {
+   "id": 58,
+   "asset": "/Game/Effects/level/ex/mat/mmt_sho_01_fslk"
+  },
+  "emt_gpu_sub_qmsa": {
+   "id": 59,
+   "asset": "/Game/Effects/level/ex/mat_s/emt_gpu_sub_qmsa"
+  },
+  "imt_dis_00k": {
+   "id": 60,
+   "asset": "/Game/Effects/level/he/he_03/mat/imt_dis_00k"
+  },
+  "imt_wat_00k": {
+   "id": 61,
+   "asset": "/Game/Effects/level/he/he_03/mat/imt_wat_00k"
+  },
+  "hmt_opqlit_ac_dith_mf_00o": {
+   "id": 62,
+   "asset": "/Game/Effects/level/he/hecom/mat/hmt_opqlit_ac_dith_mf_00o"
+  },
+  "omt_wat_sub_00k": {
+   "id": 63,
+   "asset": "/Game/Effects/level/he/hecom/mat/omt_wat_sub_00k"
+  },
+  "fmt_hole_00k": {
+   "id": 64,
+   "asset": "/Game/Effects/level/tt/tt_40/task/mat/fmt_hole_00k"
+  },
+  "tmi_tor_01fsa": {
+   "id": 65,
+   "asset": "/Game/Effects/magic/air/mat/tmi_tor_01fsa"
+  },
+  "tmt_air_smk_00a": {
+   "id": 66,
+   "asset": "/Game/Effects/magic/air/mat/tmt_air_smk_00a"
+  },
+  "tmt_air_smk_bg_00a": {
+   "id": 67,
+   "asset": "/Game/Effects/magic/air/mat/tmt_air_smk_bg_00a"
+  },
+  "tmt_dis_00a": {
+   "id": 68,
+   "asset": "/Game/Effects/magic/air/mat/tmt_dis_00a"
+  },
+  "tmt_dis_01a": {
+   "id": 69,
+   "asset": "/Game/Effects/magic/air/mat/tmt_dis_01a"
+  },
+  "tmt_flow_wind_00k": {
+   "id": 70,
+   "asset": "/Game/Effects/magic/air/mat/tmt_flow_wind_00k"
+  },
+  "tmt_roc_lit_00o": {
+   "id": 71,
+   "asset": "/Game/Effects/magic/air/mat/tmt_roc_lit_00o"
+  },
+  "tmt_tor_00fsa": {
+   "id": 72,
+   "asset": "/Game/Effects/magic/air/mat/tmt_tor_00fsa"
+  },
+  "tmt_tor_mix00fsa": {
+   "id": 73,
+   "asset": "/Game/Effects/magic/air/mat/tmt_tor_mix00fsa"
+  },
+  "sdc_blz_00a": {
+   "id": 74,
+   "asset": "/Game/Effects/magic/bliz/mat/sdc_blz_00a"
+  },
+  "smt_blz_blt_lit_00o": {
+   "id": 75,
+   "asset": "/Game/Effects/magic/bliz/mat/smt_blz_blt_lit_00o"
+  },
+  "smt_blz_gan_00a": {
+   "id": 76,
+   "asset": "/Game/Effects/magic/bliz/mat/smt_blz_gan_00a"
+  },
+  "smt_blz_han_00k": {
+   "id": 77,
+   "asset": "/Game/Effects/magic/bliz/mat/smt_blz_han_00k"
+  },
+  "smt_blz_hit_00frsk": {
+   "id": 78,
+   "asset": "/Game/Effects/magic/bliz/mat/smt_blz_hit_00frsk"
+  },
+  "smt_blz_ice_lit_05o": {
+   "id": 79,
+   "asset": "/Game/Effects/magic/bliz/mat/smt_blz_ice_lit_05o"
+  },
+  "smt_blz_ksk_00k": {
+   "id": 80,
+   "asset": "/Game/Effects/magic/bliz/mat/smt_blz_ksk_00k"
+  },
+  "smt_blz_rng_00k": {
+   "id": 81,
+   "asset": "/Game/Effects/magic/bliz/mat/smt_blz_rng_00k"
+  },
+  "smt_blz_rng_lit_00o": {
+   "id": 82,
+   "asset": "/Game/Effects/magic/bliz/mat/smt_blz_rng_lit_00o"
+  },
+  "smt_blz_smk_00k": {
+   "id": 83,
+   "asset": "/Game/Effects/magic/bliz/mat/smt_blz_smk_00k"
+  },
+  "smt_blz_smk_f00k": {
+   "id": 84,
+   "asset": "/Game/Effects/magic/bliz/mat/smt_blz_smk_f00k"
+  },
+  "smt_mdl_smk_00k": {
+   "id": 85,
+   "asset": "/Game/Effects/magic/bliz/mat/smt_mdl_smk_00k"
+  },
+  "smt_multi_par_00k": {
+   "id": 86,
+   "asset": "/Game/Effects/magic/bliz/mat/smt_multi_par_00k"
+  },
+  "kmt_clv_00o": {
+   "id": 87,
+   "asset": "/Game/Effects/magic/cure/mat/kmt_clv_00o"
+  },
+  "kmt_flw_01o": {
+   "id": 88,
+   "asset": "/Game/Effects/magic/cure/mat/kmt_flw_01o"
+  },
+  "kmt_ftb_01o": {
+   "id": 89,
+   "asset": "/Game/Effects/magic/cure/mat/kmt_ftb_01o"
+  },
+  "tdc_fij_zmn_00a": {
+   "id": 90,
+   "asset": "/Game/Effects/magic/fire/mat/tdc_fij_zmn_00a"
+  },
+  "tdc_fir_wht_00a": {
+   "id": 91,
+   "asset": "/Game/Effects/magic/fire/mat/tdc_fir_wht_00a"
+  },
+  "tdc_fir_zmn_00a": {
+   "id": 92,
+   "asset": "/Game/Effects/magic/fire/mat/tdc_fir_zmn_00a"
+  },
+  "tmt_brk2_ma": {
+   "id": 93,
+   "asset": "/Game/Effects/magic/fire/mat/tmt_brk2_ma"
+  },
+  "tmt_dis_01a@94": {
+   "id": 94,
+   "asset": "/Game/Effects/magic/fire/mat/tmt_dis_01a"
+  },
+  "tmt_fir_msk_00sa": {
+   "id": 95,
+   "asset": "/Game/Effects/magic/fire/mat/tmt_fir_msk_00sa"
+  },
+  "tmt_smk_brk_00a": {
+   "id": 96,
+   "asset": "/Game/Effects/magic/fire/mat/tmt_smk_brk_00a"
+  },
+  "tmt_sub_cnsa": {
+   "id": 97,
+   "asset": "/Game/Effects/magic/fire/mat/tmt_sub_cnsa"
+  },
+  "tmt_sub_msa": {
+   "id": 98,
+   "asset": "/Game/Effects/magic/fire/mat/tmt_sub_msa"
+  },
+  "odc_thd3_00k": {
+   "id": 99,
+   "asset": "/Game/Effects/magic/thd/mat/odc_thd3_00k"
+  },
+  "odc_thd_base_00a": {
+   "id": 100,
+   "asset": "/Game/Effects/magic/thd/mat/odc_thd_base_00a"
+  },
+  "odc_thd_zmn1k": {
+   "id": 101,
+   "asset": "/Game/Effects/magic/thd/mat/odc_thd_zmn1k"
+  },
+  "omt_fade_brk_00msa": {
+   "id": 102,
+   "asset": "/Game/Effects/magic/thd/mat/omt_fade_brk_00msa"
+  },
+  "omt_thd_wld_00sk": {
+   "id": 103,
+   "asset": "/Game/Effects/magic/thd/mat/omt_thd_wld_00sk"
+  },
+  "kdc_wat_zmn_00a": {
+   "id": 104,
+   "asset": "/Game/Effects/magic/water/mat/kdc_wat_zmn_00a"
+  },
+  "kmt_rain_00sk": {
+   "id": 105,
+   "asset": "/Game/Effects/magic/water/mat/kmt_rain_00sk"
+  },
+  "kmt_wat_01a": {
+   "id": 106,
+   "asset": "/Game/Effects/magic/water/mat/kmt_wat_01a"
+  },
+  "kmt_wat_dom0a": {
+   "id": 107,
+   "asset": "/Game/Effects/magic/water/mat/kmt_wat_dom0a"
+  },
+  "kdc_wat_01a": {
+   "id": 108,
+   "asset": "/Game/Effects/magic/water/mat/mat_master/kdc_wat_01a"
+  },
+  "smt_dis_ora_01a": {
+   "id": 109,
+   "asset": "/Game/Effects/system/Hit/mat/smt_dis_ora_01a"
+  },
+  "kmt_sublit_ma": {
+   "id": 110,
+   "asset": "/Game/Effects/system/abnormal/cloud/mat/kmt_sublit_ma"
+  },
+  "gmt_esn_hex_00k": {
+   "id": 111,
+   "asset": "/Game/Effects/system/abnormal/esn/mat/gmt_esn_hex_00k"
+  },
+  "smi_flz_smk0k": {
+   "id": 112,
+   "asset": "/Game/Effects/system/abnormal/frz/mat/smi_flz_smk0k"
+  },
+  "smt_flz_ice_dst_diz_lit_00o": {
+   "id": 113,
+   "asset": "/Game/Effects/system/abnormal/frz/mat/smt_flz_ice_dst_diz_lit_00o"
+  },
+  "zmt_sor_bac_dom_00a": {
+   "id": 114,
+   "asset": "/Game/Effects/system/guard/mat/zmt_sor_bac_dom_00a"
+  },
+  "zmt_sor_ref_dom_00a": {
+   "id": 115,
+   "asset": "/Game/Effects/system/guard/mat/zmt_sor_ref_dom_00a"
+  },
+  "smt_spd_til01k": {
+   "id": 116,
+   "asset": "/Game/Effects/system/move/mat/smt_spd_til01k"
+  },
+  "omt_prz_hpb_lit_00o": {
+   "id": 117,
+   "asset": "/Game/Effects/system/prize/mat/omt_prz_hpb_lit_00o"
+  },
+  "omt_prz_mpb_lit_00o": {
+   "id": 118,
+   "asset": "/Game/Effects/system/prize/mat/omt_prz_mpb_lit_00o"
+  },
+  "gmt_sho_00sk": {
+   "id": 119,
+   "asset": "/Game/Effects/system/system_com/mat/gmt_sho_00sk"
+  },
+  "kmt_hrt_00o": {
+   "id": 120,
+   "asset": "/Game/Effects/system/system_com/mat/kmt_hrt_00o"
+  },
+  "smt_bscw_00msa": {
+   "id": 121,
+   "asset": "/Game/Effects/system/system_com/mat/smt_bscw_00msa"
+  },
+  "jdc_brg_ma": {
+   "id": 122,
+   "asset": "/Game/Effects/texcom/mat_master/jdc_brg_ma"
+  },
+  "jdc_brg_mk": {
+   "id": 123,
+   "asset": "/Game/Effects/texcom/mat_master/jdc_brg_mk"
+  },
+  "jdc_bsc_ma": {
+   "id": 124,
+   "asset": "/Game/Effects/texcom/mat_master/jdc_bsc_ma"
+  },
+  "jdc_bsc_mk": {
+   "id": 125,
+   "asset": "/Game/Effects/texcom/mat_master/jdc_bsc_mk"
+  },
+  "jdc_uv_ma": {
+   "id": 126,
+   "asset": "/Game/Effects/texcom/mat_master/jdc_uv_ma"
+  },
+  "jdc_uv_sc_ma": {
+   "id": 127,
+   "asset": "/Game/Effects/texcom/mat_master/jdc_uv_sc_ma"
+  },
+  "jmb_2fresrnel_fsa": {
+   "id": 128,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_2fresrnel_fsa"
+  },
+  "jmb_2fresrnel_fsk": {
+   "id": 129,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_2fresrnel_fsk"
+  },
+  "jmb_2layer_mk": {
+   "id": 130,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_2layer_mk"
+  },
+  "jmb_2layer_msk": {
+   "id": 131,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_2layer_msk"
+  },
+  "jmb_blur_en_sa": {
+   "id": 132,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_blur_en_sa"
+  },
+  "jmb_brk_ca": {
+   "id": 133,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_brk_ca"
+  },
+  "jmb_brk_csa": {
+   "id": 134,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_brk_csa"
+  },
+  "jmb_brk_csk": {
+   "id": 135,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_brk_csk"
+  },
+  "jmb_brk_ma": {
+   "id": 136,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_brk_ma"
+  },
+  "jmb_brk_mfsa": {
+   "id": 137,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_brk_mfsa"
+  },
+  "jmb_brk_msa": {
+   "id": 138,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_brk_msa"
+  },
+  "jmb_brk_msk": {
+   "id": 139,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_brk_msk"
+  },
+  "jmb_brke_ma": {
+   "id": 140,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_brke_ma"
+  },
+  "jmb_bsc_ca": {
+   "id": 141,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_bsc_ca"
+  },
+  "jmb_bsc_ck": {
+   "id": 142,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_bsc_ck"
+  },
+  "jmb_bsc_csa": {
+   "id": 143,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_bsc_csa"
+  },
+  "jmb_bsc_csk": {
+   "id": 144,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_bsc_csk"
+  },
+  "jmb_bsc_ma": {
+   "id": 145,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_bsc_ma"
+  },
+  "jmb_bsc_mk": {
+   "id": 146,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_bsc_mk"
+  },
+  "jmb_bsc_msa": {
+   "id": 147,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_bsc_msa"
+  },
+  "jmb_bsc_msk": {
+   "id": 148,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_bsc_msk"
+  },
+  "jmb_bscw_mk": {
+   "id": 149,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_bscw_mk"
+  },
+  "jmb_bscw_msk": {
+   "id": 150,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_bscw_msk"
+  },
+  "jmb_dis_a": {
+   "id": 151,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_dis_a"
+  },
+  "jmb_dis_k": {
+   "id": 152,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_dis_k"
+  },
+  "jmb_dis_rng_k": {
+   "id": 153,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_dis_rng_k"
+  },
+  "jmb_dis_sk": {
+   "id": 154,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_dis_sk"
+  },
+  "jmb_flw_lp_mfsa": {
+   "id": 155,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_flw_lp_mfsa"
+  },
+  "jmb_flw_lp_mfsk": {
+   "id": 156,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_flw_lp_mfsk"
+  },
+  "jmb_frg_m1k": {
+   "id": 157,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_frg_m1k"
+  },
+  "jmb_frg_m1sk": {
+   "id": 158,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_frg_m1sk"
+  },
+  "jmb_frg_m2k": {
+   "id": 159,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_frg_m2k"
+  },
+  "jmb_frg_m2sk": {
+   "id": 160,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_frg_m2sk"
+  },
+  "jmb_glt_mix_ma": {
+   "id": 161,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_glt_mix_ma"
+  },
+  "jmb_glt_mix_mk": {
+   "id": 162,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_glt_mix_mk"
+  },
+  "jmb_glt_mix_msa": {
+   "id": 163,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_glt_mix_msa"
+  },
+  "jmb_glt_mix_msk": {
+   "id": 164,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_glt_mix_msk"
+  },
+  "jmb_gpu_sub_ma": {
+   "id": 165,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_gpu_sub_ma"
+  },
+  "jmb_gpu_sub_mk": {
+   "id": 166,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_gpu_sub_mk"
+  },
+  "jmb_gpu_sub_msa": {
+   "id": 167,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_gpu_sub_msa"
+  },
+  "jmb_gpu_sub_num_change_ma": {
+   "id": 168,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_gpu_sub_num_change_ma"
+  },
+  "jmb_gpu_sub_num_change_mk": {
+   "id": 169,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_gpu_sub_num_change_mk"
+  },
+  "jmb_mcrs_sa": {
+   "id": 170,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_mcrs_sa"
+  },
+  "jmb_mesh_sub_mfnsa": {
+   "id": 171,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_mesh_sub_mfnsa"
+  },
+  "jmb_opq_dith": {
+   "id": 172,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_opq_dith"
+  },
+  "jmb_opqlit_dith_mf": {
+   "id": 173,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_opqlit_dith_mf"
+  },
+  "jmb_opqlit_m": {
+   "id": 174,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_opqlit_m"
+  },
+  "jmb_ring_msa": {
+   "id": 175,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_ring_msa"
+  },
+  "jmb_ring_msk": {
+   "id": 176,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_ring_msk"
+  },
+  "jmb_smk_imp_00sa": {
+   "id": 177,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_smk_imp_00sa"
+  },
+  "jmb_sub_ca": {
+   "id": 178,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_sub_ca"
+  },
+  "jmb_sub_csa": {
+   "id": 179,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_sub_csa"
+  },
+  "jmb_sub_ma": {
+   "id": 180,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_sub_ma"
+  },
+  "jmb_sub_msa": {
+   "id": 181,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_sub_msa"
+  },
+  "jmb_sublit_ac_msa": {
+   "id": 182,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_sublit_ac_msa"
+  },
+  "jmb_uv_ca": {
+   "id": 183,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_ca"
+  },
+  "jmb_uv_cfa": {
+   "id": 184,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_cfa"
+  },
+  "jmb_uv_ck": {
+   "id": 185,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_ck"
+  },
+  "jmb_uv_cla": {
+   "id": 186,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_cla"
+  },
+  "jmb_uv_csa": {
+   "id": 187,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_csa"
+  },
+  "jmb_uv_csk": {
+   "id": 188,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_csk"
+  },
+  "jmb_uv_csla": {
+   "id": 189,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_csla"
+  },
+  "jmb_uv_cslk": {
+   "id": 190,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_cslk"
+  },
+  "jmb_uv_ma": {
+   "id": 191,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_ma"
+  },
+  "jmb_uv_mfa": {
+   "id": 192,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_mfa"
+  },
+  "jmb_uv_mfk": {
+   "id": 193,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_mfk"
+  },
+  "jmb_uv_mfla": {
+   "id": 194,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_mfla"
+  },
+  "jmb_uv_mfsa": {
+   "id": 195,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_mfsa"
+  },
+  "jmb_uv_mfsk": {
+   "id": 196,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_mfsk"
+  },
+  "jmb_uv_mfsla": {
+   "id": 197,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_mfsla"
+  },
+  "jmb_uv_mfslk": {
+   "id": 198,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_mfslk"
+  },
+  "jmb_uv_mk": {
+   "id": 199,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_mk"
+  },
+  "jmb_uv_mla": {
+   "id": 200,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_mla"
+  },
+  "jmb_uv_msa": {
+   "id": 201,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_msa"
+  },
+  "jmb_uv_msk": {
+   "id": 202,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_msk"
+  },
+  "jmb_uv_msk_ma": {
+   "id": 203,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_msk_ma"
+  },
+  "jmb_uv_msk_mfsla": {
+   "id": 204,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_msk_mfsla"
+  },
+  "jmb_uv_msk_mfslk": {
+   "id": 205,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_msk_mfslk"
+  },
+  "jmb_uv_msk_mk": {
+   "id": 206,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_msk_mk"
+  },
+  "jmb_uv_msk_mla": {
+   "id": 207,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_msk_mla"
+  },
+  "jmb_uv_msk_msa": {
+   "id": 208,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_msk_msa"
+  },
+  "jmb_uv_msk_msk": {
+   "id": 209,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_msk_msk"
+  },
+  "jmb_uv_msk_msla": {
+   "id": 210,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_msk_msla"
+  },
+  "jmb_uv_msla": {
+   "id": 211,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_msla"
+  },
+  "jmb_uv_mslk": {
+   "id": 212,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_mslk"
+  },
+  "jmb_uvd_ma": {
+   "id": 213,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uvd_ma"
+  },
+  "jmb_uvd_msa": {
+   "id": 214,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uvd_msa"
+  },
+  "jmb_uvd_msk": {
+   "id": 215,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uvd_msk"
+  },
+  "jmb_wht_a": {
+   "id": 216,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_wht_a"
+  },
+  "jmb_wht_fa": {
+   "id": 217,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_wht_fa"
+  },
+  "jmb_wht_fk": {
+   "id": 218,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_wht_fk"
+  },
+  "jmb_wht_fsa": {
+   "id": 219,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_wht_fsa"
+  },
+  "jmb_wht_k": {
+   "id": 220,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_wht_k"
+  },
+  "jmb_wht_sa": {
+   "id": 221,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_wht_sa"
+  },
+  "jmb_wht_sk": {
+   "id": 222,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_wht_sk"
+  },
+  "jmb_wht_two_a": {
+   "id": 223,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_wht_two_a"
+  },
+  "jmb_wht_two_fa": {
+   "id": 224,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_wht_two_fa"
+  },
+  "jmb_wht_two_fk": {
+   "id": 225,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_wht_two_fk"
+  },
+  "jmb_wht_two_fsa": {
+   "id": 226,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_wht_two_fsa"
+  },
+  "jmb_wht_two_fsk": {
+   "id": 227,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_wht_two_fsk"
+  },
+  "jmb_wht_two_k": {
+   "id": 228,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_wht_two_k"
+  },
+  "jmb_wht_two_sa": {
+   "id": 229,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_wht_two_sa"
+  },
+  "jmb_wht_two_sk": {
+   "id": 230,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_wht_two_sk"
+  },
+  "jmt_chk": {
+   "id": 231,
+   "asset": "/Game/Effects/texcom/mat_mdl/jmt_chk"
+  },
+  "jmt_chk_two": {
+   "id": 232,
+   "asset": "/Game/Effects/texcom/mat_mdl/jmt_chk_two"
+  },
+  "jmt_dst_00o": {
+   "id": 233,
+   "asset": "/Game/Effects/texcom/mat_mdl/jmt_dst_00o"
+  },
+  "jmt_dummy": {
+   "id": 234,
+   "asset": "/Game/Effects/texcom/mat_part/jmt_dummy"
+  },
+  "Smt_hit_00sa": {
+   "id": 235,
+   "asset": "/Game/Effects/trescom/mat/Smt_hit_00sa"
+  },
+  "Smt_hit_00sk": {
+   "id": 236,
+   "asset": "/Game/Effects/trescom/mat/Smt_hit_00sk"
+  },
+  "kdc_brg_mk": {
+   "id": 237,
+   "asset": "/Game/Effects/trescom/mat/kdc_brg_mk"
+  },
+  "kmt_dis_uv_00k": {
+   "id": 238,
+   "asset": "/Game/Effects/trescom/mat/kmt_dis_uv_00k"
+  },
+  "kmt_gpu_sub_co": {
+   "id": 239,
+   "asset": "/Game/Effects/trescom/mat/kmt_gpu_sub_co"
+  },
+  "kmt_gpu_sub_mo": {
+   "id": 240,
+   "asset": "/Game/Effects/trescom/mat/kmt_gpu_sub_mo"
+  },
+  "kmt_mcw_00a": {
+   "id": 241,
+   "asset": "/Game/Effects/trescom/mat/kmt_mcw_00a"
+  },
+  "kmt_sbk_00k": {
+   "id": 242,
+   "asset": "/Game/Effects/trescom/mat/kmt_sbk_00k"
+  },
+  "kmt_smy_01fsa": {
+   "id": 243,
+   "asset": "/Game/Effects/trescom/mat/kmt_smy_01fsa"
+  },
+  "kmt_snd_lit_00o": {
+   "id": 244,
+   "asset": "/Game/Effects/trescom/mat/kmt_snd_lit_00o"
+  },
+  "kmt_stn_lit_00mo": {
+   "id": 245,
+   "asset": "/Game/Effects/trescom/mat/kmt_stn_lit_00mo"
+  },
+  "kmt_stn_lit_co": {
+   "id": 246,
+   "asset": "/Game/Effects/trescom/mat/kmt_stn_lit_co"
+  },
+  "kmt_wat_00k": {
+   "id": 247,
+   "asset": "/Game/Effects/trescom/mat/kmt_wat_00k"
+  },
+  "kmt_wat_sub_0a": {
+   "id": 248,
+   "asset": "/Game/Effects/trescom/mat/kmt_wat_sub_0a"
+  },
+  "kmt_wat_tail_sub_0a": {
+   "id": 249,
+   "asset": "/Game/Effects/trescom/mat/kmt_wat_tail_sub_0a"
+  },
+  "mmt_bal_00sk": {
+   "id": 250,
+   "asset": "/Game/Effects/trescom/mat/mmt_bal_00sk"
+  },
+  "mmt_ora_01sa": {
+   "id": 251,
+   "asset": "/Game/Effects/trescom/mat/mmt_ora_01sa"
+  },
+  "mmt_wpo_thd_00sk": {
+   "id": 252,
+   "asset": "/Game/Effects/trescom/mat/mmt_wpo_thd_00sk"
+  },
+  "nmt_bbl_00a": {
+   "id": 253,
+   "asset": "/Game/Effects/trescom/mat/nmt_bbl_00a"
+  },
+  "nmt_bg_edg_00k": {
+   "id": 254,
+   "asset": "/Game/Effects/trescom/mat/nmt_bg_edg_00k"
+  },
+  "nmt_sho_02sfla": {
+   "id": 255,
+   "asset": "/Game/Effects/trescom/mat/nmt_sho_02sfla"
+  },
+  "nmt_str_00o": {
+   "id": 256,
+   "asset": "/Game/Effects/trescom/mat/nmt_str_00o"
+  },
+  "nmt_uv_eloc_00csk": {
+   "id": 257,
+   "asset": "/Game/Effects/trescom/mat/nmt_uv_eloc_00csk"
+  },
+  "nmt_uv_msk_cslk": {
+   "id": 258,
+   "asset": "/Game/Effects/trescom/mat/nmt_uv_msk_cslk"
+  },
+  "smt_blur_para_01a": {
+   "id": 259,
+   "asset": "/Game/Effects/trescom/mat/smt_blur_para_01a"
+  },
+  "smt_csb_00k": {
+   "id": 260,
+   "asset": "/Game/Effects/trescom/mat/smt_csb_00k"
+  },
+  "smt_csb_01k": {
+   "id": 261,
+   "asset": "/Game/Effects/trescom/mat/smt_csb_01k"
+  },
+  "smt_dis_sho_00sa": {
+   "id": 262,
+   "asset": "/Game/Effects/trescom/mat/smt_dis_sho_00sa"
+  },
+  "smt_gtb_00k": {
+   "id": 263,
+   "asset": "/Game/Effects/trescom/mat/smt_gtb_00k"
+  },
+  "smt_lin_mov_00k": {
+   "id": 264,
+   "asset": "/Game/Effects/trescom/mat/smt_lin_mov_00k"
+  },
+  "smt_lin_mov_01sk": {
+   "id": 265,
+   "asset": "/Game/Effects/trescom/mat/smt_lin_mov_01sk"
+  },
+  "smt_miz_01a": {
+   "id": 266,
+   "asset": "/Game/Effects/trescom/mat/smt_miz_01a"
+  },
+  "smt_miz_awa_00k": {
+   "id": 267,
+   "asset": "/Game/Effects/trescom/mat/smt_miz_awa_00k"
+  },
+  "smt_rng_c0sa": {
+   "id": 268,
+   "asset": "/Game/Effects/trescom/mat/smt_rng_c0sa"
+  },
+  "smt_rng_k0sa": {
+   "id": 269,
+   "asset": "/Game/Effects/trescom/mat/smt_rng_k0sa"
+  },
+  "smt_rng_lin00sa": {
+   "id": 270,
+   "asset": "/Game/Effects/trescom/mat/smt_rng_lin00sa"
+  },
+  "smt_rng_lin00sk": {
+   "id": 271,
+   "asset": "/Game/Effects/trescom/mat/smt_rng_lin00sk"
+  },
+  "smt_thd_lin0sa": {
+   "id": 272,
+   "asset": "/Game/Effects/trescom/mat/smt_thd_lin0sa"
+  },
+  "smt_til_lin_00sa": {
+   "id": 273,
+   "asset": "/Game/Effects/trescom/mat/smt_til_lin_00sa"
+  },
+  "smt_til_lin_01sa": {
+   "id": 274,
+   "asset": "/Game/Effects/trescom/mat/smt_til_lin_01sa"
+  },
+  "smt_uv_msk0msa": {
+   "id": 275,
+   "asset": "/Game/Effects/trescom/mat/smt_uv_msk0msa"
+  },
+  "tmt_crs_2cw_k": {
+   "id": 276,
+   "asset": "/Game/Effects/trescom/mat/tmt_crs_2cw_k"
+  },
+  "tmt_cry_00a": {
+   "id": 277,
+   "asset": "/Game/Effects/trescom/mat/tmt_cry_00a"
+  },
+  "tmt_fresnel_00o": {
+   "id": 278,
+   "asset": "/Game/Effects/trescom/mat/tmt_fresnel_00o"
+  },
+  "tmt_pzm_uv_lit_00o": {
+   "id": 279,
+   "asset": "/Game/Effects/trescom/mat/tmt_pzm_uv_lit_00o"
+  },
+  "tmt_xyz_lit_00o": {
+   "id": 280,
+   "asset": "/Game/Effects/trescom/mat/tmt_xyz_lit_00o"
+  },
+  "ymt_flw_00msa": {
+   "id": 281,
+   "asset": "/Game/Effects/trescom/mat/ymt_flw_00msa"
+  },
+  "zmt_loc_02sk": {
+   "id": 282,
+   "asset": "/Game/Effects/trescom/mat/zmt_loc_02sk"
+  },
+  "kdc_uv_ma": {
+   "id": 283,
+   "asset": "/Game/Effects/trescom/mat_decal/kdc_uv_ma"
+  },
+  "mmi_rng_c01k": {
+   "id": 284,
+   "asset": "/Game/Effects/trescom/mat_mdl/mmi_rng_c01k"
+  },
+  "mmi_rng_c0k": {
+   "id": 285,
+   "asset": "/Game/Effects/trescom/mat_mdl/mmi_rng_c0k"
+  },
+  "nmi_rng_c1k": {
+   "id": 286,
+   "asset": "/Game/Effects/trescom/mat_mdl/nmi_rng_c1k"
+  },
+  "zmi_rng_00sk": {
+   "id": 287,
+   "asset": "/Game/Effects/trescom/mat_mdl/zmi_rng_00sk"
+  },
+  "zmt_sho_00k": {
+   "id": 288,
+   "asset": "/Game/Effects/trescom/mat_mdl/zmt_sho_00k"
+  },
+  "nmi_glt_00k": {
+   "id": 289,
+   "asset": "/Game/Effects/trescom/mat_part/nmi_glt_00k"
+  },
+  "omt_lin_mov_00k": {
+   "id": 290,
+   "asset": "/Game/Effects/trescom/mat_part/omt_lin_mov_00k"
+  },
+  "omt_rng_gry01a": {
+   "id": 291,
+   "asset": "/Game/Effects/trescom/mat_part/omt_rng_gry01a"
+  },
+  "omt_thd_cpu_01_sa": {
+   "id": 292,
+   "asset": "/Game/Effects/trescom/mat_part/omt_thd_cpu_01_sa"
+  },
+  "omt_thd_gpu_00a": {
+   "id": 293,
+   "asset": "/Game/Effects/trescom/mat_part/omt_thd_gpu_00a"
+  },
+  "smi_hit_t0sk": {
+   "id": 294,
+   "asset": "/Game/Effects/trescom/mat_part/smi_hit_t0sk"
+  },
+  "tmt_vat_taper_a": {
+   "id": 295,
+   "asset": "/Game/Effects/trescom/vat/mat/tmt_vat_taper_a"
+  },
+  "gmt_ant_iga_00": {
+   "id": 296,
+   "asset": "/Game/Effects/wep/anti/mat/gmt_ant_iga_00"
+  },
+  "gmt_rsn_uv_00a": {
+   "id": 297,
+   "asset": "/Game/Effects/wep/anti/mat/gmt_rsn_uv_00a"
+  },
+  "mmt_fir_00fsk": {
+   "id": 298,
+   "asset": "/Game/Effects/wep/limit/mat/mmt_fir_00fsk"
+  },
+  "mmt_mzl_loc_00sk": {
+   "id": 299,
+   "asset": "/Game/Effects/wep/limit/mat/mmt_mzl_loc_00sk"
+  },
+  "tmt_mag_00sa": {
+   "id": 300,
+   "asset": "/Game/Effects/wep/limit/mat/tmt_mag_00sa"
+  },
+  "jmt_loc_00sa": {
+   "id": 301,
+   "asset": "/Game/Effects/wep/w_com/mat/jmt_loc_00sa"
+  },
+  "zmt_plc_00sa": {
+   "id": 302,
+   "asset": "/Game/Effects/wep/w_do050/mat/zmt_plc_00sa"
+  },
+  "zmt_d090_spc_00k": {
+   "id": 303,
+   "asset": "/Game/Effects/wep/w_do090/mat/zmt_d090_spc_00k"
+  },
+  "fmt_glw_in01sk": {
+   "id": 304,
+   "asset": "/Game/Effects/wep/w_gu130/mat/fmt_glw_in01sk"
+  },
+  "Smt_frn_01a": {
+   "id": 305,
+   "asset": "/Game/Effects/wep/w_so010/mat/Smt_frn_01a"
+  },
+  "fmi_hole_04k": {
+   "id": 306,
+   "asset": "/Game/Effects/wep/w_so010/mat/fmi_hole_04k"
+  },
+  "fmi_sin_lin02sa": {
+   "id": 307,
+   "asset": "/Game/Effects/wep/w_so010/mat/fmi_sin_lin02sa"
+  },
+  "fmt_bbl_00a": {
+   "id": 308,
+   "asset": "/Game/Effects/wep/w_so010/mat/fmt_bbl_00a"
+  },
+  "fmt_dis_05k": {
+   "id": 309,
+   "asset": "/Game/Effects/wep/w_so010/mat/fmt_dis_05k"
+  },
+  "fmt_hole_01a": {
+   "id": 310,
+   "asset": "/Game/Effects/wep/w_so010/mat/fmt_hole_01a"
+  },
+  "fmt_hole_02a": {
+   "id": 311,
+   "asset": "/Game/Effects/wep/w_so010/mat/fmt_hole_02a"
+  },
+  "fmt_hole_04k": {
+   "id": 312,
+   "asset": "/Game/Effects/wep/w_so010/mat/fmt_hole_04k"
+  },
+  "fmt_hole_05a": {
+   "id": 313,
+   "asset": "/Game/Effects/wep/w_so010/mat/fmt_hole_05a"
+  },
+  "fmt_vm_cri_rng_00sa": {
+   "id": 314,
+   "asset": "/Game/Effects/wep/w_so010/mat/fmt_vm_cri_rng_00sa"
+  },
+  "omt_gras_lit_00o": {
+   "id": 315,
+   "asset": "/Game/Effects/wep/w_so010/mat/omt_gras_lit_00o"
+  },
+  "smt_dis_sho_00sa@316": {
+   "id": 316,
+   "asset": "/Game/Effects/wep/w_so020/mat/smt_dis_sho_00sa"
+  },
+  "omt_chg_shld_00a": {
+   "id": 317,
+   "asset": "/Game/Effects/wep/w_so030/mat/omt_chg_shld_00a"
+  },
+  "imt_pot_lit_00o": {
+   "id": 318,
+   "asset": "/Game/Effects/wep/w_so040/mat/imt_pot_lit_00o"
+  },
+  "smt_so050_sjn_00a": {
+   "id": 319,
+   "asset": "/Game/Effects/wep/w_so050/mat/smt_so050_sjn_00a"
+  },
+  "smt_so050_stf_loc_00a": {
+   "id": 320,
+   "asset": "/Game/Effects/wep/w_so050/mat/smt_so050_stf_loc_00a"
+  },
+  "smt_so050_stf_sho_00sa": {
+   "id": 321,
+   "asset": "/Game/Effects/wep/w_so050/mat/smt_so050_stf_sho_00sa"
+  },
+  "smt_so050_stf_tsn_00k": {
+   "id": 322,
+   "asset": "/Game/Effects/wep/w_so050/mat/smt_so050_stf_tsn_00k"
+  },
+  "smt_so050_uv_mskstp_00a": {
+   "id": 323,
+   "asset": "/Game/Effects/wep/w_so050/mat/smt_so050_uv_mskstp_00a"
+  },
+  "idc_so064_jkz_00a": {
+   "id": 324,
+   "asset": "/Game/Effects/wep/w_so060/mat/idc_so064_jkz_00a"
+  },
+  "imi_glw_01msk@325": {
+   "id": 325,
+   "asset": "/Game/Effects/wep/w_so060/mat/imi_glw_01msk"
+  },
+  "imt_ora_00sa": {
+   "id": 326,
+   "asset": "/Game/Effects/wep/w_so060/mat/imt_ora_00sa"
+  },
+  "smt_so072_przm_00a": {
+   "id": 327,
+   "asset": "/Game/Effects/wep/w_so070/mat/smt_so072_przm_00a"
+  },
+  "smt_so072_stf_beam_00a": {
+   "id": 328,
+   "asset": "/Game/Effects/wep/w_so070/mat/smt_so072_stf_beam_00a"
+  },
+  "zmt_key_00o": {
+   "id": 329,
+   "asset": "/Game/Effects/wep/w_so110/mat/zmt_key_00o"
+  },
+  "zmt_str_01o": {
+   "id": 330,
+   "asset": "/Game/Effects/wep/w_so110/mat/zmt_str_01o"
+  },
+  "tmt_cyl_pil_00sa": {
+   "id": 331,
+   "asset": "/Game/Effects/wep/w_so150/mat/tmt_cyl_pil_00sa"
+  },
+  "tmt_lux_00o": {
+   "id": 332,
+   "asset": "/Game/Effects/wep/w_so150/mat/tmt_lux_00o"
+  },
+  "xmt_so170_cub_lit_00o": {
+   "id": 333,
+   "asset": "/Game/Effects/wep/w_so170/mat/xmt_so170_cub_lit_00o"
+  },
+  "kmt_cyl_bld_lit_00o": {
+   "id": 334,
+   "asset": "/Game/Effects/wep/w_so190/mat/kmt_cyl_bld_lit_00o"
+  },
+  "kmt_mgc_0sa": {
+   "id": 335,
+   "asset": "/Game/Effects/wep/w_so190/mat/kmt_mgc_0sa"
+  },
+  "gmt_gum_bar_00a": {
+   "id": 336,
+   "asset": "/Game/GumiShip/Effects/gimmick/mat/gmt_gum_bar_00a"
+  },
+  "M_ra_Pla_GrassAll_FoliageLOD_Fade": {
+   "id": 337,
+   "asset": "/Game/Maps/ra/uasset/Materials/M_ra_Pla_GrassAll_FoliageLOD_Fade"
+  },
+  "Metal_Nuno_Leather_EnemyColorSkin_Basemat": {
+   "id": 338,
+   "asset": "/Game/Shader/Material_set/SQEX_BaseMaterialSet/Enemy_BaseMat/Metal_Nuno_Leather_EnemyColorSkin_Basemat"
+  },
+  "nmt_bal_01sk": {
+   "id": 339,
+   "asset": "/Game/Effects/NPC/n_ex003/mat/nmt_bal_01sk"
+  },
+  "nmt_blt_plz_00a": {
+   "id": 340,
+   "asset": "/Game/Effects/NPC/n_ex003/mat/nmt_blt_plz_00a"
+  },
+  "nmt_lin_prs_01sk": {
+   "id": 341,
+   "asset": "/Game/Effects/NPC/n_ex003/mat/nmt_lin_prs_01sk"
+  },
+  "fdc_rpl_lin_01": {
+   "id": 342,
+   "asset": "/Game/Effects/d_magic/ariel/mat/fdc_rpl_lin_01"
+  },
+  "omt_smb_00mk": {
+   "id": 343,
+   "asset": "/Game/Effects/d_magic/simba/mat/omt_smb_00mk"
+  },
+  "imt_brk_00csa": {
+   "id": 344,
+   "asset": "/Game/Effects/dlc02/level/kg/kg_07/mat/imt_brk_00csa"
+  },
+  "omt_star_00o": {
+   "id": 345,
+   "asset": "/Game/Effects/enemy/e_ex301/mat/omt_star_00o"
+  },
+  "smt_brke_cfa": {
+   "id": 346,
+   "asset": "/Game/Effects/enemy/e_ex305/mat/smt_brke_cfa"
+  },
+  "nmt_air_smk03sla": {
+   "id": 347,
+   "asset": "/Game/Effects/enemy/e_ex711/mat/nmt_air_smk03sla"
+  },
+  "nmt_thd_blu_00k": {
+   "id": 348,
+   "asset": "/Game/Effects/enemy/e_ex711/mat/nmt_thd_blu_00k"
+  },
+  "smt_e_ex771_dbh_uv_lit_00sa": {
+   "id": 349,
+   "asset": "/Game/Effects/enemy/e_ex771/mat/smt_e_ex771_dbh_uv_lit_00sa"
+  },
+  "emt_ex_uvd_msk_mfsa": {
+   "id": 350,
+   "asset": "/Game/Effects/level/ex/mat/emt_ex_uvd_msk_mfsa"
+  },
+  "emt_ex_uvd_msk_mfsk": {
+   "id": 351,
+   "asset": "/Game/Effects/level/ex/mat/emt_ex_uvd_msk_mfsk"
+  },
+  "nmt_sub_rip_00a": {
+   "id": 352,
+   "asset": "/Game/Effects/level/ex/mat/nmt_sub_rip_00a"
+  },
+  "emt_ex_bsc_qmsk": {
+   "id": 353,
+   "asset": "/Game/Effects/level/ex/mat_s/emt_ex_bsc_qmsk"
+  },
+  "edc_Frz_sea02a": {
+   "id": 354,
+   "asset": "/Game/Effects/level/fz/fzcom/mat/edc_Frz_sea02a"
+  },
+  "tmt_cloud_00a": {
+   "id": 355,
+   "asset": "/Game/Effects/magic/air/mat/tmt_cloud_00a"
+  },
+  "omt_thd_wld_00sa": {
+   "id": 356,
+   "asset": "/Game/Effects/magic/thd/mat/omt_thd_wld_00sa"
+  },
+  "jdc_brg_sc_ma": {
+   "id": 357,
+   "asset": "/Game/Effects/texcom/mat_master/jdc_brg_sc_ma"
+  },
+  "jmb_flw_mfsk": {
+   "id": 358,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_flw_mfsk"
+  },
+  "jmb_flw_msa": {
+   "id": 359,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_flw_msa"
+  },
+  "jmb_flw_msk": {
+   "id": 360,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_flw_msk"
+  },
+  "jmb_gpu_sub_msk": {
+   "id": 361,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_gpu_sub_msk"
+  },
+  "jmb_sub_ck": {
+   "id": 362,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_sub_ck"
+  },
+  "jmb_uv_cfsla": {
+   "id": 363,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_cfsla"
+  },
+  "jmb_uv_msk_mfsa": {
+   "id": 364,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_msk_mfsa"
+  },
+  "jmb_uvd_mfsa": {
+   "id": 365,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uvd_mfsa"
+  },
+  "jmb_uvd_mfsk": {
+   "id": 366,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uvd_mfsk"
+  },
+  "jmb_uvd_mk": {
+   "id": 367,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uvd_mk"
+  },
+  "nmt_uv_oloc_msk": {
+   "id": 368,
+   "asset": "/Game/Effects/trescom/mat/nmt_uv_oloc_msk"
+  },
+  "zmt_ice_lit_00o": {
+   "id": 369,
+   "asset": "/Game/Effects/trescom/mat/zmt_ice_lit_00o"
+  },
+  "mdc_rrg_c_00k": {
+   "id": 370,
+   "asset": "/Game/Effects/trescom/mat_decal/mdc_rrg_c_00k"
+  },
+  "smi_hit_w_02sa": {
+   "id": 371,
+   "asset": "/Game/Effects/trescom/mat_part/smi_hit_w_02sa"
+  },
+  "fmi_thd_01sa": {
+   "id": 372,
+   "asset": "/Game/GumiShip/Effects/gmcom/mat/fmi_thd_01sa"
+  },
+  "M_FZ02_Crystal01_Ice01": {
+   "id": 373,
+   "asset": "/Game/Maps/fz/fz_02/uasset/Materials/M_FZ02_Crystal01_Ice01"
+  },
+  "omi_fire_tail0": {
+   "id": 374,
+   "asset": "/Game/Effects/d_magic/simba/mat/omi_fire_tail0"
+  },
+  "kmt_wat_uv_00a": {
+   "id": 375,
+   "asset": "/Game/Effects/magic/water/mat/kmt_wat_uv_00a"
+  },
+  "jmb_uv_cfla": {
+   "id": 376,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_uv_cfla"
+  },
+  "smt_so050_sho_00sa": {
+   "id": 377,
+   "asset": "/Game/Effects/wep/w_so050/mat/smt_so050_sho_00sa"
+  },
+  "jmb_flw_lp_msa": {
+   "id": 378,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_flw_lp_msa"
+  },
+  "jmb_sub_msk": {
+   "id": 379,
+   "asset": "/Game/Effects/texcom/mat_master/jmb_sub_msk"
+  },
+  "kmt_dis_00k": {
+   "id": 380,
+   "asset": "/Game/Effects/trescom/mat/kmt_dis_00k"
+  }
+ }
+}

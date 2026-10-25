@@ -1,0 +1,14 @@
+[package]
+name = "kh-prize"
+description = "Kingdom Hearts III's prize orbs (ATresPrizeMan / ATresPrizeBase: HP, MP, munny, focus orbs and item boxes), engine-free: glam and std only. Drop tables, the throw, bounce, life, attraction and pick-up; a host steps it at 60 Hz against its World and acts on the events. docs/sora-prize-spec.md."
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[dependencies]
+glam = { workspace = true }
+# `World` (the sweeps an orb moves with), `PrizeKind` and the status rules a collected orb is applied through.
+kh-core = { path = "../kh-core" }
+
+[dev-dependencies]
+serde_json = "1"

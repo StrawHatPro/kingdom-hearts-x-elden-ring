@@ -1,0 +1,122 @@
+[
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_rsn00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_rsn01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_kira00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_kira01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_han00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_han01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_han03",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_hahen00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_hahen01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_hahen02",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_hahen03",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_hit00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_loc00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_mat",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_zmn0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ }
+]

@@ -1,0 +1,19 @@
+{
+ "about": "tools/packgen_overlays.js: the translator runs the effect tables' overlays are made from (the streams' options; our build's)",
+ "extras": {
+  "xwc": { "from": "build/packgen/scratch/xsi_chandelier" },
+  "xwd": { "from": "build/packgen/scratch/xsi_chandelier", "add_from_pack": ["xsi/vfx/materials/kmi_ora_00slk__wep_w_so190_mat.json", "xsi/vfx/materials/zmi_blur_Para_00__wep_w_so110_mat.json", "xsi/vfx/materials/zmi_sho_02slk__wep_w_so200_mat.json"] }
+ },
+ "stages": {
+  "main_vfb": { "table": "main", "args": ["--no-twp-all", "--trig"] },
+  "party_vfb": { "table": "party", "args": ["--party", "--no-twp-all", "--trig"] },
+  "main_xwb": { "table": "main", "args": ["--no-twp-all", "--xw-break"] },
+  "party_xwb": { "table": "party", "args": ["--party", "--no-twp-all", "--xw-decals", "all", "--xw-break"] },
+  "xsi_xwb": { "table": "xsi", "args": ["--xsi", "--no-twp-all", "--xw-decals", "all", "--xw-break"] },
+  "xsi_xw": { "table": "xsi", "decal_dyn": false, "args": ["--xsi", "--no-twp-all", "--xw-decals", "sdc_so050_jwr_00a,tdc_jwr_sc00a"] },
+  "xsi_xwc": { "table": "xsi", "args": ["--xsi", "--no-twp-all", "--xw-decals", "all", "--xw-break", "--xsi-extra", "@extra:xwc"] },
+  "main_xwd": { "table": "main", "args": [] },
+  "party_xwd": { "table": "party", "args": ["--party"] },
+  "xsi_xwd": { "table": "xsi", "args": ["--xsi", "--xsi-extra", "@extra:xwd"] }
+ }
+}

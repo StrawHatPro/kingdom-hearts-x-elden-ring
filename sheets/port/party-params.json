@@ -1,0 +1,5626 @@
+{
+ "sheet": "party-params",
+ "group": "port",
+ "columns": [
+  "id",
+  "value",
+  "unit",
+  "source",
+  "evidence",
+  "ref_addr",
+  "ref_conf",
+  "note"
+ ],
+ "rows": [
+  [
+   "n_ex001.base.max_hp",
+   140,
+   "HP",
+   "DataTable/Npc/Base/n_ex001_BaseDataTable row Default m_MaxHitPoint",
+   "base max HP before HP_UP victory bonuses",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.base.max_mp",
+   100,
+   "MP",
+   "DataTable/Npc/Base/n_ex001_BaseDataTable row Default m_MaxMagicPoint",
+   "max MP",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.base.damage_min",
+   0,
+   "HP",
+   "DataTable/Npc/Base/n_ex001_BaseDataTable row Default m_DamageMin",
+   "defender floor in CalcDamage 0x140632240 (stats spec 7)",
+   "0x140632240",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.base.damage_max",
+   24,
+   "HP",
+   "DataTable/Npc/Base/n_ex001_BaseDataTable row Default m_DamageMax",
+   "defender per-hit CAP in CalcDamage 0x140632240: one hit takes at most this much",
+   "0x140632240",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.mp_charge_time",
+   30,
+   "s",
+   "Blueprints/Npc/n_ex001/n_ex001_PawnBase CDO MyMpChargeTime",
+   "MP charge length after MP runs out (plan 2.8)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.dangle.offset_x",
+   -30,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_PawnBase CDO m_DangleOffsetPos.X",
+   "Dangle: hang point = ledge contact + Rot(yaw) x the offset (FUN_140638900); the space test radius |x| - 10",
+   "0x140541BA0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.dangle.offset_z",
+   -70,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_PawnBase CDO m_DangleOffsetPos.Z",
+   "Dangle: hang point below the ledge top; the jump probes ledges at 275 - Z - 150 above the feet (0x140446070 / 0x140433FD0)",
+   "0x140541BA0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.capsule.radius",
+   30,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_PawnBase export TresRoot CollisionShapesSrc[0] (CAPSULE1) Size.X",
+   "root body capsule radius (UTresRootComponent body build 0x1405DF310: max(Size.X, 1))",
+   "0x1405DF310",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.capsule.half_height",
+   49,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_PawnBase export TresRoot CollisionShapesSrc[0] (CAPSULE1) Size.Z",
+   "root capsule total half height (0x1405DF310: Sphyl length 2 * (Size.Z - Size.X))",
+   "0x1405DF310",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.capsule.center_z",
+   51,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_PawnBase export TresRoot CollisionShapesSrc[0] (CAPSULE1) RelativeLocation.Z",
+   "root capsule centre above the actor origin (0x1405DF310)",
+   "0x1405DF310",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.physobj.radius",
+   35,
+   "cm",
+   "n_ex001_PawnBase PhysObjHitCollision CapsuleRadius",
+   "the physics-object hit capsule (ATresNpcPawnBase ctor 0x141254FF0 \"PhysObjHitCollision\", attached to the mesh): pushes physics objects, not the body",
+   "0x141254FF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.physobj.half_height",
+   51,
+   "cm",
+   "n_ex001_PawnBase PhysObjHitCollision CapsuleHalfHeight",
+   "physics-object hit capsule",
+   "0x141254FF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.move.gravity_scale",
+   1.5,
+   "-",
+   "n_ex001_PawnBase TresCharMovement0 GravityScale",
+   "movement component gravity scale",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.move.max_walk_speed",
+   680,
+   "cm/s",
+   "n_ex001_PawnBase TresCharMovement0 MaxWalkSpeed",
+   "MaxWalkSpeed",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.revive_time",
+   40,
+   "s",
+   "UTresNpcState_Die Begin 0x1412413C0: 30 (0x41F00000), unique id 11 -> 40 (0x42200000), 12 -> 35 (0x420C0000)",
+   "KO timer before the revive; divided by 1 + min(count HYPER_HEALING, 3)",
+   "0x1412413C0",
+   "inferred",
+   "-"
+  ],
+  [
+   "n_ex001.loco.move1.min_speed",
+   140,
+   "cm/s",
+   "n_ex001_Move1 m_MinSpeed",
+   "locomotion definition: walk floor",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.loco.move1.max_speed",
+   680,
+   "cm/s",
+   "n_ex001_Move1 m_MaxSpeed",
+   "locomotion definition: run",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.loco.move1.run_loop_interp",
+   0.20000000298023224,
+   "s",
+   "n_ex001_Move1 m_RunLoopInterpolationTime",
+   "blend into the run loop",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.loco.slope_slide.min_speed",
+   680,
+   "cm/s",
+   "n_ex001_SlopeSlide m_MinSpeed",
+   "locomotion definition of the slope slide (pawn m_SlopeSlide +0xB58): walk floor",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.loco.slope_slide.max_speed",
+   1600,
+   "cm/s",
+   "n_ex001_SlopeSlide m_MaxSpeed",
+   "locomotion definition of the slope slide: the MaxWalkSpeed the slide runs at (SlopeSlide tick 0x14126C950: MaxAcceleration = MaxWalkSpeed x 60)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.walkrun.x_min",
+   -300,
+   "deg",
+   "Character/npc/n_ex001/anm/rt/body/WalkRunN BlendParameters[0].Min",
+   "blend X (yaw delta) lower bound; 0x14045AAF0 clamps X to it",
+   "0x14045AAF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.walkrun.x_max",
+   300,
+   "deg",
+   "Character/npc/n_ex001/anm/rt/body/WalkRunN BlendParameters[0].Max",
+   "blend X (yaw delta) upper bound",
+   "0x14045AAF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.walkrun.y_min",
+   140,
+   "cm/s",
+   "Character/npc/n_ex001/anm/rt/body/WalkRunN BlendParameters[1].Min",
+   "blend Y (speed) lower bound",
+   "0x14045AAF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex001.walkrun.y_max",
+   680,
+   "cm/s",
+   "Character/npc/n_ex001/anm/rt/body/WalkRunN BlendParameters[1].Max",
+   "blend Y (speed) upper bound",
+   "0x14045AAF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.base.max_hp",
+   160,
+   "HP",
+   "DataTable/Npc/Base/n_ex002_BaseDataTable row Default m_MaxHitPoint",
+   "base max HP before HP_UP victory bonuses",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.base.max_mp",
+   100,
+   "MP",
+   "DataTable/Npc/Base/n_ex002_BaseDataTable row Default m_MaxMagicPoint",
+   "max MP",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.base.damage_min",
+   0,
+   "HP",
+   "DataTable/Npc/Base/n_ex002_BaseDataTable row Default m_DamageMin",
+   "defender floor in CalcDamage 0x140632240 (stats spec 7)",
+   "0x140632240",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.base.damage_max",
+   24,
+   "HP",
+   "DataTable/Npc/Base/n_ex002_BaseDataTable row Default m_DamageMax",
+   "defender per-hit CAP in CalcDamage 0x140632240: one hit takes at most this much",
+   "0x140632240",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.mp_charge_time",
+   30,
+   "s",
+   "Blueprints/Npc/n_ex002/n_ex002_PawnBase CDO MyMpChargeTime",
+   "MP charge length after MP runs out (plan 2.8)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.dangle.offset_x",
+   -40,
+   "cm",
+   "Blueprints/Npc/n_ex002/n_ex002_PawnBase CDO m_DangleOffsetPos.X",
+   "Dangle: hang point = ledge contact + Rot(yaw) x the offset (FUN_140638900); the space test radius |x| - 10",
+   "0x140541BA0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.dangle.offset_z",
+   -150,
+   "cm",
+   "Blueprints/Npc/n_ex002/n_ex002_PawnBase CDO m_DangleOffsetPos.Z",
+   "Dangle: hang point below the ledge top; the jump probes ledges at 275 - Z - 150 above the feet (0x140446070 / 0x140433FD0)",
+   "0x140541BA0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.capsule.radius",
+   40,
+   "cm",
+   "Blueprints/Npc/n_ex002/n_ex002_PawnBase export TresRoot CollisionShapesSrc[0] (CAPSULE1) Size.X",
+   "root body capsule radius (UTresRootComponent body build 0x1405DF310: max(Size.X, 1))",
+   "0x1405DF310",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.capsule.half_height",
+   89,
+   "cm",
+   "Blueprints/Npc/n_ex002/n_ex002_PawnBase export TresRoot CollisionShapesSrc[0] (CAPSULE1) Size.Z",
+   "root capsule total half height (0x1405DF310: Sphyl length 2 * (Size.Z - Size.X))",
+   "0x1405DF310",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.capsule.center_z",
+   91,
+   "cm",
+   "Blueprints/Npc/n_ex002/n_ex002_PawnBase export TresRoot CollisionShapesSrc[0] (CAPSULE1) RelativeLocation.Z",
+   "root capsule centre above the actor origin (0x1405DF310)",
+   "0x1405DF310",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.physobj.radius",
+   45,
+   "cm",
+   "n_ex002_PawnBase PhysObjHitCollision CapsuleRadius",
+   "the physics-object hit capsule (ATresNpcPawnBase ctor 0x141254FF0 \"PhysObjHitCollision\", attached to the mesh): pushes physics objects, not the body",
+   "0x141254FF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.physobj.half_height",
+   91,
+   "cm",
+   "n_ex002_PawnBase PhysObjHitCollision CapsuleHalfHeight",
+   "physics-object hit capsule",
+   "0x141254FF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.move.gravity_scale",
+   1.5,
+   "-",
+   "n_ex002_PawnBase TresCharMovement0 GravityScale",
+   "movement component gravity scale",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.move.max_walk_speed",
+   680,
+   "cm/s",
+   "n_ex002_PawnBase TresCharMovement0 MaxWalkSpeed",
+   "MaxWalkSpeed",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.revive_time",
+   35,
+   "s",
+   "UTresNpcState_Die Begin 0x1412413C0: 30 (0x41F00000), unique id 11 -> 40 (0x42200000), 12 -> 35 (0x420C0000)",
+   "KO timer before the revive; divided by 1 + min(count HYPER_HEALING, 3)",
+   "0x1412413C0",
+   "inferred",
+   "-"
+  ],
+  [
+   "n_ex002.loco.move1.min_speed",
+   140,
+   "cm/s",
+   "n_ex002_Move1 m_MinSpeed",
+   "locomotion definition: walk floor",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.loco.move1.max_speed",
+   680,
+   "cm/s",
+   "n_ex002_Move1 m_MaxSpeed",
+   "locomotion definition: run",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.loco.move1.run_loop_interp",
+   0.20000000298023224,
+   "s",
+   "n_ex002_Move1 m_RunLoopInterpolationTime",
+   "blend into the run loop",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.loco.slope_slide.min_speed",
+   680,
+   "cm/s",
+   "n_ex002_SlopeSlide m_MinSpeed",
+   "locomotion definition of the slope slide (pawn m_SlopeSlide +0xB58): walk floor",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.loco.slope_slide.max_speed",
+   1600,
+   "cm/s",
+   "n_ex002_SlopeSlide m_MaxSpeed",
+   "locomotion definition of the slope slide: the MaxWalkSpeed the slide runs at (SlopeSlide tick 0x14126C950: MaxAcceleration = MaxWalkSpeed x 60)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.walkrun.x_min",
+   -180,
+   "deg",
+   "Character/npc/n_ex002/anm/rt/body/WalkRunN BlendParameters[0].Min",
+   "blend X (yaw delta) lower bound; 0x14045AAF0 clamps X to it",
+   "0x14045AAF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.walkrun.x_max",
+   180,
+   "deg",
+   "Character/npc/n_ex002/anm/rt/body/WalkRunN BlendParameters[0].Max",
+   "blend X (yaw delta) upper bound",
+   "0x14045AAF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.walkrun.y_min",
+   140,
+   "cm/s",
+   "Character/npc/n_ex002/anm/rt/body/WalkRunN BlendParameters[1].Min",
+   "blend Y (speed) lower bound",
+   "0x14045AAF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "n_ex002.walkrun.y_max",
+   680,
+   "cm/s",
+   "Character/npc/n_ex002/anm/rt/body/WalkRunN BlendParameters[1].Max",
+   "blend Y (speed) upper bound",
+   "0x14045AAF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "turn.fixed_point_speed",
+   360,
+   "deg/s",
+   "ATresAIPawnBase ctor 0x140529E70 m_FixedPointTurnSpeed (+0xA2C)",
+   "Turn state without a turn clip: vt+0xDE8 turn at this rate (UTresAICharState_Turn tick 0x140437890 sub-step 3)",
+   "0x140437890",
+   "confirmed",
+   "-"
+  ],
+  [
+   "turn.idle_max_rotation_speed",
+   180,
+   "deg/s",
+   "ATresAIPawnBase ctor 0x140529E70 m_IdleMaxRotationSpeed (+0xA34), m_bUseIdleMaxRotationSpeed true",
+   "Idle: the per-tick rotation is clamped to dt x this (UTresAICharState_Idle tick 0x140445880)",
+   "0x140445880",
+   "confirmed",
+   "-"
+  ],
+  [
+   "turn.fixed_turn_max_rotation_speed",
+   0,
+   "deg/s",
+   "ATresAIPawnBase ctor 0x140529E70 m_bUseFixedTurnMaxRotationSpeed false (m_FixedTurnMaxRotationSpeed 180 unused)",
+   "Turn clip rotation is not clamped (0 = off; 0x140437890 sub-steps 1 / 2)",
+   "0x140437890",
+   "confirmed",
+   "-"
+  ],
+  [
+   "turn.attack_rate",
+   360,
+   "deg/s",
+   "pawn vt+0x2408 = 0x140544270 (returns 360.0) for TresNpcPawnBase / n_ex001 / n_ex002",
+   "TurnToTarget window of AttackBase (tick 0x1404404B0: vt+0xDE0 toward the attack target at this rate)",
+   "0x1404404B0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "turn.loco_max_rotation_yaw",
+   180,
+   "deg/s",
+   "UTresNpcLocomotionDefinitionLand(_FollowPlayer) ctor 0x141203230 m_MaxRotationSpeed.Yaw (n_ex00x_Move1 does not override it)",
+   "AI move: the heading turns at most this fast (velocity steering 0x1404F2590)",
+   "0x1404F2590",
+   "confirmed",
+   "-"
+  ],
+  [
+   "reflect.speed",
+   750,
+   "cm/s",
+   "UTresAICharState_Reflect Init 0x14043E620 +0xA0 = 750 (0x443B8000)",
+   "the recoil: MaxWalkSpeed and the move speed (Tick 0x140441FF0)",
+   "0x140441FF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "reflect.braking",
+   3072,
+   "cm/s^2",
+   "UTresAICharState_Reflect Init 0x14043E620 +0xA4 = 3072 (0x45400000)",
+   "BrakingDecelerationWalking / Flying during the recoil, ground friction 0",
+   "0x140441FF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "move.jump_up_gravity_scale",
+   1,
+   "-",
+   "UTresCharMovementComponent ctor 0x140570EB0 m_JumpUpGravityScale (+0xBE8) = 1.0; not set by UTresAICharMovementComponent ctor 0x140512380 nor n_ex00x_PawnBase TresCharMovement0",
+   "the NPC rise gravity scale (the jump solver FUN_1405431C0 and PhysFalling)",
+   "0x140570EB0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "move.max_jump_duration_time",
+   0,
+   "s",
+   "UTresCharMovementComponent ctor 0x140570EB0 m_MaxJumpDurationTime (+0xBEC) = 0.0 (not overridden)",
+   "no jump-duration gravity phase for the NPCs",
+   "0x140570EB0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "move.jump_duration_gravity_scale",
+   1,
+   "-",
+   "UTresCharMovementComponent ctor 0x140570EB0 m_JumpDurationGravityScale (+0xBF0) = 1.0 (not overridden)",
+   "jump-duration gravity scale of the NPCs",
+   "0x140570EB0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "warp.wait",
+   2,
+   "s",
+   "ATresNpcPawnBase tick 0x14127B980: the warp request (every +0xC98 = 2.0 s) writes Warp +0x88 = 2.0 (0x40000000)",
+   "Begin: time limit +0x8C = +0x88; the point found: wait +0x98 = +0x88, limit 2 x +0x88",
+   "0x14127B980",
+   "confirmed",
+   "-"
+  ],
+  [
+   "warp.recheck",
+   0.1,
+   "s",
+   "UTresNpcState_Warp tick 0x14126DD90: +0x9C reset to 0.1 (0x3DCCCCCD); Init 0x141266C10 starts it at random x 0.1",
+   "the path-to-the-leader re-check period",
+   "0x14126DD90",
+   "confirmed",
+   "-"
+  ],
+  [
+   "warp.threshold",
+   3000,
+   "cm",
+   "UTresNpcState_Warp Begin 0x14125BAE0: +0xA0 = 3000 (0x453B8000) when the friend component +0x314 <= 0",
+   "a path to the leader shorter than this ends the warp (no move)",
+   "0x14125BAE0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "warp.threshold_battle",
+   1000,
+   "cm",
+   "UTresNpcState_Warp Begin 0x14125BAE0: +0xA0 = 1000 (0x447A0000) while the friend component +0x314 > 0 (the battle-start window)",
+   "the same threshold just after a battle starts",
+   "0x14125BAE0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "warp.battle_window",
+   3,
+   "s",
+   "UTresFriendComponent +0x312 / +0x314: the 3 s window after the battle starts (stream C2 read)",
+   "the battle-start window of the warp threshold",
+   "0x14125BAE0",
+   "inferred",
+   "-"
+  ],
+  [
+   "slide.probe_radius",
+   50,
+   "cm",
+   "FUN_14063C870: sphere 50 (0x42480000) swept from location +50 to -50, channels 0 / 1 / 0x12",
+   "the NPC slope probe (start mode 0 from the Run tick, continue mode 1 from the SlopeSlide tick)",
+   "0x14063C870",
+   "confirmed",
+   "-"
+  ],
+  [
+   "slide.start_angle",
+   -25,
+   "deg",
+   "FUN_14063C870 mode 0: fall angle <= -25 (or a SQEX_bEnableForceSlopeSlide floor)",
+   "a flagged floor descending at 25 deg or more starts the slide",
+   "0x14063C870",
+   "confirmed",
+   "-"
+  ],
+  [
+   "slide.start_dot",
+   0.642788,
+   "-",
+   "FUN_14063C870 mode 0: dot(facing, fall line) >= 0.642788 (cos 50)",
+   "facing downhill to start",
+   "0x14063C870",
+   "confirmed",
+   "-"
+  ],
+  [
+   "slide.continue_angle",
+   -20,
+   "deg",
+   "FUN_14063C870 mode 1: fall angle <= -20",
+   "the slide continues on a floor descending 20 deg or more",
+   "0x14063C870",
+   "confirmed",
+   "-"
+  ],
+  [
+   "slide.continue_dot",
+   0.173648,
+   "-",
+   "FUN_14063C870 mode 1: dot >= 0.173648 (cos 80)",
+   "facing within 80 deg of the fall line keeps the slide",
+   "0x14063C870",
+   "confirmed",
+   "-"
+  ],
+  [
+   "slide.ahead",
+   50,
+   "cm",
+   "FUN_14063C870: the second sweep 50 cm along (pitch = fall angle, yaw = facing)",
+   "the floor ahead must also be steep enough",
+   "0x14063C870",
+   "confirmed",
+   "-"
+  ],
+  [
+   "slide.pitch_add",
+   25,
+   "deg",
+   "SlopeSlide tick 0x14126C950: target pitch = slope pitch (+0x90) + 25 in sub-step 0",
+   "the body pitch toward the slope (not drawn: the port has yaw only)",
+   "0x14126C950",
+   "confirmed",
+   "-"
+  ],
+  [
+   "slide.turn_rate",
+   6,
+   "1/s",
+   "SlopeSlide tick 0x14126C950: pawn vt+0xDB0 (0x1405DDD90) alpha = dt x 6",
+   "the facing eases toward the AI direction +0x8C",
+   "0x14126C950",
+   "confirmed",
+   "-"
+  ],
+  [
+   "slide.accel_factor",
+   60,
+   "1/s",
+   "SlopeSlide tick 0x14126C950: MaxAcceleration = MaxWalkSpeed (vt+0x1580) x 60 (vt+0x1640)",
+   "the slide reaches its speed within one 60 Hz tick",
+   "0x14126C950",
+   "confirmed",
+   "-"
+  ],
+  [
+   "slide.hop_ahead",
+   120,
+   "cm",
+   "SlopeSlide tick 0x14126C950 / Run tick 0x140442430: hop probe at location + Rot x (120, 0, 0), radius 100",
+   "hop points ahead of a slide / run",
+   "0x14126C950",
+   "confirmed",
+   "-"
+  ],
+  [
+   "slide.hop_radius",
+   100,
+   "cm",
+   "vt+0x2350 radius 100 (0x42C80000) from the SlopeSlide / Run ticks",
+   "hop probe radius",
+   "0x14126C950",
+   "confirmed",
+   "-"
+  ],
+  [
+   "slide.rail_range",
+   50,
+   "cm",
+   "vt+0xEA0 range 50 (0x42480000) from the SlopeSlide / Run ticks",
+   "rail probe range on the ground",
+   "0x14126C950",
+   "confirmed",
+   "-"
+  ],
+  [
+   "superslide.speed",
+   1500,
+   "cm/s",
+   "ATresNpcPawnBase ctor 0x141254FF0: m_SuperSlideSpeed +0xB30 = 1500 (0x44BB8000); n_ex00x_PawnBase do not override it",
+   "SuperSlide tick 0x14126D3B0: MaxWalkSpeed = vt+0x1AB0 (+0xB30) every tick",
+   "0x14126D3B0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "superslide.turn_rate",
+   6,
+   "1/s",
+   "SuperSlide tick 0x14126D3B0: vt+0xDB0 alpha dt x 6 (+0xA8 rate unset)",
+   "the facing eases toward the AI direction",
+   "0x14126D3B0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "superslide.stop_angle",
+   75,
+   "deg",
+   "SuperSlide tick 0x14126D3B0: |wrap(+0x8C - yaw)| >= 75 -> vt+0x16E8 (StopMovement)",
+   "a sharp direction change stops the slide speed",
+   "0x14126D3B0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "superslide.air_accel",
+   3888.0002,
+   "cm/s^2",
+   "SuperSlide tick 0x14126D3B0: in the air Velocity += AirControl x dir x 3888.0002 x dt, clamped to MaxWalkSpeed in XY",
+   "air steering",
+   "0x14126D3B0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "superslide.input_hold",
+   0.2,
+   "s",
+   "SuperSlide tick 0x14126D3B0: +0x94 = 0.2 (0x3E4CCCCD) on an input tick",
+   "input latch time",
+   "0x14126D3B0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "rail.warp_delay",
+   1,
+   "s",
+   "RailSlide EQS callback 0x141250A00: +0x19C = 1.0",
+   "the wait after the point is found before the off-rail warp",
+   "0x141250A00",
+   "confirmed",
+   "-"
+  ],
+  [
+   "rail.warp_limit",
+   2,
+   "s",
+   "RailSlide EQS callback 0x141250A00: +0x198 = 2.0",
+   "the off-rail warp gives up after this",
+   "0x141250A00",
+   "confirmed",
+   "-"
+  ],
+  [
+   "rail.warp_probe_range",
+   150,
+   "cm",
+   "RailSlide tick 0x14124E890: vt+0xEA0 range 150 (0x43160000) at the warp point (segment +30 up)",
+   "a rail at the warp point is taken",
+   "0x14124E890",
+   "confirmed",
+   "-"
+  ],
+  [
+   "rail.leave_distance",
+   500,
+   "cm",
+   "RailSlide slot 145 0x141252210: target = location + forward(XY) x 500, projected by FUN_140542040 (1000)",
+   "the end-of-rail jump target",
+   "0x141252210",
+   "confirmed",
+   "-"
+  ],
+  [
+   "rail.leave_height_min",
+   400,
+   "cm",
+   "RailSlide slot 145 0x141252210: JumpCodeDriven +0x9C = 400 (0x43C80000), +0xA8 = 0x101",
+   "minimum apex of the end-of-rail jump (FUN_140578330 h_min)",
+   "0x141252210",
+   "confirmed",
+   "-"
+  ],
+  [
+   "rail.leave_height",
+   100,
+   "cm",
+   "UTresAICharState_JumpCodeDriven Init 0x14043E470: +0x98 = 100 (0x42C80000)",
+   "apex above the higher end (FUN_140578330 h0)",
+   "0x14043E470",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hop.accel_factor",
+   5.4,
+   "-",
+   "Hopping Begin 0x141242050: MaxAcceleration = +0xB8 x 5.4",
+   "hop acceleration",
+   "0x141242050",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hop.next_min",
+   0.85,
+   "-",
+   "Hopping tick 0x14124C010 sub 2: input magnitude > 0.85 searches the next point",
+   "hop on / off",
+   "0x14124C010",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hop.turn_min",
+   0.2,
+   "-",
+   "Hopping tick 0x14124C010 sub 2: magnitude > 0.2 and the state time >= 0.1 (FUN_1405A0B20)",
+   "turning on the point",
+   "0x14124C010",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hop.wait_min",
+   0.1,
+   "s",
+   "Hopping tick 0x14124C010 sub 2: FUN_1405A0B20 >= 0.1",
+   "no input taken in the first 0.1 s on a point",
+   "0x14124C010",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hop.turn_rate",
+   6,
+   "1/s",
+   "Hopping tick 0x14124C010: vt+0xDB0 alpha dt x 6",
+   "facing toward the input yaw",
+   "0x14124C010",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hop.search_start",
+   150,
+   "cm",
+   "Hopping tick 0x14124C010 sub 2: d = 150, 200 .. < 400 along the input yaw, radius 100, the highest point",
+   "the next hop point",
+   "0x14124C010",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hop.search_limit",
+   400,
+   "cm",
+   "Hopping tick 0x14124C010 sub 2 loop end (d < 400)",
+   "the next hop point",
+   "0x14124C010",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hop.search_step",
+   50,
+   "cm",
+   "Hopping tick 0x14124C010 sub 2 step 50",
+   "the next hop point",
+   "0x14124C010",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hop.search_radius",
+   100,
+   "cm",
+   "Hopping tick 0x14124C010 sub 2: vt+0x2350 radius 100",
+   "the next hop point",
+   "0x14124C010",
+   "confirmed",
+   "-"
+  ],
+  [
+   "jump.h0",
+   100,
+   "cm",
+   "UTresAICharState_JumpCodeDriven Init 0x14043E470: +0x98 = 100 (0x42C80000), +0x9C = 0",
+   "FUN_140578330's apex above the higher end of a code-driven jump",
+   "0x14043E470",
+   "confirmed",
+   "-"
+  ],
+  [
+   "jump.dangle_height",
+   500,
+   "cm",
+   "JumpCodeDriven launch 0x140433FD0: ATresNpcPawnBase +0xB34 (ctor 0x141254FF0: 0x43FA0000), 500 for other pawns",
+   "a code-driven target more than this above him searches the arc for a ledge (Dangle)",
+   "0x140433FD0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "jump.rail_range",
+   150,
+   "cm",
+   "UTresAICharState_Jump tick 0x1404408A0: vt+0xEA0 range 150 (0x43160000), segment location -> +30 Z",
+   "a rail is taken in the air",
+   "0x1404408A0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "jump.turn_rate",
+   6,
+   "1/s",
+   "UTresAICharState_Jump 0x14045A5E0 phases 2 / 4: vt+0xDB0 alpha dt x 6",
+   "the facing eases toward +0xA0 in the air",
+   "0x14045A5E0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "jump.air_accel",
+   1000000,
+   "cm/s^2",
+   "0x14045A5E0 phases 2 / 4: MaxAcceleration vt+0x1640(1000000.0) with AddMovementInput(Rot(0, +0xA0, 0), 1)",
+   "the air steering while +0xA4 / +0xA8",
+   "0x14045A5E0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "jump.roll_height",
+   2000,
+   "cm",
+   "JumpCodeDriven sub-steps 0x140459D70 case 4: +0x148 < 2000 (and with input < 800) -> no RollLand",
+   "a fall this high lands with RollLand",
+   "0x140459D70",
+   "confirmed",
+   "-"
+  ],
+  [
+   "jump.roll_height_input",
+   800,
+   "cm",
+   "0x140459D70 case 4: +0xA4 and +0x148 >= 800",
+   "a fall this high with input lands with RollLand",
+   "0x140459D70",
+   "confirmed",
+   "-"
+  ],
+  [
+   "jump.stuck_period",
+   0.5,
+   "s",
+   "0x14045A5E0 phase 2: +0x100 + 0.5 < world time -> a height sample",
+   "the stuck check samples the height twice a second",
+   "0x14045A5E0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "jump.stuck_tolerance",
+   5,
+   "cm",
+   "0x14045A5E0 phase 2: 10 samples all within 5.0 of their mean, Velocity.Z <= 0",
+   "stuck in the air (on an edge)",
+   "0x14045A5E0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "jump.escape_time",
+   4,
+   "s",
+   "0x14045A5E0: phase 4 with +0x124 = 4.0 (0x40800000)",
+   "the escape steering lasts this long or until landing",
+   "0x14045A5E0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "jump.escape_speed",
+   500,
+   "cm/s",
+   "UTresAICharState_Jump 0x1404386F0: vt+0x1570(500) (0x43FA0000)",
+   "the escape hop's MaxWalkSpeed (jump 3 x half height, the longest of 8 rays)",
+   "0x1404386F0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "jump.arc_step",
+   0.05,
+   "s",
+   "JumpCodeDriven launch 0x140433FD0: the ledge search steps the arc by 0.05 s",
+   "ledge search along a code-driven jump",
+   "0x140433FD0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "climb.probe_ahead",
+   70,
+   "cm",
+   "FUN_140636BF0: the axis at the location + forward(XY) x 70",
+   "climb probe",
+   "0x140636BF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "climb.probe_top",
+   260,
+   "cm",
+   "FUN_140636BF0: from Z + 260",
+   "climb probe",
+   "0x140636BF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "climb.probe_drop",
+   180,
+   "cm",
+   "FUN_140636BF0: down 180 (to Z + 80)",
+   "climb probe",
+   "0x140636BF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "climb.probe_radius",
+   35,
+   "cm",
+   "FUN_140636BF0: PxSphereGeometry {0, 35.0 (0x420C0000)} for FUN_144526380 (channels 0 / 1 / 0x12)",
+   "climb probe sphere",
+   "0x140636BF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "climb.height_min",
+   45,
+   "cm",
+   "FUN_140636BF0: 45 <= impact Z - location Z",
+   "lowest ledge he climbs",
+   "0x140636BF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "climb.height_max",
+   225,
+   "cm",
+   "FUN_140636BF0: impact Z - location Z <= 225",
+   "highest ledge he climbs",
+   "0x140636BF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "climb.slope_max",
+   35,
+   "deg",
+   "FUN_140636BF0: -(atan2 of the impact normal's fall line) x 57.295776 <= 35",
+   "the top no steeper than this",
+   "0x140636BF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "climb.facing_dot",
+   0.707107,
+   "-",
+   "FUN_140636BF0: dot(normalize2D(impact - location), forward) >= 0.707107",
+   "the ledge within 45 deg of the facing",
+   "0x140636BF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "climb.high",
+   150,
+   "cm",
+   "FUN_140636BF0: height > 150 -> out +0x24 (ClimbingH, sub 1)",
+   "high climb",
+   "0x140636BF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "climb.middle",
+   100,
+   "cm",
+   "FUN_140636BF0: 100 < height <= 150 -> out +0x25 (ClimbingMR)",
+   "middle climb",
+   "0x140636BF0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "climb.lift_low",
+   0.1,
+   "-",
+   "UTresNpcState_Climbing tick 0x141249650 sub 0: +0xB0 = 0.1 (0x3DCCCCCD)",
+   "the traction lift's share of the gap per 60 Hz tick (low)",
+   "0x141249650",
+   "confirmed",
+   "-"
+  ],
+  [
+   "climb.lift_middle",
+   0.25,
+   "-",
+   "0x141249650 sub 0: +0xB0 = 0.25 (0x3E800000)",
+   "the traction lift (middle)",
+   "0x141249650",
+   "confirmed",
+   "-"
+  ],
+  [
+   "climb.lift_high",
+   0.3,
+   "-",
+   "0x141249650 sub 0: +0xB0 = 0.3 (0x3E99999A)",
+   "the traction lift (high)",
+   "0x141249650",
+   "confirmed",
+   "-"
+  ],
+  [
+   "dangle.probe_top",
+   275,
+   "cm",
+   "0x140446070 / 0x140433FD0: up = (275 - m_DangleOffsetPos.Z) - 150",
+   "the jump's ledge probe height",
+   "0x140446070",
+   "confirmed",
+   "-"
+  ],
+  [
+   "dangle.probe_below",
+   150,
+   "cm",
+   "0x140446070 / 0x140433FD0: (275 - Z) - 150",
+   "the jump's ledge probe height",
+   "0x140446070",
+   "confirmed",
+   "-"
+  ],
+  [
+   "dangle.probe_down",
+   50,
+   "cm",
+   "0x140446070 / 0x140433FD0: FUN_140638740 / 900 down = 50 (0x42480000)",
+   "the jump's ledge probe depth",
+   "0x140446070",
+   "confirmed",
+   "-"
+  ],
+  [
+   "dangle.probe_forward_npc",
+   0,
+   "cm",
+   "(party I1) 0x140446070 (FUN_140638740 5th argument 0.0) / 0x140433FD0 (FUN_140638900 7th argument 0.0)",
+   "attempt 3 of FUN_140638900 (the only one for an NPC): no forward offset",
+   "0x140638900",
+   "confirmed",
+   "-"
+  ],
+  [
+   "dangle.probe_radius_scale_npc",
+   1.5,
+   "-",
+   "(party I1) 0x140446070: max(root +0x288, +0x28C) x 1.5; 0x140433FD0: fStack_228 (the same max) x 1.5",
+   "the attempt-3 sphere radius = 1.5 x the capsule radius",
+   "0x140638900",
+   "confirmed",
+   "-"
+  ],
+  [
+   "dangle.begin_backoff",
+   10,
+   "cm",
+   "UTresCharState_Dangle Begin 0x141508DE0: Rot x (-10, 0, 0)",
+   "the hang point tested from 10 cm behind",
+   "0x141508DE0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "dangle.input_min",
+   0.5,
+   "-",
+   "iface vt+0x118 0x141270D90 state 6: magnitude > 0.5 -> +0xB8 / +0xB4",
+   "the AI move counts as input",
+   "0x141270D90",
+   "confirmed",
+   "-"
+  ],
+  [
+   "dangle.cooldown",
+   0.6,
+   "s",
+   "UTresCharState_Dangle tick 0x14150F220: vt+0x2378(0.6 (0x3F19999A), 1)",
+   "pawn +0x6F8 while hanging / on letting go",
+   "0x14150F220",
+   "confirmed",
+   "-"
+  ],
+  [
+   "dangle.climb_angle_ai",
+   90,
+   "deg",
+   "0x14150F220: an input pawn (vt+0x1A20: m_CharInputType PAD / DEBUG_PAD) climbs under 45 and lets go from 135; the friends (TRES_CHAR_INPUT_AI 0) climb under 90, else let go",
+   "the hang's input rule for the AI friends",
+   "0x14150F220",
+   "confirmed",
+   "-"
+  ],
+  [
+   "situation.coop_range",
+   500,
+   "cm",
+   "n_ex002 SituationAction 0x1411CB9F0 phase 2: |coop actor - leader|^2 <= 250000 (XY)",
+   "Goofy offers the coop situation command (0xCE) within it",
+   "0x1411CB9F0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "situation.coop_turn",
+   180,
+   "deg/s",
+   "n_ex002 SituationAction 0x1411CB9F0 phase 1: vt+0xDE0(leader, 180 (0x43340000), 1)",
+   "Goofy turns to the leader during GCoopStart",
+   "0x1411CB9F0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "init.protector_slot_default",
+   1,
+   "slots",
+   "FTresChrInitEquip ctor 0x140570AC0: +0x11 m_InitProtectorSlot = 1",
+   "armour slots of a record that does not serialize the count",
+   "0x140570AC0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "init.accessory_slot_default",
+   1,
+   "slots",
+   "FTresChrInitEquip ctor 0x140570AC0: +0x28 m_InitAccessorySlot = 1",
+   "accessory slots of a record that does not serialize the count",
+   "0x140570AC0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "init.item_slot_default",
+   3,
+   "slots",
+   "FTresChrInitEquip ctor 0x140570AC0: +0x40 m_InitItemSlot = 3",
+   "item slots of a record that does not serialize the count",
+   "0x140570AC0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "revive.default_time",
+   30,
+   "s",
+   "UTresNpcState_Die Begin 0x1412413C0 (0x41F00000)",
+   "KO timer of a friend that is neither Donald nor Goofy",
+   "0x1412413C0",
+   "inferred",
+   "-"
+  ],
+  [
+   "revive.hyper_healing_cap",
+   3,
+   "copies",
+   "UTresNpcState_Die Begin 0x1412413C0 and ATresNpcPawnBase 0x141264140: min(count(0xC3 HYPER_HEALING), 3)",
+   "timer / (1 + n); revive HP x (1 + n)",
+   "0x1412413C0",
+   "inferred",
+   "-"
+  ],
+  [
+   "revive.hp_percent",
+   25,
+   "%",
+   "ATresNpcPawnBase 0x141264140 (pawn slot 1075): max(1, RoundToInt(maxHP(vt+0x1820) * (n + 1) * 25 * 0.01))",
+   "HP a KO'd friend gets back when the timer runs out (vt+0x1820 read as max HP: [C], slot not named)",
+   "0x141264140",
+   "inferred",
+   "-"
+  ],
+  [
+   "revive.cure_half",
+   1,
+   "flag",
+   "kh-core status/runtime.rs Ally.dead (magic spec I 5)",
+   "a heal on a KO'd friend is halved, rounded up; the Die tick gets up as soon as HP > 0 (0x141249F80 sub-step 1)",
+   "0x141249F80",
+   "inferred",
+   "-"
+  ],
+  [
+   "damage.small_power",
+   1500,
+   "-",
+   "Blueprints/Npc/FriendDamageCommonParam CDO m_SmallDamagePower",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.small_brake",
+   0.8600000143051147,
+   "-",
+   "Blueprints/Npc/FriendDamageCommonParam CDO m_SmallDamageBrake",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.small_start_falling_speed",
+   150,
+   "-",
+   "Blueprints/Npc/FriendDamageCommonParam CDO m_SmallDamageStartFallingSpeed",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.small_air_velocity_z",
+   0,
+   "-",
+   "UTresDamageCommonParam constructor 0x14064C130 m_AirSmallDamageVelocityZ (not in the friend CDO)",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.blow_ground_power",
+   1500,
+   "-",
+   "Blueprints/Npc/FriendDamageCommonParam CDO m_BlowDamagePower",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.blow_ground_velocity_z",
+   0,
+   "-",
+   "Blueprints/Npc/FriendDamageCommonParam CDO m_BlowDamageVelocityZ",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.blow_ground_brake",
+   0.9100000262260437,
+   "-",
+   "Blueprints/Npc/FriendDamageCommonParam CDO m_BlowDamageBrake",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.blow_air_power",
+   2000,
+   "-",
+   "UTresDamageCommonParam constructor 0x14064C130 m_AirBlowDamagePower (not in the friend CDO)",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.blow_air_velocity_z",
+   300,
+   "-",
+   "Blueprints/Npc/FriendDamageCommonParam CDO m_AirBlowDamageVelocityZ",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.blow_air_brake",
+   0.949999988079071,
+   "-",
+   "Blueprints/Npc/FriendDamageCommonParam CDO m_AirBlowDamageBrake",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.blow_air_start_brake_time",
+   0,
+   "-",
+   "UTresDamageCommonParam constructor 0x14064C130 m_AirBlowDamageStartBrakeTime (not in the friend CDO)",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.blow_start_falling_speed",
+   700,
+   "-",
+   "Blueprints/Npc/FriendDamageCommonParam CDO m_BlowDamageStartFallingSpeed",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.toss_power",
+   1500,
+   "-",
+   "UTresDamageCommonParam constructor 0x14064C130 m_TossDamagePower (not in the friend CDO)",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.toss_flight_duration",
+   0.20000000298023224,
+   "-",
+   "Blueprints/Npc/FriendDamageCommonParam CDO m_TossDamageFlightDuration",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.toss_fall_gravity_scale",
+   1,
+   "-",
+   "UTresDamageCommonParam constructor 0x14064C130 m_TossDamageFallGravityScale (not in the friend CDO)",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.launch_power",
+   2500,
+   "-",
+   "Blueprints/Npc/FriendDamageCommonParam CDO m_LaunchDamagePower",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.launch_flight_duration",
+   0.20000000298023224,
+   "-",
+   "Blueprints/Npc/FriendDamageCommonParam CDO m_LaunchDamageFlightDuration",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.launch_fall_gravity_scale",
+   1,
+   "-",
+   "Blueprints/Npc/FriendDamageCommonParam CDO m_LaunchDamageFallGravityScale",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.beat_power",
+   2500,
+   "-",
+   "Blueprints/Npc/FriendDamageCommonParam CDO m_BeatDamagePower",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.parabola_power",
+   1500,
+   "-",
+   "UTresDamageCommonParam constructor 0x14064C130 m_ParabolaDamagePower (not in the friend CDO)",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.parabola_angle",
+   45,
+   "-",
+   "UTresDamageCommonParam constructor 0x14064C130 m_ParabolaDamageAngle (not in the friend CDO)",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.parabola_brake",
+   0.98,
+   "-",
+   "UTresDamageCommonParam constructor 0x14064C130 m_ParabolaDamageBrake (not in the friend CDO)",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.parabola_limit_brake",
+   300,
+   "-",
+   "UTresDamageCommonParam constructor 0x14064C130 m_ParabolaDamageLimitBrake (not in the friend CDO)",
+   "kh-react DamageParams field of the friends' damage state (UTresNpcState_Damage : UTresAICharState_Damage, plan 2.7)",
+   "0x14064C130",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.burn_move_speed",
+   300,
+   "-",
+   "Blueprints/Npc/FriendDamageCommonParam CDO m_BadStatBurnMoveSpeed",
+   "the NPC burn hop (getters 0x141246730 / 0x1412467B0 read +0xC0 / +0xC4)",
+   "0x141246730",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.burn_gravity_scale",
+   2,
+   "-",
+   "Blueprints/Npc/FriendDamageCommonParam CDO m_BadStatBurnGravityScale",
+   "the NPC burn hop (getters 0x141246730 / 0x1412467B0 read +0xC0 / +0xC4)",
+   "0x141246730",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.burn_jump_height_max",
+   200,
+   "-",
+   "Blueprints/Npc/FriendDamageCommonParam CDO m_BadStatBurnJumpHeightMax",
+   "the NPC burn hop (getters 0x141246730 / 0x1412467B0 read +0xC0 / +0xC4)",
+   "0x141246730",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.burn_jump_height_min",
+   200,
+   "-",
+   "Blueprints/Npc/FriendDamageCommonParam CDO m_BadStatBurnJumpHeightMin",
+   "the NPC burn hop (getters 0x141246730 / 0x1412467B0 read +0xC0 / +0xC4)",
+   "0x141246730",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.wall_hit_angle",
+   30,
+   "deg",
+   "UTresAICharState_Damage slot 150 0x14043A5D0 (movss constant 30.0), not overridden by TresNpcState_Damage",
+   "a blow ends on a wall when knock . normal <= -cos(angle)",
+   "0x14043A5D0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "damage.wall_hit_speed",
+   50,
+   "cm/s",
+   "UTresAICharState_Damage slot 151 0x14043A5E0 (movss constant 50.0), not overridden by TresNpcState_Damage",
+   "a wall hit needs a horizontal speed above it",
+   "0x14043A5E0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack1_Beat.MaxDistance",
+   200,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack1_Beat CDO m_MaxDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack1_Beat.YawTolerance",
+   90,
+   "-",
+   "native constructor default (m_YawTolerance)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack1_Beat.StartYawMax",
+   135,
+   "-",
+   "native constructor default (m_StartYawMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack1_Beat.AnimNotifyTractionParam.TractionDisMin",
+   0,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMin)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack1_Beat.AnimNotifyTractionParam.TractionDisMax",
+   100,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack1_Beat.AnimNotifyTractionParam.TractionMaxSpeed",
+   500,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack1_Beat CDO m_AnimNotifyTractionParam.m_TractionMaxSpeed",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack1_Beat.AnimNotifyTractionParam.TractionAcc",
+   8000,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionAcc)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack1_Beat.MinDistance",
+   0,
+   "-",
+   "native constructor default (m_MinDistance)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack1_Beat.MinHeight",
+   0,
+   "-",
+   "native constructor default (m_MinHeight)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack1_Beat.MaxHeight",
+   120,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack1_Beat CDO m_MaxHeight",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack1_Beat.AttackAnimData",
+   -1,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack1_Beat CDO m_AttackAnimData",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack1_Beat.bEnableStartYawMax",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack1_Beat CDO m_bEnableStartYawMax",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack1_Beat.bMinDistance",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack1_Beat CDO m_bMinDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack1_Beat.bDirectPathRequired",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack1_Beat CDO m_bDirectPathRequired",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack1_Beat.ActionEQSQuery",
+   -6,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack1_Beat CDO m_ActionEQSQuery",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack1_Beat.ViableStates.byteAsName",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack1_Beat CDO m_ViableStates.byteAsName",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack2_Swing.MaxDistance",
+   150,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack2_Swing CDO m_MaxDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack2_Swing.YawTolerance",
+   90,
+   "-",
+   "native constructor default (m_YawTolerance)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack2_Swing.StartYawMax",
+   135,
+   "-",
+   "native constructor default (m_StartYawMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack2_Swing.AnimNotifyTractionParam.TractionDisMin",
+   0,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMin)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack2_Swing.AnimNotifyTractionParam.TractionDisMax",
+   100,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack2_Swing.AnimNotifyTractionParam.TractionMaxSpeed",
+   500,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack2_Swing CDO m_AnimNotifyTractionParam.m_TractionMaxSpeed",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack2_Swing.AnimNotifyTractionParam.TractionAcc",
+   8000,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionAcc)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack2_Swing.MinDistance",
+   0,
+   "-",
+   "native constructor default (m_MinDistance)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack2_Swing.MinHeight",
+   0,
+   "-",
+   "native constructor default (m_MinHeight)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack2_Swing.MaxHeight",
+   120,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack2_Swing CDO m_MaxHeight",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack2_Swing.AttackAnimData",
+   -1,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack2_Swing CDO m_AttackAnimData",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack2_Swing.bEnableStartYawMax",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack2_Swing CDO m_bEnableStartYawMax",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack2_Swing.bMinDistance",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack2_Swing CDO m_bMinDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack2_Swing.bDirectPathRequired",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack2_Swing CDO m_bDirectPathRequired",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack2_Swing.ActionEQSQuery",
+   -6,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack2_Swing CDO m_ActionEQSQuery",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack2_Swing.ViableStates.byteAsName",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack2_Swing CDO m_ViableStates.byteAsName",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.MaxDistance",
+   500,
+   "-",
+   "native constructor default (m_MaxDistance)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.YawTolerance",
+   90,
+   "-",
+   "native constructor default (m_YawTolerance)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.StartYawMax",
+   135,
+   "-",
+   "native constructor default (m_StartYawMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.AnimNotifyTractionParam.TractionDisMin",
+   0,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMin)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.AnimNotifyTractionParam.TractionDisMax",
+   100,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.AnimNotifyTractionParam.TractionMaxSpeed",
+   800,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionMaxSpeed)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.AnimNotifyTractionParam.TractionAcc",
+   8000,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionAcc)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.MinDistance",
+   50,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack3_Jump CDO m_MinDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.JumpHeight",
+   200,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack3_Jump CDO m_JumpHeight",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.JumpSpeed",
+   450,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack3_Jump CDO m_JumpSpeed",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.LimitHeight",
+   460,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack3_Jump CDO m_LimitHeight",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.LimitMinHeight",
+   300,
+   "-",
+   "native constructor default (m_LimitMinHeight)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.GravityScale",
+   2.5,
+   "-",
+   "native constructor default (m_GravityScale)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.MinMoveDistance",
+   300,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack3_Jump CDO m_MinMoveDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.MaxMoveDistance",
+   600,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack3_Jump CDO m_MaxMoveDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.JumpAttackEnableZ",
+   100,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack3_Jump CDO m_JumpAttackEnableZ",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.JumpAttackRange",
+   100,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack3_Jump CDO m_JumpAttackRange",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.JumpAttackUpRangeZ",
+   50,
+   "-",
+   "native constructor default (m_JumpAttackUpRangeZ)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.JumpAttackDownRangeZ",
+   50,
+   "-",
+   "native constructor default (m_JumpAttackDownRangeZ)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.JumpAttackDecelMoveSpeed",
+   3000,
+   "-",
+   "native constructor default (m_JumpAttackDecelMoveSpeed)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.JumpAttackMinMoveSpeed",
+   0,
+   "-",
+   "native constructor default (m_JumpAttackMinMoveSpeed)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.JumpHomingSpeedEnable",
+   0,
+   "-",
+   "native constructor default (m_JumpHomingSpeedEnable)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.JumpHomingSpeed",
+   45,
+   "-",
+   "native constructor default (m_JumpHomingSpeed)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.JumpHomingYawMaxEnable",
+   0,
+   "-",
+   "native constructor default (m_JumpHomingYawMaxEnable)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.JumpHomingYawMax",
+   0,
+   "-",
+   "native constructor default (m_JumpHomingYawMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.EnableSpeedCorrectionUp",
+   1,
+   "-",
+   "native constructor default (m_EnableSpeedCorrectionUp)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.EnableSpeedCorrectionDown",
+   1,
+   "-",
+   "native constructor default (m_EnableSpeedCorrectionDown)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.bEnableStartYawMax",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack3_Jump CDO m_bEnableStartYawMax",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.bMinDistance",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack3_Jump CDO m_bMinDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.bMaxDistance",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack3_Jump CDO m_bMaxDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.MaxHeight",
+   300,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack3_Jump CDO m_MaxHeight",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.bDirectPathRequired",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack3_Jump CDO m_bDirectPathRequired",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.bLineOfSightRequired",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack3_Jump CDO m_bLineOfSightRequired",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.ActionEQSQuery",
+   -5,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack3_Jump CDO m_ActionEQSQuery",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.bTargetRequired",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack3_Jump CDO m_bTargetRequired",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.bValidateYaw",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack3_Jump CDO m_bValidateYaw",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack3_Jump.ViableStates.byteAsName",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack3_Jump CDO m_ViableStates.byteAsName",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack4_MagFire.MaxDistance",
+   5000,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack4_MagFire CDO m_MaxDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack4_MagFire.YawTolerance",
+   30,
+   "-",
+   "native constructor default (m_YawTolerance)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack4_MagFire.StartYawMax",
+   135,
+   "-",
+   "native constructor default (m_StartYawMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack4_MagFire.AnimNotifyTractionParam.TractionDisMin",
+   0,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMin)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack4_MagFire.AnimNotifyTractionParam.TractionDisMax",
+   100,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack4_MagFire.AnimNotifyTractionParam.TractionMaxSpeed",
+   800,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionMaxSpeed)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack4_MagFire.AnimNotifyTractionParam.TractionAcc",
+   8000,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionAcc)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack4_MagFire.MinDistance",
+   100,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack4_MagFire CDO m_MinDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack4_MagFire.ShotPitchMax",
+   30,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack4_MagFire CDO m_ShotPitchMax",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack4_MagFire.ShotPitchMin",
+   5,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack4_MagFire CDO m_ShotPitchMin",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack4_MagFire.ShotYawMinMax",
+   30,
+   "-",
+   "native constructor default (m_ShotYawMinMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack4_MagFire.bEnableStartYawMax",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack4_MagFire CDO m_bEnableStartYawMax",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack4_MagFire.ActionEQSQuery",
+   -5,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack4_MagFire CDO m_ActionEQSQuery",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack4_MagFire.ViableStates.byteAsName",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack4_MagFire CDO m_ViableStates.byteAsName",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack5_MagBlizzard.MaxDistance",
+   5000,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack5_MagBlizzard CDO m_MaxDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack5_MagBlizzard.YawTolerance",
+   30,
+   "-",
+   "native constructor default (m_YawTolerance)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack5_MagBlizzard.StartYawMax",
+   135,
+   "-",
+   "native constructor default (m_StartYawMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack5_MagBlizzard.AnimNotifyTractionParam.TractionDisMin",
+   0,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMin)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack5_MagBlizzard.AnimNotifyTractionParam.TractionDisMax",
+   100,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack5_MagBlizzard.AnimNotifyTractionParam.TractionMaxSpeed",
+   800,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionMaxSpeed)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack5_MagBlizzard.AnimNotifyTractionParam.TractionAcc",
+   8000,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionAcc)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack5_MagBlizzard.MinDistance",
+   100,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack5_MagBlizzard CDO m_MinDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack5_MagBlizzard.ShotPitchMax",
+   30,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack5_MagBlizzard CDO m_ShotPitchMax",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack5_MagBlizzard.ShotPitchMin",
+   5,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack5_MagBlizzard CDO m_ShotPitchMin",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack5_MagBlizzard.ShotYawMinMax",
+   30,
+   "-",
+   "native constructor default (m_ShotYawMinMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack5_MagBlizzard.bEnableStartYawMax",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack5_MagBlizzard CDO m_bEnableStartYawMax",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack5_MagBlizzard.ActionEQSQuery",
+   -5,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack5_MagBlizzard CDO m_ActionEQSQuery",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack5_MagBlizzard.ViableStates.byteAsName",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack5_MagBlizzard CDO m_ViableStates.byteAsName",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack6_MagThunder.MaxDistance",
+   5000,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack6_MagThunder CDO m_MaxDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack6_MagThunder.YawTolerance",
+   30,
+   "-",
+   "native constructor default (m_YawTolerance)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack6_MagThunder.StartYawMax",
+   135,
+   "-",
+   "native constructor default (m_StartYawMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack6_MagThunder.AnimNotifyTractionParam.TractionDisMin",
+   0,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMin)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack6_MagThunder.AnimNotifyTractionParam.TractionDisMax",
+   100,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack6_MagThunder.AnimNotifyTractionParam.TractionMaxSpeed",
+   800,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionMaxSpeed)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack6_MagThunder.AnimNotifyTractionParam.TractionAcc",
+   8000,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionAcc)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack6_MagThunder.MinDistance",
+   100,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack6_MagThunder CDO m_MinDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack6_MagThunder.ShotPitchMax",
+   30,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack6_MagThunder CDO m_ShotPitchMax",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack6_MagThunder.ShotPitchMin",
+   5,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack6_MagThunder CDO m_ShotPitchMin",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack6_MagThunder.ShotYawMinMax",
+   30,
+   "-",
+   "native constructor default (m_ShotYawMinMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack6_MagThunder.bEnableStartYawMax",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack6_MagThunder CDO m_bEnableStartYawMax",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack6_MagThunder.ActionEQSQuery",
+   -5,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack6_MagThunder CDO m_ActionEQSQuery",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack6_MagThunder.ViableStates.byteAsName",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack6_MagThunder CDO m_ViableStates.byteAsName",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack7_MagAero.MaxDistance",
+   5000,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack7_MagAero CDO m_MaxDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack7_MagAero.YawTolerance",
+   30,
+   "-",
+   "native constructor default (m_YawTolerance)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack7_MagAero.StartYawMax",
+   135,
+   "-",
+   "native constructor default (m_StartYawMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack7_MagAero.AnimNotifyTractionParam.TractionDisMin",
+   0,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMin)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack7_MagAero.AnimNotifyTractionParam.TractionDisMax",
+   100,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack7_MagAero.AnimNotifyTractionParam.TractionMaxSpeed",
+   800,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionMaxSpeed)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack7_MagAero.AnimNotifyTractionParam.TractionAcc",
+   8000,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionAcc)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack7_MagAero.MinDistance",
+   100,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack7_MagAero CDO m_MinDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack7_MagAero.ShotPitchMax",
+   30,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack7_MagAero CDO m_ShotPitchMax",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack7_MagAero.ShotPitchMin",
+   5,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack7_MagAero CDO m_ShotPitchMin",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack7_MagAero.ShotYawMinMax",
+   30,
+   "-",
+   "native constructor default (m_ShotYawMinMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack7_MagAero.bEnableStartYawMax",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack7_MagAero CDO m_bEnableStartYawMax",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack7_MagAero.ActionEQSQuery",
+   -5,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack7_MagAero CDO m_ActionEQSQuery",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Attack7_MagAero.ViableStates.byteAsName",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Attack7_MagAero CDO m_ViableStates.byteAsName",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Action2_MagCure.MaxDistance",
+   800,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Action2_MagCure CDO m_MaxDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Action2_MagCure.YawTolerance",
+   180,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Action2_MagCure CDO m_YawTolerance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Action2_MagCure.StartYawMax",
+   135,
+   "-",
+   "native constructor default (m_StartYawMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Action2_MagCure.AnimNotifyTractionParam.TractionDisMin",
+   0,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMin)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Action2_MagCure.AnimNotifyTractionParam.TractionDisMax",
+   100,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Action2_MagCure.AnimNotifyTractionParam.TractionMaxSpeed",
+   800,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionMaxSpeed)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Action2_MagCure.AnimNotifyTractionParam.TractionAcc",
+   8000,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionAcc)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Action2_MagCure.MinDistance",
+   0,
+   "-",
+   "native constructor default (m_MinDistance)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Action2_MagCure.ShotPitchMax",
+   45,
+   "-",
+   "native constructor default (m_ShotPitchMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Action2_MagCure.ShotPitchMin",
+   0,
+   "-",
+   "native constructor default (m_ShotPitchMin)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Action2_MagCure.ShotYawMinMax",
+   30,
+   "-",
+   "native constructor default (m_ShotYawMinMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Action2_MagCure.bEnableStartYawMax",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Action2_MagCure CDO m_bEnableStartYawMax",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Action2_MagCure.bMinDistance",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Action2_MagCure CDO m_bMinDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Action2_MagCure.bMaxDistance",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Action2_MagCure CDO m_bMaxDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Action2_MagCure.bLineOfSightRequired",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Action2_MagCure CDO m_bLineOfSightRequired",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Action2_MagCure.bTargetRequired",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Action2_MagCure CDO m_bTargetRequired",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Action2_MagCure.bValidateYaw",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Action2_MagCure CDO m_bValidateYaw",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex001.Action2_MagCure.ViableStates.byteAsName",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/BT/n_ex001_Action2_MagCure CDO m_ViableStates.byteAsName",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack1_Push.MaxDistance",
+   230,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack1_Push CDO m_MaxDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack1_Push.YawTolerance",
+   90,
+   "-",
+   "native constructor default (m_YawTolerance)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack1_Push.StartYawMax",
+   135,
+   "-",
+   "native constructor default (m_StartYawMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack1_Push.AnimNotifyTractionParam.TractionDisMin",
+   0,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMin)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack1_Push.AnimNotifyTractionParam.TractionDisMax",
+   100,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack1_Push.AnimNotifyTractionParam.TractionMaxSpeed",
+   500,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack1_Push CDO m_AnimNotifyTractionParam.m_TractionMaxSpeed",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack1_Push.AnimNotifyTractionParam.TractionAcc",
+   8000,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionAcc)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack1_Push.MinDistance",
+   0,
+   "-",
+   "native constructor default (m_MinDistance)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack1_Push.MinHeight",
+   50,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack1_Push CDO m_MinHeight",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack1_Push.MaxHeight",
+   135,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack1_Push CDO m_MaxHeight",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack1_Push.AttackAnimData",
+   -1,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack1_Push CDO m_AttackAnimData",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack1_Push.bEnableStartYawMax",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack1_Push CDO m_bEnableStartYawMax",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack1_Push.bMinDistance",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack1_Push CDO m_bMinDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack1_Push.bDirectPathRequired",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack1_Push CDO m_bDirectPathRequired",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack1_Push.ActionEQSQuery",
+   -6,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack1_Push CDO m_ActionEQSQuery",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack1_Push.ViableStates.byteAsName",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack1_Push CDO m_ViableStates.byteAsName",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack2_Sweep.MaxDistance",
+   260,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack2_Sweep CDO m_MaxDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack2_Sweep.YawTolerance",
+   130,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack2_Sweep CDO m_YawTolerance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack2_Sweep.StartYawMax",
+   135,
+   "-",
+   "native constructor default (m_StartYawMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack2_Sweep.AnimNotifyTractionParam.TractionDisMin",
+   0,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMin)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack2_Sweep.AnimNotifyTractionParam.TractionDisMax",
+   100,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack2_Sweep.AnimNotifyTractionParam.TractionMaxSpeed",
+   500,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack2_Sweep CDO m_AnimNotifyTractionParam.m_TractionMaxSpeed",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack2_Sweep.AnimNotifyTractionParam.TractionAcc",
+   8000,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionAcc)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack2_Sweep.MinDistance",
+   0,
+   "-",
+   "native constructor default (m_MinDistance)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack2_Sweep.MinHeight",
+   50,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack2_Sweep CDO m_MinHeight",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack2_Sweep.MaxHeight",
+   85,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack2_Sweep CDO m_MaxHeight",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack2_Sweep.AttackAnimData",
+   -1,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack2_Sweep CDO m_AttackAnimData",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack2_Sweep.bEnableStartYawMax",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack2_Sweep CDO m_bEnableStartYawMax",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack2_Sweep.bMinDistance",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack2_Sweep CDO m_bMinDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack2_Sweep.bDirectPathRequired",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack2_Sweep CDO m_bDirectPathRequired",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack2_Sweep.ActionEQSQuery",
+   -6,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack2_Sweep CDO m_ActionEQSQuery",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack2_Sweep.ViableStates.byteAsName",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack2_Sweep CDO m_ViableStates.byteAsName",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.MaxDistance",
+   500,
+   "-",
+   "native constructor default (m_MaxDistance)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.YawTolerance",
+   60,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack3_Jump CDO m_YawTolerance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.StartYawMax",
+   135,
+   "-",
+   "native constructor default (m_StartYawMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.AnimNotifyTractionParam.TractionDisMin",
+   0,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMin)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.AnimNotifyTractionParam.TractionDisMax",
+   100,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.AnimNotifyTractionParam.TractionMaxSpeed",
+   800,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionMaxSpeed)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.AnimNotifyTractionParam.TractionAcc",
+   8000,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionAcc)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.MinDistance",
+   50,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack3_Jump CDO m_MinDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.JumpHeight",
+   200,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack3_Jump CDO m_JumpHeight",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.JumpSpeed",
+   450,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack3_Jump CDO m_JumpSpeed",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.LimitHeight",
+   460,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack3_Jump CDO m_LimitHeight",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.LimitMinHeight",
+   300,
+   "-",
+   "native constructor default (m_LimitMinHeight)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.GravityScale",
+   2.5,
+   "-",
+   "native constructor default (m_GravityScale)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.MinMoveDistance",
+   300,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack3_Jump CDO m_MinMoveDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.MaxMoveDistance",
+   600,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack3_Jump CDO m_MaxMoveDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.JumpAttackEnableZ",
+   100,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack3_Jump CDO m_JumpAttackEnableZ",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.JumpAttackRange",
+   100,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack3_Jump CDO m_JumpAttackRange",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.JumpAttackUpRangeZ",
+   50,
+   "-",
+   "native constructor default (m_JumpAttackUpRangeZ)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.JumpAttackDownRangeZ",
+   50,
+   "-",
+   "native constructor default (m_JumpAttackDownRangeZ)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.JumpAttackDecelMoveSpeed",
+   3000,
+   "-",
+   "native constructor default (m_JumpAttackDecelMoveSpeed)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.JumpAttackMinMoveSpeed",
+   0,
+   "-",
+   "native constructor default (m_JumpAttackMinMoveSpeed)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.JumpHomingSpeedEnable",
+   0,
+   "-",
+   "native constructor default (m_JumpHomingSpeedEnable)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.JumpHomingSpeed",
+   45,
+   "-",
+   "native constructor default (m_JumpHomingSpeed)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.JumpHomingYawMaxEnable",
+   0,
+   "-",
+   "native constructor default (m_JumpHomingYawMaxEnable)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.JumpHomingYawMax",
+   0,
+   "-",
+   "native constructor default (m_JumpHomingYawMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.EnableSpeedCorrectionUp",
+   1,
+   "-",
+   "native constructor default (m_EnableSpeedCorrectionUp)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.EnableSpeedCorrectionDown",
+   1,
+   "-",
+   "native constructor default (m_EnableSpeedCorrectionDown)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.bEnableStartYawMax",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack3_Jump CDO m_bEnableStartYawMax",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.bMinDistance",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack3_Jump CDO m_bMinDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.bMaxDistance",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack3_Jump CDO m_bMaxDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.MaxHeight",
+   300,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack3_Jump CDO m_MaxHeight",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.bDirectPathRequired",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack3_Jump CDO m_bDirectPathRequired",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.bLineOfSightRequired",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack3_Jump CDO m_bLineOfSightRequired",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.ActionEQSQuery",
+   -5,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack3_Jump CDO m_ActionEQSQuery",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.bTargetRequired",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack3_Jump CDO m_bTargetRequired",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.bValidateYaw",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack3_Jump CDO m_bValidateYaw",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack3_Jump.ViableStates.byteAsName",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack3_Jump CDO m_ViableStates.byteAsName",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.MaxDistance",
+   1000,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack6_Tornado CDO m_MaxDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.YawTolerance",
+   180,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack6_Tornado CDO m_YawTolerance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.StartYawMax",
+   135,
+   "-",
+   "native constructor default (m_StartYawMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.AnimNotifyTractionParam.TractionDisMin",
+   0,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMin)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.AnimNotifyTractionParam.TractionDisMax",
+   100,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.AnimNotifyTractionParam.TractionMaxSpeed",
+   640,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack6_Tornado CDO m_AnimNotifyTractionParam.m_TractionMaxSpeed",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.AnimNotifyTractionParam.TractionAcc",
+   1000,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack6_Tornado CDO m_AnimNotifyTractionParam.m_TractionAcc",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.MinDistance",
+   0,
+   "-",
+   "native constructor default (m_MinDistance)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.fMoveTime",
+   3,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack6_Tornado CDO m_fMoveTime",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.fMovemSpeed",
+   400,
+   "-",
+   "native constructor default (m_fMovemSpeed)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.ExclusionNum",
+   3,
+   "-",
+   "native constructor default (m_ExclusionNum)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.fFlyHeight",
+   60,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack6_Tornado CDO m_fFlyHeight",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.fFlySpeed",
+   20,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack6_Tornado CDO m_fFlySpeed",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.bEnableStartYawMax",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack6_Tornado CDO m_bEnableStartYawMax",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.bMinDistance",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack6_Tornado CDO m_bMinDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.MinHeight",
+   -50,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack6_Tornado CDO m_MinHeight",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.MaxHeight",
+   200,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack6_Tornado CDO m_MaxHeight",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.ActionEQSQuery",
+   -5,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack6_Tornado CDO m_ActionEQSQuery",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.bValidateYaw",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack6_Tornado CDO m_bValidateYaw",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack6_Tornado.ViableStates.byteAsName",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack6_Tornado CDO m_ViableStates.byteAsName",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.MaxDistance",
+   2000,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack7_Turbo CDO m_MaxDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.YawTolerance",
+   180,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack7_Turbo CDO m_YawTolerance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.StartYawMax",
+   135,
+   "-",
+   "native constructor default (m_StartYawMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.AnimNotifyTractionParam.TractionDisMin",
+   0,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMin)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.AnimNotifyTractionParam.TractionDisMax",
+   100,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.AnimNotifyTractionParam.TractionMaxSpeed",
+   800,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionMaxSpeed)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.AnimNotifyTractionParam.TractionAcc",
+   8000,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionAcc)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.MinDistance",
+   0,
+   "-",
+   "native constructor default (m_MinDistance)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.fMoveTime",
+   6,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack7_Turbo CDO m_fMoveTime",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.fMoveSpeed",
+   900,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack7_Turbo CDO m_fMoveSpeed",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.fRangeMin",
+   50,
+   "-",
+   "native constructor default (m_fRangeMin)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.fTurnAngle",
+   15,
+   "-",
+   "native constructor default (m_fTurnAngle)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.fTurnRate",
+   3,
+   "-",
+   "native constructor default (m_fTurnRate)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.fSlalomTime",
+   0.7,
+   "-",
+   "native constructor default (m_fSlalomTime)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.fTargetHeight",
+   90,
+   "-",
+   "native constructor default (m_fTargetHeight)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.FallHeight",
+   150,
+   "-",
+   "native constructor default (m_FallHeight)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.bEnableStartYawMax",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack7_Turbo CDO m_bEnableStartYawMax",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.bMinDistance",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack7_Turbo CDO m_bMinDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.ActionEQSQuery",
+   -5,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack7_Turbo CDO m_ActionEQSQuery",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.bValidateYaw",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack7_Turbo CDO m_bValidateYaw",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack7_Turbo.ViableStates.byteAsName",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack7_Turbo CDO m_ViableStates.byteAsName",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.MaxDistance",
+   3000,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack8_Discus CDO m_MaxDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.YawTolerance",
+   180,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack8_Discus CDO m_YawTolerance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.StartYawMax",
+   135,
+   "-",
+   "native constructor default (m_StartYawMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.AnimNotifyTractionParam.TractionDisMin",
+   0,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMin)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.AnimNotifyTractionParam.TractionDisMax",
+   100,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionDisMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.AnimNotifyTractionParam.TractionMaxSpeed",
+   800,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionMaxSpeed)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.AnimNotifyTractionParam.TractionAcc",
+   8000,
+   "-",
+   "native constructor default (m_AnimNotifyTractionParam.m_TractionAcc)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.MinDistance",
+   300,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack8_Discus CDO m_MinDistance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.ShotPitchMax",
+   45,
+   "-",
+   "native constructor default (m_ShotPitchMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.ShotPitchMin",
+   -30,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack8_Discus CDO m_ShotPitchMin",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.ShotYawMinMax",
+   30,
+   "-",
+   "native constructor default (m_ShotYawMinMax)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.bEnableTargetShot",
+   1,
+   "-",
+   "native constructor default (m_bEnableTargetShot)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.fAttackTime",
+   2,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack8_Discus CDO m_fAttackTime",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.fStartSpeed",
+   2500,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack8_Discus CDO m_fStartSpeed",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.fAttackFadeTime",
+   0.3499999940395355,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack8_Discus CDO m_fAttackFadeTime",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.rHomingDisableYaw",
+   90,
+   "-",
+   "native constructor default (m_rHomingDisableYaw)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.rHomingDisablePitch",
+   70,
+   "-",
+   "native constructor default (m_rHomingDisablePitch)",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.NpcPitchOffset",
+   7.5,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack8_Discus CDO m_NpcPitchOffset",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.NpcPitchTolerance",
+   37.5,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack8_Discus CDO m_NpcPitchTolerance",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.bNpcValidatePitch",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack8_Discus CDO m_bNpcValidatePitch",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.bEnableStartYawMax",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack8_Discus CDO m_bEnableStartYawMax",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.ActionEQSQuery",
+   -5,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack8_Discus CDO m_ActionEQSQuery",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.bValidateYaw",
+   0,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack8_Discus CDO m_bValidateYaw",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "act.n_ex002.Attack8_Discus.ViableStates.byteAsName",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex002/BT/n_ex002_Attack8_Discus CDO m_ViableStates.byteAsName",
+   "action definition number (plan 2.4)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.life",
+   5,
+   "s",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagFire CDO m_MainLife",
+   "projectile life",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.no_destroy_on_hit",
+   0,
+   "flag",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagFire / Blueprints/Projectile/MagicFire/TresProj_MagFireBase CDO m_bNoDestroyOnHit",
+   "1 = the actor lives on after a hit (one hit per target)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.InitialSpeed",
+   1000,
+   "cm/s",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagFire ProjectileComp InitialSpeed",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.MaxSpeed",
+   1500,
+   "cm/s",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagFire ProjectileComp MaxSpeed",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.Accel",
+   100,
+   "cm/s",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagFire ProjectileComp m_Accel",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.EnableHoming",
+   1,
+   "cm/s",
+   "Blueprints/Projectile/MagicFire/TresProj_MagFireBase ProjectileComp m_bEnableHoming",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.HomingStartDelay",
+   0.15000000596046448,
+   "s",
+   "Blueprints/Projectile/MagicFire/TresProj_MagFireBase ProjectileComp m_HomingStartDelay",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.HomingMinDist",
+   0,
+   "cm/s",
+   "TresProjectileMovementComponent ctor 0x141470D50 default m_HomingMinDist",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.HomingTurnMax",
+   500,
+   "deg/s",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagFire ProjectileComp m_HomingTurnMax",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.HomingTurnAccel",
+   100,
+   "deg/s",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagFire ProjectileComp m_HomingTurnAccel",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.HomingMaxTurnMax",
+   3000,
+   "deg/s",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagFire ProjectileComp m_HomingMaxTurnMax",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.shape0.kind",
+   0,
+   "0 sphere / 1 capsule / 2 convex",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagFire TresAtkColl0 CollisionShapesSrc[0] m_ShapeType",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.shape0.size_x",
+   20,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagFire TresAtkColl0 CollisionShapesSrc[0] m_Size.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.shape0.size_z",
+   0,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagFire TresAtkColl0 CollisionShapesSrc[0] m_Size.Z",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.shape0.inc_x",
+   0,
+   "cm/s",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagFire TresAtkColl0 CollisionShapesSrc[0] m_IncSize.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.shape0.inc_max_x",
+   0,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagFire TresAtkColl0 CollisionShapesSrc[0] m_IncMaxSize.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.shape0.offset_z",
+   0,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagFire TresAtkColl0 CollisionShapesSrc[0] m_RelativeLocation1.Z",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.shape0.scale_x",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagFire TresAtkColl0 CollisionShapesSrc[0] m_Scale.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.shape0.scale_z",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagFire TresAtkColl0 CollisionShapesSrc[0] m_Scale.Z",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.fire.shapes",
+   1,
+   "count",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagFire TresAtkColl0 CollisionShapesSrc",
+   "number of attack shapes",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.life",
+   5,
+   "s",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagBlizzard CDO m_MainLife",
+   "projectile life",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.no_destroy_on_hit",
+   0,
+   "flag",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagBlizzard / Blueprints/Projectile/MagicBlizzard/TresProj_MagBlizzardBase CDO m_bNoDestroyOnHit",
+   "1 = the actor lives on after a hit (one hit per target)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.InitialSpeed",
+   1500,
+   "cm/s",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagBlizzard ProjectileComp InitialSpeed",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.MaxSpeed",
+   2000,
+   "cm/s",
+   "TresProjectileMovementComponent ctor 0x141470D50 default MaxSpeed",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.Accel",
+   100,
+   "cm/s",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagBlizzard ProjectileComp m_Accel",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.EnableHoming",
+   1,
+   "cm/s",
+   "Blueprints/Projectile/MagicBlizzard/TresProj_MagBlizzardBase ProjectileComp m_bEnableHoming",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.HomingStartDelay",
+   0,
+   "s",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagBlizzard ProjectileComp m_HomingStartDelay",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.HomingMinDist",
+   0,
+   "cm/s",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagBlizzard ProjectileComp m_HomingMinDist",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.HomingTurnMax",
+   180,
+   "deg/s",
+   "Blueprints/Projectile/MagicBlizzard/TresProj_MagBlizzardBase ProjectileComp m_HomingTurnMax",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.HomingTurnAccel",
+   180,
+   "deg/s",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagBlizzard ProjectileComp m_HomingTurnAccel",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.HomingMaxTurnMax",
+   180,
+   "deg/s",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagBlizzard ProjectileComp m_HomingMaxTurnMax",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.shape0.kind",
+   0,
+   "0 sphere / 1 capsule / 2 convex",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagBlizzard TresAtkColl0 CollisionShapesSrc[0] m_ShapeType",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.shape0.size_x",
+   38,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagBlizzard TresAtkColl0 CollisionShapesSrc[0] m_Size.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.shape0.size_z",
+   0,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagBlizzard TresAtkColl0 CollisionShapesSrc[0] m_Size.Z",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.shape0.inc_x",
+   0,
+   "cm/s",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagBlizzard TresAtkColl0 CollisionShapesSrc[0] m_IncSize.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.shape0.inc_max_x",
+   0,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagBlizzard TresAtkColl0 CollisionShapesSrc[0] m_IncMaxSize.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.shape0.offset_z",
+   0,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagBlizzard TresAtkColl0 CollisionShapesSrc[0] m_RelativeLocation1.Z",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.shape0.scale_x",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagBlizzard TresAtkColl0 CollisionShapesSrc[0] m_Scale.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.shape0.scale_z",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagBlizzard TresAtkColl0 CollisionShapesSrc[0] m_Scale.Z",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.blizzard.shapes",
+   1,
+   "count",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagBlizzard TresAtkColl0 CollisionShapesSrc",
+   "number of attack shapes",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.life",
+   0.30000001192092896,
+   "s",
+   "Blueprints/Projectile/MagicThunder/TresProj_MagThunderBase CDO m_MainLife",
+   "projectile life",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.no_destroy_on_hit",
+   1,
+   "flag",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagThunder / Blueprints/Projectile/MagicThunder/TresProj_MagThunderBase CDO m_bNoDestroyOnHit",
+   "1 = the actor lives on after a hit (one hit per target)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.InitialSpeed",
+   0,
+   "cm/s",
+   "Blueprints/Projectile/MagicThunder/TresProj_MagThunderBase ProjectileComp InitialSpeed",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.MaxSpeed",
+   0,
+   "cm/s",
+   "Blueprints/Projectile/MagicThunder/TresProj_MagThunderBase ProjectileComp MaxSpeed",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.Accel",
+   0,
+   "cm/s",
+   "TresProjectileMovementComponent ctor 0x141470D50 default m_Accel",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.EnableHoming",
+   0,
+   "cm/s",
+   "TresProjectileMovementComponent ctor 0x141470D50 default m_bEnableHoming",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.HomingStartDelay",
+   0,
+   "s",
+   "TresProjectileMovementComponent ctor 0x141470D50 default m_HomingStartDelay",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.HomingMinDist",
+   0,
+   "cm/s",
+   "TresProjectileMovementComponent ctor 0x141470D50 default m_HomingMinDist",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.HomingTurnMax",
+   0,
+   "deg/s",
+   "TresProjectileMovementComponent ctor 0x141470D50 default m_HomingTurnMax",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.HomingTurnAccel",
+   0,
+   "deg/s",
+   "TresProjectileMovementComponent ctor 0x141470D50 default m_HomingTurnAccel",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.HomingMaxTurnMax",
+   0,
+   "deg/s",
+   "TresProjectileMovementComponent ctor 0x141470D50 default m_HomingMaxTurnMax",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.shape0.kind",
+   1,
+   "0 sphere / 1 capsule / 2 convex",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagThunder TresAtkColl0 CollisionShapesSrc[0] m_ShapeType",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.shape0.size_x",
+   50,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagThunder TresAtkColl0 CollisionShapesSrc[0] m_Size.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.shape0.size_z",
+   200,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagThunder TresAtkColl0 CollisionShapesSrc[0] m_Size.Z",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.shape0.inc_x",
+   600,
+   "cm/s",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagThunder TresAtkColl0 CollisionShapesSrc[0] m_IncSize.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.shape0.inc_max_x",
+   200,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagThunder TresAtkColl0 CollisionShapesSrc[0] m_IncMaxSize.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.shape0.offset_z",
+   200,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagThunder TresAtkColl0 CollisionShapesSrc[0] m_RelativeLocation1.Z",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.shape0.scale_x",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagThunder TresAtkColl0 CollisionShapesSrc[0] m_Scale.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.shape0.scale_z",
+   1,
+   "-",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagThunder TresAtkColl0 CollisionShapesSrc[0] m_Scale.Z",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.shape1.kind",
+   2,
+   "0 sphere / 1 capsule / 2 convex",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagThunder TresAtkColl0 CollisionShapesSrc[1] m_ShapeType",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.shape1.size_x",
+   50,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagThunder TresAtkColl0 CollisionShapesSrc[1] m_Size.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.shape1.size_z",
+   0,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagThunder TresAtkColl0 CollisionShapesSrc[1] m_Size.Z",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.shape1.inc_x",
+   0,
+   "cm/s",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagThunder TresAtkColl0 CollisionShapesSrc[1] m_IncSize.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.shape1.inc_max_x",
+   0,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagThunder TresAtkColl0 CollisionShapesSrc[1] m_IncMaxSize.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.shape1.offset_z",
+   0,
+   "cm",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagThunder TresAtkColl0 CollisionShapesSrc[1] m_RelativeLocation1.Z",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.shape1.scale_x",
+   2,
+   "-",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagThunder TresAtkColl0 CollisionShapesSrc[1] m_Scale.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.shape1.scale_z",
+   1.5,
+   "-",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagThunder TresAtkColl0 CollisionShapesSrc[1] m_Scale.Z",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.thunder.shapes",
+   2,
+   "count",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagThunder TresAtkColl0 CollisionShapesSrc",
+   "number of attack shapes",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.life",
+   0.11999999731779099,
+   "s",
+   "Blueprints/Projectile/MagicAero/TresProj_MagAeroBase CDO m_MainLife",
+   "projectile life",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.no_destroy_on_hit",
+   1,
+   "flag",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagAero / Blueprints/Projectile/MagicAero/TresProj_MagAeroBase CDO m_bNoDestroyOnHit",
+   "1 = the actor lives on after a hit (one hit per target)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.InitialSpeed",
+   0,
+   "cm/s",
+   "Blueprints/Projectile/MagicAero/TresProj_MagAeroBase ProjectileComp InitialSpeed",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.MaxSpeed",
+   0,
+   "cm/s",
+   "Blueprints/Projectile/MagicAero/TresProj_MagAeroBase ProjectileComp MaxSpeed",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.Accel",
+   0,
+   "cm/s",
+   "TresProjectileMovementComponent ctor 0x141470D50 default m_Accel",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.EnableHoming",
+   0,
+   "cm/s",
+   "TresProjectileMovementComponent ctor 0x141470D50 default m_bEnableHoming",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.HomingStartDelay",
+   0,
+   "s",
+   "TresProjectileMovementComponent ctor 0x141470D50 default m_HomingStartDelay",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.HomingMinDist",
+   0,
+   "cm/s",
+   "TresProjectileMovementComponent ctor 0x141470D50 default m_HomingMinDist",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.HomingTurnMax",
+   0,
+   "deg/s",
+   "TresProjectileMovementComponent ctor 0x141470D50 default m_HomingTurnMax",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.HomingTurnAccel",
+   0,
+   "deg/s",
+   "TresProjectileMovementComponent ctor 0x141470D50 default m_HomingTurnAccel",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.HomingMaxTurnMax",
+   0,
+   "deg/s",
+   "TresProjectileMovementComponent ctor 0x141470D50 default m_HomingMaxTurnMax",
+   "TresProjectileMovementComponent (homing 0x1414859E0: turn max grows by TurnAccel per s up to MaxTurnMax)",
+   "0x141470D50",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.shape0.kind",
+   0,
+   "0 sphere / 1 capsule / 2 convex",
+   "Blueprints/Projectile/MagicAero/TresProj_MagAeroBase TresAtkColl0 CollisionShapesSrc[0] m_ShapeType",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.shape0.size_x",
+   120,
+   "cm",
+   "Blueprints/Projectile/MagicAero/TresProj_MagAeroBase TresAtkColl0 CollisionShapesSrc[0] m_Size.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.shape0.size_z",
+   0,
+   "cm",
+   "Blueprints/Projectile/MagicAero/TresProj_MagAeroBase TresAtkColl0 CollisionShapesSrc[0] m_Size.Z",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.shape0.inc_x",
+   0,
+   "cm/s",
+   "Blueprints/Projectile/MagicAero/TresProj_MagAeroBase TresAtkColl0 CollisionShapesSrc[0] m_IncSize.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.shape0.inc_max_x",
+   0,
+   "cm",
+   "Blueprints/Projectile/MagicAero/TresProj_MagAeroBase TresAtkColl0 CollisionShapesSrc[0] m_IncMaxSize.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.shape0.offset_z",
+   0,
+   "cm",
+   "Blueprints/Projectile/MagicAero/TresProj_MagAeroBase TresAtkColl0 CollisionShapesSrc[0] m_RelativeLocation1.Z",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.shape0.scale_x",
+   1,
+   "-",
+   "Blueprints/Projectile/MagicAero/TresProj_MagAeroBase TresAtkColl0 CollisionShapesSrc[0] m_Scale.X",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.shape0.scale_z",
+   1,
+   "-",
+   "Blueprints/Projectile/MagicAero/TresProj_MagAeroBase TresAtkColl0 CollisionShapesSrc[0] m_Scale.Z",
+   "attack shape (kh-core ShapeDef::extent 0x140649E40: size + inc * t, capped at inc max; CONVEX tres_colltest01 = cylinder radius 100 x scale.x, z +-50 x scale.z)",
+   "0x140649E40",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.aero.shapes",
+   1,
+   "count",
+   "Blueprints/Projectile/MagicAero/TresProj_MagAeroBase TresAtkColl0 CollisionShapesSrc",
+   "number of attack shapes",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.cure.life",
+   1,
+   "s",
+   "Blueprints/Projectile/MagicCure/TresProj_MagCureBase CDO m_MainLife",
+   "projectile life",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.cure.no_destroy_on_hit",
+   0,
+   "flag",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagCure / Blueprints/Projectile/MagicCure/TresProj_MagCureBase CDO m_bNoDestroyOnHit",
+   "1 = the actor lives on after a hit (one hit per target)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.cure.AppendCure",
+   120,
+   "HP",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagCure CDO m_AppendCure",
+   "ATresProj_MagicCure 0x1414742A0: the target gets AppendCure + max(1, MagicPower); the others in DetectRange BonusAppendCure + max(1, MagicPower)",
+   "0x1414742A0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.cure.BonusAppendCure",
+   60,
+   "HP",
+   "Blueprints/Npc/n_ex001/n_ex001_ProjectileMagCure CDO m_BonusAppendCure",
+   "ATresProj_MagicCure 0x1414742A0: the target gets AppendCure + max(1, MagicPower); the others in DetectRange BonusAppendCure + max(1, MagicPower)",
+   "0x1414742A0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.cure.DetectRange",
+   300,
+   "cm",
+   "ATresProj_MagicCure ctor 0x14146FD60 m_DetectRange (not overridden)",
+   "the bonus heal reaches the target's team within this distance of the target",
+   "0x1414742A0",
+   "confirmed",
+   "-"
+  ],
+  [
+   "magicset.fire.cast_type",
+   0,
+   "flag",
+   "Blueprints/Npc/n_ex001/n_ex001_MagicSet m_Units TRES_CMD_KIND_FIRE m_bIsCastType",
+   "1 = MagicCast / MagicAirCast, 0 = MagicFire / MagicAirFire (FUN_14122D300 via FUN_141229630)",
+   "0x14122D300",
+   "confirmed",
+   "-"
+  ],
+  [
+   "magicset.fire.direct_pos",
+   0,
+   "flag",
+   "Blueprints/Npc/n_ex001/n_ex001_MagicSet m_Units TRES_CMD_KIND_FIRE m_bIsDirectPos",
+   "1 = the spell actor is put at the target position",
+   "0x14122D300",
+   "inferred",
+   "-"
+  ],
+  [
+   "magicset.fire.effect_group",
+   1300,
+   "id",
+   "Blueprints/Npc/n_ex001/n_ex001_MagicSet m_Units TRES_CMD_KIND_FIRE m_EffectGroup",
+   "effect group of the cast (FUN_1405B8C30 with unit +8)",
+   "0x14122D300",
+   "confirmed",
+   "-"
+  ],
+  [
+   "magicset.blizzard.cast_type",
+   0,
+   "flag",
+   "Blueprints/Npc/n_ex001/n_ex001_MagicSet m_Units TRES_CMD_KIND_BLIZZARD m_bIsCastType",
+   "1 = MagicCast / MagicAirCast, 0 = MagicFire / MagicAirFire (FUN_14122D300 via FUN_141229630)",
+   "0x14122D300",
+   "confirmed",
+   "-"
+  ],
+  [
+   "magicset.blizzard.direct_pos",
+   0,
+   "flag",
+   "Blueprints/Npc/n_ex001/n_ex001_MagicSet m_Units TRES_CMD_KIND_BLIZZARD m_bIsDirectPos",
+   "1 = the spell actor is put at the target position",
+   "0x14122D300",
+   "inferred",
+   "-"
+  ],
+  [
+   "magicset.blizzard.effect_group",
+   1310,
+   "id",
+   "Blueprints/Npc/n_ex001/n_ex001_MagicSet m_Units TRES_CMD_KIND_BLIZZARD m_EffectGroup",
+   "effect group of the cast (FUN_1405B8C30 with unit +8)",
+   "0x14122D300",
+   "confirmed",
+   "-"
+  ],
+  [
+   "magicset.thunder.cast_type",
+   1,
+   "flag",
+   "Blueprints/Npc/n_ex001/n_ex001_MagicSet m_Units TRES_CMD_KIND_THUNDER m_bIsCastType",
+   "1 = MagicCast / MagicAirCast, 0 = MagicFire / MagicAirFire (FUN_14122D300 via FUN_141229630)",
+   "0x14122D300",
+   "confirmed",
+   "-"
+  ],
+  [
+   "magicset.thunder.direct_pos",
+   1,
+   "flag",
+   "Blueprints/Npc/n_ex001/n_ex001_MagicSet m_Units TRES_CMD_KIND_THUNDER m_bIsDirectPos",
+   "1 = the spell actor is put at the target position",
+   "0x14122D300",
+   "inferred",
+   "-"
+  ],
+  [
+   "magicset.thunder.effect_group",
+   1320,
+   "id",
+   "Blueprints/Npc/n_ex001/n_ex001_MagicSet m_Units TRES_CMD_KIND_THUNDER m_EffectGroup",
+   "effect group of the cast (FUN_1405B8C30 with unit +8)",
+   "0x14122D300",
+   "confirmed",
+   "-"
+  ],
+  [
+   "magicset.aero.cast_type",
+   1,
+   "flag",
+   "Blueprints/Npc/n_ex001/n_ex001_MagicSet m_Units TRES_CMD_KIND_AERO m_bIsCastType",
+   "1 = MagicCast / MagicAirCast, 0 = MagicFire / MagicAirFire (FUN_14122D300 via FUN_141229630)",
+   "0x14122D300",
+   "confirmed",
+   "-"
+  ],
+  [
+   "magicset.aero.direct_pos",
+   1,
+   "flag",
+   "Blueprints/Npc/n_ex001/n_ex001_MagicSet m_Units TRES_CMD_KIND_AERO m_bIsDirectPos",
+   "1 = the spell actor is put at the target position",
+   "0x14122D300",
+   "inferred",
+   "-"
+  ],
+  [
+   "magicset.aero.effect_group",
+   1330,
+   "id",
+   "Blueprints/Npc/n_ex001/n_ex001_MagicSet m_Units TRES_CMD_KIND_AERO m_EffectGroup",
+   "effect group of the cast (FUN_1405B8C30 with unit +8)",
+   "0x14122D300",
+   "confirmed",
+   "-"
+  ],
+  [
+   "magicset.cure.cast_type",
+   1,
+   "flag",
+   "Blueprints/Npc/n_ex001/n_ex001_MagicSet m_Units TRES_CMD_KIND_CURE m_bIsCastType",
+   "1 = MagicCast / MagicAirCast, 0 = MagicFire / MagicAirFire (FUN_14122D300 via FUN_141229630)",
+   "0x14122D300",
+   "confirmed",
+   "-"
+  ],
+  [
+   "magicset.cure.direct_pos",
+   0,
+   "flag",
+   "Blueprints/Npc/n_ex001/n_ex001_MagicSet m_Units TRES_CMD_KIND_CURE m_bIsDirectPos",
+   "1 = the spell actor is put at the target position",
+   "0x14122D300",
+   "inferred",
+   "-"
+  ],
+  [
+   "magicset.cure.effect_group",
+   1340,
+   "id",
+   "Blueprints/Npc/n_ex001/n_ex001_MagicSet m_Units TRES_CMD_KIND_CURE m_EffectGroup",
+   "effect group of the cast (FUN_1405B8C30 with unit +8)",
+   "0x14122D300",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.discus.radius",
+   50,
+   "cm",
+   "Blueprints/Npc/n_ex002/w_gu_WepBase TresAtkColl0 CollisionShapesSrc \"Attack_Discus\" m_Size.X (SPHERE at ATK_00)",
+   "the thrown shield's attack sphere",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.discus.Accel",
+   100,
+   "cm/s",
+   "Blueprints/Npc/n_ex002/w_gu_WepBase TresWeaponMovement0 m_Accel",
+   "the thrown shield TresWeaponMovementComponent (projectile law 0x1414729E0; homing 0x1414859E0)",
+   "0x1411CD930",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.discus.EnableMapHitNormalCheck",
+   1,
+   "cm/s",
+   "Blueprints/Npc/n_ex002/w_gu_WepBase TresWeaponMovement0 m_bEnableMapHitNormalCheck",
+   "the thrown shield TresWeaponMovementComponent (projectile law 0x1414729E0; homing 0x1414859E0)",
+   "0x1411CD930",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.discus.CheckMapHitNormal",
+   60,
+   "cm/s",
+   "Blueprints/Npc/n_ex002/w_gu_WepBase TresWeaponMovement0 m_CheckMapHitNormal",
+   "the thrown shield TresWeaponMovementComponent (projectile law 0x1414729E0; homing 0x1414859E0)",
+   "0x1411CD930",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.discus.EnableHoming",
+   1,
+   "cm/s",
+   "Blueprints/Npc/n_ex002/w_gu_WepBase TresWeaponMovement0 m_bEnableHoming",
+   "the thrown shield TresWeaponMovementComponent (projectile law 0x1414729E0; homing 0x1414859E0)",
+   "0x1411CD930",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.discus.HomingMinDist",
+   100,
+   "cm/s",
+   "Blueprints/Npc/n_ex002/w_gu_WepBase TresWeaponMovement0 m_HomingMinDist",
+   "the thrown shield TresWeaponMovementComponent (projectile law 0x1414729E0; homing 0x1414859E0)",
+   "0x1411CD930",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.discus.HomingTurnMax",
+   360,
+   "deg/s",
+   "Blueprints/Npc/n_ex002/w_gu_WepBase TresWeaponMovement0 m_HomingTurnMax",
+   "the thrown shield TresWeaponMovementComponent (projectile law 0x1414729E0; homing 0x1414859E0)",
+   "0x1411CD930",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.discus.InitialSpeed",
+   1000,
+   "cm/s",
+   "Blueprints/Npc/n_ex002/w_gu_WepBase TresWeaponMovement0 InitialSpeed",
+   "the thrown shield TresWeaponMovementComponent (projectile law 0x1414729E0; homing 0x1414859E0)",
+   "0x1411CD930",
+   "confirmed",
+   "-"
+  ],
+  [
+   "proj.discus.MaxSpeed",
+   1500,
+   "cm/s",
+   "Blueprints/Npc/n_ex002/w_gu_WepBase TresWeaponMovement0 MaxSpeed",
+   "the thrown shield TresWeaponMovementComponent (projectile law 0x1414729E0; homing 0x1414859E0)",
+   "0x1411CD930",
+   "confirmed",
+   "-"
+  ]
+ ]
+}

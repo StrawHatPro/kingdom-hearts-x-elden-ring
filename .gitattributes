@@ -1,0 +1,5 @@
+# The sheets and tools expect LF line endings (the sheet format is one row per line, LF only).
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.dxil binary

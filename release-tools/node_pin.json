@@ -1,0 +1,12 @@
+{
+ "about": "The portable Node.js the release bundles (tools/bin/node/node.exe, release-tools/make_release.js) and a source checkout downloads when it has no Node 20+ (setup/get_node.ps1, from setup\\setup.bat). Official win-x64 zip of nodejs.org; zip_sha256 is the line of the release's SHASUMS256.txt; node_exe_sha256 is the node.exe inside it (release-tools/scan.js allows that binary by this hash).",
+ "version": "24.21.0",
+ "lts": "Krypton",
+ "released": "2026-09-07",
+ "zip_url": "https://nodejs.org/dist/v24.21.0/node-v24.21.0-win-x64.zip",
+ "shasums_url": "https://nodejs.org/dist/v24.21.0/SHASUMS256.txt",
+ "zip_sha256": "158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541",
+ "zip_folder": "node-v24.21.0-win-x64",
+ "node_exe_sha256": "ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32",
+ "license": "MIT (Node.js), with the third-party licences of its bundled components in the same LICENSE file"
+}

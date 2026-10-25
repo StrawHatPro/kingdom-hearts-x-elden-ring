@@ -1,0 +1,30 @@
+{
+ "about": "the sound assets the ui research asked the audio pack for (tools/packgen_notes.js)",
+ "requests": [
+  "/Game/Sound/SE/common/00000/se00000_001",
+  "/Game/Sound/SE/common/00000/se00000_002",
+  "/Game/Sound/SE/common/00000/se00000_004",
+  "/Game/Sound/SE/common/00000/se00000_005",
+  "/Game/Sound/SE/common/00000/se00000_003",
+  "/Game/Sound/SE/common/00000/se00000_006",
+  "/Game/Sound/SE/common/00000/se00000_010",
+  "/Game/Sound/SE/common/00000/se00000_011",
+  "/Game/Sound/SE/common/00000/se00000_001",
+  "/Game/Sound/SE/common/00000/se00000_007",
+  "/Game/Sound/SE/common/00000/se00000_004",
+  "/Game/Sound/SE/common/00000/se00000_005",
+  "/Game/Sound/SE/common/00000/se00000_008",
+  "/Game/Sound/SE/common/00000/se00000_009",
+  "/Game/Sound/SE/common/00000/se00000_042",
+  "/Game/Sound/SE/common/00000/se00000_042",
+  "/Game/Sound/SE/common/00000/se00000_043",
+  "/Game/Sound/SE/common/00000/se00000_039",
+  "/Game/Sound/SE/common/00000/se00000_051",
+  "/Game/Sound/SE/common/00000/se00000_054",
+  "/Game/Sound/SE/common/00000/se00000_059",
+  "/Game/Sound/SE/common/00000/se00000_013",
+  "/Game/Sound/SE/common/00000/se00000_067",
+  "/Game/Sound/SE/common/00000/se00000_073",
+  "/Game/Sound/SE/common/00000/se00000_067"
+ ]
+}

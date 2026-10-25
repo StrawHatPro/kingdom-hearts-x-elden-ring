@@ -1,0 +1,11 @@
+[package]
+name = "kh-audio"
+description = "Sora's sound, engine-free (glam and std only): the SEAD playback model of docs/sora-audio-spec.md as data and logic (what plays when a sound index is started, the automatic motion sounds, the trigger routes), a list of voice commands per step for any backend, and a software mixer over them. No audio device, no Bevy."
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[dependencies]
+glam = { workspace = true }
+# Only its JSON reader (kh_anim::json), for the audio pack's manifest: std only, already in the tree.
+kh-anim = { path = "../kh-anim" }

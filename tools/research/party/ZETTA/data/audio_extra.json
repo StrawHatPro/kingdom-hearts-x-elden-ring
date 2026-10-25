@@ -1,0 +1,78 @@
+[
+ {
+  "asset": "/Game/Sound/SE/cutscene/kg/31001/se_kg702b_cut510_1800",
+  "trigger": "Zettaflare: the event kg702b's SE stream (cut into the channel / cast segments by ZETTA/tools/zetta_audio.js)",
+  "ref": "cutscene_kg01_kg702 matinee kg702b InterpGroup SE: SQEXSEADInterpTrackSound at 18.0 s"
+ },
+ {
+  "asset": "/Game/Sound/VOICE/Localization/ja/Event/kg/kg7020241do0",
+  "trigger": "Zettaflare: Donald's effort at the channel's start (matinee 58.767)",
+  "ref": "kg702b TresInterpGroup_13 InterpTrackSound voice",
+  "spatial": "3D"
+ },
+ {
+  "asset": "/Game/Sound/VOICE/Localization/ja/Event/kg/kg7020250do0",
+  "trigger": "Zettaflare: Donald's \"Zettaflare!\" (matinee 70.067)",
+  "ref": "kg702b TresInterpGroup_13 InterpTrackSound voice; subtitle kg7020250do0",
+  "spatial": "3D"
+ },
+ {
+  "asset": "/Game/Sound/SE/cutscene/kg/31001/se_kg702c_cut960",
+  "trigger": "Zettaflare ending: the event kg702c SE stream (the wide shot of the beam, cut by ZETTA/tools/zetta_audio.js)",
+  "ref": "cutscene_kg01_kg702b matinee kg702c InterpGroup_223 SQEXSEADInterpTrackSound at 0.0 s"
+ },
+ {
+  "asset": "/Game/Sound/SE/enemy/00508_e_ex731/se00508_061",
+  "trigger": "Zettaflare finale (round 5c): the silhouette cracks and shatters (the ice enemy e_ex731 dead-shatter SE, effect ve_ex731_ded_ice00)",
+  "ref": "SeAttach / gimmick SE (by name; round 5c)",
+  "spatial": "3D"
+ },
+ {
+  "asset": "/Game/Sound/SE/common/00002_magic/se00002_105",
+  "trigger": "Zettaflare finale (round 5c): the silhouette breaks into chunks (the ice-break SE of ve_ex731_ded_ice01)",
+  "ref": "SeAttach / gimmick SE (by name; round 5c)",
+  "spatial": "3D"
+ },
+ {
+  "asset": "/Game/Sound/SE/cutscene/_common/se_cs_enm_HLdead1",
+  "trigger": "Zettaflare finale (round 5c): the silhouette disperses into ash (the cutscene Heartless death dissolve)",
+  "ref": "SeAttach / gimmick SE (by name; round 5c)",
+  "spatial": "3D"
+ },
+ {
+  "asset": "/Game/Sound/SE/gimmick/bt/se_g_bt_break_stone_big_01",
+  "trigger": "Zettaflare ending (round 5c): a rock spike cracks and breaks (the stone gimmick break, big)",
+  "ref": "SeAttach / gimmick SE (by name; round 5c)",
+  "spatial": "3D"
+ },
+ {
+  "asset": "/Game/Sound/SE/gimmick/bt/se_g_bt_break_stone_mid_01",
+  "trigger": "Zettaflare ending (round 5c): a spike rubble falls (the stone gimmick break, mid)",
+  "ref": "SeAttach / gimmick SE (by name; round 5c)",
+  "spatial": "3D"
+ },
+ {
+  "asset": "/Game/Sound/SE/gimmick/bt/se_g_bt_break_stone_small_01",
+  "trigger": "Zettaflare ending (round 5c): a spike chunk thuds onto the ground (the stone gimmick break, small)",
+  "ref": "SeAttach / gimmick SE (by name; round 5c)",
+  "spatial": "3D"
+ },
+ {
+  "asset": "/Game/Sound/SE/world/00100_dw/se00100_042",
+  "trigger": "Zettaflare ending (round 5c): the rubble crumbles away (the rock depop SE of vl_dw06_rock_depop_real)",
+  "ref": "SeAttach / gimmick SE (by name; round 5c)",
+  "spatial": "3D"
+ },
+ {
+  "asset": "/Game/Sound/SE/cutscene/he/30102/se_he02_ms060s_rockexp1",
+  "trigger": "Zettaflare (round 5c): a rock spike bursts out of the ground (the Olympus rock-titan cutscene rock explosion)",
+  "ref": "cutscene SE (by name; round 5c)",
+  "spatial": "3D"
+ },
+ {
+  "asset": "/Game/Sound/SE/cutscene/he/30102/se_he02_ms061s_cut06_collapse1",
+  "trigger": "Zettaflare (round 5c): the ground rumbles as the spikes erupt (the Olympus cutscene collapse)",
+  "ref": "cutscene SE (by name; round 5c)",
+  "spatial": "3D"
+ }
+]

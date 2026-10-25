@@ -1,0 +1,6 @@
+{"sheet":"sora-combat-finish-levels","group":"port","columns":["id","level","command","enum","state_slot","function","clips","extra_commands","evidence"],"rows":[
+["LM_STUNIMPACT",1,171,"LM_STUNIMPACT",152,"0x1413E2630","M_1421 (ground) / M_1422 (air)","-","I for the mapping (0x141414C70, thunk 0x1404EFAB0 jmp [rax+4C0h]); C for the body"],
+["LM_SONICRAVE",2,172,"LM_SONICRAVE",153,"0x1413E1FC0","M_1423 (ground) / M_1424 (air) -> M_1425 per dash -> M_1426","175 LMEX_RAVE (per dash), 176 LMEX_FINISH (after more than 5 dashes)","I mapping (thunk 0x1404EFABC jmp [rax+4C8h]); C body"],
+["LM_LASTARCANUM",3,173,"LM_LASTARCANUM",154,"0x1413E1800","M_1427 -> M_1428..M_1432 -> M_1433 (ground) / M_1434 (air)","177 LMEX_BREAK (x5), 178 LMEX_THEEND","I mapping (thunk 0x1404EFAC8 jmp [rax+4D0h]); C body"],
+["LM_UNIONDISCODE",3,174,"LM_UNIONDISCODE",155,"0x1413E2810","M_1435","-","form 0x95 only (not the Kingdom Key); body not read"]
+]}

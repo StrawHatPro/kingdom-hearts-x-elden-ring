@@ -1,0 +1,706 @@
+{
+ "sheet": "party-guard-levels",
+ "group": "port",
+ "columns": [
+  "id",
+  "chara",
+  "level",
+  "guard_max",
+  "source"
+ ],
+ "rows": [
+  [
+   "n_ex002.1",
+   "n_ex002",
+   1,
+   100,
+   "PORT DESIGN (THE USER, 2026-10-16 23:40, ER_PHASE_NOTES: \"a new bar above MP called GUARD that is silver ... Use that for his guard mechanics. Also make it possible to increase via levelling up\"; stream GG): 100 at level 1 (the X3G shield gauge), +5 every 5 levels"
+  ],
+  [
+   "n_ex002.2",
+   "n_ex002",
+   2,
+   100,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.3",
+   "n_ex002",
+   3,
+   100,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.4",
+   "n_ex002",
+   4,
+   100,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.5",
+   "n_ex002",
+   5,
+   105,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.6",
+   "n_ex002",
+   6,
+   105,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.7",
+   "n_ex002",
+   7,
+   105,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.8",
+   "n_ex002",
+   8,
+   105,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.9",
+   "n_ex002",
+   9,
+   105,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.10",
+   "n_ex002",
+   10,
+   110,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.11",
+   "n_ex002",
+   11,
+   110,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.12",
+   "n_ex002",
+   12,
+   110,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.13",
+   "n_ex002",
+   13,
+   110,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.14",
+   "n_ex002",
+   14,
+   110,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.15",
+   "n_ex002",
+   15,
+   115,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.16",
+   "n_ex002",
+   16,
+   115,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.17",
+   "n_ex002",
+   17,
+   115,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.18",
+   "n_ex002",
+   18,
+   115,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.19",
+   "n_ex002",
+   19,
+   115,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.20",
+   "n_ex002",
+   20,
+   120,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.21",
+   "n_ex002",
+   21,
+   120,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.22",
+   "n_ex002",
+   22,
+   120,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.23",
+   "n_ex002",
+   23,
+   120,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.24",
+   "n_ex002",
+   24,
+   120,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.25",
+   "n_ex002",
+   25,
+   125,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.26",
+   "n_ex002",
+   26,
+   125,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.27",
+   "n_ex002",
+   27,
+   125,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.28",
+   "n_ex002",
+   28,
+   125,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.29",
+   "n_ex002",
+   29,
+   125,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.30",
+   "n_ex002",
+   30,
+   130,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.31",
+   "n_ex002",
+   31,
+   130,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.32",
+   "n_ex002",
+   32,
+   130,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.33",
+   "n_ex002",
+   33,
+   130,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.34",
+   "n_ex002",
+   34,
+   130,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.35",
+   "n_ex002",
+   35,
+   135,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.36",
+   "n_ex002",
+   36,
+   135,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.37",
+   "n_ex002",
+   37,
+   135,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.38",
+   "n_ex002",
+   38,
+   135,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.39",
+   "n_ex002",
+   39,
+   135,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.40",
+   "n_ex002",
+   40,
+   140,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.41",
+   "n_ex002",
+   41,
+   140,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.42",
+   "n_ex002",
+   42,
+   140,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.43",
+   "n_ex002",
+   43,
+   140,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.44",
+   "n_ex002",
+   44,
+   140,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.45",
+   "n_ex002",
+   45,
+   145,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.46",
+   "n_ex002",
+   46,
+   145,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.47",
+   "n_ex002",
+   47,
+   145,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.48",
+   "n_ex002",
+   48,
+   145,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.49",
+   "n_ex002",
+   49,
+   145,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.50",
+   "n_ex002",
+   50,
+   150,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.51",
+   "n_ex002",
+   51,
+   150,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.52",
+   "n_ex002",
+   52,
+   150,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.53",
+   "n_ex002",
+   53,
+   150,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.54",
+   "n_ex002",
+   54,
+   150,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.55",
+   "n_ex002",
+   55,
+   155,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.56",
+   "n_ex002",
+   56,
+   155,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.57",
+   "n_ex002",
+   57,
+   155,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.58",
+   "n_ex002",
+   58,
+   155,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.59",
+   "n_ex002",
+   59,
+   155,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.60",
+   "n_ex002",
+   60,
+   160,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.61",
+   "n_ex002",
+   61,
+   160,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.62",
+   "n_ex002",
+   62,
+   160,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.63",
+   "n_ex002",
+   63,
+   160,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.64",
+   "n_ex002",
+   64,
+   160,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.65",
+   "n_ex002",
+   65,
+   165,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.66",
+   "n_ex002",
+   66,
+   165,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.67",
+   "n_ex002",
+   67,
+   165,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.68",
+   "n_ex002",
+   68,
+   165,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.69",
+   "n_ex002",
+   69,
+   165,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.70",
+   "n_ex002",
+   70,
+   170,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.71",
+   "n_ex002",
+   71,
+   170,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.72",
+   "n_ex002",
+   72,
+   170,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.73",
+   "n_ex002",
+   73,
+   170,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.74",
+   "n_ex002",
+   74,
+   170,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.75",
+   "n_ex002",
+   75,
+   175,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.76",
+   "n_ex002",
+   76,
+   175,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.77",
+   "n_ex002",
+   77,
+   175,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.78",
+   "n_ex002",
+   78,
+   175,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.79",
+   "n_ex002",
+   79,
+   175,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.80",
+   "n_ex002",
+   80,
+   180,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.81",
+   "n_ex002",
+   81,
+   180,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.82",
+   "n_ex002",
+   82,
+   180,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.83",
+   "n_ex002",
+   83,
+   180,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.84",
+   "n_ex002",
+   84,
+   180,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.85",
+   "n_ex002",
+   85,
+   185,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.86",
+   "n_ex002",
+   86,
+   185,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.87",
+   "n_ex002",
+   87,
+   185,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.88",
+   "n_ex002",
+   88,
+   185,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.89",
+   "n_ex002",
+   89,
+   185,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.90",
+   "n_ex002",
+   90,
+   190,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.91",
+   "n_ex002",
+   91,
+   190,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.92",
+   "n_ex002",
+   92,
+   190,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.93",
+   "n_ex002",
+   93,
+   190,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.94",
+   "n_ex002",
+   94,
+   190,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.95",
+   "n_ex002",
+   95,
+   195,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.96",
+   "n_ex002",
+   96,
+   195,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.97",
+   "n_ex002",
+   97,
+   195,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.98",
+   "n_ex002",
+   98,
+   195,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ],
+  [
+   "n_ex002.99",
+   "n_ex002",
+   99,
+   195,
+   "PORT DESIGN (stream GG, as row n_ex002.1)"
+  ]
+ ]
+}

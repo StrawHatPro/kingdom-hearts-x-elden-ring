@@ -1,0 +1,15 @@
+[package]
+name = "kh-core"
+description = "Sora's simulation, engine-free (glam and std only), in KH3's native conventions. Hosted by kh-app (Bevy test level) and later by a DLL inside another game."
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[dependencies]
+# (PACKGEN) the generated tables made from KH3 data, read at run time (release builds)
+kh-gendata = { path = "../kh-gendata" }
+glam = { workspace = true }
+
+# Tests only (tests/status.rs reads the loadout sheet as a host would): the crate itself stays glam + std.
+[dev-dependencies]
+serde_json = "1"

@@ -1,0 +1,17 @@
+{"sheet":"sora-combat-can-attack","group":"port","columns":["id","state_ids","condition","addr","conf"],"rows":[
+["can_attack_01","pre","controller exists; !slot989; slot1336; pawn+0xE34 <= 0; has(30) -> pawn+0xE28 = 1; queued id not in {19,32,59,61,62}","0x141426330","confirmed"],
+["can_attack_02","1","!(Idle+0x9C > 0) (always true)","0x14142645D","confirmed"],
+["can_attack_03","2,4,5,11,26,34-39,98","true","0x141426EDF","confirmed"],
+["can_attack_04","3","!(Jump+0x98 == 2 && Velocity.z > 0)","0x1414264B9","confirmed"],
+["can_attack_05","9,10,21,23,24","queued state is not an Attack","0x141426C38","confirmed"],
+["can_attack_06","12,13,14,75-90,100,156,157,159,160,161,171","queued not Attack; +0x143 == 0; +0x164 != 0; +0x84 & 0x20; (combo < MaxCombo || +0x234 & 0x200000); pawn+0xE28 != 0; !(pawn+0xE48 bit 5)","0x141426587","confirmed"],
+["can_attack_07","15","(queued not Attack && pawn.slot605(-1) && Guard+0xDC != 0 && Guard+0x84 & 0x20) || ctrl+0x8A0 > 0 || (queued == null && Guard+0xDC != 0 && Guard+0x84 & 0x20)","0x141426832","confirmed"],
+["can_attack_08","16,111","m_bEnableChange","0x141426993","confirmed"],
+["can_attack_09","17","RiskDodge+0xD8 & 1 && !(RiskDodge+0xC8 & 4)","0x141426A34","confirmed"],
+["can_attack_10","18","queued not Attack; !(Magic+0xD8 & 0x10); Magic+0xD0 > 0; Magic+0xB4 < MaxCombo; pawn+0xE28 != 0; !(pawn+0xE48 bit 5)","0x141426669","confirmed"],
+["can_attack_11","19","queued == null; Damage+0x90 == 0; sub in {1,2,7,8,9,10}; m_bEnableChange","0x14142674F","confirmed"],
+["can_attack_12","20","flags +0xA8: bit 7 -> false; bit 6 -> true; else m_bEnableChange","0x141426927","confirmed"],
+["can_attack_13","32","sub != 0 && pawn+0xE28 != 0","0x141426527","confirmed"],
+["can_attack_14","122","queued == null && m_bEnableChange","0x1414267D6","confirmed"],
+["can_attack_15","final","!(pawn+0xE60 bit 17) (not applied to state 102)","0x141426EDF","confirmed"]
+]}

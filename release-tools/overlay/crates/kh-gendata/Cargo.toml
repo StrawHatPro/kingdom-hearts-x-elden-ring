@@ -1,0 +1,9 @@
+[package]
+name = "kh-gendata"
+version.workspace = true
+edition.workspace = true
+description = "The generated tables made from KH3 data, read at run time from the player's own pack (tools/packgen_genruntime.js)"
+publish = false
+
+[dependencies]
+serde_json = "1"

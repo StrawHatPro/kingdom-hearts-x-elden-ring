@@ -1,0 +1,188 @@
+use std::time::{Duration, Instant};
+use std::{sync::LazyLock, thread};
+
+use pelite::pe64::Pe;
+use shared::{FromStatic, InstanceError, OwnedPtr, RecurringTask, SharedTaskImp, program::Program};
+
+use crate::fd4::FD4BasicHashString;
+use crate::{rva, util::system::*};
+
+/// The task manager that schedules tasks to run at various points during the
+/// rendering of the frame.
+///
+/// This is thread-safe, so it's safe to call [FromStatic::instance] outside the
+/// main thread.
+#[repr(C)]
+#[shared::singleton("SprjTask")]
+pub struct SprjTaskImp {
+    vftable: usize,
+    pub inner: OwnedPtr<SprjTask>,
+}
+
+impl SprjTaskImp {
+    /// Blocks this thread until the singleton instance is available.
+    ///
+    /// **Note:** This should never be called on the main thread, since the main
+    /// thread is responsible for initializing this singleton in the first
+    /// place.
+    ///
+    /// This returns [`SystemInitError::InvalidRva`] if either the global
+    /// HINSTANCE RVA or the `SprjTaskImp` RVA aren't within the executable.
+    ///
+    /// [`SystemInitError::InvalidRva`]: SystemInitError::InvalidRva
+    pub fn wait_for_instance(timeout: Duration) -> Result<&'static Self, SystemInitError> {
+        let start = Instant::now();
+        wait_for_system_init(&Program::current(), timeout)?;
+
+        loop {
+            match unsafe { Self::instance() } {
+                Err(InstanceError::NotFound(_)) => return Err(SystemInitError::InvalidRva),
+                Err(InstanceError::Null(_)) => {
+                    if start.elapsed() > timeout {
+                        return Err(SystemInitError::Timeout);
+                    }
+                    thread::yield_now();
+                }
+                Ok(instance) => return Ok(instance),
+            }
+        }
+    }
+}
+
+static REGISTER_TASK_VA: LazyLock<u64> = LazyLock::new(|| {
+    Program::current()
+        .rva_to_va(rva::get().register_task)
+        .expect("Call target for REGISTER_TASK_VA was not in exe")
+});
+
+// TODO: Track down exactly what DS3's FD4TaskData struct looks like.
+impl SharedTaskImp<SprjTaskGroupIndex, usize> for SprjTaskImp {
+    fn register_task_internal(&self, index: SprjTaskGroupIndex, task: &RecurringTask<usize>) {
+        let register_task: extern "C" fn(
+            &SprjTaskImp,
+            SprjTaskGroupIndex,
+            u64,
+            &RecurringTask<usize>,
+        ) = unsafe { std::mem::transmute(*REGISTER_TASK_VA) };
+        register_task(self, index, 0, task);
+    }
+}
+
+#[repr(C)]
+#[shared::singleton("SprjTaskGroup")]
+pub struct SprjTaskGroup {
+    vftable: usize,
+    pub task_groups: [OwnedPtr<SprjTimeLineTaskGroupIns>; 0x61],
+}
+
+#[repr(C)]
+pub struct SprjTimeLineTaskGroupIns {
+    vftable: usize,
+    pub name: FD4BasicHashString,
+}
+
+#[repr(C)]
+pub struct SprjTask {}
+
+#[repr(u32)]
+#[allow(non_camel_case_types)]
+#[derive(Debug, Clone, Copy)]
+pub enum SprjTaskGroupIndex {
+    FrameBegin,
+    FD4TaskMng,
+    SystemStep,
+    FileStep,
+    ResStep,
+    PadStep,
+    ObjResUpdate,
+    GameFlowStep,
+    MenuMan,
+    GameMan,
+    TaskMan,
+    FaceGenMan,
+    FrpgNetMan,
+    ResMan,
+    WorldChrMan_PrePhysics,
+    ChrIns_Prepare,
+    ChrIns_PreBehavior,
+    ChrIns_PreBehaviorSafe,
+    HavokBehavior,
+    HavokBehavior_SceneModifier,
+    ChrIns_BehaviorSafe,
+    ChrIns_PrePhysics,
+    ChrIns_PrePhysicsSafe,
+    TaskLineIdx_Sys,
+    TaskLineIdx_Test,
+    TaskLineIdx_InGame_InGameStep,
+    RemoStep,
+    TaskLineIdx_InGame_MoveMapStep,
+    TaskLineIdx_InGame_TestNetStep,
+    TaskLineIdx_InGame_InGameMenuStep,
+    TaskLineIdx_InGame_TitleMenuStep,
+    TaskLineIdx_InGame_CommonMenuStep,
+    TaskLineIdx_NetworkFlowStep,
+    REMOTEMAN,
+    InGameDebugViewer,
+    HavokClothUpdate,
+    AdhocHavokClothPostUpdate,
+    LocationStep,
+    LocationUpdate_PrePhysics,
+    LocationUpdate_PostCloth,
+    HavokWorldUpdate_Pre,
+    HavokWorldUpdate_Post,
+    ChrIns_PreCloth,
+    ChrIns_PreClothSafe,
+    HavokClothUpdate_Pre_AddRemoveRigidBody,
+    HavokClothUpdate_Pre_ClothModelInsSafe,
+    HavokClothUpdate_Pre_ClothModelIns,
+    HavokClothUpdate_Pre_ClothManager,
+    ScaleformStep,
+    ScaleformCapture,
+    ScaleformCaptureFE,
+    GetNPAuthCode,
+    HavokAi_SilhouetteGeneratorHelper_Begin,
+    HavokAi_SilhouetteGeneratorHelper_End,
+    SoundStep,
+    HavokClothUpdate_Post_ClothManager,
+    HavokClothUpdate_Post_ClothModelIns,
+    HavokClothUpdate_Post_UpdateVertex,
+    HavokClothVertexUpdateFinishWait,
+    ChrIns_PostPhysics,
+    ChrIns_PostPhysicsSafe,
+    WorldChrMan_PostPhysics,
+    GameFlowInGame_MoveMap_PostPhysics_0,
+    ChrIns_UpdateDraw_Begin,
+    ChrIns_UpdateDraw,
+    ChrIns_UpdateDraw_End,
+    GameFlowInGame_MoveMap_PostPhysics_1,
+    CameraStep,
+    DrawParamUpdate,
+    AiCollectGabage,
+    GameFlowInGame_TestNet,
+    GameFlowInGame_InGameMenu,
+    GameFlowInGame_TitleMenu,
+    GameFlowInGame_CommonMenu,
+    GameFlowFrpgNet_Sys,
+    GameFlowFrpgNet_Lobby,
+    GameFlowFrpgNet_ConnectMan,
+    GameFlowFrpgNet_Connect,
+    DarkSight,
+    UpdateLodWorld,
+    UpdateLodIns,
+    GraphicsStep,
+    DebugDrawMemoryBar,
+    DbgMenuStep,
+    DbgRemoteStep,
+    PlaylogSystemStep,
+    ReportSystemStep,
+    DbgDispStep,
+    DrawStep,
+    DrawBegin,
+    GameSceneDraw,
+    AdhocDraw,
+    DrawEnd,
+    Flip,
+    DelayDeleteStep,
+    RecordHeapStats,
+    FrameEnd,
+}

@@ -1,0 +1,9 @@
+{"sheet":"sora-combat-hit-effects","group":"port","columns":["id","case","effect","sound","ref_conf"],"rows":[
+["effect_01","character or prop, attribute PHYSICAL","/Game/Effects/wep/w_so010/par/vw_so010_hit0 (+ vw_so010_str0 for phys shapes)","window hit sound (notify asset, else enumset_hit_w_so010[alias])","inferred"],
+["effect_02","character or prop, attribute NOTYPE","/Game/Effects/system/Hit/par/VS_non_HIT0 (+ vw_so010_str0 for phys shapes)","window hit sound","inferred"],
+["effect_03","character or prop, FIRE / BLIZZARD / THUNDER / WATER / AERO / DARK","vs_fir_hit0 / vs_blz_hit0 / vs_thd_hit0 / vs_wat_hit0 / vs_win_hit0 / vs_dak_hit1","window hit sound","inferred"],
+["effect_04","map (KB_Stick only)","/Game/Effects/wep/w_so010/par/VW_SO010_WHT0","none","inferred"],
+["effect_05","victim result GUARD / GUARD_REFLECT","victim body-interface slot 78 effect, else the manager common guard effect","none from the chooser","inferred"],
+["effect_06","victim result NONE on an ENEMY with noReact","victim body-interface slot 79 effect, else the manager default","none from the chooser","inferred"],
+["effect_07","attacker result REFLECT reaching the chooser","as the first rows","none","inferred"]
+]}

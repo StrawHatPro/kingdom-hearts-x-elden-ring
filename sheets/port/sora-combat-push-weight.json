@@ -1,0 +1,6 @@
+{"sheet":"sora-combat-push-weight","group":"port","columns":["id","case","weight","conf"],"rows":[
+["push_01","my level 9 or unpushable state",0,"inferred"],
+["push_02","my level < other's",1,"inferred"],
+["push_03","equal",0.5,"inferred"],
+["push_04","my level > other's",0,"inferred"]
+]}

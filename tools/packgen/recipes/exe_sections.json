@@ -1,0 +1,26 @@
+{
+ "about": "tools/packgen_exe_check.js: the SHA-256 of the KH3 executable sections the research tools read at fixed addresses (the build they were made with)",
+ "image_base": "0x140000000",
+ "sections": {
+  ".text": {
+   "rva": "0x1000",
+   "raw_size": 96516096,
+   "sha256": "1448aeff4e0156717151fa0034c07f5065def0deccc56a5c114557a36e11d08f"
+  },
+  ".rdata": {
+   "rva": "0x5c0d000",
+   "raw_size": 44870144,
+   "sha256": "845e5b9b542b276d8b47ca9b5b7604a65afb48157cec32f6fccfc011b0e08745"
+  },
+  ".data": {
+   "rva": "0x86d8000",
+   "raw_size": 977920,
+   "sha256": "28b8f02f230638b1e05c5e7aa7a2efb01f0002fde8247268a4d2ffdda9cc3d9b"
+  },
+  ".pdata": {
+   "rva": "0xa173000",
+   "raw_size": 3801088,
+   "sha256": "7e2bb39c5a0d1619321531144e051be0295d7d82b1cb906e0f7de5d78c314001"
+  }
+ }
+}

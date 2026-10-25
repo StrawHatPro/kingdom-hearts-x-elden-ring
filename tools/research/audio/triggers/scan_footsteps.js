@@ -1,0 +1,19 @@
+// footstep / cloth auto-SE tables of Sora's SQEXSEADAutoSeComponent -> footstep_rows.json (+ cloth rows returned for weapon_cloth_rows)
+const L=require('./lib.js');
+// (release) the surface names are the game's own: read from the player's KH3 config (assets/KINGDOM HEARTS III/Config/
+// DefaultEngine.ini, +PhysicalSurfaces), not stored here; the English after them is ours
+const surfaceNames = (en) => { const ini = require('fs').readFileSync(require('path').resolve(__dirname, '../../../../assets/KINGDOM HEARTS III/Config/DefaultEngine.ini'), 'utf8'); const jp = {}; for (const m of ini.matchAll(/^\+PhysicalSurfaces=\(Type=SurfaceType(\d+),Name="([^"]*)"\)/gm)) jp[m[1]] = m[2]; const out = {}; for (const [k, e] of Object.entries(en)) { if (k !== '0' && jp[k] === undefined) throw new Error('DefaultEngine.ini: no name for SurfaceType' + k); out[k] = k === '0' ? e : [jp[k], e].filter(Boolean).join(' '); } return out; };
+const SURF=surfaceNames({ 0: 'Default', 1: 'mud', 2: 'soil', 4: 'sand', 6: 'grass', 8: 'fallen leaves', 9: 'snow', 10: 'rock/concrete', 11: 'marble/ice', 12: 'carpet', 13: 'wood', 14: 'cloth', 15: 'glass', 16: 'plastic', 17: 'roof tile', 18: 'net/mesh', 19: 'metal', 20: 'iron plate', 21: 'treasure', 22: 'cardboard box', 25: 'gravel', 30: 'frost', 31: 'snow (2)', 32: 'puddle', 33: 'water knee', 34: 'water waist', 35: 'water 3', 36: 'water 4', 37: 'water 5' });
+const PER=['Walk','Run','Jump','LandNormal','LandHard','FootShuffle'];
+const NON=['RustleShort','RustleLong','RustleFootShort','RustleFootLong','WingFlapUp','WingFlapDown','SwingKnock','SwingRub','CrouchDown','StandUp'];
+const tables=process.argv.slice(2); if(!tables.length) tables.push('FsTable_Sora','FsTable_Sora_mi','FsTable_Sora_ts','FsTable_Sora_ca','FsTable_EW_Sora');
+const idx=k=>{const m=/\[(\d+)\]$/.exec(k);return m?+m[1]:0;};
+const str=v=>typeof v==='string'?v:(v&&v.s!==undefined?v.s:null);
+const rows=[],cloth=[],summary={};
+for(const t of tables){ const d=L.loadPkg('Sound/SE/_Data/MASTS/'+t); if(!d){console.error('missing',t);continue;} const p=L.simp(d,d.exports[0].data.props); const tbl='/Game/Sound/SE/_Data/MASTS/'+t; summary[t]={per_surface:0,aux:0,non_surface:0,surfaces:[]};
+  for(const k in p){ if(/^PerSurfaceInfos/.test(k)){ const s=idx(k); summary[t].surfaces.push(s); for(const kk in p[k]){ const m=idx(kk); const a=str(p[k][kk]); if(!a)continue; const r=L.resolveSound(a); rows.push({table:tbl,route:'per_surface',surface_type:s,surface_name:SURF[s]||null,slot:m,slot_name:PER[m],sound:a.replace(/\.[^./]+$/,''),bank_file:r.bank_file||null,sound_index:r.sound_index,resolved:r}); summary[t].per_surface++; } }
+    else if(k==='NonSurfaceInfos'){ for(const kk in p[k]){ const m=idx(kk); const a=str(p[k][kk]); if(!a)continue; const r=L.resolveSound(a); cloth.push({table:tbl,route:'non_surface',slot:m,slot_name:NON[m],sound:a.replace(/\.[^./]+$/,''),bank_file:r.bank_file||null,sound_index:r.sound_index,resolved:r}); summary[t].non_surface++; } }
+    else if(k==='AuxSurfaceAssetTable'){ for(const rec of (p[k].Records||[])){ for(const kk in rec){ if(!/^AssetRefs/.test(kk))continue; const s=idx(kk); const a=str(rec[kk]); if(!a)continue; const r=L.resolveSound(a); rows.push({table:tbl,route:'aux_surface',record:rec.Name,surface_type:s,surface_name:SURF[s]||null,sound:a.replace(/\.[^./]+$/,''),bank_file:r.bank_file||null,sound_index:r.sound_index,resolved:r}); summary[t].aux++; } } }
+    else summary[t]['other:'+k]=1; } }
+L.fs.writeFileSync(__dirname+'/footstep_rows.json',JSON.stringify(rows,null,1)); L.fs.writeFileSync(__dirname+'/cloth_autose_rows.json',JSON.stringify(cloth,null,1));
+console.log(JSON.stringify(summary)); const bad=rows.concat(cloth).filter(r=>!r.resolved.exists||!r.resolved.bank_file_exists); console.log('rows',rows.length,'cloth',cloth.length,'unresolved',bad.length,bad.slice(0,8).map(b=>b.sound+' s'+b.surface_type));

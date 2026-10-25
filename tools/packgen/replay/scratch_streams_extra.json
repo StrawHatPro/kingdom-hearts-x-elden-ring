@@ -1,0 +1,66 @@
+[
+ {
+  "effect": "/Game/Effects/dlc02/NPC/n_ex005/par/vn_ex005_op_hane",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc02/NPC/n_ex005/par/vn_ex005_hit",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc02/NPC/n_ex005/par/vn_ex005_op_crs",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc02/NPC/n_ex005/par/vn_ex005_op_rad",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc02/NPC/n_ex005/par/vn_ex005_hand_lgt",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc02/NPC/n_ex005/par/vn_ex005_op_aura",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc02/NPC/n_ex005/par/vn_ex005_wing_aura",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc02/level/kg/kg_05/event/kg872r/par/vd_kg872r_04_mmr00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ }
+]

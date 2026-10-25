@@ -1,0 +1,12 @@
+{"sheet":"sora-combat-queue-classes","group":"port","columns":["id","cmd_type","cate","kinds","hud_class","container","counted","hud_countdown","producer","sora_only"],"rows":[
+["queue_class_01",1,"any","1..26 (REFLECTGUARD .. FR_GOOFY2)","2 as a kind; entered as ex-kind entries (type 2): ex kinds 1..3 -> 5, 5 / 9 / 13 -> 6, others 2","single slot: A (HUD+0x770) for class 2, B (HUD+0x7C8) for the ex kinds classed 5 / 6 [C]","no","no (controller prompt timer ctrl+0x8A0)","reaction prompt: controller 0x1414145C0 -> hud 0x141575640 / 0x14158C180 (other strands: guard, damage, risk dodge); not through NotifySetActionCommand","yes for 1..21"],
+["queue_class_02",4,13,"76..108 context (SAVE, TALK, OPEN, CHECK, ...)","2 (0x0B / 0x0C / 0x10 for 82, 83, 84, 87, 88)","slot A","no","no","level objects","needs level objects"],
+["queue_class_03",4,14,"127..154, 221..224 formchange",3,"list (HUD+0x760)","yes","yes","gauge full: controller slot 830 0x1413F0ED0","yes (148 for the Kingdom Key)"],
+["queue_class_04",4,15,"155..174, 179..185, 225..228 finish",4,"slot B (HUD+0x7C8)","no","no (lives with the form time)","controller slot 837 0x1413EE030","yes (171..173)"],
+["queue_class_05",4,16,"170, 175..178, 243 finish extras",4,"slot B extra (0x14158C180)","no","no","StyleFinish slot 162 0x1413E3690 during a finish","yes (175..178)"],
+["queue_class_06",4,11,"110..126, 231 grand magic",1,"list","yes","yes","gauge full: controller slot 838 0x1413ED500 (docs/sora-magic-spec.md part I section 7)","yes"],
+["queue_class_07",4,17,"186..191 attraction (192 AF_FINISH: class 6)",5,"list","yes","yes","attraction marks on enemies","no (marked enemies)"],
+["queue_class_08",4,18,"193..210, 237..242 team attacks (211, 214, 241: class 6)",7,"list","yes","yes","friend gauge / friend AI","no (party members)"],
+["queue_class_09",3,19,"69..75 links",10,"list","yes","yes","link menu","no (out of scope)"],
+["queue_class_10",5,25,"253 SHOOTFLOW",8,"list","yes","yes","shotlock / athletic flow","see magic spec part F"]
+]}

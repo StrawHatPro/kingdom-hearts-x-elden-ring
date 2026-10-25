@@ -1,0 +1,56 @@
+[package]
+name = "kh-er-render"
+description = "Sora drawn by our own Direct3D 12 code inside another game's frame (Elden Ring 2.7.1.0 through kh-er): minimal vtable hooks on the swap chain and the command queue, a thin skinned-mesh renderer on the game's own device, the character materials of kh-look with shaders built offline by kh-shaderc. No Bevy, no wgpu device, no game SDK. build/sora_tmp/er/IMPL_ER2_STATE.md."
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+kh-look = { path = "../kh-look" }
+kh-anim = { path = "../kh-anim" }
+# (effects) The draw lists Sora's effects come as (vfx.rs).
+kh-vfx = { path = "../kh-vfx" }
+# (NF) KH3's camera fade (which character fades, how fast: kh-camera camfade.rs, engine-free)
+kh-camera = { path = "../kh-camera" }
+glam = { workspace = true }
+serde_json = "1"
+# PNG decoding of the pack's textures (already in the tree through Bevy's image crate).
+png = "0.18"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# (ER party S4) Donald, Goofy and the team props (src/party.rs, src/gfx/party.rs): without the feature the renderer has no
+# party code at all (deploy discipline: build/sora_tmp/er/party/ER_PARTY_PLAN.md 3.2). The DLL's kh-er turns it on with its own
+# `party` feature.
+[features]
+default = ["party"]
+party = []
+
+# (effects) The offline proof (examples/effects.rs): Sora without a game and the effect side every host shares.
+[dev-dependencies]
+kh-host = { path = "../kh-host" }
+kh-core = { path = "../kh-core" }
+kh-ui = { path = "../kh-ui" }
+# (ER party S4) the party's figures in the effects harness (examples/party_draw.rs) use kh-partyhost's poser (below)
+# (ER party S5) the party in the effects harness (examples/effects_party): Donald and Goofy simulated and posed
+kh-party = { path = "../kh-party" }
+kh-partyhost = { path = "../kh-partyhost" }
+# (ZDRAW) the offline proof reads real Elden Ring models from the game's files (examples/effects_zdraw/zdraw_harness.rs; read-only)
+kh-erfile = { path = "../kh-erfile" }
+kh-audio = { path = "../kh-audio" }
+
+# (ER party S5) S5's second effect root (vfx.rs PARTY_NAMESPACE) needs no feature of its own: it is inert unless the effect
+# side names a `party:` material (only kh-er's feature `party` does). The renderer's `party` feature is S4's to declare.

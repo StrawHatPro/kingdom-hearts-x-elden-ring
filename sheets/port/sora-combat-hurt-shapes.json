@@ -1,0 +1,15 @@
+{"sheet":"sora-combat-hurt-shapes","group":"port","columns":["id","variable","group_name","ignore_none_group","shape","size_x","size_y","size_z","socket","loc_x","loc_y","loc_z","rot_pitch","rot_yaw","rot_roll","damage","push","camera","reaction_type","template_export"],"rows":[
+["TresBodyCollPrimitive1","TresBodyCollPrimitive1","None","no","CAPSULE",50,0,90,"-",0,0,90,0,0,0,"no","yes","no","TRES_BODY_RT_DEFAULT","TresBodyCollPrimitive_0"],
+["TresBodyCollPrimitive2","TresBodyCollPrimitive2","None","no","CAPSULE",50,0,90,"Center",0,15,0,0,0,90,"yes","no","no","TRES_BODY_RT_DEFAULT","TresBodyCollPrimitive_6"],
+["TresBodyCollPrimitive3","TresBodyCollPrimitive3","Camera","no","CAPSULE",30,0,60,"hara1",-10,0,0,90,0,0,"no","no","yes","TRES_BODY_RT_DEFAULT","TresBodyCollPrimitive3_GEN_VARIABLE"],
+["TresBodyCollPrimitive4","TresBodyCollPrimitive4","Guard","yes","CAPSULE",51,0,91,"-",0,2,90,0,0,0,"yes","no","no","TRES_BODY_RT_GUARD","TresBodyCollPrimitive4_GEN_VARIABLE"],
+["TresBodyCollPrimitive5","TresBodyCollPrimitive5","Camera","no","SPHERE",23,0,0,"atama",10,-2,0,0,0,0,"no","no","yes","TRES_BODY_RT_DEFAULT","TresBodyCollPrimitive5_GEN_VARIABLE"],
+["TresBodyCollPrimitive6","TresBodyCollPrimitive6","BaymaxRide","yes","SPHERE",120,0,0,"-",0,0,0,0,0,0,"yes","no","no","TRES_BODY_RT_DEFAULT","TresBodyCollPrimitive6_GEN_VARIABLE"],
+["TresBodyCollPrimitive7","TresBodyCollPrimitive7","Camera","no","CAPSULE",10,0,23,"R_ashi1",8,10,0,0,0,90,"no","no","yes","TRES_BODY_RT_DEFAULT","TresBodyCollPrimitive7_GEN_VARIABLE"],
+["TresBodyCollPrimitive8","TresBodyCollPrimitive8","Camera","no","CAPSULE",10,0,23,"L_ashi1",8,10,0,0,0,90,"no","no","yes","TRES_BODY_RT_DEFAULT","TresBodyCollPrimitive8_GEN_VARIABLE"],
+["TresBodyCollPrimitive9","TresBodyCollPrimitive9","Camera","no","CAPSULE",20,0,35,"R_sune",15,0,0,90,0,0,"no","no","yes","TRES_BODY_RT_DEFAULT","TresBodyCollPrimitive9_GEN_VARIABLE"],
+["TresBodyCollPrimitive10","TresBodyCollPrimitive10","Camera","no","CAPSULE",20,0,35,"L_sune",15,0,0,90,0,0,"no","no","yes","TRES_BODY_RT_DEFAULT","TresBodyCollPrimitive10_GEN_VARIABLE"],
+["TresBodyCollPrimitive11","TresBodyCollPrimitive11","Camera","no","CAPSULE",12,0,25,"R_ude2",18,0,0,90,0,0,"no","no","yes","TRES_BODY_RT_DEFAULT","TresBodyCollPrimitive11_GEN_VARIABLE"],
+["TresBodyCollPrimitive12","TresBodyCollPrimitive12","Camera","no","CAPSULE",12,0,25,"L_ude2",18,0,0,90,0,0,"no","no","yes","TRES_BODY_RT_DEFAULT","TresBodyCollPrimitive12_GEN_VARIABLE"],
+["TresBodyCollPrimitive13","TresBodyCollPrimitive13","GuardBody","yes","CAPSULE",50,0,90,"-",0,0,90,0,0,0,"yes","no","no","WEAK_GUARD","TresBodyCollPrimitive13_GEN_VARIABLE"]
+]}

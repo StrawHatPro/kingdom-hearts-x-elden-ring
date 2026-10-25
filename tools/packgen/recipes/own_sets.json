@@ -1,0 +1,40 @@
+{
+ "about": "the outfits' own shader sets (tools/packgen_recipe.js shaders): tools/sora_material_pack.js --own-khs, one run each",
+ "sets": [
+  {
+   "outfit": "caribbean",
+   "suffix": "real",
+   "asset": "/Game/Shader/KHS_set/postprocess/KHS_Real",
+   "world": "caribbean=Maps/ca/umap/ca_01/ca_01_ENV.umap.json=The Caribbean (ca_01)",
+   "control": null
+  },
+  {
+   "outfit": "monstropolis",
+   "suffix": "cg",
+   "asset": "/Game/Shader/KHS_set/postprocess/KHS_CG",
+   "world": "monstropolis=Maps/mi/umap/mi_01/mi_01_ENV.umap.json=Monstropolis (mi_01)",
+   "control": null
+  },
+  {
+   "outfit": "sanfransokyo",
+   "suffix": "cg",
+   "asset": "/Game/Shader/KHS_set/postprocess/KHS_CG",
+   "world": "sanfransokyo=Maps/bx/umap/bx_02/bx_02_ENV_Day.umap.json=San Fransokyo by day (bx_02)",
+   "control": null
+  },
+  {
+   "outfit": "toybox",
+   "suffix": "cg",
+   "asset": "/Game/Shader/KHS_set/postprocess/KHS_CG",
+   "world": "toybox=Maps/ts/umap/ts_02/ts_02_ENV.umap.json=Toy Box, Galaxy Toys (ts_02)",
+   "control": null
+  },
+  {
+   "outfit": "verumrex",
+   "suffix": "cg",
+   "asset": "/Game/Shader/KHS_set/postprocess/KHS_CG",
+   "world": "quadratum=Maps/ss_DLC/umap/ss_01/ss_01_Env.umap.json=Quadratum (ss_01)",
+   "control": "PixarCoreControl=0"
+  }
+ ]
+}

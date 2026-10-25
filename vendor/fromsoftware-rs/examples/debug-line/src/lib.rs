@@ -1,0 +1,80 @@
+use std::time::Duration;
+
+use eldenring::{
+    cs::{CSTaskGroupIndex, CSTaskImp, RendMan, WorldChrMan},
+    fd4::FD4TaskData,
+    position::PositionDelta,
+};
+use fromsoftware_shared::{F32Vector4, FromStatic, SharedTaskImpExt};
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// This is exposed this way such that windows LoadLibrary API can call it. Do not call this yourself.
+pub unsafe extern "C" fn DllMain(_hmodule: usize, reason: u32) -> bool {
+    // Check if the reason for the call is DLL_PROCESS_ATTACH.
+    // This indicates that the DLL is being loaded into a process.
+    if reason != 1 {
+        return true;
+    }
+
+    // Kick off new thread.
+    std::thread::spawn(|| {
+        // Wait for the game (current program we're injected into) to boot up
+        // and initialize its task runner.
+        let cs_task = CSTaskImp::wait_for_instance(Duration::MAX).unwrap();
+
+        // Register a new task with the game to happen every frame during the gameloops
+        // ChrIns_PostPhysics phase because all the physics calculations have ran at this
+        // point.
+        cs_task.run_recurring(
+            // The registered task will be our closure.
+            |_: &FD4TaskData| {
+                // Grab the debug ez draw from RendMan if it's available. Bail otherwise.
+                let Some(ez_draw) = unsafe { RendMan::instance_mut() }
+                    .ok()
+                    .map(|r| r.debug_ez_draw.as_mut())
+                else {
+                    return;
+                };
+
+                // Grab the main player from WorldChrMan if it's available. Bail otherwise.
+                let Some(player) = unsafe { WorldChrMan::instance() }
+                    .ok()
+                    .and_then(|w| w.main_player.as_ref())
+                else {
+                    return;
+                };
+
+                // Grab physics module from player.
+                let physics = &player.chr_ins.modules.physics;
+
+                // Make a directional vector that points forward following the players
+                // rotation.
+                let directional_vector = {
+                    let forward = glam::vec3(0.0, 0.0, -1.0);
+                    glam::Quat::from(physics.orientation).mul_vec3(forward)
+                };
+
+                // Set color for the to-be-rendered line.
+                ez_draw.set_color(&F32Vector4(0.0, 0.0, 1.0, 1.0));
+
+                // Draw the line from the players position to a meter in front of the player.
+                ez_draw.draw_line(
+                    &physics.position,
+                    &(physics.position
+                        + PositionDelta(
+                            directional_vector.x,
+                            directional_vector.y,
+                            directional_vector.z,
+                        )),
+                );
+            },
+            // Specify the task group in which physics calculations are already done.
+            CSTaskGroupIndex::ChrIns_PostPhysics,
+        );
+    });
+
+    // Signal that DllMain executed successfully
+    true
+}

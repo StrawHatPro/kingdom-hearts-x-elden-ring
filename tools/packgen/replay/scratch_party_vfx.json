@@ -1,0 +1,1800 @@
+[
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/VN_bsh_inl0",
+  "used_by": [
+   "n_ex002 effect folder",
+   "n_ex002 notify TresAnimNotify_AttachEffect @ 1621"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/VN_bsh_inl1",
+  "used_by": [
+   "n_ex002 effect folder",
+   "n_ex002 notify TresAnimNotifyState_AttachEffect @ 1632",
+   "n_ex002 notify TresAnimNotifyState_AttachEffect @ 1635"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/VN_slg_bsh0",
+  "used_by": [
+   "n_ex002 effect folder",
+   "n_ex002 notify TresAnimNotifyState_AttachEffect @ 1630",
+   "n_ex002 notify TresAnimNotifyState_AttachEffect @ 1631"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/VN_slg_hit0",
+  "used_by": [
+   "ShieldGuardian_Pawn",
+   "ShieldGuardian_Pawn (import)",
+   "n_ex002 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/VN_slg_hvy00",
+  "used_by": [
+   "n_ex002 effect folder",
+   "n_ex002 notify TresAnimNotify_AttachEffect @ 1635"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/VN_slg_hvy01",
+  "used_by": [
+   "n_ex002 effect folder",
+   "n_ex002 notify TresAnimNotify_AttachEffect @ 1632"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_air_han_00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_ProjectileMagAero_C body"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/AUD/vd_don_aud_blz_dome",
+  "used_by": [
+   "magic.S_BLIZZAGAN.ReSpawnProjectileClass.body"
+  ],
+  "priority": "core",
+  "categories": [
+   "magic"
+  ]
+ },
+ {
+  "effect": "/Game/AUD/vd_don_aud_fir_erupt",
+  "used_by": [
+   "magic.S_FIRAGAN.ReSpawnProjectileClass.body"
+  ],
+  "priority": "core",
+  "categories": [
+   "magic"
+  ]
+ },
+ {
+  "effect": "/Game/AUD/vd_don_aud_orb_zap",
+  "used_by": [
+   "pawn.badstate.g3051.vs_abn_cld_thd0"
+  ],
+  "priority": "core",
+  "categories": [
+   "abnormal"
+  ]
+ },
+ {
+  "effect": "/Game/AUD/vd_don_aud_str0s",
+  "used_by": [
+   "magic.THUNDER.body"
+  ],
+  "priority": "core",
+  "categories": [
+   "magic"
+  ]
+ },
+ {
+  "effect": "/Game/AUD/vd_don_aud_str1s",
+  "used_by": [
+   "magic.THUNDARA.body",
+   "magic.S_THUNDARA.body"
+  ],
+  "priority": "core",
+  "categories": [
+   "magic"
+  ]
+ },
+ {
+  "effect": "/Game/AUD/vd_don_aud_str2s",
+  "used_by": [
+   "magic.THUNDAGA.body",
+   "magic.S_THUNDAGA.body"
+  ],
+  "priority": "core",
+  "categories": [
+   "magic"
+  ]
+ },
+ {
+  "effect": "/Game/AUD/vd_don_aud_wat_dome",
+  "used_by": [
+   "seed: imported by /Game/Blueprints/Projectile/MagicWater/TresProj_WataganBurn",
+   "seed: imported by /Game/Blueprints/Projectile/MagicWater/TresProj_WataganBZBurn"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/DON-SPELLB/vd_don_jb_str3a",
+  "used_by": [
+   "magic.S_THUNDAGAN.body"
+  ],
+  "priority": "core",
+  "categories": [
+   "magic"
+  ]
+ },
+ {
+  "effect": "/Game/DON-SPELLB/vd_don_jb_str3b",
+  "used_by": [
+   "magic.S_THUNDAGAN.body"
+  ],
+  "priority": "core",
+  "categories": [
+   "magic"
+  ]
+ },
+ {
+  "effect": "/Game/DON-SPELLB/vd_don_thd_str0s",
+  "used_by": [
+   "magic.THUNDER.body"
+  ],
+  "priority": "core",
+  "categories": [
+   "magic"
+  ]
+ },
+ {
+  "effect": "/Game/Effects/level/ew/ew_02/event/ew751/par/vd_ew751_wave_head",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/ew/ew_02/event/ew751/par/vd_ew751_wave_set",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/fz/fz_05/event/fz451/par/vd_fz451_13_smk_frz_01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/fz/fz_01/event/fz452/par/vd_fz452_ice_spa_1st",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/fz/fz_01/event/fz453/par/vd_fz453_19_ice_wal00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/fz/fz_01/event/fz453/par/vd_fz453_19_ice_wal01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/fz/fz_06/event/fz470b/par/vd_fz470b_c33_drk_sph00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_86_rit_00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_86_zfr_01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_86_zfr_02",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_86_zfr_03",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_86_zfr_04",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_86_zfr_05",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_86_zfr_06",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_86_zfr_07",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_86_zfr_08",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_86_zfr_09",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_86_zfr_10",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_88_rit_00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_88_zfr_00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_91_rit_00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_91_rit_01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_91_zfr_00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_91_zfr_01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_92_blr_00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_92_zfr_01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_92_zfr_02",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_92_zfr_03",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_93_zfr_00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_94_exp_00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_94_zfr_00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702/par/vd_kg702_94_zfr_01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702b/par/vd_kg702b_100_smk_00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702b/par/vd_kg702b_101_zfr_00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702b/par/vd_kg702b_102_smk_00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702b/par/vd_kg702b_102_zfr_00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702b/par/vd_kg702b_103_wld_smk00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702b/par/vd_kg702b_96_rit_00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702b/par/vd_kg702b_96_stn_00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702b/par/vd_kg702b_96_zfr_00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702b/par/vd_kg702b_96_zfr_01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702b/par/vd_kg702b_97_sky_00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_01/event/kg702b/par/vd_kg702b_97_zfr_00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_02/event/kg878/par/vd_kg878_c34_ult_cal00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_02/event/kg878/par/vd_kg878_c36_ult_blt00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_02/event/kg878/par/vd_kg878_c36_ult_dom00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/kg/kg_02/event/kg878/par/vd_kg878_c38_ult_cal00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/enemy/e_ex004/par/ve_ca004_wat_atk1",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/enemy/e_ex004/par/ve_ex004_wat_atk1",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/enemy/e_ex028/par/ve_ex028_thd_glw00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/enemy/e_ex043/par/ve_ex043_fir_zan0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/enemy/e_ex043/par/ve_ex043_fir_zan1",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/enemy/e_ex043/par/ve_ex043_fir_zan2",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/enemy/e_ex711/par/ve_ex711_tor2",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/enemy/e_ex711/par/ve_ex711_tor_spk0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/enemy/e_ex731/par/ve_ex731_ded_ice00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/enemy/e_ex731/par/ve_ex731_ded_ice01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/enemy/e_ex771/par/ve_ex771_flr4_exp_040",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc02/enemy/e_ex773/par/ve_ex773_flre_bom",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc02/enemy/e_ex773/par/ve_ex773_flre_bom2",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc02/enemy/e_ex773/par/ve_ex773_flre_cal0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc02/enemy/e_ex773/par/ve_ex773_flre_hit0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc02/enemy/e_ex773/par/ve_ex773_flre_sht_fir0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/enemy/e_fz903/par/ve_fz903_scs_snw02",
+  "used_by": [
+   "n_ex002 notify TresAnimNotifyState_AttachEffect @ 1676"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/magic/air/par/vm_aic_rng3",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/magic/air/par/vm_aiw_blt0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/d_magic/stitch/par/vm_bem_lne0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/magic/bliz/par/vm_blb_fir0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/magic/bliz/par/vm_blc_rng3",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/magic/fire/par/vm_fic_rng0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/magic/fire/par/vm_fic_rng3",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/d_magic/simba/par/vm_fir_fot0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/d_magic/stitch/par/vm_fns_inseki",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/d_magic/simba/par/vm_fns_sky0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/d_magic/stitch/par/vm_fns_star",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/d_magic/ariel/par/vm_hit_just00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/d_magic/simba/par/vm_lgt_2",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/magic/thd/par/vm_pole_thd2",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/magic/thd/par/vm_pole_thd3",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/d_magic/ariel/par/vm_spt_just00",
+  "used_by": [
+   "nested in vm_hit_just00 (SQEX_SpawnParticleSystem)"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/magic/thd/par/vm_thb_blt0",
+  "used_by": [
+   "nested in vn_ex001_wth_blt00 (SQEX_SpawnParticleSystem)"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/magic/thd/par/vm_thc_rng3",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/magic/thd/par/vm_thd_str4",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/magic/water/par/vm_wac_rng3",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/magic/water/par/vm_waw_fir3",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/d_magic/wandanyan/par/vm_wnd_kze00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_air_cal00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_Magic_ead"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_air_fir00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_ProjectileMagAero_C fire",
+   "n_ex001_ProjectileMagWaterAero_C fire"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_air_han_00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_ProjectileMagAero_C body"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_blz_blt00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_ProjectileMagBlizzard_C body"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_blz_cal00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_Magic_ead"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_blz_fir00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_ProjectileMagBlizzard_C fire"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_cur_cal00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_Magic_ead"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_cur_fir00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_ProjectileMagCure_C fire"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_fcm_emi00",
+  "used_by": [
+   "CallMeteor_Proj",
+   "CallMeteor_Proj (import)",
+   "n_ex001 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_fcm_flt00",
+  "used_by": [
+   "CallMeteor_Pawn",
+   "CallMeteor_Pawn (import)",
+   "n_ex001 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_fcm_hit00",
+  "used_by": [
+   "CallMeteor_Proj",
+   "CallMeteor_Proj (import)",
+   "n_ex001 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_fcm_spn00",
+  "used_by": [
+   "CallMeteor_Pawn",
+   "CallMeteor_Pawn (import)",
+   "n_ex001 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_fff_dou00",
+  "used_by": [
+   "FlareForce_Proj",
+   "FlareForce_Proj (import)",
+   "n_ex001 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_fff_hit00",
+  "used_by": [
+   "FlareForce_ExpProj",
+   "FlareForce_ExpProj (import)",
+   "n_ex001 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_fff_spn00",
+  "used_by": [
+   "FlareForce_Proj",
+   "FlareForce_Proj (import)",
+   "n_ex001 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_fir_blt00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_ProjectileMagFire_C body"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_fir_cal00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_Magic_ead"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_fir_fir00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_ProjectileMagFire_C fire",
+   "n_ex001_ProjectileMagWaterFire_C fire"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_thd_cal00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_Magic_ead"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_thd_fir00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_ProjectileMagThunder_C fire"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_thd_han00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_ProjectileMagThunder_C body"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_wac_awa00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001 notify TresAnimNotifyState_AttachEffect @ 1088"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_wac_awa01",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001 notify TresAnimNotifyState_AttachEffect @ 1093"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_wai_cal00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_Magic_ead"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_wai_han_00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_ProjectileMagWaterAero_C body"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_wbl_blt00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_ProjectileMagWaterBlizzard_C body"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_wbl_cal00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_Magic_ead"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_wbl_fir00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_ProjectileMagWaterBlizzard_C fire"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_wbl_han00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_ProjectileMagWaterBlizzardBurn_C body"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_wfi_blt00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_ProjectileMagWaterFire_C body"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_wfi_cal00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_Magic_ead"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_wfi_han00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_ProjectileMagWaterFireBurn_C body"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_whr_awa00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001 notify TresAnimNotifyState_AttachEffect @ 1090"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_wth_blt00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_ProjectileMagWaterThunder_C body"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_wth_cal00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_Magic_ead"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_wth_fir00",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_ProjectileMagWaterThunder_C fire"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex001/par/vn_ex001_wth_han01",
+  "used_by": [
+   "n_ex001 effect folder",
+   "n_ex001_ProjectileMagWaterThunderBurn_C body"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/vn_ex002_dcs_awa00",
+  "used_by": [
+   "n_ex002 effect folder",
+   "n_ex002 notify TresAnimNotifyState_AttachEffect @ 1088",
+   "n_ex002 notify TresAnimNotifyState_AttachEffect @ 1090",
+   "n_ex002 notify TresAnimNotifyState_AttachEffect @ 1324"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/vn_ex002_dcs_awa01",
+  "used_by": [
+   "n_ex002 effect folder",
+   "n_ex002 notify TresAnimNotify_AttachEffect @ 1332"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/vn_ex002_dcs_cth00",
+  "used_by": [
+   "n_ex002 effect folder",
+   "n_ex002 notify TresAnimNotify_AttachEffect @ 1329",
+   "n_ex002 notify TresAnimNotify_AttachEffect @ 1332"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/vn_ex002_frt_tsn00",
+  "used_by": [
+   "n_ex002 effect folder",
+   "n_ex002 notify TresAnimNotifyState_AttachEffect @ 1765"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/vn_ex002_gsh_kic0",
+  "used_by": [
+   "n_ex002 effect folder",
+   "n_ex002 notify TresAnimNotify_AttachEffect @ 1640"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/vn_ex002_gsh_lnc0",
+  "used_by": [
+   "n_ex002 effect folder",
+   "n_ex002 notify TresAnimNotify_AttachEffect @ 1637"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/vn_ex002_gsh_sho0",
+  "used_by": [
+   "GoofyShoot_Proj",
+   "GoofyShoot_Proj (import)",
+   "n_ex002 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/vn_ex002_mcl_col0",
+  "used_by": [
+   "n_ex002 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/vn_ex002_mcl_hit0",
+  "used_by": [
+   "n_ex002 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/vn_ex002_mcl_rbd0",
+  "used_by": [
+   "n_ex002 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/vn_ex002_mcl_run0",
+  "used_by": [
+   "n_ex002 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/vn_ex002_spn_loc00",
+  "used_by": [
+   "n_ex002 effect folder",
+   "n_ex002 notify TresAnimNotifyState_AttachEffect @ 1764"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/vn_ex002_spn_loc02",
+  "used_by": [
+   "n_ex002 effect folder",
+   "n_ex002 notify TresAnimNotifyState_AttachEffect @ 1764"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/vn_ex002_trb_awa00",
+  "used_by": [
+   "n_ex002 effect folder",
+   "n_ex002 notify TresAnimNotifyState_AttachEffect @ 1325"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/vn_ex002_trb_tub00",
+  "used_by": [
+   "n_ex002 effect folder",
+   "n_ex002 notify TresAnimNotifyState_AttachEffect @ 1325"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/vn_ex002_trn_awa00",
+  "used_by": [
+   "n_ex002 effect folder",
+   "n_ex002 notify TresAnimNotifyState_AttachEffect @ 1322",
+   "n_ex002 notify TresAnimNotifyState_AttachEffect @ 1330"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/vn_ex002_trn_loc00",
+  "used_by": [
+   "n_ex002 effect folder",
+   "n_ex002 notify TresAnimNotifyState_AttachEffect @ 1322"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex003/par/vn_ex003_hly_blt1",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex003/par/vn_ex003_hly_fir2",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex003/par/vn_ex003_hly_hit0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ra201/par/vn_ra201_sph_tbu00",
+  "used_by": [
+   "n_ex001 notify TresAnimNotifyState_AttachEffect @ 1718",
+   "n_ex002 notify TresAnimNotifyState_AttachEffect @ 1718"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/NPC/n_ex002/par/vn_spd_lin0",
+  "used_by": [
+   "n_ex002 effect folder",
+   "n_ex002 notify TresAnimNotifyState_AttachEffect @ 1639"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/PC/sea/sea_com/par/vp_div_flo0",
+  "used_by": [
+   "n_ex002 notify TresAnimNotify_AttachEffect @ 1088",
+   "n_ex002 notify TresAnimNotify_AttachEffect @ 1332"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/PC/sea/sea_com/par/vp_div_idl00",
+  "used_by": [
+   "n_ex001 notify TresAnimNotify_AttachEffect @ 0085",
+   "n_ex002 notify TresAnimNotify_AttachEffect @ 0085"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/PC/sea/sea_com/par/vp_div_sbk0",
+  "used_by": [
+   "n_ex001 notify TresAnimNotify_AttachEffect @ 0084",
+   "n_ex002 notify TresAnimNotify_AttachEffect @ 0084",
+   "n_ex002 notify TresAnimNotify_AttachEffect @ 1089"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/level/he/he_01/event_r/par/vr_he_ms100s_whiteout00",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc02/level/kg/kg_06/event_r/ms130/par/vr_kg06_ms130_c02_holy_cal0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/dlc02/level/kg/kg_06/event_r/ms130/par/vr_kg06_ms130_c04_lst_holy_bem01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/system/Hit/par/vs_blz_wht0",
+  "used_by": [
+   "n_ex001_ProjectileMagBlizzard_C map_hit",
+   "n_ex001_ProjectileMagWaterBlizzard_C map_hit"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/system/Hit/par/vs_fir_wht0",
+  "used_by": [
+   "n_ex001_ProjectileMagFire_C map_hit",
+   "n_ex001_ProjectileMagWaterFireBurn_C map_hit",
+   "n_ex001_ProjectileMagWaterFire_C map_hit"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/system/Hit/par/vs_thd_wht0",
+  "used_by": [
+   "n_ex001_ProjectileMagThunder_C map_hit"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/GumiShip/Effects/gmcom/par/vt_grv_bom01",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/GumiShip/Effects/gmcom/par/vt_grv_bom02",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/GumiShip/Effects/gmcom/par/vt_grv_bom03",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/GumiShip/Effects/gmcom/par/vt_grv_hit1",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_do010/par/vw_do010_hit0",
+  "used_by": [
+   "w_do010 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_do020/par/vw_do020_hit0",
+  "used_by": [
+   "w_do020 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_do030/par/vw_do030_hit00",
+  "used_by": [
+   "w_do030 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_do040/par/vw_do040_hit00",
+  "used_by": [
+   "w_do040 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_do050/par/vw_do050_hit0",
+  "used_by": [
+   "w_do050 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_do060/par/vw_do060_hit00",
+  "used_by": [
+   "w_do060 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_do070/par/vw_do070_hit0",
+  "used_by": [
+   "w_do070 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_do080/par/vw_do080_hit00",
+  "used_by": [
+   "w_do080 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_do090/par/vw_do090_hit0",
+  "used_by": [
+   "w_do090 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_do100/par/vw_do100_hit00",
+  "used_by": [
+   "w_do100 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_do110/par/vw_do110_hit00",
+  "used_by": [
+   "w_do110 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_do120/par/vw_do120_hit00",
+  "used_by": [
+   "w_do120 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_do130/par/vw_do130_hit0",
+  "used_by": [
+   "w_do130 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_do140/par/vw_do140_hit00",
+  "used_by": [
+   "w_do140 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_com/par/vw_don_app00",
+  "used_by": [
+   "w_do010 m_AppearEffect",
+   "w_do010 m_DisappearEffect",
+   "w_do020 m_AppearEffect",
+   "w_do020 m_DisappearEffect",
+   "w_do030 m_AppearEffect",
+   "w_do030 m_DisappearEffect",
+   "w_do040 m_AppearEffect",
+   "w_do040 m_DisappearEffect",
+   "w_do050 m_AppearEffect",
+   "w_do050 m_DisappearEffect",
+   "w_do060 m_AppearEffect",
+   "w_do060 m_DisappearEffect",
+   "w_do070 m_AppearEffect",
+   "w_do070 m_DisappearEffect",
+   "w_do080 m_AppearEffect",
+   "w_do080 m_DisappearEffect",
+   "w_do090 m_AppearEffect",
+   "w_do090 m_DisappearEffect",
+   "w_do100 m_AppearEffect",
+   "w_do100 m_DisappearEffect",
+   "w_do110 m_AppearEffect",
+   "w_do110 m_DisappearEffect",
+   "w_do120 m_AppearEffect",
+   "w_do120 m_DisappearEffect",
+   "w_do130 m_AppearEffect",
+   "w_do130 m_DisappearEffect",
+   "w_do140 m_AppearEffect",
+   "w_do140 m_DisappearEffect"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_com/par/vw_gof_app00",
+  "used_by": [
+   "w_gu010 m_AppearEffect",
+   "w_gu010 m_DisappearEffect",
+   "w_gu020 m_AppearEffect",
+   "w_gu020 m_DisappearEffect",
+   "w_gu030 m_AppearEffect",
+   "w_gu030 m_DisappearEffect",
+   "w_gu040 m_AppearEffect",
+   "w_gu040 m_DisappearEffect",
+   "w_gu050 m_AppearEffect",
+   "w_gu050 m_DisappearEffect",
+   "w_gu060 m_AppearEffect",
+   "w_gu060 m_DisappearEffect",
+   "w_gu070 m_AppearEffect",
+   "w_gu070 m_DisappearEffect",
+   "w_gu080 m_AppearEffect",
+   "w_gu080 m_DisappearEffect",
+   "w_gu090 m_AppearEffect",
+   "w_gu090 m_DisappearEffect",
+   "w_gu100 m_AppearEffect",
+   "w_gu100 m_DisappearEffect",
+   "w_gu110 m_AppearEffect",
+   "w_gu110 m_DisappearEffect",
+   "w_gu120 m_AppearEffect",
+   "w_gu120 m_DisappearEffect",
+   "w_gu130 m_AppearEffect",
+   "w_gu130 m_DisappearEffect",
+   "w_gu140 m_AppearEffect",
+   "w_gu140 m_DisappearEffect"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_gu010/par/vw_gu010_hit0",
+  "used_by": [
+   "w_gu010 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_gu020/par/vw_gu020_hit00",
+  "used_by": [
+   "w_gu020 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_gu030/par/vw_gu030_hit0",
+  "used_by": [
+   "w_gu030 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_gu040/par/vw_gu040_hit00",
+  "used_by": [
+   "w_gu040 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_gu050/par/vw_gu050_hit00",
+  "used_by": [
+   "w_gu050 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_gu060/par/vw_gu060_hit00",
+  "used_by": [
+   "w_gu060 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_gu070/par/vw_gu070_hit0",
+  "used_by": [
+   "w_gu070 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_gu080/par/vw_gu080_hit00",
+  "used_by": [
+   "w_gu080 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_gu090/par/vw_gu090_hit0",
+  "used_by": [
+   "w_gu090 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_gu100/par/vw_gu100_hit0",
+  "used_by": [
+   "w_gu100 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_gu110/par/vw_gu110_hit0",
+  "used_by": [
+   "w_gu110 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_gu120/par/vw_gu120_hit0",
+  "used_by": [
+   "w_gu120 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_gu130/par/vw_gu130_hit0",
+  "used_by": [
+   "w_gu130 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_gu140/par/vw_gu140_hit00",
+  "used_by": [
+   "w_gu140 effect folder"
+  ],
+  "priority": null,
+  "categories": []
+ }
+]

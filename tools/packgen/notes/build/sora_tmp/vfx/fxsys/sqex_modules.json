@@ -1,0 +1,4163 @@
+[
+ {
+  "class": "ParticleModuleSQEX_EmitterTransforms",
+  "semantics": "Emitter-node transform track (no Spawn/Update of its own; cached by the emitter instance at inst+0x720 by 0x144294000 and evaluated every tick by 0x144294b90 / 0x1442a17a0). All distributions are sampled at emitter time (inst vt+0x2C8(0)). LocalAddPosition / LocalAddScale (helper 0x144277b40): value v = dist(t); if bCurveParameterDirectX the accumulated value = v (curve is the absolute local offset / scale), else accumulated += v * dt (curve is a rate per second; dt = inst+0x668). bInitializeCurveXParameterUseOnly: the distribution is sampled only on the first tick (constant rate / value afterwards). LocalAddRotation: degrees; direct -> absolute Euler angles, else degrees per second integrated and wrapped to [0,360). Velocity: emitter-node velocity (flags as above; consumer not traced). Gravity (0x1442a17a0): g = dist(t) * 60.0 stored at inst+0x464 (a Uniform / UniformCurve distribution is sampled only once, others every tick); each tick v (inst+0x460) += g * axis.z * dt and the accumulated z offset (inst+0x404) += v * dt (dt = inst+0x668); the node matrix is then translated by (inst+0x468 + inst+0x3FC, inst+0x46C + inst+0x400, inst+0x470 + z offset). DisplayType: node billboard mode (0 none, 1 camera, 2..4 axis-locked, 5 screen): consumer not read. bIsUseTransformScale: not read. The node transform composes with the parent node / component according to SQEX_EmitterTakeover.",
+  "confidence": "decompiled",
+  "properties": [
+   {
+    "name": "DisplayType",
+    "meaning": "node billboard mode"
+   },
+   {
+    "name": "LocalAddPosition",
+    "meaning": "local translation (cm) or rate (cm/s)"
+   },
+   {
+    "name": "bInitializeCurvePositionParameterUseOnly",
+    "meaning": "sample once at start"
+   },
+   {
+    "name": "bCurveParameterDirectPosition",
+    "meaning": "curve = absolute value instead of rate"
+   },
+   {
+    "name": "LocalAddRotation",
+    "meaning": "Euler degrees or deg/s"
+   },
+   {
+    "name": "bInitializeCurveRotationParameterUseOnly"
+   },
+   {
+    "name": "bCurveParameterDirectRotation"
+   },
+   {
+    "name": "LocalAddScale",
+    "meaning": "scale or rate"
+   },
+   {
+    "name": "bIsUseTransformScale"
+   },
+   {
+    "name": "bInitializeCurveScaleParameterUseOnly"
+   },
+   {
+    "name": "bCurveParameterDirectScale"
+   },
+   {
+    "name": "Velocity",
+    "meaning": "node velocity"
+   },
+   {
+    "name": "bInitializeCurveVelocityParameterUseOnly"
+   },
+   {
+    "name": "bCurveParameterDirectVelocity"
+   },
+   {
+    "name": "Gravity",
+    "meaning": "node gravity (x60)"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_EmitterTakeover",
+  "semantics": "Inheritance (\"takeover\") rules of an emitter node, cached at inst+0x730. Each *TakeoverType is SQEX_TAKEOVER_TYPE: 0 NONE (do not inherit), 1 ALWAYS (follow every tick), 2 SPAWN_TIME_ONLY (copy once when the emitter instance is created). Read in 0x1442a1450 [C]: ParentParticleColorTakeoverType (+0x5A) / ParentParticleAlphaTakeoverType (+0x5B) select the parent colour / alpha source (ALWAYS = live parent data inst+0x530 or inst+0x520, +0x2A0 rgb / +0x2AC a; SPAWN_TIME_ONLY = snapshot inst+0x528); ParticleColorTakeoverType (+0x64) / ParticleAlphaTakeoverType (+0x65) gate the emitter own ColorScaleOverLife-at-emitter-time multiplier. Result = emitter colour multiplier inst+0x480 (rgb) / +0x48C (a). Component* / Parent* Position / Rotation / Scale types do the same for the transform chain (component = the UParticleSystemComponent transform, parent = parent emitter node or parent particle); bLeavePlaceInWorld / bConvertLeavePlaceInWorld: keep already spawned particles in world space; bFadeTakeoverType: inherit the component fade. Functions 0x1442a0ca0, 0x1442a57c0, 0x144280490 read these; not traced line by line. The duplicated *_TakeoverType fields at +108..+116 are a second (older / newer) copy converted in PostLoad 0x1442ed7b0.",
+  "confidence": "decompiled (color / alpha part), reflection+name (transform part)",
+  "properties": [
+   {
+    "name": "bLeavePlaceInWorld"
+   },
+   {
+    "name": "bConvertLeavePlaceInWorld"
+   },
+   {
+    "name": "bFadeTakeoverType"
+   },
+   {
+    "name": "ComponentPositionTakeoverType"
+   },
+   {
+    "name": "ComponentRotationTakeoverType"
+   },
+   {
+    "name": "ComponentScaleTakeoverType"
+   },
+   {
+    "name": "ParentPositionTakeoverType"
+   },
+   {
+    "name": "ParentRotationTakeoverType"
+   },
+   {
+    "name": "ParentScaleTakeoverType"
+   },
+   {
+    "name": "ParentParticleColorTakeoverType"
+   },
+   {
+    "name": "ParentParticleAlphaTakeoverType"
+   },
+   {
+    "name": "ParentParticleSizeScaleTakeoverType"
+   },
+   {
+    "name": "bParentLocalRotationTakeoverType"
+   },
+   {
+    "name": "ParticleColorTakeoverType"
+   },
+   {
+    "name": "ParticleAlphaTakeoverType"
+   },
+   {
+    "name": "ParticleSizeScaleTakeoverType"
+   },
+   {
+    "name": "bNoParticleRotation"
+   },
+   {
+    "name": "ParentLocalRotationTakeoverType"
+   },
+   {
+    "name": "Position_TakeoverType"
+   },
+   {
+    "name": "Rotation_TakeoverType"
+   },
+   {
+    "name": "LocalRotation_TakeoverType"
+   },
+   {
+    "name": "Scale_TakeoverType"
+   },
+   {
+    "name": "ParticleColor_TakeoverType"
+   },
+   {
+    "name": "ParticleAlpha_TakeoverType"
+   },
+   {
+    "name": "ParticleSizeScale_TakeoverType"
+   },
+   {
+    "name": "bFade_TakeoverType"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_AttachParticle",
+  "semantics": "Spawn 0x1442f20c0 and Update 0x1442fb700 (every live particle not frozen, Flags & 0x4000000 == 0): bIsAttachPosition and the emitter is not bUseEmitterLocalSpace (Required +0x94 bit1): particle.Location = emitter origin (translation row of the emitter-to-simulation matrix, inst+0x90). bIsAttachRotation: sprite: particle.Rotation = roll of the emitter matrix (deg * pi/180); mesh (inst vt+0x178 gives the mesh rotation payload offset): payload rotation = (payload base rotation) composed with the emitter matrix. Net effect: the particle stays glued to its emitter node (used with SQEX_Parent hierarchies and single-particle emitters).",
+  "confidence": "decompiled",
+  "properties": [
+   {
+    "name": "bIsAttachRotation",
+    "meaning": "follow emitter rotation"
+   },
+   {
+    "name": "bIsAttachPosition",
+    "meaning": "follow emitter origin"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_Range",
+  "semantics": "Spawn-location module (SQEX_LocationBase family; Spawn 0x144373380 -> vt+0x3A8 = 0x144375a40). Local point from vt+0x3A0 (0x144356a00: inside a sphere / disc of RangeRadius, Deviation, DirectionAngle), scaled per axis by RangeScale(emitter time), rotated by Direction, transformed by the emitter (owner scale optional: bApplySpawnLocationOwnerScale). LocationBase adds initial velocity: DirectionType (none / velocity / vertex normal / emitter normal) * Speed.",
+  "confidence": "decompiled-partial",
+  "properties": [
+   {
+    "name": "RangeRadius"
+   },
+   {
+    "name": "RangeScale"
+   },
+   {
+    "name": "Deviation"
+   },
+   {
+    "name": "DirectionAngle"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_ParticleRotation",
+  "semantics": "Per-particle 3-axis rotation in degrees (Spawn 0x1442f2dd0, Update 0x1442fd7b0, core 0x1442ef550; payload: start[3], accumulated[3], rate[3], effective[3], emitter matrix snapshot, own time). Time source: bEmitterTime -> emitter time; bUseParticleModuleTime -> own accumulated time; else particle RelativeTime. scale = ParticleRotationScale(t) (1 when no distribution). Not bParticleRotationSpawnTimeOnly: bCurveParameterDirectRotation ? added = ParticleRotation(t) * scale : accumulated += ParticleRotation(t) * scale * dt, added = accumulated. Spawn-time-only: the value sampled at spawn is reused (rate or direct). Sprite: particle.Rotation = (StartParticleRotation.x + added.x) * pi/180. Mesh: rotation = R(start) * R(added) written to the mesh rotation payload; bMeshRotAdjustEmitterRot / bUseCalcMeshRotMat use the emitter matrix snapshot (not traced).",
+  "confidence": "decompiled",
+  "properties": [
+   {
+    "name": "StartParticleRotation",
+    "meaning": "initial Euler degrees"
+   },
+   {
+    "name": "ParticleRotation",
+    "meaning": "deg/s (or absolute degrees when direct)"
+   },
+   {
+    "name": "ParticleRotationScale",
+    "meaning": "multiplier over time"
+   },
+   {
+    "name": "bUseCalcMeshRotMat"
+   },
+   {
+    "name": "bUseParticleModuleTime"
+   },
+   {
+    "name": "bEmitterTime"
+   },
+   {
+    "name": "bMeshRotAdjustEmitterRot"
+   },
+   {
+    "name": "bParticleRotationSpawnTimeOnly"
+   },
+   {
+    "name": "bCurveParameterDirectRotation"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_Parent",
+  "semantics": "Makes the emitter a parent node that creates child emitter instances (Update 0x14437a3b0; cached at inst+0x7A8; child instances inst+0x670). For each ChildrenData entry (runtime copy inst+0x688, stride 0x58): template = emitter named GenerateEmitterName (vt+0x340). GenerationConditions TIME: for each TimeDatas {GenerateTime, GenerateNumber}: when emitter time >= GenerateTime (once per loop; LoopNumber limits loops, MaxGenerateCount limits total) create GenerateNumber child emitter instances (vt+0x358), or, when bUseSpawnModule and the LOD level has an SQEX location module, through that module (vt+0x390) so that children appear at spawn-shape positions. PARTICLE_DEATH: children are created when a particle dies (path not traced). LoopEndTime > 0: children of that template get loop-end when emitter time >= LoopEndTime. AllLoopEndTime > 0: all children get loop-end (bGrandsonLoopEnd: recursively). OffsetPosition / Rotation / Scale: child node offset. bToChildren / bChildrenTakeOVerTheParentTime: not traced.",
+  "confidence": "decompiled",
+  "properties": [
+   {
+    "name": "AllLoopEndTime"
+   },
+   {
+    "name": "bGrandsonLoopEnd"
+   },
+   {
+    "name": "ChildrenData"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_Control",
+  "semantics": "Type data of a non-rendering control emitter: CreateInstance 0x144382fe0 allocates the base Square Enix emitter instance (0x870 bytes, ctor 0x144274de0). Used for pure parent / transform nodes (with SQEX_Parent, SQEX_EmitterTransforms, blur / camera modules).",
+  "confidence": "decompiled",
+  "properties": []
+ },
+ {
+  "class": "ParticleModuleSQEX_ComponentCutoff",
+  "semantics": "Cached at inst+0x738. Cuts the emitter node off from the component transform: ComponentRotationTakeoverType / ComponentScaleTakeoverType (NONE / ALWAYS / SPAWN_TIME_ONLY) and bFadeTakeoverType. Readers 0x144284a80, 0x1442a57c0, 0x1442f0040 (ColorScaleOverLife spawn), not traced.",
+  "confidence": "reflection+name",
+  "properties": [
+   {
+    "name": "bFadeTakeoverType"
+   },
+   {
+    "name": "ComponentRotationTakeoverType"
+   },
+   {
+    "name": "ComponentScaleTakeoverType"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_CurlNoise",
+  "semantics": "Spawn 0x1442f25f0: payload vec3 = emitter origin - particle.Location (start offset). Update 0x1442fc8c0 (1537 bytes, not traced): curl-noise displacement / velocity with Intensity, PositionScale (spatial frequency), TimeScale and TimeType (emitter total time / particle time / game time), CurlNoiseScale per axis, optional colour / size modulation by the noise value. Cached at inst+0x778.",
+  "confidence": "decompiled-partial",
+  "properties": [
+   {
+    "name": "NoAutoCurl"
+   },
+   {
+    "name": "UseEmitterMoveOffset"
+   },
+   {
+    "name": "UseEmitterMove"
+   },
+   {
+    "name": "NoiseToVelocityTransition"
+   },
+   {
+    "name": "TimeType"
+   },
+   {
+    "name": "Intensity"
+   },
+   {
+    "name": "PositionScale"
+   },
+   {
+    "name": "TimeScale"
+   },
+   {
+    "name": "CurlNoiseScale"
+   },
+   {
+    "name": "NoRandomPositionOffset"
+   },
+   {
+    "name": "NoiseStartPositionOffset"
+   },
+   {
+    "name": "UseTimeNoiseScale"
+   },
+   {
+    "name": "UseDirectPosition_3DScale"
+   },
+   {
+    "name": "UseDirectPosition_LengScale"
+   },
+   {
+    "name": "UseDirectPosition"
+   },
+   {
+    "name": "CurlNoiseTimeScale"
+   },
+   {
+    "name": "UseNoiseBeColorScale"
+   },
+   {
+    "name": "ColorIntensity"
+   },
+   {
+    "name": "AlphaIntensity"
+   },
+   {
+    "name": "UseColorScaleAnotherNoise"
+   },
+   {
+    "name": "ColorScaleTimeScale"
+   },
+   {
+    "name": "ColorScaleNoiseScale"
+   },
+   {
+    "name": "UseNoiseBeSizeScale"
+   },
+   {
+    "name": "SizeIntensity"
+   },
+   {
+    "name": "UseSizeScaleAnotherNoise"
+   },
+   {
+    "name": "SizeScaleTimeScale"
+   },
+   {
+    "name": "SizeScaleNoiseScale"
+   },
+   {
+    "name": "TimeScaleAxisType"
+   },
+   {
+    "name": "DebugBoxSize"
+   },
+   {
+    "name": "DebugBoxGrid"
+   },
+   {
+    "name": "DebugPointSize"
+   },
+   {
+    "name": "bDrawNoiseColor"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_Ring",
+  "semantics": "Spawn-location on a ring: VertexNumber points on radius RangeRadius (RangeRadiusTwo second radius), DirectionAngle, VartexGenerateType (all / in order / random), Interval, RingOffsetPosition / Rotation / Scale; bAttachParticle keeps particles on the ring (Update 0x14437a760). Not traced.",
+  "confidence": "reflection+name",
+  "properties": [
+   {
+    "name": "VertexNumber"
+   },
+   {
+    "name": "RangeRadius"
+   },
+   {
+    "name": "RangeRadiusTwo"
+   },
+   {
+    "name": "DirectionAngle"
+   },
+   {
+    "name": "VartexGenerateType"
+   },
+   {
+    "name": "Interval"
+   },
+   {
+    "name": "bAttachParticle"
+   },
+   {
+    "name": "RingOffsetPosition"
+   },
+   {
+    "name": "RingOffsetRotation"
+   },
+   {
+    "name": "RingOffsetScale"
+   },
+   {
+    "name": "RingOffsetPositionTow"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_DepthOffset",
+  "semantics": "Spawn 0x1442f2650: per-particle float payload = |emitter node scale (inst+0x230)| * DepthOffset. Consumed by the vertex factory as a camera-depth bias in cm (negative = towards the camera); consumer not traced. Cached at inst+0x7B0.",
+  "confidence": "decompiled",
+  "properties": [
+   {
+    "name": "DepthOffset",
+    "meaning": "depth bias (cm) before node scale"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_AllParticleKill",
+  "semantics": "No virtual overrides and no class test found: KillEmitterTime (seconds) is read by emitter-instance code not located. By name: all particles of the emitter are killed when the emitter time reaches KillEmitterTime. Trail asset VW_SO010_LOC0 uses 0.385.",
+  "confidence": "reflection+name",
+  "properties": [
+   {
+    "name": "KillEmitterTime",
+    "meaning": "seconds"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_TailShape",
+  "semantics": "Shape / width / UV parameters of SQEX tail emitters; cached at inst+0x788. Not traced.",
+  "confidence": "reflection+name",
+  "properties": [
+   {
+    "name": "HistoryPositionOffset"
+   },
+   {
+    "name": "TailShapeInterpType"
+   },
+   {
+    "name": "bResetHistoryInLoop"
+   },
+   {
+    "name": "UseMatrixOfOwner"
+   },
+   {
+    "name": "HistoryMaxDataNumber"
+   },
+   {
+    "name": "TailNumber"
+   },
+   {
+    "name": "TailInterval"
+   },
+   {
+    "name": "bTailIntervalNoUseEmitterLocation"
+   },
+   {
+    "name": "TailScale"
+   },
+   {
+    "name": "TailColor"
+   },
+   {
+    "name": "TailAlpha"
+   },
+   {
+    "name": "bUseTailTwist"
+   },
+   {
+    "name": "TailRotation"
+   },
+   {
+    "name": "TailTwistRate"
+   },
+   {
+    "name": "MeshTwistAxisType"
+   },
+   {
+    "name": "bUseTailScroll"
+   },
+   {
+    "name": "TailScrollTimeScale"
+   },
+   {
+    "name": "TailScrollScale"
+   },
+   {
+    "name": "TailScrollColor"
+   },
+   {
+    "name": "TailScrollAlpha"
+   },
+   {
+    "name": "TailHistoryType"
+   },
+   {
+    "name": "bUseBoneList"
+   },
+   {
+    "name": "BoneList"
+   },
+   {
+    "name": "bUseTracingHistory"
+   },
+   {
+    "name": "bSetReverse"
+   },
+   {
+    "name": "HistoryTracingStartType"
+   },
+   {
+    "name": "TracingHistoryRate"
+   },
+   {
+    "name": "bNoForceReactionParticle"
+   },
+   {
+    "name": "bForceReactionHistory"
+   },
+   {
+    "name": "ForceHitAlphaScaleParam"
+   },
+   {
+    "name": "ForceHitFadeTime"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_LocalParticle",
+  "semantics": "Spawn 0x144373420 / Update 0x144378c00 with a per-particle payload (RequiredBytes 0x140469260). Keeps particles in the local space of the emitter node at update time: bIsPosition (position), bIsRotation (rotation), bIsLocalRotation. Cached at inst+0x750. Body not traced.",
+  "confidence": "decompiled-partial",
+  "properties": [
+   {
+    "name": "bIsLocalRotation"
+   },
+   {
+    "name": "bIsRotation"
+   },
+   {
+    "name": "bIsPosition"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_TailPolygon",
+  "semantics": "Ribbon-derived \"tail\" (history polygon) emitter (34 systems, 51 with SQEX_TailShape). Not traced. The Kingdom Key trail does NOT use it (stock AnimTrail).",
+  "confidence": "reflection+name",
+  "properties": [
+   {
+    "name": "UpVector"
+   },
+   {
+    "name": "TangentVector"
+   },
+   {
+    "name": "TailPolygonSplitNumber"
+   },
+   {
+    "name": "TailUVType"
+   },
+   {
+    "name": "bTailTexVReverse"
+   },
+   {
+    "name": "bTailTexUReverse"
+   },
+   {
+    "name": "TailPolygonColor"
+   },
+   {
+    "name": "TailPolygonAlpha"
+   },
+   {
+    "name": "TailPoygonUPitch"
+   },
+   {
+    "name": "TextureUScale"
+   },
+   {
+    "name": "TextureVScale"
+   },
+   {
+    "name": "bUVLockMode"
+   },
+   {
+    "name": "bTextureUTypeParticleDistance"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_Material_Scalar",
+  "semantics": "Update 0x144378f10: writes MaterialScalarParam(emitter time) to scalar parameter ParamName of the emitter dynamic material instance (NoSetUseLastParameter: keep the last value when unset). Not traced.",
+  "confidence": "reflection+name",
+  "properties": [
+   {
+    "name": "MaterialScalarParam"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_VertexSpawn",
+  "semantics": "Spawn on vertices / surface of a mesh (VertexData asset or the attached mesh: bUseAttachMeshVertex).",
+  "confidence": "reflection+name",
+  "properties": [
+   {
+    "name": "VertexData"
+   },
+   {
+    "name": "bUseAttachMeshVertex"
+   },
+   {
+    "name": "VartexGenerateType"
+   },
+   {
+    "name": "SourceType"
+   },
+   {
+    "name": "bNoSameVertexIndex"
+   },
+   {
+    "name": "bLockIndexAtLoopReset"
+   },
+   {
+    "name": "bVertexColor"
+   },
+   {
+    "name": "ExclusionSpawnElemetnIndexs"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_TailShape",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "bIsOwnerCompletedPos"
+   },
+   {
+    "name": "NoHistoryOfTheMatrixLocalList"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_Decal",
+  "semantics": "Decal emitter: each particle is a deferred decal (DecalMaterial, DecalSize, DecalRotation, DecalColor, DecalOpacity, CustomParam0..2, FadeScreenSize, ZFade*). 15 systems. Not traced.",
+  "confidence": "reflection+name",
+  "properties": [
+   {
+    "name": "DecalMaterial"
+   },
+   {
+    "name": "FadeScreenSize"
+   },
+   {
+    "name": "SortOrder"
+   },
+   {
+    "name": "bItUseScaleRotMatrixTransfrom"
+   },
+   {
+    "name": "EnableForceRecive"
+   },
+   {
+    "name": "DecalSize"
+   },
+   {
+    "name": "DecalRotation"
+   },
+   {
+    "name": "DecalColor"
+   },
+   {
+    "name": "DecalOpacity"
+   },
+   {
+    "name": "bUseCustomParam0SpawnTime"
+   },
+   {
+    "name": "CustomParam0"
+   },
+   {
+    "name": "bUseCustomParam1SpawnTime"
+   },
+   {
+    "name": "CustomParam1"
+   },
+   {
+    "name": "bUseCustomParam2SpawnTime"
+   },
+   {
+    "name": "CustomParam2"
+   },
+   {
+    "name": "ZFadeSegment"
+   },
+   {
+    "name": "ZFadePow"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_MeshPivotOffset",
+  "semantics": "Pivot offset for mesh particles.",
+  "confidence": "reflection+name",
+  "properties": [
+   {
+    "name": "PivotOffset"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_EmitterInitializeTransforms",
+  "semantics": "Initial node transform, sampled once (flags inst+0x450 bits 0/1/2) at emitter time by 0x144294b90: InitPosition -> inst+0x42C, InitRotation (Euler deg -> quaternion) -> inst+0x438, InitScale -> inst+0x444. bRestInitEmit*: re-sample on emitter loop (EmitterLoopingNotify slot 90, 0x144383e10).",
+  "confidence": "decompiled",
+  "properties": [
+   {
+    "name": "InitPosition",
+    "meaning": "initial local position"
+   },
+   {
+    "name": "bRestInitEmitLocation",
+    "meaning": "re-sample on loop"
+   },
+   {
+    "name": "InitRotation",
+    "meaning": "initial local rotation (deg)"
+   },
+   {
+    "name": "bRestInitEmitRotation",
+    "meaning": "re-sample on loop"
+   },
+   {
+    "name": "InitScale",
+    "meaning": "initial local scale"
+   },
+   {
+    "name": "bRestInitEmitScale",
+    "meaning": "re-sample on loop"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_Material_InLight",
+  "semantics": "Drives the character material \"InLight\" parameters (scalar kind 0, vectors InLightCenterPosition / InLightColor / InLightOutColor) of the attach owner mesh from the effect. Names confirmed in the game tables (0x1487d6650 / 0x1487d6628).",
+  "confidence": "reflection+name",
+  "properties": [
+   {
+    "name": "ParamType"
+   },
+   {
+    "name": "InLightParam"
+   },
+   {
+    "name": "InLightColor"
+   },
+   {
+    "name": "InLightOutColor"
+   },
+   {
+    "name": "InLightCenterBounds"
+   },
+   {
+    "name": "InLightCenterBoundsBlur"
+   },
+   {
+    "name": "InLightOutBounds"
+   },
+   {
+    "name": "InLightOutBoundsBlur"
+   },
+   {
+    "name": "InLightCameraOffset"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_Material_Aura",
+  "semantics": "Drives the character material \"Aura\" scalar and AuraColor / AuraOutColor vectors of the attach owner mesh.",
+  "confidence": "reflection+name",
+  "properties": [
+   {
+    "name": "Aura"
+   },
+   {
+    "name": "AuraColor"
+   },
+   {
+    "name": "AuraOutColor"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_RadialBlur",
+  "semantics": "Screen-space radial blur requested by the effect (census: 8 systems in the Sora-related folders).",
+  "confidence": "reflection+name",
+  "properties": [
+   {
+    "name": "Mode"
+   },
+   {
+    "name": "Power"
+   },
+   {
+    "name": "Angle"
+   },
+   {
+    "name": "Alpha"
+   },
+   {
+    "name": "bUseScreenPos"
+   },
+   {
+    "name": "PosX"
+   },
+   {
+    "name": "PosY"
+   },
+   {
+    "name": "Range"
+   },
+   {
+    "name": "HoleSize"
+   },
+   {
+    "name": "AttenuationDistanceOutside"
+   },
+   {
+    "name": "AttenuationDistanceInside"
+   },
+   {
+    "name": "bCameraPitchCheck"
+   },
+   {
+    "name": "CheckCameraPich"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_TailShapeExData_Wave",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "bUseEmitterMat"
+   },
+   {
+    "name": "MoveVector"
+   },
+   {
+    "name": "RandomInterval"
+   },
+   {
+    "name": "RandomMoveVector"
+   },
+   {
+    "name": "RotationOffset"
+   },
+   {
+    "name": "bNoSetSamePostionData"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_Quadrangle",
+  "semantics": "Spawn-location inside a box / quad: QuadrangleSize * QuadrangleScale(emitter time), Deviation. Spawn point function vt+0x3A0 = 0x1443565c0, placement 0x1443758c0 (same structure as SQEX_Range). Not traced.",
+  "confidence": "reflection+name",
+  "properties": [
+   {
+    "name": "QuadrangleSize"
+   },
+   {
+    "name": "QuadrangleScale"
+   },
+   {
+    "name": "Deviation"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_SpawnParticleSystem",
+  "semantics": "Spawns another particle system from the effect.",
+  "confidence": "reflection+name",
+  "properties": [
+   {
+    "name": "ParticleSystemAsset"
+   },
+   {
+    "name": "SpawnTime"
+   },
+   {
+    "name": "LoopEndTime"
+   },
+   {
+    "name": "bGiveAlpha"
+   },
+   {
+    "name": "bGiveColor"
+   },
+   {
+    "name": "bGiveScale"
+   },
+   {
+    "name": "bGiveRotation"
+   },
+   {
+    "name": "bGiveLocation"
+   },
+   {
+    "name": "WarmupTime"
+   },
+   {
+    "name": "bUseWarmupTime"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_SphereForce",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "bIsLocalCollision"
+   },
+   {
+    "name": "bIsUseForceInGame"
+   },
+   {
+    "name": "CollPos"
+   },
+   {
+    "name": "ForceData"
+   },
+   {
+    "name": "RadiusScale"
+   },
+   {
+    "name": "HitMovePowScale"
+   },
+   {
+    "name": "HitRotMovePowScale"
+   },
+   {
+    "name": "ReactionObject"
+   },
+   {
+    "name": "TestPos1"
+   },
+   {
+    "name": "TestPos2"
+   },
+   {
+    "name": "TestVec1"
+   },
+   {
+    "name": "TestVec2"
+   },
+   {
+    "name": "TestVec3"
+   },
+   {
+    "name": "BoxSize"
+   },
+   {
+    "name": "TriPos0"
+   },
+   {
+    "name": "TriPos1"
+   },
+   {
+    "name": "TriPos2"
+   },
+   {
+    "name": "area"
+   },
+   {
+    "name": "height"
+   },
+   {
+    "name": "deg"
+   },
+   {
+    "name": "DotAndLine"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_AnyVertexSpawn",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "ShapeType"
+   },
+   {
+    "name": "SpawnUVType"
+   },
+   {
+    "name": "MaxSpawnNumber"
+   },
+   {
+    "name": "WNumber"
+   },
+   {
+    "name": "HNumber"
+   },
+   {
+    "name": "RangeRadius"
+   },
+   {
+    "name": "RangeRadiusTwo"
+   },
+   {
+    "name": "DirectionAngle"
+   },
+   {
+    "name": "VartexGenerateType"
+   },
+   {
+    "name": "Interval"
+   },
+   {
+    "name": "bNoTopAndFinalPoint"
+   },
+   {
+    "name": "bTowRadiusSameHeightOneRadius"
+   },
+   {
+    "name": "MaxSideNumber"
+   },
+   {
+    "name": "VertexHorizontalScale"
+   },
+   {
+    "name": "OffsetPosition"
+   },
+   {
+    "name": "OffsetRotation"
+   },
+   {
+    "name": "OffsetScale"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_TailShapeExData_Inertia",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "TailInertia"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_EmitterDirectEX",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "EmitterName"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_Filter",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "UseAlphaFilterAtHDR"
+   },
+   {
+    "name": "FilterColorScaleAtHDR"
+   },
+   {
+    "name": "FilterAlphaScaleAtHDR"
+   },
+   {
+    "name": "FildterType"
+   },
+   {
+    "name": "FilterColor"
+   },
+   {
+    "name": "FilterAlpha"
+   },
+   {
+    "name": "FilterTexture"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_InitSizeScale",
+  "semantics": "Spawn 0x1442f2770: when bIsScale, particle.Size and BaseSize *= emitter size scale (inst+0x4B8). The emitter-level value ParticleSizeScale(emitter time) is evaluated in 0x144294b90 into inst+0x4AC (cached module at inst+0x740).",
+  "confidence": "decompiled",
+  "properties": [
+   {
+    "name": "bIsScale",
+    "meaning": "apply"
+   },
+   {
+    "name": "ParticleSizeScale",
+    "meaning": "emitter-level size multiplier over emitter time"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_ScreenBlur",
+  "semantics": "Screen blur post effect (3 systems).",
+  "confidence": "reflection+name",
+  "properties": [
+   {
+    "name": "ScreenBlurIntensity"
+   },
+   {
+    "name": "bUseScreenPos"
+   },
+   {
+    "name": "ScreenBlurRange"
+   },
+   {
+    "name": "ScreenBlurPosX"
+   },
+   {
+    "name": "ScreenBlurPosY"
+   },
+   {
+    "name": "ScreenBlurOffsetX"
+   },
+   {
+    "name": "ScreenBlurOffsetY"
+   },
+   {
+    "name": "ScreenBlurCenterOffset"
+   },
+   {
+    "name": "ScreenBlurHoleSize"
+   },
+   {
+    "name": "ScreenBlurAngle"
+   },
+   {
+    "name": "bUseAttenuation"
+   },
+   {
+    "name": "ScreenBlurAttenuationOffset"
+   },
+   {
+    "name": "ScreenBlurAttenuationDistance"
+   },
+   {
+    "name": "ScreenBlurAttenuationDistanceOutside"
+   },
+   {
+    "name": "ScreenBlurAttenuationDistanceInside"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_CameraShake",
+  "semantics": "Camera shake driven by the effect (2 systems); cached at inst+0x790.",
+  "confidence": "reflection+name",
+  "properties": [
+   {
+    "name": "bReestPlayList"
+   },
+   {
+    "name": "ShakePlayTime"
+   },
+   {
+    "name": "Shake"
+   },
+   {
+    "name": "OverrideOscillationDuration"
+   },
+   {
+    "name": "OscillationDuration"
+   },
+   {
+    "name": "CameraShakeScale"
+   },
+   {
+    "name": "ShakeScaleDistance"
+   },
+   {
+    "name": "ShakeScaleDistanceOffset"
+   },
+   {
+    "name": "ShakeScaleDistanceMin"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_Raycast",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "RayEndOffset"
+   },
+   {
+    "name": "bInWorldSpace"
+   },
+   {
+    "name": "RaycastSize"
+   },
+   {
+    "name": "SpawnTheme"
+   },
+   {
+    "name": "bIsNoHitSetLocation"
+   },
+   {
+    "name": "bIsHitOnlySpawn"
+   },
+   {
+    "name": "CheckPhysicalSurface"
+   },
+   {
+    "name": "bIsHitNormalInfluenced"
+   },
+   {
+    "name": "bCheckPhysicalSurfaceEqual"
+   },
+   {
+    "name": "CollisionTypes"
+   },
+   {
+    "name": "SqExCollisionResponseParams"
+   },
+   {
+    "name": "SqExCollisionChannel"
+   },
+   {
+    "name": "bCollideOnlyIfVisible"
+   },
+   {
+    "name": "SpawnLocationOffset"
+   },
+   {
+    "name": "bIgnoreTriggerVolumes"
+   },
+   {
+    "name": "bPawnsDoNotDecrementCount"
+   },
+   {
+    "name": "bIgnoreSourceActor"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_TailNoise",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "ShareNoiseDataEmitterName"
+   },
+   {
+    "name": "bUseNoiseTypeSize"
+   },
+   {
+    "name": "MinSize"
+   },
+   {
+    "name": "bUseNoiseTypeAlpha"
+   },
+   {
+    "name": "NoiseIntensity"
+   },
+   {
+    "name": "NoiseMin"
+   },
+   {
+    "name": "NoiseMax"
+   },
+   {
+    "name": "NoiseIntensityRandomMin"
+   },
+   {
+    "name": "NoiseIntensityRandomMax"
+   },
+   {
+    "name": "bLoopResetNoiseData"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_BloomRadialBlur",
+  "semantics": "Bloom radial blur (1 system).",
+  "confidence": "reflection+name",
+  "properties": [
+   {
+    "name": "Mode"
+   },
+   {
+    "name": "Power"
+   },
+   {
+    "name": "Angle"
+   },
+   {
+    "name": "Alpha"
+   },
+   {
+    "name": "bUseScreenPos"
+   },
+   {
+    "name": "PosX"
+   },
+   {
+    "name": "PosY"
+   },
+   {
+    "name": "Range"
+   },
+   {
+    "name": "HoleSize"
+   },
+   {
+    "name": "AttenuationDistanceOutside"
+   },
+   {
+    "name": "AttenuationDistanceInside"
+   },
+   {
+    "name": "LuminanceThreshold"
+   },
+   {
+    "name": "bCharaMask"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_ChangeSceneColor",
+  "semantics": "Scene colour change driven by the effect (1 system); cached at inst+0x798.",
+  "confidence": "reflection+name",
+  "properties": [
+   {
+    "name": "EffectPriority"
+   },
+   {
+    "name": "bUseGetaPlus"
+   },
+   {
+    "name": "LightIntensity"
+   },
+   {
+    "name": "bSceneTintColor"
+   },
+   {
+    "name": "SceneTintColor"
+   },
+   {
+    "name": "SceneTintAlpha"
+   },
+   {
+    "name": "bLightIntensity"
+   },
+   {
+    "name": "LightIntensityCoefficient"
+   },
+   {
+    "name": "bInDirectIntensity"
+   },
+   {
+    "name": "InDirectIntensityCoefficient"
+   },
+   {
+    "name": "bAmbientIntensity"
+   },
+   {
+    "name": "AmbientIntensityCoefficient"
+   },
+   {
+    "name": "bKHShaderSceneEmissive"
+   },
+   {
+    "name": "KHShaderSceneEmissiveCoefficient"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_Material_Vector",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "BoneOrSocketName"
+   },
+   {
+    "name": "bUseMyCurrentMaterial"
+   },
+   {
+    "name": "MaterialVectorParam"
+   },
+   {
+    "name": "MaterialAlphaParam"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_ParticleLocation",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "StartScale"
+   },
+   {
+    "name": "Location"
+   },
+   {
+    "name": "bApplyOwnerScale"
+   },
+   {
+    "name": "bInWorldSpace"
+   },
+   {
+    "name": "UseMeshParticleRotaion"
+   },
+   {
+    "name": "EnableZ"
+   },
+   {
+    "name": "EnableY"
+   },
+   {
+    "name": "EnableX"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_PostprocessAura",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "AuraID"
+   },
+   {
+    "name": "Size"
+   },
+   {
+    "name": "Color"
+   },
+   {
+    "name": "Alpha"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_Quadrangle_Seeded",
+  "semantics": "SQEX_Quadrangle with a per-instance random seed (stock seeded-module pattern: RequiredBytesPerInstance 0x14436f2c0, PrepPerInstanceBlock 0x14435fb90, EmitterLoopingNotify 0x14434d380).",
+  "confidence": "reflection+name",
+  "properties": [
+   {
+    "name": "RandomSeedInfo"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_Range_Seeded",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "RandomSeedInfo"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_Vertex",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "GenerateMesh"
+   },
+   {
+    "name": "VertexColorStaticMesh"
+   },
+   {
+    "name": "GenerateSkeletalMesh"
+   },
+   {
+    "name": "VertexColorSkeletalMesh"
+   },
+   {
+    "name": "bLoopWhenClearVertexHistory"
+   },
+   {
+    "name": "bUseSameVertex"
+   },
+   {
+    "name": "VartexGenerateType"
+   },
+   {
+    "name": "bResetVertexNumberList"
+   },
+   {
+    "name": "VertexNumberList"
+   },
+   {
+    "name": "SourceType"
+   },
+   {
+    "name": "bIsParticleAttach"
+   },
+   {
+    "name": "bVertexColor"
+   },
+   {
+    "name": "PolygonAreaBlockNumber"
+   },
+   {
+    "name": "MeshOffsetPosition"
+   },
+   {
+    "name": "MeshOffsetRotation"
+   },
+   {
+    "name": "MeshOffsetScale"
+   },
+   {
+    "name": "MorphWeight0"
+   },
+   {
+    "name": "MorphWeight1"
+   },
+   {
+    "name": "MorphWeight2"
+   },
+   {
+    "name": "NormalCheckTolerance"
+   },
+   {
+    "name": "bDrawWireframe"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_GrassForce",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "GrassForcePriority"
+   },
+   {
+    "name": "GrassForceRange"
+   },
+   {
+    "name": "GrassForcePower"
+   },
+   {
+    "name": "GrassForceDetailPower"
+   },
+   {
+    "name": "GrassForceForceType"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_TailShapeEx",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "bIsSameLocationNoParticleMove"
+   },
+   {
+    "name": "bIsLocalHistory"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_TailShapeTypeMesh",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": []
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_TailTube",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "WNumber"
+   },
+   {
+    "name": "bOnReversePolygon"
+   },
+   {
+    "name": "OnTrubeScale"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_2DFluidInflow",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "InflowType"
+   },
+   {
+    "name": "Point"
+   },
+   {
+    "name": "Intensity"
+   },
+   {
+    "name": "IntensityScale"
+   },
+   {
+    "name": "ForceIntensity"
+   },
+   {
+    "name": "ForceIntensityScale"
+   },
+   {
+    "name": "ForceRotaion"
+   },
+   {
+    "name": "Radius"
+   },
+   {
+    "name": "BoxSizeMin"
+   },
+   {
+    "name": "BoxSizeMax"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_2DFluidParameters",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "SimulationSize"
+   },
+   {
+    "name": "CellSize"
+   },
+   {
+    "name": "Force"
+   },
+   {
+    "name": "TimeStep"
+   },
+   {
+    "name": "Viscosity"
+   },
+   {
+    "name": "Diffusion"
+   },
+   {
+    "name": "ReductionRate"
+   },
+   {
+    "name": "ColorDensityScalar"
+   },
+   {
+    "name": "Color"
+   },
+   {
+    "name": "Alpha"
+   },
+   {
+    "name": "bOnVorticity"
+   },
+   {
+    "name": "bCeilingOpen"
+   },
+   {
+    "name": "Vorticity"
+   },
+   {
+    "name": "bOnBuoyancy"
+   },
+   {
+    "name": "Buoyancy"
+   },
+   {
+    "name": "NoiseIntensity"
+   },
+   {
+    "name": "NoisePosScale"
+   },
+   {
+    "name": "NoiseSpeedScale"
+   },
+   {
+    "name": "NoiseScaleTime"
+   },
+   {
+    "name": "NoiseOffset"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_AllEmitterFade",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "FadeInStartTime"
+   },
+   {
+    "name": "FadeInTime"
+   },
+   {
+    "name": "FadeOutStartTime"
+   },
+   {
+    "name": "FadeOutTime"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_AnyVertexSpawn_Seeded",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "RandomSeedInfo"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_Base",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": []
+ },
+ {
+  "class": "ParticleModuleSQEX_BlurBase",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "StartTime"
+   },
+   {
+    "name": "EndTime"
+   },
+   {
+    "name": "bReestPlayList"
+   },
+   {
+    "name": "EffectPriority"
+   },
+   {
+    "name": "bIsEnableAdjastFade"
+   },
+   {
+    "name": "AdjastFadeRate"
+   },
+   {
+    "name": "bIsEnableDistanceFade"
+   },
+   {
+    "name": "DistanceFadeRate"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_BoneAttach",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "bNoUpdateParticleLocation"
+   },
+   {
+    "name": "MaxParticleNumber"
+   },
+   {
+    "name": "AttachData"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_BoxForce",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "CollPos"
+   },
+   {
+    "name": "BoxSize"
+   },
+   {
+    "name": "HitParticleSizeScale"
+   },
+   {
+    "name": "ReactionObject"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_CapsuleForce",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "CapsulePos0"
+   },
+   {
+    "name": "CapsulePos1"
+   },
+   {
+    "name": "CollPos"
+   },
+   {
+    "name": "CapsuleSize"
+   },
+   {
+    "name": "HitParticleSizeScale"
+   },
+   {
+    "name": "ReactionObject"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_EmitterParentTailHistoryPos",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "bIsCurrentLength"
+   },
+   {
+    "name": "EmitterPosToTailHistoryRate"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_EmitterTransformsBase",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": []
+ },
+ {
+  "class": "ParticleModuleSQEX_ExternalVertexSpawn",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "ExternalVertexSpawnType"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_FloatParameter",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "ParameterName"
+   },
+   {
+    "name": "FloatParameter"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_FloatParameterEx",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "CheckRowName"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_Fluid",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": []
+ },
+ {
+  "class": "ParticleModuleSQEX_GaussBlur",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "Intensity"
+   },
+   {
+    "name": "Size"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_Gravity",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "bUseEmitterTime"
+   },
+   {
+    "name": "Gravity"
+   },
+   {
+    "name": "GravityInfluenceScale"
+   },
+   {
+    "name": "GravityHeightt"
+   },
+   {
+    "name": "GravityHeighttAddRandom"
+   },
+   {
+    "name": "bMoveCalumToTime"
+   },
+   {
+    "name": "OnGravity"
+   },
+   {
+    "name": "BaseHeight"
+   },
+   {
+    "name": "GravityMoveTime"
+   },
+   {
+    "name": "EndSpeedScale"
+   },
+   {
+    "name": "bCheckRadius"
+   },
+   {
+    "name": "CheckRadius"
+   },
+   {
+    "name": "bRadiusReflectionRate"
+   },
+   {
+    "name": "RadiusReflectionRate"
+   },
+   {
+    "name": "bGroundCheck"
+   },
+   {
+    "name": "GroundHeight"
+   },
+   {
+    "name": "GroundCheckRadius"
+   },
+   {
+    "name": "bCanFloorReflection"
+   },
+   {
+    "name": "FloorReflectionRate"
+   },
+   {
+    "name": "ReflectionZVelocity"
+   },
+   {
+    "name": "Drag"
+   },
+   {
+    "name": "bUseDragZ"
+   },
+   {
+    "name": "bEnableDragZ"
+   },
+   {
+    "name": "bEnableDragY"
+   },
+   {
+    "name": "bEnableDragX"
+   },
+   {
+    "name": "DragZ"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_If_Material_Scalar",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "IfParamName"
+   },
+   {
+    "name": "IfValue"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_LocalTakeover",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "bIsScale"
+   },
+   {
+    "name": "bIsRotation"
+   },
+   {
+    "name": "bIsPosition"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_LocationBase",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "bUseParentLockSpawnList"
+   },
+   {
+    "name": "LockSpawnPointInLoop"
+   },
+   {
+    "name": "Direction"
+   },
+   {
+    "name": "NormalDirection"
+   },
+   {
+    "name": "DirectionType"
+   },
+   {
+    "name": "Speed"
+   },
+   {
+    "name": "bNoMeshRotation"
+   },
+   {
+    "name": "bApplySpawnLocationOwnerScale"
+   },
+   {
+    "name": "bApplyOwnerScale"
+   },
+   {
+    "name": "SpawnRotCalcMode"
+   },
+   {
+    "name": "NormalAxis"
+   },
+   {
+    "name": "NormalUpAxis"
+   },
+   {
+    "name": "LocalSpaceTopAxis"
+   },
+   {
+    "name": "LocalSpaceUpAxis"
+   },
+   {
+    "name": "LocalSpaceFacingAxis"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_Material",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "ParamName"
+   },
+   {
+    "name": "NoSetUseLastParameter"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_Material_SendParticlePosToMaterial",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "GetOwnerEmitterParticle"
+   },
+   {
+    "name": "SendParticleNumber"
+   },
+   {
+    "name": "bSetParticlePosAtRenderTarget"
+   },
+   {
+    "name": "RTTexture"
+   },
+   {
+    "name": "ClipTexture"
+   },
+   {
+    "name": "BlendMode"
+   },
+   {
+    "name": "FieldMax"
+   },
+   {
+    "name": "FieldMin"
+   },
+   {
+    "name": "Height"
+   },
+   {
+    "name": "Simscale"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_OverrideParPostion",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "OverridePosType"
+   },
+   {
+    "name": "GetOwnerEmitterParticle"
+   },
+   {
+    "name": "ParticleNumber"
+   },
+   {
+    "name": "RingNumber"
+   },
+   {
+    "name": "RingPointNumber"
+   },
+   {
+    "name": "RingRadiusBase"
+   },
+   {
+    "name": "RingRadius"
+   },
+   {
+    "name": "AddStartIndex"
+   },
+   {
+    "name": "InitRingRot"
+   },
+   {
+    "name": "UpdateBaseRingRot"
+   },
+   {
+    "name": "UpdateRingRot"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_ParameterCollection",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "Priority"
+   },
+   {
+    "name": "ParamCollection"
+   },
+   {
+    "name": "ParameterCollection"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_ParticleAround",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "AroundType"
+   },
+   {
+    "name": "AroundPostion"
+   },
+   {
+    "name": "AroundRadius"
+   },
+   {
+    "name": "AroundSpeedBase"
+   },
+   {
+    "name": "AroundRadiusScale"
+   },
+   {
+    "name": "AroundRadiusRandom"
+   },
+   {
+    "name": "AroundVelocityScale"
+   },
+   {
+    "name": "AroundVelocityRandom"
+   },
+   {
+    "name": "bAroundDirRandom"
+   },
+   {
+    "name": "AttachInHomingEndRadius"
+   },
+   {
+    "name": "HomingMaxAngle"
+   },
+   {
+    "name": "HomingTurnMax"
+   },
+   {
+    "name": "bHomingTurnByDistance"
+   },
+   {
+    "name": "Strength"
+   },
+   {
+    "name": "bStrengthByDistance"
+   },
+   {
+    "name": "ClampAroundSpeed"
+   },
+   {
+    "name": "AddContactRotaion"
+   },
+   {
+    "name": "ContactDirTime"
+   },
+   {
+    "name": "AroundMeshRotaionOffset"
+   },
+   {
+    "name": "bUseTestMode"
+   },
+   {
+    "name": "ChangeModeTime"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_ParticleColor",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "StartParticleColor"
+   },
+   {
+    "name": "StartParticleAlpha"
+   },
+   {
+    "name": "ParticleColor"
+   },
+   {
+    "name": "ParticleAlpha"
+   },
+   {
+    "name": "ParticleColorScale"
+   },
+   {
+    "name": "ParticleAlphaScale"
+   },
+   {
+    "name": "bEmitterTime"
+   },
+   {
+    "name": "bCurveParameterDirectColor"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_ParticleRotationZ",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": []
+ },
+ {
+  "class": "ParticleModuleSQEX_ParticleScale",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "StartParticleScale"
+   },
+   {
+    "name": "ParticleScale"
+   },
+   {
+    "name": "ParticleScaleScale"
+   },
+   {
+    "name": "bEmitterTime"
+   },
+   {
+    "name": "bCurveParameterDirectScale"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_ParticleState",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "RotA"
+   },
+   {
+    "name": "RotB"
+   },
+   {
+    "name": "Diff"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_PlayerWearColor",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "ColorData"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_PostprocessFringe",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "Intensity"
+   },
+   {
+    "name": "EffectPriority"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_PostprocessGlare",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "Size"
+   },
+   {
+    "name": "Color"
+   },
+   {
+    "name": "Alpha"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_QuaternionTest",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "A"
+   },
+   {
+    "name": "B"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_RandomTestModule",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "bUseGaussFloat"
+   },
+   {
+    "name": "RandomGaussFloat"
+   },
+   {
+    "name": "bUseGaussVector"
+   },
+   {
+    "name": "RandomGaussVector"
+   },
+   {
+    "name": "bUseRandomFloat"
+   },
+   {
+    "name": "RandomFloat"
+   },
+   {
+    "name": "bUseRandomVector"
+   },
+   {
+    "name": "RandomVector"
+   },
+   {
+    "name": "bUseInterpCircularIn"
+   },
+   {
+    "name": "bUseInterpExpoInOut"
+   },
+   {
+    "name": "bUseInterpExpoOut"
+   },
+   {
+    "name": "bUseInterpExpoIn"
+   },
+   {
+    "name": "bUseInterpSinInOut"
+   },
+   {
+    "name": "bUseInterpSinOut"
+   },
+   {
+    "name": "bUseInterpSinIn"
+   },
+   {
+    "name": "bUseEase"
+   },
+   {
+    "name": "bUseInterpCircularInOut"
+   },
+   {
+    "name": "bUseInterpCircularOut"
+   },
+   {
+    "name": "FStart"
+   },
+   {
+    "name": "FEnd"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_Ring_Seeded",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "RandomSeedInfo"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_SpawnActor",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "SpawnTime"
+   },
+   {
+    "name": "ChildActorClass"
+   },
+   {
+    "name": "bReestSpawnList"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_SpawnFluidParticle",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "SpawnType"
+   },
+   {
+    "name": "SpawnNumber"
+   },
+   {
+    "name": "SpawnTime"
+   },
+   {
+    "name": "SpawnIntervalTime"
+   },
+   {
+    "name": "SpawnGridSizeMax"
+   },
+   {
+    "name": "SpawnGridSizeMin"
+   },
+   {
+    "name": "Rotation"
+   },
+   {
+    "name": "PositionOffset"
+   },
+   {
+    "name": "Radius"
+   },
+   {
+    "name": "DiskSize"
+   },
+   {
+    "name": "InitVelocity"
+   },
+   {
+    "name": "VelocityRadiusScale"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_SpawnParentHistoryPos",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": []
+ },
+ {
+  "class": "ParticleModuleSQEX_SpawnParentHistoryPosEx",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "bIsCurrentLength"
+   },
+   {
+    "name": "SpawnPosToTailHistoryRate"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_SpawnParentParticlePos",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": []
+ },
+ {
+  "class": "ParticleModuleSQEX_SpawnSeaSurface",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "SeaSurfaceSpawnMode"
+   },
+   {
+    "name": "Datas"
+   },
+   {
+    "name": "SpawnScale"
+   },
+   {
+    "name": "SpawnSuppressScale"
+   },
+   {
+    "name": "EntryAndExitScale"
+   },
+   {
+    "name": "TesMode"
+   },
+   {
+    "name": "TestZ"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_TailShape_Base",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": []
+ },
+ {
+  "class": "ParticleModuleSQEX_TargetVelocity",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "bLockTargetToEmitter"
+   },
+   {
+    "name": "Velocity"
+   },
+   {
+    "name": "EmitterOffsetRotation"
+   },
+   {
+    "name": "bZAxis"
+   },
+   {
+    "name": "TargetPostion"
+   },
+   {
+    "name": "SpeedScale"
+   },
+   {
+    "name": "CheckMiniDistance"
+   },
+   {
+    "name": "CheckMiniDistanceOffset"
+   },
+   {
+    "name": "CheckMiniSpeedScale"
+   },
+   {
+    "name": "bUseSpawnModuleTarget"
+   },
+   {
+    "name": "TargetEmitterName"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_TestModule",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "A"
+   },
+   {
+    "name": "B"
+   },
+   {
+    "name": "C"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_TexSpawn",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "SpawnTextrue"
+   },
+   {
+    "name": "NormalTextrue"
+   },
+   {
+    "name": "OnCenterTextrue"
+   },
+   {
+    "name": "UseOtherSpawnModuleLocation"
+   },
+   {
+    "name": "LocationOffset"
+   },
+   {
+    "name": "RotatorOffset"
+   },
+   {
+    "name": "SpawnMaxSizeX"
+   },
+   {
+    "name": "SpawnMaxSizeY"
+   },
+   {
+    "name": "TexScaleU"
+   },
+   {
+    "name": "TexScaleV"
+   },
+   {
+    "name": "Sub_Horizontal"
+   },
+   {
+    "name": "Sub_Vertical"
+   },
+   {
+    "name": "SubIndex"
+   },
+   {
+    "name": "OffsetInterpolationScale"
+   },
+   {
+    "name": "LocationScale"
+   },
+   {
+    "name": "UseColorLocationOffsetZ"
+   },
+   {
+    "name": "UseColorLocationOffsetY"
+   },
+   {
+    "name": "UseColorLocationOffsetX"
+   },
+   {
+    "name": "NormalVecScale"
+   },
+   {
+    "name": "bInWorldSpace"
+   },
+   {
+    "name": "VelocityScale"
+   },
+   {
+    "name": "EmitterNormalVelocity"
+   },
+   {
+    "name": "UseColorVelocityOffsetZ"
+   },
+   {
+    "name": "UseColorVelocityOffsetY"
+   },
+   {
+    "name": "UseColorVelocityOffsetX"
+   },
+   {
+    "name": "NormalScale"
+   },
+   {
+    "name": "UseColorA"
+   },
+   {
+    "name": "UseColorB"
+   },
+   {
+    "name": "UseColorG"
+   },
+   {
+    "name": "UseColorR"
+   },
+   {
+    "name": "TextureSizeX"
+   },
+   {
+    "name": "TextureSizeY"
+   },
+   {
+    "name": "NormalList"
+   },
+   {
+    "name": "NormalTextureSizeX"
+   },
+   {
+    "name": "NormalTextureSizeY"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_ValuePerUnit",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "InsPrameterName"
+   },
+   {
+    "name": "MinValue"
+   },
+   {
+    "name": "MaxValue"
+   },
+   {
+    "name": "AmountMovement"
+   },
+   {
+    "name": "AmountMovementScale"
+   },
+   {
+    "name": "AttenuationRate"
+   },
+   {
+    "name": "MovementTolerance"
+   },
+   {
+    "name": "bIgnoreMovementAlongZ"
+   },
+   {
+    "name": "bIgnoreMovementAlongY"
+   },
+   {
+    "name": "bIgnoreMovementAlongX"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_VectorParameter",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "ParameterName"
+   },
+   {
+    "name": "VectorParameter"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_VertexLinear",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "bIsCirculationMesh"
+   },
+   {
+    "name": "bIsVertexReverse"
+   },
+   {
+    "name": "Interval"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_VertexSpawnBase",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": []
+ },
+ {
+  "class": "ParticleModuleSQEX_VertexTarget",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "TargetMesh"
+   },
+   {
+    "name": "TargetSkeletalMesh"
+   },
+   {
+    "name": "bUseSpawnModuleTarget"
+   },
+   {
+    "name": "TargetEmitterName"
+   },
+   {
+    "name": "bIsWorldLocation"
+   },
+   {
+    "name": "bVertexColor"
+   },
+   {
+    "name": "bUseEmitterRotMat"
+   },
+   {
+    "name": "SkipTime"
+   },
+   {
+    "name": "Speed"
+   },
+   {
+    "name": "PolygonAreaBlockNumber"
+   },
+   {
+    "name": "SourceType"
+   },
+   {
+    "name": "bResetVertexNumberList"
+   },
+   {
+    "name": "OffsetPosition"
+   },
+   {
+    "name": "OffsetRotation"
+   },
+   {
+    "name": "OffsetScale"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleSQEX_VoxelVertexIndex",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "FieldSizeMax"
+   },
+   {
+    "name": "FieldSizeMin"
+   },
+   {
+    "name": "VoxelData"
+   },
+   {
+    "name": "VoxcelHeight"
+   },
+   {
+    "name": "TestVec1"
+   },
+   {
+    "name": "TestVec2"
+   },
+   {
+    "name": "TestVec3"
+   },
+   {
+    "name": "TriPos0"
+   },
+   {
+    "name": "TriPos1"
+   },
+   {
+    "name": "TriPos2"
+   },
+   {
+    "name": "area"
+   },
+   {
+    "name": "height"
+   },
+   {
+    "name": "deg"
+   },
+   {
+    "name": "DotAndLine"
+   },
+   {
+    "name": "bDrawVoxelIndex"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_2DFluid",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "FluidInfo"
+   },
+   {
+    "name": "ResourceData"
+   },
+   {
+    "name": "ComputeType"
+   },
+   {
+    "name": "SimulationSize"
+   },
+   {
+    "name": "CellSize"
+   },
+   {
+    "name": "CameraFacing"
+   },
+   {
+    "name": "BillboardRotaionOffset"
+   },
+   {
+    "name": "bDrawGrid"
+   },
+   {
+    "name": "bDrawForce"
+   },
+   {
+    "name": "bDrawPoint"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_CPUFluid",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "SPHParameterData"
+   },
+   {
+    "name": "DebugCheckStartIndex"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_ConnectParticle",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "GetOwnerEmitterParticle"
+   },
+   {
+    "name": "Scale"
+   },
+   {
+    "name": "CheckLength"
+   },
+   {
+    "name": "PerceptionLength"
+   },
+   {
+    "name": "CoonectRate"
+   },
+   {
+    "name": "bCheckParticleSizeRate"
+   },
+   {
+    "name": "bSetParticleAlpha"
+   },
+   {
+    "name": "ScaleBase"
+   },
+   {
+    "name": "ScaleDir"
+   },
+   {
+    "name": "EnableLenghtScaleX"
+   },
+   {
+    "name": "EnableLenghtScaleY"
+   },
+   {
+    "name": "EnableLenghtScaleZ"
+   },
+   {
+    "name": "FieldMax"
+   },
+   {
+    "name": "FieldMin"
+   },
+   {
+    "name": "Height"
+   },
+   {
+    "name": "Simscale"
+   },
+   {
+    "name": "bConnectLine"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_Contin",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "ParticleSystemAsset"
+   },
+   {
+    "name": "SpawnWaite"
+   },
+   {
+    "name": "SpawnRndWaite"
+   },
+   {
+    "name": "ScaleBase"
+   },
+   {
+    "name": "ScaleDir"
+   },
+   {
+    "name": "BaseDistance"
+   },
+   {
+    "name": "AddRndDistance"
+   },
+   {
+    "name": "BaseRange"
+   },
+   {
+    "name": "AddRndRange"
+   },
+   {
+    "name": "ScaleRate"
+   },
+   {
+    "name": "DirectionAngle"
+   },
+   {
+    "name": "AddDirectionAngle"
+   },
+   {
+    "name": "CheckIndex"
+   },
+   {
+    "name": "IsStartRandom"
+   },
+   {
+    "name": "FirstPointToStartLot"
+   },
+   {
+    "name": "EndPointToEndLot"
+   },
+   {
+    "name": "EndLocation"
+   },
+   {
+    "name": "IsEndPosRelative"
+   },
+   {
+    "name": "ResetTargetPoint"
+   },
+   {
+    "name": "TestAng0"
+   },
+   {
+    "name": "TestAng1"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_DevilWave",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": []
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_DynamicShape",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "DynamicShapeType"
+   },
+   {
+    "name": "PolygonNumber"
+   },
+   {
+    "name": "PolygonRotation"
+   },
+   {
+    "name": "Radius"
+   },
+   {
+    "name": "RadiusScale"
+   },
+   {
+    "name": "Size"
+   },
+   {
+    "name": "SizeScale"
+   },
+   {
+    "name": "Height"
+   },
+   {
+    "name": "HeightScale"
+   },
+   {
+    "name": "Spin"
+   },
+   {
+    "name": "PolygonColor"
+   },
+   {
+    "name": "PolygonAlpha"
+   },
+   {
+    "name": "bIsCrossPolygon"
+   },
+   {
+    "name": "CrossPolygonRotation"
+   },
+   {
+    "name": "bIsUseCustomPolygon"
+   },
+   {
+    "name": "PolygonSplit"
+   },
+   {
+    "name": "SplitColor"
+   },
+   {
+    "name": "SplitAlpha"
+   },
+   {
+    "name": "bIsUseCustomUV"
+   },
+   {
+    "name": "UVType"
+   },
+   {
+    "name": "bTexVReverse"
+   },
+   {
+    "name": "bTexUReverse"
+   },
+   {
+    "name": "UVTiling"
+   },
+   {
+    "name": "UTilingScale"
+   },
+   {
+    "name": "VTilingScale"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_FragmentMesh",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "LocationOffsetScale"
+   },
+   {
+    "name": "RandomLocationOffsetScale"
+   },
+   {
+    "name": "ImpactTime"
+   },
+   {
+    "name": "ImpactPower"
+   },
+   {
+    "name": "RandomImpactPower"
+   },
+   {
+    "name": "ImpactLocationOffset"
+   },
+   {
+    "name": "ImpactPowerVecotr"
+   },
+   {
+    "name": "RandomImpactPowerVecotr"
+   },
+   {
+    "name": "bImpactPowerVecotrWorldSpace"
+   },
+   {
+    "name": "RandomImpactRotation"
+   },
+   {
+    "name": "bExternalRotRate"
+   },
+   {
+    "name": "Gravity"
+   },
+   {
+    "name": "Force"
+   },
+   {
+    "name": "bAlwaysInWorldSpace"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_GPUFluid",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "SPHParameterData"
+   },
+   {
+    "name": "TypeGas"
+   },
+   {
+    "name": "MaxParticleNumber"
+   },
+   {
+    "name": "DebugCheckStartIndex"
+   },
+   {
+    "name": "DebugPressureColor"
+   },
+   {
+    "name": "DebugPressureColorScale"
+   },
+   {
+    "name": "DebugRhoColor"
+   },
+   {
+    "name": "DebugRhoColorScale"
+   },
+   {
+    "name": "DebugForColor"
+   },
+   {
+    "name": "DebugForColorScale"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_GPUParticle",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "ParticleType"
+   },
+   {
+    "name": "MaxParticleNumber"
+   },
+   {
+    "name": "RestSpawnWaitParticle"
+   },
+   {
+    "name": "CheckReactionNumberWait"
+   },
+   {
+    "name": "bNoCulling"
+   },
+   {
+    "name": "AfterSpawnNoStateCheck"
+   },
+   {
+    "name": "CheckReactionNumber"
+   },
+   {
+    "name": "Mesh"
+   },
+   {
+    "name": "bOverrideMaterial"
+   },
+   {
+    "name": "Meshs"
+   },
+   {
+    "name": "bUseSubMeshs"
+   },
+   {
+    "name": "MeshLists"
+   },
+   {
+    "name": "IntervalTime"
+   },
+   {
+    "name": "SpawnMeshDataIndex"
+   },
+   {
+    "name": "SpawnMeshIndexImportant"
+   },
+   {
+    "name": "CheckCenterPos"
+   },
+   {
+    "name": "ParticleLockDir"
+   },
+   {
+    "name": "CheckRange"
+   },
+   {
+    "name": "CheckRange2"
+   },
+   {
+    "name": "SpawnAddVelocity"
+   },
+   {
+    "name": "SpawnGravity"
+   },
+   {
+    "name": "MoveSpeed"
+   },
+   {
+    "name": "HeightmapTexture"
+   },
+   {
+    "name": "HeightTexCenterLocation"
+   },
+   {
+    "name": "HeightCheckSize"
+   },
+   {
+    "name": "CheckHeight"
+   },
+   {
+    "name": "bReSpawn"
+   },
+   {
+    "name": "ReSpawnNumberRate"
+   },
+   {
+    "name": "ReSpawnTimer"
+   },
+   {
+    "name": "SpawnStopTimer"
+   },
+   {
+    "name": "EnterInsideNumber"
+   },
+   {
+    "name": "EnterInsideRate"
+   },
+   {
+    "name": "CheckPlayerRadius"
+   },
+   {
+    "name": "HitEffectOffset"
+   },
+   {
+    "name": "HitEffect"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_GatherAfterBurst",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "GroundZ"
+   },
+   {
+    "name": "Gravity"
+   },
+   {
+    "name": "Speed"
+   },
+   {
+    "name": "AddSpeed"
+   },
+   {
+    "name": "MaxSpeed"
+   },
+   {
+    "name": "BoundTime"
+   },
+   {
+    "name": "CenterOutTime"
+   },
+   {
+    "name": "CenterOutTimeAddRand"
+   },
+   {
+    "name": "TargetRotPower"
+   },
+   {
+    "name": "MaxTargetRot"
+   },
+   {
+    "name": "TargetHitRadius"
+   },
+   {
+    "name": "MeshRotOffset"
+   },
+   {
+    "name": "TargetPointOffset"
+   },
+   {
+    "name": "bAreaOutDropDown"
+   },
+   {
+    "name": "bAbsolutelyAreaIn"
+   },
+   {
+    "name": "AreaCenterPoint"
+   },
+   {
+    "name": "AreaRadius"
+   },
+   {
+    "name": "bEndScale"
+   },
+   {
+    "name": "EndScaleTime"
+   },
+   {
+    "name": "bEnableZ"
+   },
+   {
+    "name": "bEnableY"
+   },
+   {
+    "name": "bEnableX"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_LineRoad",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "HistoryDataType"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_OmnidLaser",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "OmidLaserShapeType"
+   },
+   {
+    "name": "MaxSpawnNumber"
+   },
+   {
+    "name": "WNumber"
+   },
+   {
+    "name": "HNumber"
+   },
+   {
+    "name": "SubNum"
+   },
+   {
+    "name": "Radius"
+   },
+   {
+    "name": "StepNum"
+   },
+   {
+    "name": "LaserParticleScale"
+   },
+   {
+    "name": "UseLeaserShake"
+   },
+   {
+    "name": "ShakeWaitBase"
+   },
+   {
+    "name": "ShakeWaitRndom"
+   },
+   {
+    "name": "LaserShakePower"
+   },
+   {
+    "name": "ResetBaseTime"
+   },
+   {
+    "name": "ResetRandomAddTime"
+   },
+   {
+    "name": "TestCheck"
+   },
+   {
+    "name": "TestCheckListReset"
+   },
+   {
+    "name": "TestCheckListResetTime"
+   },
+   {
+    "name": "TestCheckListNumber"
+   },
+   {
+    "name": "CheckRadius"
+   },
+   {
+    "name": "CheckIndexNum"
+   },
+   {
+    "name": "TestAutoShot"
+   },
+   {
+    "name": "TestShotSpeed"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_PolygonMaker",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "VertexPointAsset"
+   },
+   {
+    "name": "ParticleSystemAsset"
+   },
+   {
+    "name": "ScaleBase"
+   },
+   {
+    "name": "ScaleDir"
+   },
+   {
+    "name": "CreateSideData"
+   },
+   {
+    "name": "bDynamicVertex"
+   },
+   {
+    "name": "Radius"
+   },
+   {
+    "name": "RadiusCheckSacle"
+   },
+   {
+    "name": "OffsetLocation"
+   },
+   {
+    "name": "OffseScale"
+   },
+   {
+    "name": "bFixShape"
+   },
+   {
+    "name": "bCheckGround"
+   },
+   {
+    "name": "bConnectVertex"
+   },
+   {
+    "name": "bTestStep"
+   },
+   {
+    "name": "ChangeStepWait"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_RestraintTail",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "UpdateTime"
+   },
+   {
+    "name": "SetStartPointType"
+   },
+   {
+    "name": "SetEndPointType"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_SkeletalMesh",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "bUseExtanalSkeletalMesh"
+   },
+   {
+    "name": "SkeletalMesh"
+   },
+   {
+    "name": "bAttachParentObject"
+   },
+   {
+    "name": "AttachBone"
+   },
+   {
+    "name": "SQEX_bOverrideTranslucencySortPriority"
+   },
+   {
+    "name": "bCastShadow"
+   },
+   {
+    "name": "bCastCapsuleDirectShadow"
+   },
+   {
+    "name": "bOverrideMaterial"
+   },
+   {
+    "name": "SQEXTranslucencySortPriorityCategory"
+   },
+   {
+    "name": "bSimulatePhysics"
+   },
+   {
+    "name": "AuraID"
+   },
+   {
+    "name": "bUseExtanalSkeletalAnimation"
+   },
+   {
+    "name": "AnimationData"
+   },
+   {
+    "name": "RotaionOffset"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_StaticMesh",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "StaticMesh"
+   },
+   {
+    "name": "bOverrideMaterial"
+   },
+   {
+    "name": "StaticMeshColor"
+   },
+   {
+    "name": "StaticMeshOpacity"
+   },
+   {
+    "name": "bUseCustomParam0SpawnTime"
+   },
+   {
+    "name": "CustomParam0"
+   },
+   {
+    "name": "bUseCustomParam1SpawnTime"
+   },
+   {
+    "name": "CustomParam1"
+   },
+   {
+    "name": "bUseCustomParam2SpawnTime"
+   },
+   {
+    "name": "CustomParam2"
+   },
+   {
+    "name": "SQEXTranslucencySortPriorityCategory"
+   },
+   {
+    "name": "SQEX_bOverrideTranslucencySortPriority"
+   },
+   {
+    "name": "bCastShadow"
+   },
+   {
+    "name": "bCastCapsuleDirectShadow"
+   },
+   {
+    "name": "RotaionOffset"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_TailDecal",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "DecalMaterial"
+   },
+   {
+    "name": "FadeScreenSize"
+   },
+   {
+    "name": "SortOrder"
+   },
+   {
+    "name": "EnableForceRecive"
+   },
+   {
+    "name": "DecalSize"
+   },
+   {
+    "name": "DecalRotation"
+   },
+   {
+    "name": "DecalColor"
+   },
+   {
+    "name": "DecalOpacity"
+   },
+   {
+    "name": "bUseCustomParam0SpawnTime"
+   },
+   {
+    "name": "CustomParam0"
+   },
+   {
+    "name": "bUseCustomParam1SpawnTime"
+   },
+   {
+    "name": "CustomParam1"
+   },
+   {
+    "name": "bUseCustomParam2SpawnTime"
+   },
+   {
+    "name": "CustomParam2"
+   },
+   {
+    "name": "ZFadeSegment"
+   },
+   {
+    "name": "ZFadePow"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_TailModelCirculation",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "bIsGroundZCheck"
+   },
+   {
+    "name": "bReversModelRotLerp"
+   },
+   {
+    "name": "GroundZOffset"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_TailModelMarch",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "ShapeType"
+   },
+   {
+    "name": "ModelWidthNumbetr"
+   },
+   {
+    "name": "ModelHeightNumbetr"
+   },
+   {
+    "name": "ModelWidthInterval"
+   },
+   {
+    "name": "ModelHeightInterval"
+   },
+   {
+    "name": "bOnIntervalScale"
+   },
+   {
+    "name": "ModelIntervalScale"
+   },
+   {
+    "name": "ModelWidthIntervalScale"
+   },
+   {
+    "name": "ModelHeightIntervalScale"
+   },
+   {
+    "name": "bOnInterValScroll"
+   },
+   {
+    "name": "ModelIntervalScrollScale"
+   },
+   {
+    "name": "ModelWidthIntervalScrollScale"
+   },
+   {
+    "name": "ModelHeightIntervalScrollScale"
+   },
+   {
+    "name": "ImpactModelIntervalScrollScale"
+   },
+   {
+    "name": "bOnNoiseMove"
+   },
+   {
+    "name": "Intensity"
+   },
+   {
+    "name": "PositionScale"
+   },
+   {
+    "name": "TimeScale"
+   },
+   {
+    "name": "CurlNoiseScale"
+   },
+   {
+    "name": "CurlNoiseTimeScale"
+   },
+   {
+    "name": "bIsPlayerAvoid"
+   },
+   {
+    "name": "PlayerAvoidType"
+   },
+   {
+    "name": "PlayerAvoidRange"
+   },
+   {
+    "name": "PlayerAvoidRangeOffset"
+   },
+   {
+    "name": "bIsCameraAvoid"
+   },
+   {
+    "name": "CameraAvoidType"
+   },
+   {
+    "name": "CameraAvoidRange"
+   },
+   {
+    "name": "CameraAvoidRangeOffset"
+   },
+   {
+    "name": "bIsGoAround"
+   },
+   {
+    "name": "TestAroundPostion"
+   },
+   {
+    "name": "TestAroundRadius"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_TestTypeData",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "ThreadNumber"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_Thunder",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "UpdateTime"
+   },
+   {
+    "name": "SetStartPointType"
+   },
+   {
+    "name": "SetEndPointType"
+   },
+   {
+    "name": "bUseBoneList"
+   },
+   {
+    "name": "bCheckCollision"
+   },
+   {
+    "name": "bConnectingVertexAndNextVertex"
+   },
+   {
+    "name": "BoneList"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_TriangleParticle",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "VertexIntervalNumber"
+   },
+   {
+    "name": "TriangleData"
+   }
+  ]
+ },
+ {
+  "class": "ParticleModuleTypeDataSQEX_VoxelMesh",
+  "semantics": null,
+  "confidence": "reflection-only",
+  "properties": [
+   {
+    "name": "ComputeType"
+   },
+   {
+    "name": "RenderType"
+   },
+   {
+    "name": "Mesh"
+   },
+   {
+    "name": "bOverrideMaterial"
+   },
+   {
+    "name": "HeightmapTexture"
+   },
+   {
+    "name": "FieldSizeMin"
+   },
+   {
+    "name": "FieldSizeMax"
+   },
+   {
+    "name": "VoxelScale"
+   },
+   {
+    "name": "VoxelNumber"
+   },
+   {
+    "name": "bIsPosUpdateInEffectArea"
+   },
+   {
+    "name": "bIsScaleInterpolation"
+   },
+   {
+    "name": "InterpolationType"
+   },
+   {
+    "name": "bOverrideInterpolation"
+   },
+   {
+    "name": "GatherVoxelTime"
+   },
+   {
+    "name": "GatherMoveRot"
+   },
+   {
+    "name": "GatherStartRadius"
+   },
+   {
+    "name": "DecreaseVoxelScale"
+   },
+   {
+    "name": "VoxelTimeRandom"
+   },
+   {
+    "name": "IncreaseVoxelTimeScale"
+   },
+   {
+    "name": "DecreaseVoxelTimeScale"
+   },
+   {
+    "name": "LeaveVoxelTime"
+   },
+   {
+    "name": "LeaveStartRadius"
+   },
+   {
+    "name": "LeaveGravity"
+   },
+   {
+    "name": "LeaveImpactPower"
+   },
+   {
+    "name": "LeaveRandomImpactPower"
+   },
+   {
+    "name": "SubImpacPower"
+   },
+   {
+    "name": "LeaveFriction"
+   },
+   {
+    "name": "RandomImpactRotation"
+   },
+   {
+    "name": "GroundZOffset"
+   },
+   {
+    "name": "ImpactAddForce"
+   },
+   {
+    "name": "CheckPlayerRadius"
+   },
+   {
+    "name": "CheckPlayerImpactPower"
+   },
+   {
+    "name": "CheckPlayerAddZForce"
+   },
+   {
+    "name": "NoiseIntensityBase"
+   },
+   {
+    "name": "NoiseIntensityScale"
+   },
+   {
+    "name": "NoiseIntensityFixScale"
+   },
+   {
+    "name": "FixNoiseFromHighOverrideNoise"
+   },
+   {
+    "name": "DecreaseVoxelScaleParam"
+   },
+   {
+    "name": "IncreaseVoxelTimeScaleParam"
+   },
+   {
+    "name": "LeaveImpactPowerScale"
+   },
+   {
+    "name": "SimpleShapeRadius"
+   },
+   {
+    "name": "SimpleShapeScale"
+   },
+   {
+    "name": "SpatialPartitioningData"
+   },
+   {
+    "name": "UseSpatialPartitioningLevel"
+   },
+   {
+    "name": "SetSpatialPartitioningThredNumber"
+   },
+   {
+    "name": "CellCheckSpatialPartitioningIndex"
+   },
+   {
+    "name": "CheckBoneRadiusScale"
+   },
+   {
+    "name": "bOverrideCheckType"
+   },
+   {
+    "name": "OverrideCheckType"
+   },
+   {
+    "name": "BoneListAsset"
+   },
+   {
+    "name": "CheckBoneList"
+   },
+   {
+    "name": "bCreateBoneListData"
+   },
+   {
+    "name": "BoneNameBase"
+   },
+   {
+    "name": "VoxelThredNumber"
+   },
+   {
+    "name": "VoxelRenderThredNumber"
+   },
+   {
+    "name": "bIsPoint1_2ConnectCheck"
+   },
+   {
+    "name": "bIsTestCheckPostion"
+   },
+   {
+    "name": "RenderType1"
+   },
+   {
+    "name": "CheckPoint"
+   },
+   {
+    "name": "CheckPointRot1"
+   },
+   {
+    "name": "CheckPointScale1"
+   },
+   {
+    "name": "RenderType2"
+   },
+   {
+    "name": "CheckPoint2"
+   },
+   {
+    "name": "CheckPointRot2"
+   },
+   {
+    "name": "CheckPointScale2"
+   },
+   {
+    "name": "RenderType3"
+   },
+   {
+    "name": "CheckPoint3"
+   },
+   {
+    "name": "CheckPointRot3"
+   },
+   {
+    "name": "CheckPointScale3"
+   },
+   {
+    "name": "CheckTime"
+   },
+   {
+    "name": "CheckRadius"
+   },
+   {
+    "name": "ShinePostion"
+   },
+   {
+    "name": "ShineRadius"
+   },
+   {
+    "name": "bIsBreakTest"
+   },
+   {
+    "name": "ConditionChangeType"
+   },
+   {
+    "name": "BeforeCellType"
+   },
+   {
+    "name": "AfterCellType"
+   },
+   {
+    "name": "CheckType"
+   },
+   {
+    "name": "BreakTestCheckPoint"
+   },
+   {
+    "name": "BreakTestCheckRadius"
+   },
+   {
+    "name": "DebugPointSize"
+   }
+  ]
+ }
+]

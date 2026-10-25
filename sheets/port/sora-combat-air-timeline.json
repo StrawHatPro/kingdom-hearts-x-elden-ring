@@ -1,0 +1,8 @@
+{"sheet":"sora-combat-air-timeline","group":"port","columns":["id","order","event","effect","addr","conf"],"rows":[
+["air_01",1,"Begin / PlayAttack","V = 0; +0x234 |= 4|0x10; GravityScale 0.1; gravity disabled; Flying; +0x18C = 0.6; skip flag","0x14133A8BA","confirmed"],
+["air_02",2,"before the window","hang: root motion only","0x14058E570","confirmed"],
+["air_03",3,"window open","XY homing; Z = dzc * z_gain by the sign rule else current","0x14134A740","confirmed"],
+["air_04",4,"window closes","gravity enabled; Falling; XY decay 0.1 (0.5 first air); Z pinned to decaying DirZ while != 0","0x14134A902","confirmed"],
+["air_05",5,"TresEnableChange","GravityScale default; gravity on; Falling","0x14134D52E","confirmed"],
+["air_06",6,"End","gravity on; scale default; skip flag off; airborne: Falling keep V; grounded: Falling+stop (air-mode) or Walking+stop","0x141335720","confirmed"]
+]}

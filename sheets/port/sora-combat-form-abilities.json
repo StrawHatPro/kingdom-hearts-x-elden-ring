@@ -1,0 +1,8 @@
+{"sheet":"sora-combat-form-abilities","group":"port","columns":["id","wear_form","ability","ability_id","copies","source"],"rows":[
+["HIGHJUMP","TRES_WEAR_FORM_05","HIGHJUMP",16,1,"Blueprints/Player/p_ex001/p_ex001_FormAbility"],
+["OVERCOME","TRES_WEAR_FORM_05","OVERCOME",179,1,"Blueprints/Player/p_ex001/p_ex001_FormAbility"],
+["COMBO_MASTER","TRES_WEAR_FORM_05","COMBO_MASTER",30,1,"Blueprints/Player/p_ex001/p_ex001_FormAbility"],
+["MASTER_DRAW","TRES_WEAR_FORM_05","MASTER_DRAW",61,1,"Blueprints/Player/p_ex001/p_ex001_FormAbility"],
+["LUCK_UP","TRES_WEAR_FORM_05","LUCK_UP",39,1,"Blueprints/Player/p_ex001/p_ex001_FormAbility"],
+["MP_HASTE","TRES_WEAR_FORM_05","MP_HASTE",53,1,"Blueprints/Player/p_ex001/p_ex001_FormAbility"]
+]}

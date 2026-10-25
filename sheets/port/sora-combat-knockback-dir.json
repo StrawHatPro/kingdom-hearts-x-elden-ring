@@ -1,0 +1,8 @@
+{"sheet":"sora-combat-knockback-dir","group":"port","columns":["id","type","name","direction","ref_addr","ref_conf"],"rows":[
+["knockback_01",0,"NORMAL","norm(victim - root of (comp+0x890 actor ?: instigator ?: owner))","0x14061EA30","inferred"],
+["knockback_02",1,"VELOCITY","GetVelocity() of comp+0x890 actor ?: owner, not normalised","0x14061EA30","inferred"],
+["knockback_03",2,"ATK_COLLISION","norm(victim - lerp(prevCentre, centre, clamp(hit.Time, 0, 1)))","0x14061EA30","inferred"],
+["knockback_04",3,"INSTIGATOR_PAWN","norm(victim - root of the pawn of the instigator controller); none → as NORMAL","0x14061EA30","inferred"],
+["knockback_05",4,"IMPACT_LOCATION","norm(victim - hit.ImpactPoint)","0x14061EA30","confirmed"],
+["knockback_06",5,"SPECIFIC","(1,0,0), overwritable by notify slot 29 of comp+0x890 actor ?: instigator ?: owner","0x14061EA30","inferred"]
+]}

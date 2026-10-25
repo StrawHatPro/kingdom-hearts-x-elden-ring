@@ -1,0 +1,39 @@
+# Kingdom Hearts x Elden Ring: the Elden Ring mod (kh-er = kh_er.dll, kh-er-loader = kh_er_loader.dll), its crates and
+# the shader compiler (kh-shaderc). One target directory: target/ at this root.
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+# (PORT) the vendored SDK is its own workspace (vendor/fromsoftware-rs), not a member of this one
+exclude = ["vendor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+# The same glam Bevy 0.19 uses, so kh_core::Vec3 and bevy::math::Vec3 are one type in kh-app.
+glam = "0.32"
+
+# Release is what setup/setup.js builds. Tuned for build time, not for the last few percent: no LTO, parallel
+# codegen, incremental, no debug info.
+[profile.release]
+opt-level = 3
+lto = "off"
+codegen-units = 16
+incremental = true
+debug = false
+strip = "debuginfo"
+
+# `cargo test` builds in dev: keep our crates quick to compile and the dependencies fast to run.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+# Elden Ring 2.7.2.0 (2026-10-21 patch): the pinned SDK (Dasaav-dsv/fromsoftware-rs rev 79266c9, MIT OR Apache-2.0, unchanged
+# otherwise) is vendored with one addition, the 2.7.2.0 RVA table its own binary-mapper produced (vendor/fromsoftware-rs/
+# crates/eldenring/src/rva/rva_ww2720.rs). Both 2.7.1.0 and 2.7.2.0 are served.
+[patch."https://github.com/Dasaav-dsv/fromsoftware-rs.git"]
+eldenring = { path = "vendor/fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "vendor/fromsoftware-rs/crates/shared" }

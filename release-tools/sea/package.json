@@ -1,0 +1,9 @@
+{
+  "name": "kh-x-er-sea-build",
+  "private": true,
+  "description": "Release-build tools of setup.exe (release-tools/make_release.js): postject injects the setup into the pinned node.exe, resedit sets its version information. Not part of the mod; never in a release download.",
+  "devDependencies": {
+    "postject": "1.0.0-alpha.6",
+    "resedit": "3.1.0"
+  }
+}

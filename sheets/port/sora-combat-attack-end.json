@@ -1,0 +1,16 @@
+{"sheet":"sora-combat-attack-end","group":"port","columns":["id","order","condition","action","addr","conf"],"rows":[
+["end_01",1,"always","state+0x234 &= ~0x1000000; slot139(0) weapon effect group off; slot142(0) Body reaction restore","0x141335224","confirmed"],
+["end_02",2,"always","pawn vt+0x1388(0,1,0); level pitch if +0x1F4 & 0x20; skip-CalcVelocity off (vt+0x16D8(0)); MaxWalkSpeed, MaxAcceleration defaults; pawn+0x630 bit 2 = 0","0x14133550F","confirmed"],
+["end_03",3,"queued id != 12","pawn slot 1303 (unison request cleared)","0x141335713","confirmed"],
+["end_04",4,"always","gravity on (vt+0x1728(1))","0x141335720","confirmed"],
+["end_05",5,"not in water, OnGround, +0x16C == 0, !(+0x234 & 4)","SetMovementMode(Walking, bStop = true)","0x14133578B","confirmed"],
+["end_06",6,"not in water, OnGround, +0x234 & 4","SetMovementMode(Falling, bStop = true)","0x14133577E","confirmed"],
+["end_07",7,"not in water, not OnGround","SetMovementMode(Falling, bStop = false); hit landed (+0x234 & 0x2000) ? +0x18C = 0 : pawn+0xE38 = 0.6, pawn+0xE3C = 0.3333","0x141335798","confirmed"],
+["end_08",8,"always","GravityScale = class default (vt+0x1658)","0x1413357ED","confirmed"],
+["end_09",9,"queued is an Attack","chase bit / target / just-guard bit forwarded; counters +0x12C, +0x138 forwarded (zeroed first unless +0x13C & 5)","0x14133582E","confirmed"],
+["end_10",10,"queued is a FireMagic","counters to Magic+0xB8 / +0xC4 (same reset)","0x141335910","confirmed"],
+["end_11",11,"queued id 32 or 162","counters to pawn+0xE1C / +0xE20 (same reset)","0x1413359E6","confirmed"],
+["end_12",12,"any other / none","pawn slot 981(+0x18C > 0): combo memory reset, launch stocks reloaded, command cool-down 0.6 if arg; counters kept only if hit landed && +0x18C <= 0","0x141335A30","confirmed"],
+["end_13",13,"queued is not a guard-hit Guard","reaction command off (slot141(0)); ctrl+0x878 bit 9 = 0","0x141335B3F","confirmed"],
+["end_14",14,"always","cancel driven move (vt+0x22E8); finishEnd -> pawn+0xE60 bit 19 = 1","0x141335B93","confirmed"]
+]}

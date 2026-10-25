@@ -1,0 +1,26 @@
+[
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_hahen02",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_hahen03",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ },
+ {
+  "effect": "/Game/Effects/wep/w_so080/par/vw_so088_fin_zmn0",
+  "used_by": [
+   "command line"
+  ],
+  "priority": null,
+  "categories": []
+ }
+]

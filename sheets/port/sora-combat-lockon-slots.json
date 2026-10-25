@@ -1,0 +1,13 @@
+{"sheet":"sora-combat-lockon-slots","group":"port","columns":["id","slot","vt_offset","address","meaning","evidence"],"rows":[
+["lockon_slot_01",336,"0xA80","0x140F96570","Targetable: comp+0x868 bit 0 && m_bPermissionLockOn && owner valid && owner.vt+0x698()","I"],
+["lockon_slot_02",338,"0xA90","0x140846E10","m_LockonPriority (comp+0x874)","I"],
+["lockon_slot_03",350,"0xAF0","0x140F50950","m_AutoLockOnRange (comp+0x888)","I"],
+["lockon_slot_04",351,"0xAF8","0x140F50C30","m_ShootLockOnRange (comp+0x88C)","I"],
+["lockon_slot_05",354,"0xB10","0x140F28770","m_bRushSuppression (comp+0x898 bit 0)","I"],
+["lockon_slot_06",355,"0xB18","0x140F27A90","m_CloseRange (comp+0x89C)","I"],
+["lockon_slot_07",362,"0xB50","0x140F95CA0","LookAtPosition: owner.vt+0x710(m_ViewTargetIndex) when index >= 0, else Location","I"],
+["lockon_slot_08",369,"0xB88","0x140ACF250","Location: component world location (comp+0x2B0)","I"],
+["lockon_slot_09",93,"0x2E8","0x140F960B0","BeginPlay: register with ATresGameMode vt+0xA78","C"],
+["lockon_slot_10",96,"0x300","0x140F9D100","EndPlay: unregister with ATresGameMode vt+0xA80","C"],
+["lockon_slot_11","-","-","0x140F75F30","Team: comp+0x868 bit 1 ? owner team : comp+0x86C","I"]
+]}

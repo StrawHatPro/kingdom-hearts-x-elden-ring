@@ -1,0 +1,10 @@
+{"sheet":"sora-combat-try-attack","group":"port","columns":["id","state_ids","queueing","writes","addr","conf"],"rows":[
+["try_attack_01","1,2 (3 fallthrough)","SetState","combo carry if pawn+0x10E4 > 0; counter-window upgrade W; bAir = !OnGround; target; pawn+0xE18 = combo","0x1414375F1","confirmed"],
+["try_attack_02","4,5","SetState","as 1 with bAir = 1","0x141437912","confirmed"],
+["try_attack_03","12,13,14,75-90,156,157,159-161,171","PushState","cur+0x143 = 1; next.combo = cur.combo + 1; bAir, target, reach (+0x154), +0x1F0, +0x1F4 bit 0 copied; pawn+0xE18; unison bit","0x141437ADA","confirmed"],
+["try_attack_04","15","SetState","target = stored attacker component; if ctrl+0x8A0 > 0: just-guard bit, forcedKind 0x21/0x23/0x24/0x25, close window","0x141437D5E","confirmed"],
+["try_attack_05","16","SetState","W; bAir; target","0x1414379F6","inferred"],
+["try_attack_06","17","PushState","CounterUsed; bAir; target = dodged attacker; forcedKind = RiskDodge+0xE0; just-guard bit from RiskDodge+0xD8 bit 1","0x141437EFA","confirmed"],
+["try_attack_07","18","PushState","Magic+0xD8 |= 0x10; combo = Magic+0xB4 + 1; bAir = Magic+0xD8 & 1; target","0x141437BEA","confirmed"],
+["try_attack_08","20","PushState","W; bAir; target from AirSlide+0x98; forcedKind = AirSlide+0xB0","0x14143804E","inferred"]
+]}

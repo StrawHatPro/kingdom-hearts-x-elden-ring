@@ -1,0 +1,25 @@
+[package]
+name = "kh-party"
+description = "Donald and Goofy as AI allies, engine-free (glam, std, kh-core): NPC pawns, states, actions, status and progression from KH3's decompiled code. docs/party-port-plan.md stream B; contract docs/party-contracts.md section B."
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[dependencies]
+# (PACKGEN) the generated tables made from KH3 data, read at run time (release builds)
+kh-gendata = { path = "../kh-gendata" }
+glam = { workspace = true }
+kh-core = { path = "../kh-core" }
+# The friends' damage state is UTresNpcState_Damage over UTresAICharState_Damage: the same handlers kh-react implements for enemies (plan 2.7).
+kh-react = { path = "../kh-react" }
+# Stream C's AI traits: kh-party implements `kh_ai::AiBody` (src/ai_body.rs, contract C.2).
+kh-ai = { path = "../kh-ai", optional = true }
+
+[features]
+# `ai`: the `kh_ai::AiBody` adapter (src/ai_body.rs). On by default; off lets kh-party build while kh-ai is mid-edit.
+default = ["ai"]
+ai = ["dep:kh-ai"]
+
+# (party X3D) the feel test (tests/x3d_feel.rs) reads Sora's level-99 loadout sheet to measure his dodge beside Donald's
+[dev-dependencies]
+serde_json = "1"

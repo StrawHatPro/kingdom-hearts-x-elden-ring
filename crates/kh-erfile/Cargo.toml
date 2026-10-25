@@ -1,0 +1,9 @@
+[package]
+name = "kh-erfile"
+description = "(ZDRAW) Elden Ring's own character models read from the game's files, READ-ONLY: the BHD5/BDT archives (RSA header with the key the exe carries, AES ranges), DCX (KRAK through the game's own oo2core_6_win64.dll), BND4 and FLVER2 (bones, skinned meshes, triangles). No game memory, no writes. build/sora_tmp/er/IMPL_ZDRAW_STATE.md."
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+glam = { workspace = true }
+num-bigint = "0.4"

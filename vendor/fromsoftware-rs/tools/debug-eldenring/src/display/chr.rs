@@ -1,0 +1,765 @@
+use std::str::FromStr;
+
+use hudhook::imgui::{TableColumnSetup, Ui};
+
+use debug::UiExt;
+use eldenring::cs::{
+    ChrAsm, ChrAsmEquipEntries, ChrAsmEquipment, ChrAsmSlot, ChrIns, ChrInsExt, ChrInsSubclassMut,
+    EquipGameData, EquipInventoryData, EquipItemData, EquipMagicData, InventoryItemsData,
+    ItemReplenishStateTracker, PlayerDataAttackRating, PlayerGameData, PlayerIns,
+};
+use fromsoftware_shared::NonEmptyIteratorExt;
+
+use crate::display::{DebugDisplay, DisplayUiExt, StatefulDebugDisplay};
+
+#[derive(Default)]
+pub struct ChrInsState {
+    new_speffect: String,
+}
+
+impl StatefulDebugDisplay for PlayerIns {
+    type State = ChrInsState;
+
+    fn render_debug_mut(&mut self, ui: &Ui, state: &mut Self::State) {
+        chr_ins_common_debug(&mut self.chr_ins, ui, state);
+
+        ui.nested("ChrAsm", &self.chr_asm);
+        ui.nested("PlayerGameData", unsafe { self.player_game_data.as_ref() });
+        ui.nested(
+            "Session Player Entry",
+            self.session_manager_player_entry.as_ref(),
+        );
+        ui.display(
+            "Invincibility timer",
+            self.invincibility_timer_for_net_player,
+        );
+        ui.display("Locked on enemy", self.locked_on_enemy);
+        ui.display("Block position", self.block_position);
+    }
+}
+
+impl DebugDisplay for ChrAsm {
+    fn render_debug(&self, ui: &Ui) {
+        ui.nested("ChrAsmEquipment", &self.equipment);
+        ui.header("GaitemHandles", || {
+            ui.table(
+                "chr-asm-gaitem-handles",
+                [
+                    TableColumnSetup::new("Index"),
+                    TableColumnSetup::new("Slot"),
+                    TableColumnSetup::new("Gaitem Handle"),
+                ],
+                self.gaitem_handles.iter(),
+                |ui, i, e| {
+                    ui.table_next_column();
+                    ui.text(format!("{i}"));
+
+                    ui.table_next_column();
+                    match ChrAsmSlot::from_index(i as u32) {
+                        Ok(slot) => ui.text(format!("{slot:?}")),
+                        Err(err) => ui.text(err.to_string()),
+                    }
+
+                    ui.table_next_column();
+                    ui.text(e.to_string());
+                },
+            );
+        });
+
+        ui.header("Param IDs", || {
+            ui.table(
+                "chr-asm-param-ids",
+                [
+                    TableColumnSetup::new("Index"),
+                    TableColumnSetup::new("Slot"),
+                    TableColumnSetup::new("Param ID"),
+                ],
+                self.equipment_param_ids.iter(),
+                |ui, i, e| {
+                    ui.table_next_column();
+                    ui.text(format!("{i}"));
+
+                    ui.table_next_column();
+                    match ChrAsmSlot::from_index(i as u32) {
+                        Ok(slot) => ui.text(format!("{slot:?}")),
+                        Err(err) => ui.text(err.to_string()),
+                    }
+
+                    ui.table_next_column();
+                    ui.text(e.to_string());
+                },
+            );
+        });
+    }
+}
+
+impl DebugDisplay for ChrAsmEquipment {
+    fn render_debug(&self, ui: &Ui) {
+        ui.debug("Arm style", self.arm_style);
+        ui.debug(
+            "Left-hand weapon slot",
+            self.selected_slots.left_weapon_slot,
+        );
+        ui.debug(
+            "Right-hand weapon slot",
+            self.selected_slots.right_weapon_slot,
+        );
+        ui.debug("Left-hand arrow slot", self.selected_slots.left_arrow_slot);
+        ui.debug(
+            "Right-hand arrow slot",
+            self.selected_slots.right_arrow_slot,
+        );
+        ui.debug("Left-hand bolt slot", self.selected_slots.left_bolt_slot);
+        ui.debug("Right-hand bolt slot", self.selected_slots.right_bolt_slot);
+    }
+}
+
+impl DebugDisplay for ChrAsmEquipEntries {
+    fn render_debug(&self, ui: &Ui) {
+        ui.debug("Primary Left weapon", self.weapon_primary_left.param_id());
+        ui.debug("Primary Right weapon", self.weapon_primary_right.param_id());
+        ui.debug(
+            "Secondary Left weapon",
+            self.weapon_secondary_left.param_id(),
+        );
+        ui.debug(
+            "Secondary Right weapon",
+            self.weapon_secondary_right.param_id(),
+        );
+        ui.debug("Tertiary Left weapon", self.weapon_tertiary_left.param_id());
+        ui.debug(
+            "Tertiary Right weapon",
+            self.weapon_tertiary_right.param_id(),
+        );
+
+        ui.debug("Primary Left arrow", self.arrow_primary.param_id());
+        ui.debug("Primary Left bolt", self.bolt_primary.param_id());
+        ui.debug("Secondary Left arrow", self.arrow_secondary.param_id());
+        ui.debug("Secondary Left bolt", self.bolt_secondary.param_id());
+        ui.debug("Tertiary Left arrow", self.arrow_tertiary.param_id());
+        ui.debug("Tertiary Left bolt", self.bolt_tertiary.param_id());
+
+        ui.debug("Protector Head", self.protector_head.param_id());
+        ui.debug("Protector Chest", self.protector_chest.param_id());
+        ui.debug("Protector Hands", self.protector_hands.param_id());
+        ui.debug("Protector Legs", self.protector_legs.param_id());
+
+        ui.list("Accessories", self.accessories.iter(), |ui, i, item| {
+            ui.text(format!("{}: {:?}", i, item));
+        });
+
+        ui.text(format!("Covenant: {:?}", self.covenant.param_id()));
+
+        ui.list("Quick Items", self.quick_tems.iter(), |ui, index, item| {
+            ui.text(format!("{}: {:?}", index, item));
+        });
+
+        ui.list("Pouch", self.pouch.iter(), |ui, i, item| {
+            ui.text(format!("{}: {:?}", i, item));
+        });
+    }
+}
+
+impl DebugDisplay for PlayerGameData {
+    fn render_debug(&self, ui: &Ui) {
+        ui.display("Player ID", self.player_id);
+        ui.display("Character ID", self.character_id);
+        ui.display("Character Event ID", self.character_event_id);
+        ui.display("Game Data Man Index", self.game_data_man_index);
+        ui.debug("Character Type", self.chr_type);
+        ui.debug("Multiplay Role", self.multiplay_role);
+        ui.debug("Sell Region", self.sell_region);
+        ui.display("Is My World", self.is_my_world);
+        ui.display("Is Main Player", self.is_main_player);
+        ui.display("Is Voice Chat Enabled", self.is_voice_chat_enabled);
+
+        ui.header("Character", || {
+            ui.display("Level", self.level);
+            ui.display("Gender", self.gender);
+            ui.display("Archetype", self.archetype);
+            ui.display("Voice Type", self.voice_type);
+            ui.display("Starting Gift", self.starting_gift);
+            ui.display("Vow Type", self.vow_type);
+            ui.display("Unlocked Magic Slots", self.unlocked_magic_slots);
+            ui.display("Unlocked Talisman Slots", self.unlocked_talisman_slots);
+            ui.display("Scadutree Blessing", self.scadutree_blessing);
+            ui.display("Reversed Spirit Ash", self.reversed_spirit_ash);
+        });
+
+        ui.header("Resources", || {
+            ui.display(
+                "HP",
+                format!(
+                    "{} / {} (base {})",
+                    self.current_hp, self.current_max_hp, self.base_max_hp
+                ),
+            );
+            ui.display(
+                "FP",
+                format!(
+                    "{} / {} (base {})",
+                    self.current_fp, self.current_max_fp, self.base_max_fp
+                ),
+            );
+            ui.display(
+                "Stamina",
+                format!(
+                    "{} / {} (base {})",
+                    self.current_stamina, self.current_max_stamina, self.base_max_stamina
+                ),
+            );
+            ui.display("HP Flask Max", self.max_hp_flask);
+            ui.display("HP Estus Rate", self.hp_estus_rate);
+            ui.display("HP Estus Additional", self.hp_estus_additional);
+            ui.display("FP Flask Max", self.max_fp_flask);
+            ui.display("FP Estus Rate", self.fp_estus_rate);
+            ui.display("FP Estus Additional", self.fp_estus_additional);
+        });
+
+        ui.header("Attributes", || {
+            ui.display(
+                "Vigor",
+                format!("{} (effective {})", self.vigor, self.effective_vigor),
+            );
+            ui.display(
+                "Mind",
+                format!("{} (effective {})", self.mind, self.effective_mind),
+            );
+            ui.display(
+                "Endurance",
+                format!(
+                    "{} (effective {})",
+                    self.endurance, self.effective_endurance
+                ),
+            );
+            ui.display(
+                "Strength",
+                format!("{} (effective {})", self.strength, self.effective_strength),
+            );
+            ui.display(
+                "Dexterity",
+                format!(
+                    "{} (effective {})",
+                    self.dexterity, self.effective_dexterity
+                ),
+            );
+            ui.display(
+                "Intelligence",
+                format!(
+                    "{} (effective {})",
+                    self.intelligence, self.effective_intelligence
+                ),
+            );
+            ui.display(
+                "Faith",
+                format!("{} (effective {})", self.faith, self.effective_faith),
+            );
+            ui.display(
+                "Arcane",
+                format!("{} (effective {})", self.arcane, self.effective_arcane),
+            );
+            ui.display("Effective Vitality", self.effective_vitality);
+        });
+
+        ui.header("Combat", || {
+            ui.display("Poise", self.poise);
+            ui.display("Discovery", self.discovery);
+            ui.display("Max Equip Load", self.max_equip_load);
+            ui.display("Base Durability", self.base_durability);
+            ui.display("Damage Negation Physical", self.damage_negation_physical);
+            ui.display("Damage Negation Strike", self.damage_negation_strike);
+            ui.display("Damage Negation Slash", self.damage_negation_slash);
+            ui.display("Damage Negation Pierce", self.damage_negation_pierce);
+            ui.display("Damage Negation Magic", self.damage_negation_magic);
+            ui.display("Damage Negation Fire", self.damage_negation_fire);
+            ui.display("Damage Negation Lightning", self.damage_negation_lightning);
+            ui.display("Damage Negation Holy", self.damage_negation_holy);
+            ui.nested("Attack Rating", &self.attack_rating);
+        });
+
+        ui.header("Status Resistances", || {
+            const NAMES: [&str; 7] = [
+                "Poison", "Rot", "Bleed", "Death", "Frost", "Sleep", "Madness",
+            ];
+            let base = [
+                self.poison_resist,
+                self.rot_resist,
+                self.bleed_resist,
+                self.death_resist,
+                self.frost_resist,
+                self.sleep_resist,
+                self.madness_resist,
+            ];
+            for (i, name) in NAMES.iter().enumerate() {
+                ui.display(
+                    *name,
+                    format!(
+                        "{} / {} (resist {})",
+                        self.resistance_gauges[i], self.resistance_gauge_max[i], base[i]
+                    ),
+                );
+            }
+            ui.display("Resist Curse Item Count", self.resist_curse_item_count);
+            ui.display("Pending Block Clear Bonus", self.pending_block_clear_bonus);
+        });
+
+        ui.header("Status Proc Timers", || {
+            const NAMES: [&str; 7] = [
+                "Poison", "Rot", "Bleed", "Death", "Frost", "Sleep", "Madness",
+            ];
+            for (i, name) in NAMES.iter().enumerate() {
+                ui.display(
+                    *name,
+                    format!(
+                        "{:.2} / {:.2}",
+                        self.proc_status_timers[i], self.proc_status_timer_max[i]
+                    ),
+                );
+            }
+        });
+
+        ui.header("Progression", || {
+            ui.display("Rune Count", self.rune_count);
+            ui.display("Rune Memory", self.rune_memory);
+            ui.display("Reached Max Rune Memory", self.reached_max_rune_memory);
+            ui.display("Base Hero Point", self.base_hero_point);
+            ui.display("Base Hero Point 2", self.base_hero_point_2);
+            ui.display("Matching Weapon Level", self.matching_weapon_level);
+            ui.display(
+                "Matchmaking Spirit Ashes Level",
+                self.matchmaking_spirit_ashes_level,
+            );
+        });
+
+        ui.header("Multiplayer", || {
+            ui.debug(
+                "Furlcalling Finger Active",
+                self.furlcalling_finger_remedy_active,
+            );
+            ui.debug("Rune Arc Active", self.rune_arc_active);
+            ui.debug("White Ring Active", self.white_ring_active);
+            ui.debug("Blue Ring Active", self.blue_ring_active);
+            ui.display("Total Summon Count", self.total_summon_count);
+            ui.display("Coop Success Count", self.coop_success_count);
+            ui.display("Invasions Success Count", self.invasions_success_count);
+            ui.display("Solo Breakin Point", self.solo_breakin_point);
+            ui.display("Invaders Killed", self.invaders_killed);
+            ui.display(
+                "Is Using Festering Bloody Finger",
+                self.is_using_festering_bloody_finger,
+            );
+            ui.debug("Used Invasion Item Type", self.used_invasion_item_type);
+            ui.display("Mount Handle", self.mount_handle);
+            ui.display("Sign Cooldown Enabled", self.sign_cooldown_enabled);
+        });
+
+        ui.header("Quickmatch", || {
+            ui.display("Kill Count", self.quickmatch_kill_count);
+            ui.display("Team", self.quick_match_team);
+            ui.display("Desired Team", self.quick_match_desired_team);
+            ui.display("Is Host", self.is_quick_match_host);
+            ui.display("Map Load Ready", self.quick_match_map_load_ready);
+            ui.display("Duel Points", self.quick_match_duel_points);
+            ui.display(
+                "United Combat Points",
+                self.quick_match_united_combat_points,
+            );
+            ui.display("Spirit Ashes Points", self.quick_match_spirit_ashes_points);
+            ui.display("Duel Rank", self.quickmatch_duel_rank);
+            ui.display("United Combat Rank", self.quickmatch_united_combat_rank);
+            ui.display("Spirit Ashes Rank", self.quickmatch_spirit_ashes_rank);
+        });
+
+        ui.nested("EquipGameData", &self.equipment);
+        ui.nested_opt("Storage Box EquipInventoryData", self.storage.as_ref());
+    }
+}
+
+impl DebugDisplay for PlayerDataAttackRating {
+    fn render_debug(&self, ui: &Ui) {
+        ui.display("Left Primary", self.left_armament_primary);
+        ui.display("Right Primary", self.right_armament_primary);
+        ui.display("Left Secondary", self.left_armament_secondary);
+        ui.display("Right Secondary", self.right_armament_secondary);
+        ui.display("Left Tertiary", self.left_armament_tertiary);
+        ui.display("Right Tertiary", self.right_armament_tertiary);
+    }
+}
+
+impl DebugDisplay for EquipGameData {
+    fn render_debug(&self, ui: &Ui) {
+        ui.nested("EquipInventoryData", &self.equip_inventory_data);
+        ui.nested("EquipMagicData", &self.equip_magic_data);
+        ui.nested("EquipItemData", &self.equip_item_data);
+        ui.nested_opt(
+            "Item Replenish State Tracker",
+            self.item_replenish_state_tracker.as_ref(),
+        );
+    }
+}
+
+impl DebugDisplay for ItemReplenishStateTracker {
+    fn render_debug(&self, ui: &Ui) {
+        ui.table(
+            "item-replenish-state-tracker-entries",
+            [
+                TableColumnSetup::new("Index"),
+                TableColumnSetup::new("Item ID"),
+                TableColumnSetup::new("Auto Replenish"),
+            ],
+            self.entries().iter(),
+            |ui, index, item| {
+                ui.table_next_column();
+                ui.text(index.to_string());
+
+                ui.table_next_column();
+                ui.text(format!("{:?}", item.item_id));
+
+                ui.table_next_column();
+                ui.text(item.auto_replenish.to_string());
+            },
+        );
+        ui.text(format!("Count: {}", self.count));
+    }
+}
+
+impl DebugDisplay for EquipMagicData {
+    fn render_debug(&self, ui: &Ui) {
+        ui.text(format!("Selected slot: {}", self.selected_slot));
+
+        ui.header("EquipDataItem", || {
+            ui.table(
+                "equip-magic-data-entries",
+                [
+                    TableColumnSetup::new("Index"),
+                    TableColumnSetup::new("Param ID"),
+                    TableColumnSetup::new("Charges"),
+                ],
+                self.entries.iter(),
+                |ui, index, item| {
+                    ui.table_next_column();
+                    ui.text(index.to_string());
+
+                    ui.table_next_column();
+                    ui.text(item.param_id.to_string());
+
+                    ui.table_next_column();
+                    ui.text(item.charges.to_string());
+                },
+            );
+        });
+    }
+}
+
+impl DebugDisplay for EquipItemData {
+    fn render_debug(&self, ui: &Ui) {
+        ui.display("Selected quick slot", self.selected_quick_slot);
+
+        ui.header("Quick slots", || {
+            ui.table(
+                "equip-item-data-quick-slots",
+                [
+                    TableColumnSetup::new("Index"),
+                    TableColumnSetup::new("Gaitem Handle"),
+                    TableColumnSetup::new("Inventory Index"),
+                ],
+                self.quick_slots.iter(),
+                |ui, index, item| {
+                    ui.table_next_column();
+                    ui.text(index.to_string());
+                    ui.align_text_to_frame_padding();
+
+                    ui.table_next_column();
+                    ui.text(item.gaitem_handle.to_string());
+
+                    ui.table_next_column();
+                    ui.text(item.index.to_string());
+                },
+            );
+        });
+
+        ui.header("Pouch slots", || {
+            ui.table(
+                "equip-item-data-pouch-slots",
+                [
+                    TableColumnSetup::new("Index"),
+                    TableColumnSetup::new("Gaitem Handle"),
+                    TableColumnSetup::new("Inventory Index"),
+                ],
+                self.pouch_slots.iter(),
+                |ui, index, item| {
+                    ui.table_next_column();
+                    ui.text(index.to_string());
+
+                    ui.table_next_column();
+                    ui.text(item.gaitem_handle.to_string());
+
+                    ui.table_next_column();
+                    ui.text(item.index.to_string());
+                },
+            );
+        });
+
+        ui.text(format!(
+            "Greatrune: {}, index: {}",
+            self.great_rune.gaitem_handle, self.great_rune.index
+        ));
+
+        ui.nested("Equipment Entries", &self.equip_entries);
+        ui.display("Selected Quick Slot", self.selected_quick_slot);
+    }
+}
+
+impl DebugDisplay for EquipInventoryData {
+    fn render_debug(&self, ui: &Ui) {
+        ui.nested("InventoryItemsData", &self.items_data);
+        ui.display("Total item entry count", self.total_item_entry_count);
+        ui.display("Next sort ID", self.next_sort_id);
+        ui.display("Unlimited Consumables", self.unlimited_consumables);
+        ui.display("Limited Consumables", self.limited_pots);
+
+        ui.list(
+            "Recent Items Indecies",
+            self.recent_item_indices.iter(),
+            |ui, i, item| {
+                ui.text(format!("{}: {:?}", i, item));
+            },
+        );
+    }
+}
+
+impl DebugDisplay for InventoryItemsData {
+    fn render_debug(&self, ui: &Ui) {
+        let normal_items = self.normal_entries().iter().non_empty().collect::<Vec<_>>();
+        let label = format!(
+            "Normal Items ({}/{})",
+            normal_items.len(),
+            self.normal_items_capacity
+        );
+        ui.header(&label, || {
+            ui.table(
+                "inventory-items-data-normal-items",
+                [
+                    TableColumnSetup::new("Index"),
+                    TableColumnSetup::new("Gaitem Handle"),
+                    TableColumnSetup::new("Item ID"),
+                    TableColumnSetup::new("Quantity"),
+                    TableColumnSetup::new("Display ID"),
+                    TableColumnSetup::new("Is New"),
+                ],
+                normal_items.iter(),
+                |ui, index, item| {
+                    ui.table_next_column();
+                    ui.text(index.to_string());
+
+                    ui.table_next_column();
+                    ui.text(item.gaitem_handle.to_string());
+
+                    ui.table_next_column();
+                    ui.text(format!("{:?}", item.item_id));
+
+                    ui.table_next_column();
+                    ui.text(item.quantity.to_string());
+
+                    ui.table_next_column();
+                    ui.text(item.sort_id.to_string());
+
+                    ui.table_next_column();
+                    ui.text(item.is_new.to_string());
+                },
+            );
+        });
+
+        let label = format!(
+            "Key Items ({}/{})",
+            self.key_items_len, self.key_items_capacity
+        );
+        ui.header(&label, || {
+            ui.table(
+                "inventory-items-data-key-items",
+                [
+                    TableColumnSetup::new("Index"),
+                    TableColumnSetup::new("Gaitem Handle"),
+                    TableColumnSetup::new("Item ID"),
+                    TableColumnSetup::new("Quantity"),
+                    TableColumnSetup::new("Display ID"),
+                    TableColumnSetup::new("Is New"),
+                ],
+                self.key_entries().iter().non_empty(),
+                |ui, index, item| {
+                    ui.table_next_column();
+                    ui.text(index.to_string());
+
+                    ui.table_next_column();
+                    ui.text(item.gaitem_handle.to_string());
+
+                    ui.table_next_column();
+                    ui.text(format!("{:?}", item.item_id));
+
+                    ui.table_next_column();
+                    ui.text(item.quantity.to_string());
+
+                    ui.table_next_column();
+                    ui.text(item.sort_id.to_string());
+
+                    ui.table_next_column();
+                    ui.text(item.is_new.to_string());
+                },
+            );
+        });
+
+        let label = format!(
+            "Multiplay Key Items ({}/{})",
+            self.multiplay_key_items_len, self.multiplay_key_items_capacity
+        );
+        ui.header(&label, || {
+            ui.table(
+                "inventory-items-data-multiplay-key-items",
+                [
+                    TableColumnSetup::new("Index"),
+                    TableColumnSetup::new("Gaitem Handle"),
+                    TableColumnSetup::new("Item ID"),
+                    TableColumnSetup::new("Quantity"),
+                    TableColumnSetup::new("Display ID"),
+                ],
+                self.multiplay_key_entries().iter().non_empty(),
+                |ui, index, item| {
+                    ui.table_next_column();
+                    ui.text(index.to_string());
+
+                    ui.table_next_column();
+                    ui.text(item.gaitem_handle.to_string());
+
+                    ui.table_next_column();
+                    ui.text(format!("{:?}", item.item_id));
+
+                    ui.table_next_column();
+                    ui.text(item.quantity.to_string());
+
+                    ui.table_next_column();
+                    ui.text(item.sort_id.to_string());
+                },
+            );
+        });
+        ui.header("Item ID Map", || {
+            ui.table(
+                "inventory-items-data-item-map",
+                [
+                    TableColumnSetup::new("Index"),
+                    TableColumnSetup::new("Is Free"),
+                    TableColumnSetup::new("Item Id"),
+                    TableColumnSetup::new("Item Slot"),
+                    TableColumnSetup::new("Next Index"),
+                ],
+                unsafe { self.item_id_mapping.as_slice() },
+                |ui, index, item| {
+                    ui.table_next_column();
+                    ui.text(index.to_string());
+
+                    ui.table_next_column();
+                    ui.text(format!("{:?}", item.is_free()));
+
+                    ui.table_next_column();
+                    ui.text(format!("{:?}", item.item_id));
+
+                    ui.table_next_column();
+                    ui.text(item.item_slot().to_string());
+
+                    ui.table_next_column();
+                    ui.text(item.next_mapping_item().to_string());
+                },
+            );
+        });
+        ui.list(
+            "Item ID Indices",
+            self.item_id_mapping_indices.iter(),
+            |ui, i, item| {
+                ui.text(format!("{}: {:?}", i, item));
+            },
+        );
+    }
+}
+
+impl StatefulDebugDisplay for ChrIns {
+    type State = ChrInsState;
+
+    fn render_debug_mut(&mut self, ui: &Ui, state: &mut Self::State) {
+        match ChrInsSubclassMut::from(self) {
+            ChrInsSubclassMut::PlayerIns(player) => player.render_debug_mut(ui, state),
+            mut chr_ins => chr_ins_common_debug(chr_ins.superclass_mut(), ui, state),
+        }
+    }
+}
+
+fn chr_ins_common_debug(chr_ins: &mut ChrIns, ui: &Ui, state: &mut ChrInsState) {
+    ui.display("Team", chr_ins.team_type);
+    ui.debug("Chr Type", chr_ins.chr_type);
+    ui.display("Field Ins Handle", chr_ins.field_ins_handle);
+    ui.display("P2P Entity Handle", &chr_ins.p2p_entity_handle);
+
+    ui.display("Block ID", chr_ins.block_id);
+    ui.display("Block ID Override", chr_ins.block_id_override);
+    ui.display("Block ID Origin", chr_ins.block_origin);
+    ui.display("Block ID Origin Override", chr_ins.block_origin_override);
+
+    ui.nested("Chunk Position", chr_ins.chunk_position);
+    ui.nested("Initial Position", chr_ins.initial_position);
+    ui.nested("Initial Orientation", chr_ins.initial_orientation_euler);
+
+    ui.display("Last hit by", chr_ins.last_hit_by);
+    ui.debug("TAE use item", chr_ins.tae_queued_use_item);
+
+    ui.header("Special Effect", || {
+        ui.input_text("", &mut state.new_speffect).build();
+        ui.same_line();
+        let id = i32::from_str(&state.new_speffect);
+        ui.disabled(id.is_err(), || {
+            if ui.button("Apply") {
+                chr_ins.apply_speffect(id.unwrap(), false);
+            }
+        });
+
+        let mut remove = None;
+        ui.table(
+            "chr-ins-special-effects",
+            [
+                TableColumnSetup::new("ID"),
+                TableColumnSetup::new("Timer"),
+                TableColumnSetup::new("Removal timer"),
+                TableColumnSetup::new("Duration"),
+                TableColumnSetup::new("Interval Timer"),
+                TableColumnSetup::new(""),
+            ],
+            chr_ins.special_effect.entries(),
+            |ui, _i, entry| {
+                ui.table_next_column();
+                ui.text(format!("{}", entry.param_id));
+
+                ui.table_next_column();
+                ui.text(format!("{}", entry.interval_timer));
+
+                ui.table_next_column();
+                ui.text(format!("{}", entry.removal_timer));
+
+                ui.table_next_column();
+                ui.text(format!("{}", entry.duration));
+
+                ui.table_next_column();
+                ui.text(format!("{}", entry.interval_timer));
+
+                ui.table_next_column();
+                if ui.button("Remove") {
+                    // We can't directly call `chr_ins.remove_speffect` here
+                    // because `chr_ins` is already borrowed for the iteration.
+                    remove = Some(entry.param_id);
+                }
+            },
+        );
+
+        if let Some(speffect) = remove {
+            chr_ins.remove_speffect(speffect);
+        }
+    });
+
+    ui.nested("Modules", &chr_ins.modules);
+}

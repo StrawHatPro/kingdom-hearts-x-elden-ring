@@ -1,0 +1,144 @@
+{
+ "sheet": "party-states",
+ "group": "port",
+ "columns": [
+  "id",
+  "class",
+  "ctor",
+  "what"
+ ],
+ "rows": [
+  [
+   "Idle",
+   "TresNpcState_Idle",
+   "0x141242140",
+   "idle / idle break / battle stance"
+  ],
+  [
+   "Move",
+   "TresNpcState_Run",
+   "0x14042FBE0",
+   "AI move under a locomotion definition (UTresAICharState_Run ctor 0x14042FBE0)"
+  ],
+  [
+   "Turn",
+   "TresNpcState_Turn",
+   "0x14042FCA0",
+   "turn in place (UTresAICharState_Turn ctor)"
+  ],
+  [
+   "Jump",
+   "TresNpcState_Jump",
+   "0x14123FFB0",
+   "jump id 3 (ctor; Init 0x141247E10, Begin 0x1412422F0, Tick 0x14124D680, End 0x1412453E0): registered by ATresNpcPawnBase 0x141254FF0 but never requested for the friends (RequestJump 0x14054C2E0 takes 0x2B first): B5 NavLinkJump"
+  ],
+  [
+   "NavLinkJump",
+   "TresAICharState_NavLinkJumpCodeDriven",
+   "0x14042FA70",
+   "B5: the friends' jump / fall, TSID_STATE_NAVLINK_JUMP 0x2B (vtable 0x145C963E8: Init 0x14043E470, Begin 0x140433610, Tick 0x1404408A0, End 0x140435040, sub-steps 0x140459D70, air phase 0x14045A5E0, air probes 0x140446070, launch 0x140433FD0, stuck 0x140438BD0); RequestJump iface vt+0x510 0x14054C2E0 (fall, vt+0x398 0x140458D00), JumpCodeDriven vt+0x3A8 0x14054C6A0 (target, vt+0x390 0x140459150); clips 0x141263A00"
+  ],
+  [
+   "Climbing",
+   "TresNpcState_Climbing",
+   "0x14123F7F0",
+   "B5: the vault, id 7 (vtable 0x146837448: Init 0x141247B10, Begin 0x141241270, Tick 0x141249650, End 0x141244460, CanChange 0x1412405A0); request iface vt+0x538 0x141276490 from the Run / SlopeSlide / SuperSlide ticks with the NPC probe FUN_140636BF0; clips ClimbingR / MR / H, SonicSlideClimbing(M / H), LightLandR / L"
+  ],
+  [
+   "Dangle",
+   "TresNpcState_Dangle",
+   "0x14123F870",
+   "B5: the hang, id 6 over UTresCharState_Dangle (Init 0x14150DEA0, Begin 0x141508DE0, Tick 0x14150F220, End 0x14150BB80); request iface vt+0x208 0x141276580 from the jump air probe 0x140446070 after a ledge-aimed launch 0x140433FD0; clips GripStart / GripLoop / GripRise"
+  ],
+  [
+   "Action",
+   "TresAICharState_Action",
+   "0x14042F390",
+   "one action definition running (ctor); AttackBase tick 0x1404404B0"
+  ],
+  [
+   "PlayMotion",
+   "TresAICharState_PlayMotion",
+   "0x14042FAF0",
+   "play a named motion (ctor)"
+  ],
+  [
+   "Damage",
+   "TresNpcState_Damage",
+   "0x14123F830",
+   "damage reaction over UTresAICharState_Damage (kh-react with FriendDamageCommonParam)"
+  ],
+  [
+   "Reflect",
+   "TresNpcState_Reflect",
+   "0x141240040",
+   "attack repelled (ctor); tick 0x14124F080"
+  ],
+  [
+   "BadStatStun",
+   "TresNpcState_BadStatStun",
+   "0x14123F770",
+   "stun"
+  ],
+  [
+   "BadStatBurn",
+   "TresNpcState_BadStatBurn",
+   "0x14123F630",
+   "burn"
+  ],
+  [
+   "BadStatSneeze",
+   "TresNpcState_BadStatSneeze",
+   "0x14123F6B0",
+   "sneeze"
+  ],
+  [
+   "Die",
+   "TresNpcState_Die",
+   "0x14123F8B0",
+   "KO: Begin 0x1412413C0, Tick 0x141249F80, End 0x141244670, anim names 0x141246E00 (BadStatStun* clips)"
+  ],
+  [
+   "UseItem",
+   "TresNpcState_UseItem",
+   "0x141255F30",
+   "item use (anim names 0x141263D30: ItemUse / ItemAirUse)"
+  ],
+  [
+   "Warp",
+   "TresNpcState_Warp",
+   "0x141255F70",
+   "warp to the EQS point near Sora"
+  ],
+  [
+   "SlopeSlide",
+   "TresNpcState_SlopeSlide",
+   "0x141266A80",
+   "B4: slope slide (Init 0x141266A80, Begin 0x14125B8A0, Tick 0x14126C950, End 0x14125E310); state id 10, requested by the Run tick 0x140442430 through iface vt+0x520 0x141276B10"
+  ],
+  [
+   "SuperSlide",
+   "TresNpcState_SuperSlide",
+   "0x141266B90",
+   "B4: super slide (Init 0x141266B90, Begin 0x14125BA50, Tick 0x14126D3B0, End 0x14125E460); id 0x15, requested by iface vt+0x240 0x141271170 -> vt+0x248 0x141276B70"
+  ],
+  [
+   "RailSlide",
+   "TresNpcState_RailSlide",
+   "0x141247F00",
+   "B4: rail slide over UTresCharState_RailSlide (Init 0x141247F00, Begin 0x1412423C0, Tick 0x14124E890 -> base 0x141510EE0, End 0x141245430, leave slot 145 0x141252210); id 0x16"
+  ],
+  [
+   "Hopping",
+   "TresNpcState_Hopping",
+   "0x141247D60",
+   "B4: hop points (Init 0x141247D60, Begin 0x141242050, Tick 0x14124C010, End 0x141245270); id 9, requested by iface vt+0x530 0x141276660"
+  ],
+  [
+   "SituationAction",
+   "TresNpcState_SituationAction",
+   "0x141247F40",
+   "B4: pawn situation 6 / 8 / 9 -> inner TalkPointWait / GimmickWait / NpcMotionPlay (Init 0x141247F40 -> 0x141247430, Begin 0x141242570, Tick 0x14124F1E0, End 0x1412454B0); Goofy n_ex002 override situation 7 GCoop (0x1411BD5D0 / 0x1411CB950 -> 0x1411CB9F0); id 0x93"
+  ]
+ ]
+}

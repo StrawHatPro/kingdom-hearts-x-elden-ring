@@ -1,0 +1,87 @@
+// Writes sheets/port/sora-enemy-reaction.json: the constants of the ENEMY side of a hit (what a generic KH3 enemy
+// physically does when one of Sora's hits lands), docs/sora-enemy-reaction-spec.md. Authored rows: the values are the
+// class default object of /Game/Blueprints/Enemy/EnemyCommonParam (a blueprint child of TresEnemyCommonParam :
+// TresDamageCommonParam) laid over the two native constructors (0x14064C130, 0x140DC4270), plus the constants of the
+// damage-state handlers of UTresAICharState_Damage / UTresEnemyState_Damage read in the disassembly. Evidence
+// listings and the scan tools: build/sora_tmp/react/. Unknown cells are null, never guessed.
+//
+//   node tools/sora_enemy_reaction_sheet.js          write the sheet
+//   node tools/sora_enemy_reaction_sheet.js --check  exit 1 if the sheet on disk differs from the rows below
+const fs = require('fs'), path = require('path');
+const VERSION = '1.0.0';
+const R = path.resolve(__dirname, '..');
+const BP = 'assets_converted/packages/KINGDOM HEARTS III/Content/Blueprints/Enemy/EnemyCommonParam.uasset.json Default__EnemyCommonParam_C';
+const NAT = 'UTresDamageCommonParam ctor 0x14064C130 (the asset does not set it)';
+// id, value, unit, source, evidence, ref_addr, ref_conf, note
+const ROWS = [
+// ---- TresDamageCommonParam as an enemy reads it (getter = state slot; scale = info.m_DamagePowerScale, slot 176)
+['small.power', 550, 'cm/s', BP + ' m_SmallDamagePower (+0x40)', 'slot 142: x power scale; horizontal speed of a SMALL reaction along the knock direction', '0x14043D230', 'confirmed', 'no param object: 750'],
+['small.brake', 0.95, '-', NAT + ' m_SmallDamageBrake (+0x44)', 'slot 143: velocity x brake^(dt x 60) every tick of the reaction (XY through 0x140431E10, Z while gravity is off); info.m_DamageBrakeParam is NOT read by the AI state', '0x14043D200', 'confirmed', 'the player uses 0.9; e_ex026 overrides 0.96'],
+['small.start_falling_speed', 150, 'cm/s', BP + ' m_SmallDamageStartFallingSpeed (+0x48)', 'slot 145: gravity comes back when the horizontal speed is at or below it', '0x14043D280', 'confirmed', 'e_ex367 overrides 50'],
+['small.air_velocity_z', 200, 'cm/s', BP + ' m_AirSmallDamageVelocityZ (+0x4C)', 'slot 146: 0 on the ground; the upward speed an airborne victim gets from every SMALL hit', '0x140439D50', 'confirmed', 'the player value is 0: this is the juggle'],
+['blow.ground_power', 1500, 'cm/s', BP + ' m_BlowDamagePower (+0x54)', 'slot 147, victim on the ground: x power scale', '0x14043A4C0', 'confirmed', 'e_ex322 overrides 2500'],
+['blow.ground_velocity_z', 0, 'cm/s', BP + ' m_BlowDamageVelocityZ (+0x50)', 'slot 148, victim on the ground', '0x14043A570', 'confirmed', 'e_ex322 overrides 400'],
+['blow.ground_brake', 0.91, '-', BP + ' m_BlowDamageBrake (+0x58)', 'slot 149, victim on the ground', '0x14043A460', 'confirmed', '-'],
+['blow.air_power', 2000, 'cm/s', NAT + ' m_AirBlowDamagePower (+0x60)', 'slot 147, victim off the ground: x power scale', '0x14043A4C0', 'confirmed', 'e_ex731 overrides 2800'],
+['blow.air_velocity_z', 300, 'cm/s', BP + ' m_AirBlowDamageVelocityZ (+0x5C)', 'slot 148, victim off the ground', '0x14043A570', 'confirmed', '-'],
+['blow.air_brake', 0.95, '-', BP + ' m_AirBlowDamageBrake (+0x64)', 'slot 149, victim off the ground', '0x14043A460', 'confirmed', '-'],
+['blow.air_start_brake_time', 0.1, 's', BP + ' m_AirBlowDamageStartBrakeTime (+0x68)', 'slot 152: 0 on the ground; the wait of sub-step 2 before the vertical brake starts', '0x140439D00', 'confirmed', '-'],
+['blow.start_falling_speed', 250, 'cm/s', BP + ' m_BlowDamageStartFallingSpeed (+0x6C)', 'slot 153: gravity comes back when the horizontal speed is at or below it', '0x14043A530', 'confirmed', 'the player value is 700; e_ex731 overrides 1000'],
+['toss.power', 1500, 'cm/s', NAT + ' m_TossDamagePower (+0x70)', 'slot 155: x power scale, straight up', '0x14043DCB0', 'confirmed', '-'],
+['toss.flight_duration', 0.2, 's', BP + ' m_TossDamageFlightDuration (+0x74)', 'slot 156: hover at the apex with gravity off', '0x14043DC80', 'confirmed', '-'],
+['toss.fall_gravity_scale', 1, '-', NAT + ' m_TossDamageFallGravityScale (+0x78)', 'slot 157', '0x14043DC50', 'confirmed', '-'],
+['launch.power', 2500, 'cm/s', BP + ' m_LaunchDamagePower (+0x7C)', 'slot 158: x power scale; replaced by info.m_DamageEffectTime when that is > 0', '0x14043B8A0', 'confirmed', '-'],
+['launch.flight_duration', 0.2, 's', BP + ' m_LaunchDamageFlightDuration (+0x80)', 'slot 159: hover at the apex with gravity scale 0.25', '0x14043B870', 'confirmed', '-'],
+['launch.fall_gravity_scale', 1, '-', BP + ' m_LaunchDamageFallGravityScale (+0x84)', 'slot 160', '0x14043B840', 'confirmed', '-'],
+['beat.power', 1500, 'cm/s', NAT + ' m_BeatDamagePower (+0x88)', 'slot 161: x power scale, straight down', '0x14043A410', 'confirmed', 'the player asset has 2500; the AI handler has no rebound'],
+['parabola.power', 1500, 'cm/s', NAT + ' m_ParabolaDamagePower (+0x98)', 'slot 163: x power scale along the launch pitch', '0x14043C570', 'confirmed', 'e_fz903 overrides 4000'],
+['parabola.angle', 45, 'deg', NAT + ' m_ParabolaDamageAngle (+0x9C)', 'slot 164: info.m_DamageParabolaAngle when that is > 0', '0x14043C4C0', 'confirmed', '-'],
+['parabola.brake', 0.98, '-', NAT + ' m_ParabolaDamageBrake (+0xA0)', 'slot 165', '0x14043C510', 'confirmed', '-'],
+['parabola.limit_brake', 300, 'cm/s', NAT + ' m_ParabolaDamageLimitBrake (+0xA4)', 'slot 166: the horizontal brake acts only above this speed', '0x14043C540', 'confirmed', '-'],
+['wall.hit_speed', 100, 'cm/s', BP + ' m_BlowDmgWallHitSpeed (+0xFC)', 'enemy slot 151: a wall hit needs a horizontal speed above it', '0x140DD1C90', 'confirmed', 'native 50; the base (friend) getter is hard-coded 50'],
+['wall.hit_angle', 60, 'deg', BP + ' m_BlowDmgWallHitAngle (+0x100)', 'enemy slot 150: knock . wall normal <= -cos(angle)', '0x140DD1C10', 'confirmed', 'native 30'],
+// ---- handler constants
+['rise.gravity_scale', 3, '-', 'mov dword ptr [rcx+2F8h],40400000h at 0x1404527F0 / 0x1404499F0 (sub-steps 1 and 13)', 'GravityScale while a TOSS / LAUNCH victim rises', '0x1404527F0', 'confirmed', '-'],
+['launch.hover_gravity_scale', 0.25, '-', 'movss xmm1,[0x145C87D04] at 0x1404499F0 (sub-step 13)', 'GravityScale during the LAUNCH flight duration (a TOSS switches gravity off instead)', '0x1404499F0', 'confirmed', '-'],
+['gravity', 980, 'cm/s2', 'stock UE 4.17 world gravity; no enemy movement component of the generic heartless overrides GravityScale in its class default object (7 enemy blueprints do)', 'x GravityScale', '-', 'inferred', 'class default GravityScale 1.0 is stock UCharacterMovementComponent'],
+['turn.rate', 0.5, '-', 'state slots 144 and 154: movss xmm0,[0x145C9C4D0] (0.5), one shared function', 'the victim turns to its held facing with alpha = rate x dt x 60 (SMALL sub 4, BLOW sub 2)', '0x14043A560', 'confirmed', '-'],
+['blow.flying_stop_speed', 150, 'cm/s', 'comiss xmm1,[0x145C9C580] (22500 = 150 squared) at 0x140DD92F4 / 0x140DD94E6', 'a victim that is not on the ground yet leaves the blow loop only at or below this horizontal speed', '0x140DD8980', 'confirmed', '-'],
+['blow.break_fall_speed', -300, 'cm/s', 'comiss xmm0,[0x145D785EC] at 0x140DD930E', 'airborne, slow and falling at least this fast: the tumble becomes the fall loop (DmgAirBlowBr*Loop)', '0x140DD8980', 'confirmed', '-'],
+['parabola.loop_min_time', 0.5, 's', 'mov dword ptr [rsi+1ECh],3F000000h at 0x14044B990 (sub-step 3)', 'the landing is not looked at before this much of the loop has played', '0x14044B990', 'confirmed', '-'],
+['beat.trace_range', 2500, 'cm', 'movss xmm2,[0x145C9C574] at 0x1404463F0', 'ground trace under an airborne BEAT victim', '0x1404463F0', 'confirmed', '-'],
+['beat.radius_factor', 0.7071, '-', 'movss xmm9,[0x145C9C4D4] at 0x1404463F0', 'horizontal speed of a BEAT = knock x factor x (own radius + attacker radius) / time to the ground', '0x1404463F0', 'confirmed', '-'],
+['wall.turn_rate', 15, '1/s', 'mulss xmm2,[0x145C9C510] at 0x140DD8980 (sub-step 8)', 'turn alpha = dt x 15 during the wall-hit clip', '0x140DD8980', 'confirmed', '-'],
+// ---- body: reaction endurance and revenge
+['strong.recover_time', 10, 's', 'mov dword ptr [..+8],41200000h in 0x140576400 / 0x140576360; tick 0x140598CD0', 'a STRONG body\'s endurance (m_MaxBodyStrongValue): every hit with reaction power restarts this timer; when it runs out a broken body is refilled, an unbroken one gains 1 point', '0x140576400', 'inferred', 'decompiled C; the constant is a literal'],
+['revenge.hold_time', 3, 's', '0x140573EB0: param_1[2] = 3.0', 'after a hit the revenge value is held this long before it decays', '0x140573EB0', 'inferred', 'decompiled C'],
+['revenge.decay_per_second', 5, '1/s', '0x140598D30: value -= dt x 5.0', 'decay of the revenge value once the hold time is over and the pawn is NOT in the Damage state', '0x140598D30', 'inferred', 'decompiled C'],
+['revenge.full_after', 20, 's', '0x140573EB0 / 0x140598D30: param_1[3] capped at 20.0', 'after this many seconds with a non-zero revenge value the next hit adds the whole limit', '0x140573EB0', 'inferred', 'decompiled C'],
+// ---- clip lengths: medians over the enemies' own animation sets (the reaction phases end at the END of a clip)
+['clip.small_ground', 1.0, 's', 'assets_converted/animations/.../Character/enemy/*/ clip 200 (82 enemies: 0.267 .. 4.6, median 1.0)', 'a ground flinch lasts the whole clip; there is no early exit notify on enemies', '0x14044F650', 'inferred', 'median: every enemy has its own; build/sora_tmp/react/enemy_anim_stats.js'],
+['clip.small_air', 0.767, 's', 'clip 210 (83 enemies: 0.4 .. 2.03, median 0.767)', 'the air flinch clip; at its end an enemy in the air goes to its fall loop', '0x14044F650', 'inferred', 'median'],
+['clip.blow_start', 0.1, 's', 'clip 240 (88 enemies: 0.033 .. 2.03, median 0.1)', 'BLOW / PARABOLA start clip', '0x140DD8980', 'inferred', 'median'],
+['clip.blow_down', 1.667, 's', 'clip 240_2 (84 enemies: 0.667 .. 5.13, median 1.667); 240_3 exists on 1 enemy', 'landing + lying + getting up in ONE clip; the reaction ends with it', '0x140DD8980', 'inferred', 'median'],
+['clip.toss_start', 0.1, 's', 'clip m_250 (78 enemies, median 0.1)', 'TOSS / LAUNCH start clip', '0x1404527F0', 'inferred', 'median'],
+['clip.toss_fall_start', 0.367, 's', 'clip m_250_2 (78 enemies, median 0.367)', 'played when the apex hover ends', '0x1404527F0', 'inferred', 'median'],
+['clip.toss_down', 1.7, 's', 'clip m_250_4 (76 enemies: 0.767 .. 4.83, median 1.7); m_250_5 exists on 1 enemy', 'landing + lying + getting up after TOSS / LAUNCH', '0x1404527F0', 'inferred', 'median'],
+['clip.beat_down', 2.233, 's', 'clip m_259 (3 enemies have it: 1.533 / 2.233 / 2.967)', 'ground slam of a BEAT; without the clip the reaction ends at the landing', '0x1404463F0', 'inferred', 'median of 3'],
+['clip.spin', 0.867, 's', 'clips m_260 (61 enemies) and m_270 (67 enemies): median 0.867 each', 'SIDESPIN / VERTICALROLL: the root motion of this clip IS the knock-away', '0x14044EDC0', 'inferred', 'median'],
+['clip.spin_distance', 470, 'cm', 'root bone kh_sk translation of m_260 over the clip: 230 .. 740, median 470 (m_270: 240 .. 611, median 450)', 'distance travelled away from the attacker during the spin, decelerating', '0x14044EDC0', 'inferred', 'median; build/sora_tmp/react/rootmotion.js'],
+['clip.spin_down', 1.367, 's', 'clip m_260_1 (64 enemies, median 1.367; m_270_1: 1.567)', 'landing + getting up after the spin', '0x14044EDC0', 'inferred', 'median'],
+['clip.wall', 0.5, 's', 'clip 280 (46 enemies, median 0.5)', 'stuck to the wall with gravity off', '0x1404434C0', 'inferred', 'median'],
+['clip.wall_down', 1.8, 's', 'clip 280_2 (45 enemies, median 1.8)', 'landing + getting up after a wall hit', '0x140DD8980', 'inferred', 'median'],
+['clip.land', null, 's', 'not looked up: which sequence an enemy anim set maps "Land" to', 'the "Land" clip an enemy plays when it lands on its feet out of an air flinch', '0x14044F650', 'guess', 'NOT MEASURED; kh-react uses a marked stand-in (0.3 s) that a host replaces with its own landing time'],
+];
+const COLUMNS = ['id', 'value', 'unit', 'source', 'evidence', 'ref_addr', 'ref_conf', 'note'];
+const ids = new Set();
+for (const r of ROWS) { if (r.length !== COLUMNS.length) throw new Error('row width: ' + r[0]); if (ids.has(r[0])) throw new Error('duplicate id: ' + r[0]); ids.add(r[0]); }
+const name = 'sora-enemy-reaction';
+const out = JSON.stringify({ sheet: name, group: 'port', columns: COLUMNS }).replace(/\}$/, ',"rows":[\n') + ROWS.map((r) => JSON.stringify(r)).join(',\n') + '\n]}\n';
+const file = path.join(R, 'sheets/port', name + '.json');
+if (process.argv.includes('--check')) {
+  const same = fs.existsSync(file) && fs.readFileSync(file, 'utf8') === out;
+  console.log(same ? name + ': ' + ROWS.length + ' rows, current' : name + ': sheet differs from tools/sora_enemy_reaction_sheet.js ' + VERSION);
+  process.exit(same ? 0 : 1);
+}
+fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, out);
+console.log(name + ': ' + ROWS.length + ' rows written (tools/sora_enemy_reaction_sheet.js ' + VERSION + ')');

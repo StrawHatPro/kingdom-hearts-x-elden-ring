@@ -1,0 +1,11 @@
+[package]
+name = "kh-react"
+description = "What a Kingdom Hearts III enemy does when a hit lands (UTresEnemyState_Damage), engine-free: glam and std only. A state machine + integrator a host steps at 60 Hz. docs/sora-enemy-reaction-spec.md."
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[dependencies]
+glam = { workspace = true }
+# For `HitRecord` (a host feeds a hit straight in), the damage-kind enum and the `World` trait.
+kh-core = { path = "../kh-core" }

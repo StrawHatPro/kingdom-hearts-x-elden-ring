@@ -1,0 +1,201 @@
+{
+ "sheet": "party-guard",
+ "group": "port",
+ "columns": [
+  "id",
+  "value",
+  "unit",
+  "source",
+  "evidence",
+  "ref_addr",
+  "ref_conf",
+  "note"
+ ],
+ "rows": [
+  [
+   "guard.refill_delay",
+   2,
+   "s",
+   "PORT DESIGN (party X3G shield gauge, XD_PLAYABLE_KITS.md 2.1, approved 2026-10-15), carried over to the GUARD gauge by stream GG: party-kit-goofy guard.refill_delay",
+   "GUARD starts refilling this long after it was last used (spent, drained, held up)",
+   "-",
+   "confirmed",
+   "same as the X3G shield gauge"
+  ],
+  [
+   "guard.refill_time",
+   3,
+   "s",
+   "PORT DESIGN (party X3G shield gauge, XD_PLAYABLE_KITS.md 2.1, approved 2026-10-15), carried over to the GUARD gauge by stream GG: party-kit-goofy guard.refill_time",
+   "an empty GUARD refills in this long (the rate is max / this, so a longer bar refills at the same pace in time)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "guard.rearm_fraction",
+   0.3,
+   "x",
+   "PORT DESIGN (party X3G shield gauge, XD_PLAYABLE_KITS.md 2.1, approved 2026-10-15), carried over to the GUARD gauge by stream GG: party-kit-goofy guard.rearm 30 of 100",
+   "after a GUARD BREAK the shield can come up again once GUARD has refilled to this share of its max",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "guard.broken_delay",
+   2,
+   "s",
+   "PORT DESIGN (THE USER, 2026-10-16 23:40, ER_PHASE_NOTES: \"a new bar above MP called GUARD that is silver ... Use that for his guard mechanics. Also make it possible to increase via levelling up\"; stream GG) (the broken state + recovery)",
+   "BROKEN: refilling starts this long after the break",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "guard.broken_refill_time",
+   3,
+   "s",
+   "PORT DESIGN (THE USER, 2026-10-16 23:40, ER_PHASE_NOTES: \"a new bar above MP called GUARD that is silver ... Use that for his guard mechanics. Also make it possible to increase via levelling up\"; stream GG)",
+   "BROKEN: an empty GUARD refills in this long",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "guard.level_up_adds",
+   true,
+   "bool",
+   "PORT DESIGN (THE USER, 2026-10-16 23:40, ER_PHASE_NOTES: \"a new bar above MP called GUARD that is silver ... Use that for his guard mechanics. Also make it possible to increase via levelling up\"; stream GG)",
+   "a level-up that raises the max adds the increase to the current value (a full bar stays full), as KH3 does for HP / MP",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "guard.save_point_refills",
+   true,
+   "bool",
+   "PORT DESIGN (THE USER, 2026-10-16 23:40, ER_PHASE_NOTES: \"a new bar above MP called GUARD that is silver ... Use that for his guard mechanics. Also make it possible to increase via levelling up\"; stream GG)",
+   "a save point (test level) / site of grace (Elden Ring) refills GUARD and clears a break",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.color_fill",
+   [
+    0.76,
+    0.78,
+    0.82,
+    1
+   ],
+   "rgba",
+   "PORT DESIGN (THE USER, 2026-10-16 23:40, ER_PHASE_NOTES: \"a new bar above MP called GUARD that is silver ... Use that for his guard mechanics. Also make it possible to increase via levelling up\"; stream GG) (\"silver\")",
+   "the GUARD fill: KH3 HUD bars are a flat fill under the frame sprite, this one silver",
+   "-",
+   "confirmed",
+   "MP is blue, HP green, Focus orange"
+  ],
+  [
+   "hud.color_shine",
+   [
+    1,
+    1,
+    1,
+    0.55
+   ],
+   "rgba",
+   "PORT DESIGN (THE USER, 2026-10-16 23:40, ER_PHASE_NOTES: \"a new bar above MP called GUARD that is silver ... Use that for his guard mechanics. Also make it possible to increase via levelling up\"; stream GG) (\"silver\")",
+   "the top of the GUARD label letters: their faces run from this (blended by its alpha over the fill colour) down to 0.7 x the fill colour",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.color_loss",
+   [
+    0.92,
+    0.25,
+    0.25,
+    1
+   ],
+   "rgba",
+   "PORT DESIGN (THE USER, 2026-10-16 23:40, ER_PHASE_NOTES: \"a new bar above MP called GUARD that is silver ... Use that for his guard mechanics. Also make it possible to increase via levelling up\"; stream GG) (KH3 bars show the lost part flash red, then shrink)",
+   "the lost part while it shrinks after a spend / block",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.color_regen",
+   [
+    0.55,
+    0.58,
+    0.66,
+    1
+   ],
+   "rgba",
+   "PORT DESIGN (THE USER, 2026-10-16 23:40, ER_PHASE_NOTES: \"a new bar above MP called GUARD that is silver ... Use that for his guard mechanics. Also make it possible to increase via levelling up\"; stream GG)",
+   "the refilling part while GUARD regenerates (a darker silver, as the MP charge bar is a darker blue)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.color_broken",
+   [
+    0.4,
+    0.4,
+    0.44,
+    1
+   ],
+   "rgba",
+   "PORT DESIGN (THE USER, 2026-10-16 23:40, ER_PHASE_NOTES: \"a new bar above MP called GUARD that is silver ... Use that for his guard mechanics. Also make it possible to increase via levelling up\"; stream GG)",
+   "BROKEN: the bar refills in this dull grey and blinks until it rearms",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.offset_x",
+   -72,
+   "stage px",
+   "PORT DESIGN (THE USER, 2026-10-16 23:40, ER_PHASE_NOTES: \"a new bar above MP called GUARD that is silver ... Use that for his guard mechanics. Also make it possible to increase via levelling up\"; stream GG) (above MP; placed so the bar and its label clear the HP ring)",
+   "the GUARD bar sits this far right of the MP bar (negative = left)",
+   "-",
+   "confirmed",
+   "the lost part follows the fill down with the KH3 red-gauge timer FollowGauge (800 ms, then its speed rule), as the HP ring does: no sheet number"
+  ],
+  [
+   "hud.offset_y",
+   -14,
+   "stage px",
+   "PORT DESIGN (THE USER, 2026-10-16 23:40, ER_PHASE_NOTES: \"a new bar above MP called GUARD that is silver ... Use that for his guard mechanics. Also make it possible to increase via levelling up\"; stream GG) (above MP)",
+   "the GUARD bar sits this far below the MP bar (negative = above)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.level_up_line",
+   "Maximum GUARD increased!",
+   "text",
+   "PORT DESIGN (THE USER, 2026-10-16 23:40, ER_PHASE_NOTES: \"a new bar above MP called GUARD that is silver ... Use that for his guard mechanics. Also make it possible to increase via levelling up\"; stream GG) (the level-up window line, worded as the KH3 \"Maximum HP increased!\" kh3_system.general bonus line)",
+   "added to a level-up window of Goofy when the level raised the GUARD max",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.broken_blink",
+   4,
+   "Hz",
+   "PORT DESIGN (THE USER, 2026-10-16 23:40, ER_PHASE_NOTES: \"a new bar above MP called GUARD that is silver ... Use that for his guard mechanics. Also make it possible to increase via levelling up\"; stream GG)",
+   "the BROKEN bar blinks at this rate",
+   "-",
+   "confirmed",
+   "-"
+  ]
+ ]
+}

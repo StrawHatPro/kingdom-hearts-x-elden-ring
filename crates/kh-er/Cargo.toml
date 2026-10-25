@@ -1,0 +1,57 @@
+[package]
+name = "kh-er"
+description = "Sora hosted inside Elden Ring (exe 2.7.1.0 or 2.7.2.0): an injected DLL that runs kh-core on the game's frame tasks, answers its world queries with the game's Havok world, and draws through the game's debug drawer. No Bevy. build/sora_tmp/er/IMPL_ER1_STATE.md."
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# (PACKGEN) the generated tables made from KH3 data, read at run time (release builds)
+kh-gendata = { path = "../kh-gendata" }
+kh-core = { path = "../kh-core" }
+kh-anim = { path = "../kh-anim" }
+# (IMPL_ER15) the point lights of the game-over void
+kh-look = { path = "../kh-look" }
+# KH3's enemy-side hit reactions (the state machine + integrator the enemy puppet runs).
+kh-react = { path = "../kh-react" }
+glam = { workspace = true }
+# (fx) Sora's sound: the shared host glue + our own device output (kh-host), the engine-free audio model (kh-audio).
+kh-host = { path = "../kh-host" }
+kh-audio = { path = "../kh-audio" }
+kh-vfx = { path = "../kh-vfx" }
+# (prize) KH3's prize orbs: the engine-free simulation (kh-host steps and shows it).
+kh-prize = { path = "../kh-prize" }
+# (hud) the game HUD's types (the game-over menu's buttons)
+kh-ui = { path = "../kh-ui" }
+# KH3's cameras (field, lock-on, attack, aim, shot, shakes): stepped by cam.rs, shown through the game's camera.
+kh-camera = { path = "../kh-camera" }
+# (ZDRAW) Zettaflare's target drawn from its own model: the game's character files read (read-only)
+kh-erfile = { path = "../kh-erfile" }
+serde_json = "1"
+# (ER party S1) Donald, Goofy and AI Sora: the engine-free party host (kh-partyhost) over kh-party / kh-ai, behind the
+# cargo feature `party` (default on) and the run-time key `party.er` (build/sora_tmp/er/party/ER_PARTY_PLAN.md).
+kh-party = { path = "../kh-party", optional = true }
+kh-ai = { path = "../kh-ai", optional = true }
+kh-partyhost = { path = "../kh-partyhost", optional = true }
+
+# (ER party S1) `--no-default-features` builds the DLL without any party code (deploy discipline, plan 3.2).
+[features]
+default = ["party"]
+party = ["dep:kh-party", "dep:kh-ai", "dep:kh-partyhost", "kh-er-render/party"]
+# Development aids (test one-shots, debug probes, scripted input, cheats): OFF, and never built by setup/setup.js.
+# Without it their keys in kh-er.ini are ignored (src/control.rs DEV_KEYS).
+dev-aids = []
+
+# The Elden Ring SDK: Dasaav's fork of fromsoftware-rs at the revision erfps2 0.3.5 pins (it carries the
+# Havok world fields upstream lacks). Supports exe 2.7.1.0 (WW) / 2.7.1.1 (JP); (PORT) vendored with a 2.7.2.0 (WW) table, see the workspace [patch]. Pinned: never float.
+[target.'cfg(windows)'.dependencies]
+# Sora's real model, drawn by our own Direct3D 12 code in the game's frame (IMPL_ER2_STATE.md).
+# (ER party S4) the renderer's party drawing comes with this crate's `party` feature (default-features off: `--no-default-features`
+# builds a renderer without any party code)
+kh-er-render = { path = "../kh-er-render", default-features = false }
+eldenring = { git = "https://github.com/Dasaav-dsv/fromsoftware-rs.git", rev = "79266c9748863272dfd08d8e51f5fd413aec862d" }
+fromsoftware-shared = { git = "https://github.com/Dasaav-dsv/fromsoftware-rs.git", rev = "79266c9748863272dfd08d8e51f5fd413aec862d" }
+pelite = "0.10"
+windows-sys = { version = "0.61", features = ["Win32_UI_Input_XboxController", "Win32_System_LibraryLoader", "Win32_System_SystemServices", "Win32_Foundation", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_System_Memory", "Win32_System_Diagnostics_Debug", "Win32_System_SystemInformation"] }

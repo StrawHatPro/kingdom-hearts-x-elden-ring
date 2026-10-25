@@ -1,0 +1,12 @@
+{"sheet":"sora-combat-damage-handlers","group":"port","columns":["id","damage_kinds","handler","slot","ref_addr","attack_out","jump_out","aerial_recovery","clips","ref_conf"],"rows":[
+["Small","1 SMALL and every kind not listed below (0, 3-6, 11-18, 23-40)","Small",116,"0x14135D740","kind 1 only: m_bEnableChange","kind 1 only: m_bEnableChange","no","0201-0204 (0205/0206 alternate), air 0207-0210, landing clip / Land","confirmed"],
+["Blow","2 BLOW, 21 SHIELD_BLOW","Blow",117,"0x14135B300","kind 2: m_bEnableChange","kind 2: m_bEnableChange, or recoverable + ability 1","kind 2: yes","0211+3i (start), 0212+3i (loop), 0213+3i (down / get-up); wall M_0223-M_0226","confirmed"],
+["Toss","7 TOSS, 22 SHIELD_TOSS","Toss",118,"0x14135EEA0","kind 7: m_bEnableChange","kind 7: recoverable + ability 1","kind 7: yes","M_0227, M_0228 (loop), M_0237 (fall loop), 0213 (get-up)","confirmed"],
+["Launch","8 LAUNCH","Launch",119,"0x14135C410","m_bEnableChange","recoverable + ability 1","yes","as Toss","confirmed"],
+["Parabola","10 PARABOLA","Parabola",120,"0x14135CAB0","m_bEnableChange (forced 0.5 s after the start clip)","recoverable + ability 1","yes","as Blow","confirmed"],
+["Beat","9 BEAT","Beat",121,"0x14135A870","m_bEnableChange (never set by its clips)","m_bEnableChange (never set)","no","M_0230 (fall loop), M_0227 (impact), M_0228 (bounce loop)","confirmed"],
+["Frozen","bad status FREEZE fallback","Frozen",122,"0x14135B150","no","no","no","-","inferred"],
+["Suction","19 SUCTION","Suction",123,"0x14135E260","no","sub-step 4","no","Small and Blow clips","inferred"],
+["Eat","20 EAT","Eat",124,"0x14135BDA0","no","no","no","CatchEnd and others","inferred"],
+["PuddingEat","41 PUDDING_EAT","PuddingEat",125,"0x14135D680","no","no","no","PuddingEat","inferred"]
+]}
