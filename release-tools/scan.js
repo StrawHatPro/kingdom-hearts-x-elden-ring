@@ -38,8 +38,8 @@ const nodeIsPinned = (abs) => !!NODE_PIN && require('crypto').createHash('sha256
 let nodeOk = false;
 // the mod's own logo (the owner's fan art, docs/images): the only images allowed, each by its SHA-256
 const OWN_IMAGES = {
-  'docs/images/logo.png': '29c3e58c8f6e7375c9347a980ddfb9fdf365a519c1ddf1d9034a5fe147c59edb',
-  'docs/images/logo-640.png': '7c84a5448cc89597c80ae35e0d2bfb6cccc01752435338a92899762325dffb87',
+  'docs/images/logo.png': '4c83e7789dc09a59b941c3d0359ba73957e24c7c40eb5da778283d5a90d41c2f',
+  'docs/images/logo-640.png': '85233767cf9772a2bde8275876c10679eb2893cc57e6bf10977635de9adf475c',
 };
 let imageOk = false;
 const ALLOWED_BINARY = { test: (r) => HUD_DXIL.test(r) || (RELEASE && RELEASE_BINARY.test(r)) || (RELEASE && r === NODE_EXE && nodeOk) || (imageOk && r in OWN_IMAGES) };
