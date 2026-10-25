@@ -47,7 +47,7 @@ You don't need to install anything else. The setup has everything it needs built
    - Windows may say "Windows protected your PC", because `setup.exe` isn't signed. Click **More info**, then
      **Run anyway**. Your antivirus may also ask about it.
    - The setup finds your games by itself. If it can't, it opens a window so you can pick the game's folder.
-4. **Wait.** The first time, the setup builds the mod's files from your KH3 install. This takes about 30 minutes, and
+4. **Wait.** The first time, the setup builds the mod's files from your KH3 install. **This takes about 30 minutes**, and
    longer on a slower PC. When it says **Ready**, you can play.
 
 If something goes wrong, the setup stops and says why. Fix it and run `setup.exe` again: it carries on from where it
