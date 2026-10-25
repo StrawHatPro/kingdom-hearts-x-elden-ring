@@ -96,13 +96,6 @@ The setup reuses the files it built before, unless the new version needs them re
    `%APPDATA%\EldenRing\<your id>\`. Leave `ER0000.sl2` alone: that's your normal game.
 4. Uninstall me3 if you don't use it for anything else.
 
-## Known issues
-
-- Only Elden Ring **2.7.2.0** is officially supported. A game update can stop the mod working until it's updated.
-- The setup has only been tested on the developer's PC so far.
-- KINGDOM HEARTS III from Epic hasn't been tested.
-- No Keyblade except the Kingdom Key can be obtained yet.
-
 ## Building from source
 
 Want to build it yourself, or need the setup's extra options? See [docs/BUILDING.md](docs/BUILDING.md).
