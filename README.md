@@ -15,7 +15,7 @@ needs from them, on your PC.
 ## What's in it
 
 - **Three playable characters.** Start your journey as Sora, Donald or Goofy. The others join you along the way,
-  follow you as party members, and can take the lead.
+  follow you as party members, and can take the lead. **GOOFY IS STILL A HEAVY WIP, PLAYING AS HIM IS NOT RECOMMENDED OR FUN**
 - **KH3 combat.** Combos, finishers, blocking, dodging, air combos and team attacks. Enemies, bosses included, can be
   launched and juggled.
 - **Magic.** Sora's spells, and Donald as a real mage, all the way up to his ultimate spell, Zettaflare.
