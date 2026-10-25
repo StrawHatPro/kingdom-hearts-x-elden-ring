@@ -2,6 +2,7 @@
   "name": "kingdom-hearts-x-elden-ring",
   "version": "0.1.1-b.preview",
   "private": true,
+  "license": "MIT",
   "description": "Kingdom Hearts x Elden Ring: the setup and asset pack tools (Node). No game files are distributed.",
   "scripts": {
     "setup": "node setup/setup.js",

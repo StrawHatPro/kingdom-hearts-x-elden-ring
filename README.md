@@ -124,4 +124,6 @@ Namco Entertainment Inc. and FromSoftware, Inc.
 You must own both games. No game files are shared: everything the mod needs from the games is built on your PC from
 your own copies. [LEGAL.md](LEGAL.md) explains what is and isn't included, and why.
 
-No licence has been chosen for this project yet.
+The mod's own code and documentation are open source under the [MIT licence](LICENSE). That covers this project's
+own work only: third-party code keeps its own licence (see [LEGAL.md](LEGAL.md)), and the game names, logos (including
+those in the mod's logo) and everything from the games themselves belong to their owners.

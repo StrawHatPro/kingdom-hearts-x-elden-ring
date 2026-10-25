@@ -7,7 +7,10 @@ made on the player's PC from the player's own installs, by the tools in this rep
 This is an unofficial fan project, not affiliated with Square Enix, Disney, FromSoftware or Bandai Namco
 Entertainment. You must own both games.
 
-No licence has been chosen for this repository yet.
+**Licence:** the project's own code and documentation are released under the MIT licence ([LICENSE](LICENSE)). It
+covers only this project's own work. Third-party code in the repository or a release download keeps its own licence,
+listed below. The game names and logos (also those in the mod's logo, `docs/images`) are trademarks of their owners and
+are not covered by the MIT licence, and nothing from the games themselves is included or licensed.
 
 ## Included
 
