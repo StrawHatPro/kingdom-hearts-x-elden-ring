@@ -28,7 +28,7 @@ needs from them, on your PC.
 
 ## What you need
 
-- **ELDEN RING** on PC (Steam), version **2.7.2.0**.
+- **ELDEN RING** on PC (Steam), version **2.7.2.0** and DLC.
 - **KINGDOM HEARTS III + Re Mind** on PC (Steam or Epic).
 - **me3 (Mod Engine 3)**, the tool that loads the mod. Get it from
   [its releases page](https://github.com/garyttierney/me3/releases) (tested with 0.13.0).
