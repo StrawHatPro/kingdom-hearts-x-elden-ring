@@ -1,6 +1,6 @@
-# Kingdom Hearts x Elden Ring: the me3 profile (Mod Engine 3, tested with 0.13.0).
+# Kingdom Hearts x Elden Ring: the me3 profile (Mod Engine 3, version 0.13.0 or newer).
 # OFFLINE ONLY: start_online is never set, so me3 starts Elden Ring without Easy Anti-Cheat. Never play online with the mod.
-# The mod keeps its own save file (KHSora.sl2): your normal Elden Ring saves are not used.
+# The mod keeps its own save file (KHSora.sl2, in Elden Ring's save folder): your normal Elden Ring saves are not used.
 # Launch with er\play.bat, or run (me3 is a command-line tool)
 #   me3 launch -g eldenring -p er\profiles\kh-sora.me3
 # Double-clicking this file works only with me3's Windows installer version. Me3 Manager: see the README.

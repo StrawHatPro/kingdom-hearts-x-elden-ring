@@ -287,7 +287,10 @@ function downloadDxc() {
     const v = capture(me3, ['--version']).out;
     const ver = (v.match(/\d+\.\d+\.\d+/) || [])[0];
     ok(`me3 ${ver || '(version unknown)'} ${me3}`);
-    if (ver && ver !== TESTED_ME3) warn(`the mod was tested with me3 ${TESTED_ME3}; ${ver} may work`);
+    try { fs.mkdirSync(ER_DIR, { recursive: true }); fs.writeFileSync(path.join(ER_DIR, 'me3_path.txt'), me3 + '\r\n'); } catch {} // er\play.bat starts this me3
+    const older = ver && ver.split('.').map(Number).reduce((d, n, i) => d || n - TESTED_ME3.split('.').map(Number)[i], 0) < 0;
+    if (!ver || older) warn(`me3 ${ver || '(version unknown)'} is older than ${TESTED_ME3}: an older me3 can ignore the mod's own save file and start Elden Ring on your NORMAL saves (ER0000.sl2). Update me3 (https://github.com/garyttierney/me3/releases) before playing: er\\play.bat refuses an older me3.`);
+    else if (ver !== TESTED_ME3) warn(`the mod was tested with me3 ${TESTED_ME3}; ${ver} may work`);
   } else warn(`me3 not found (Mod Engine 3, tested ${TESTED_ME3}: https://github.com/garyttierney/me3/releases). Install it before launching, or give --me3 FILE.`);
 
   // ---- 2. the games
@@ -433,7 +436,7 @@ function downloadDxc() {
   say('   Steam must be running. Start the mod any of these ways:');
   say('     - er\\play.bat (runs me3 with the mod\'s profile), or');
   say(`     - ${me3 ? `"${me3}"` : 'me3'} launch -g eldenring -p "${PROFILE}"`);
-  say('     - with me3\'s Windows installer, double-clicking the profile also works; with Me3 Manager, see README "Using Me3 Manager (GUI)".');
-  say('   The mod uses its own save file (KHSora.sl2); your normal saves are not used. To play the normal game, start it from Steam as usual.');
+  say('     - with me3\'s Windows installer, double-clicking the profile also works; with Me3 Manager, see the README, "Play".');
+  say('   The mod uses its own save file (KHSora.sl2; your KH progress is kept in er\\saves); your normal saves are not used. To play the normal game, start it from Steam as usual.');
   if (rl) rl.close();
 })().catch((e) => { console.error(e); process.exit(1); });

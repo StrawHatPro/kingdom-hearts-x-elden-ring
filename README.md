@@ -30,8 +30,8 @@ needs from them, on your PC.
 
 - **ELDEN RING** on PC (Steam), version **2.7.2.0** and DLC.
 - **KINGDOM HEARTS III + Re Mind** on PC (Steam or Epic).
-- **me3 (Mod Engine 3)**, the tool that loads the mod. Get it from
-  [its releases page](https://github.com/garyttierney/me3/releases) (tested with 0.13.0).
+- **me3 (Mod Engine 3)**, version **0.13.0 or newer**: the tool that loads the mod. Get it from
+  [its releases page](https://github.com/garyttierney/me3/releases).
 - About **80 GB of free disk space** while the setup runs.
 - A **controller** is strongly recommended.
 
@@ -59,6 +59,8 @@ The mod is **offline only**. me3 starts Elden Ring without Easy Anti-Cheat, so n
 running.
 
 **The easy way:** double-click `er\play.bat` in the mod's folder.
+It finds me3 by itself. If it can't, it asks you to pick `me3.exe` once and remembers it. It doesn't need to be run
+as administrator.
 
 **With Me3 Manager:**
 1. Run the setup first (see Install).
@@ -73,16 +75,23 @@ To check that the mod loaded, look for `er\logs\kh-er.log` in the mod's folder.
 
 ## Your saves
 
-- The mod uses **its own Elden Ring save file** (`KHSora.sl2` with `er\play.bat`). Your normal save, `ER0000.sl2`, is
-  never touched. **Never play the mod on `ER0000.sl2`.**
-- Your **KH progress** (Sora's and the party's levels, abilities and items) is kept in the mod's folder, in
-  `er\saves`. Keep that folder safe.
+Your mod game is kept in two places:
+- **The mod's save file**, `KHSora.sl2` (when you use `er\play.bat`), in Elden Ring's save folder
+  (`%APPDATA%\EldenRing\<your id>\`), next to your normal save.
+- **Your KH progress** (Sora's and the party's levels, abilities and items), in the mod's folder, in `er\saves`.
+
+To back up your mod game, or move it to another PC, copy both.
+
+- **Your normal Elden Ring save is never used.** The mod plays on its own save file.
+- **Any characters from your normal Elden Ring save are copied over** into the mod's save file the first time you
+  play. They're only copies: you can safely ignore them, and overwrite them with a **New Game** in the mod. Your real
+  characters stay untouched in your normal save.
 
 ## Updating
 
 1. Close Elden Ring.
 2. Unzip the new version to the same place as before, so its `kingdom-hearts-x-elden-ring` folder lands on top of
-   your mod folder. Say yes when Windows asks to replace files. Your `er\saves` folder, your settings and the files the
+   your mod folder. Say yes when Windows asks to replace files. Your saves (`er\saves`), your settings and the files the
    setup built are kept, because they aren't in the zip.
 3. Double-click `setup.exe` again.
 
@@ -90,7 +99,8 @@ The setup reuses the files it built before, unless the new version needs them re
 
 ## Uninstalling
 
-1. Copy `er\saves` somewhere safe if you might come back. Deleting the mod's folder deletes your KH progress.
+1. If you might come back, copy `er\saves` and `KHSora.sl2` somewhere safe. **Deleting the mod's folder deletes your
+   KH progress.**
 2. Delete the mod's folder. The mod never writes into the game folders.
 3. If you like, delete the mod's save file `KHSora.sl2` (and `KHSora.sl2.bak`) from
    `%APPDATA%\EldenRing\<your id>\`. Leave `ER0000.sl2` alone: that's your normal game.

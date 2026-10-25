@@ -96,10 +96,11 @@ inside it is `release-tools/sea_main.js`:
   Development and cheat keys are ignored in the released mod.
 - A `.me3` profile you write yourself must give the mod its own save file: add `savefile = "KHSora.sl2"` at the top,
   before the first `[[...]]` section. Any name ending in `.sl2` works, except `ER0000.sl2`.
+- me3 0.13.0 or newer is required. When the profile's save file doesn't exist yet, me3 creates it in
+  `%APPDATA%\EldenRing\<your id>\` as a copy of `ER0000.sl2`.
 - The mod finds the save file the game really opens and only ever reads it. If the log says it was not detected, name
   it in `er\mods\kh-er.ini`: `save.file = KHSora.sl2` (the name only).
-- me3 keeps the mod's save in `%APPDATA%\EldenRing\<your id>\`, next to your normal saves. The mod's own KH progress is
-  in `er\saves` in the mod's folder.
+- The KH progress is in `er\saves` in the mod's folder.
 
 ## Release tools
 
