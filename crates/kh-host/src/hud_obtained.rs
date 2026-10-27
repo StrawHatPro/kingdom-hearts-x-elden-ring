@@ -99,7 +99,7 @@ impl Hud {
     }
 
     /// The world is free for a popup: no menu, cutscene, game over, save screen or new-game menu of ours is up.
-    fn obtained_free(&self) -> bool {
+    pub(super) fn obtained_free(&self) -> bool { // (ALLYJOIN) pub(super): the ally question waits for the same free world
         !self.flow.paused() && self.force_camp == 0 /* a camp menu asked for */ && !self.camp_view.is_open() && !self.pause.is_open() && !self.cutscene && !self.savepoint.is_open() && !self.cutscene_pause.is_open() && !self.gameover.is_open() && !self.gameover_seq.as_ref().is_some_and(|s| s.scene_on()) && !self.newgame_choice_open() && !self.saveload_open()
     }
 

@@ -273,6 +273,8 @@ impl PartyRuntime {
     /// input (the pad's when he leads, AI Sora's otherwise).
     pub fn route(&mut self, r: RouteIn) -> Input {
         let RouteIn { sora, input, dt, targets, camera, asked_formation, asked_ai, nav, now } = r;
+        // (CHESTFIX) the follow speed cap is AI Sora's alone: set again below by his AI each step (`SoraAi::input`)
+        sora.set_follow_cap(None);
         // (DON-KIT) Donald's Aero aura on Sora where he stands (every host's route: the test level's seam, kh-er's glue)
         let (evasion, recovery) = kh_party::pad::donald::sora_aura(&self.party, sora.output().position);
         sora.set_aura(evasion, recovery);
@@ -677,6 +679,67 @@ fn sora_free(s: kh_core::StateId) -> bool {
     matches!(s, kh_core::StateId::Idle | kh_core::StateId::Run)
 }
 
+/// (CHESTFIX) AI Sora's way behind a running friend leader: where his stick points and his speed cap (cm/s).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FollowWay {
+    pub aim: Vec3,
+    pub cap: f32,
+    /// The goal was a spot beside or ahead of the leader: the spot behind him instead.
+    pub moved_back: bool,
+}
+
+/// (CHESTFIX, the user 2026-10-27: "he also keeps trying to run in front of Donald so fix that, he should just follow like
+/// Donald and Goofy do when playing as Sora") AI SORA FOLLOWS AS THE FRIENDS DO (kh-party locomotion.rs FOL2, the friends'
+/// Move1 behind a running Sora). THE CAUSE: the friends' speed is a follow SPEED (the leader's plus the gap to their spot
+/// over FOL2_GAP_TIME, a goal run past eased off along his way, never back for it, and only spots behind him travel with
+/// him: FOL2 r3), but AI Sora's was a full stick: his own run 680 and after 0.3 s his sprint 980 x the catch-up scale
+/// (never below 1), the tree's EQS spot taken as it is (beside or ahead of the leader too), and his K1 hold (3 s, the
+/// friends' 0.6 s) ran the stick on along the leader's way wherever he was: behind Donald's run of 600-680 he passed him.
+/// NOW, while the leader runs (faster than k1.hold_leader_speed) and AI Sora is out of battle on a run MoveTo or the hold:
+/// - his goal: the tree's spot when it is at least FOL2_LIVE_BEHIND behind the leader along his way, else the spot
+///   follow.same_speed_range (300) behind him, the tree's sideways offset kept up to FOL2_LATERAL_CM;
+/// - level with it or past it (less than FOL2_ALONG_AHEAD ahead of him along the way): along the leader's way, the sideways
+///   gap taken gently, at the leader's speed plus that gap over FOL2_GAP_TIME (at least half the leader's): ahead of the
+///   leader that is half his speed, so the leader passes him and he falls in behind;
+/// - farther behind: toward the goal at KH3's follow speed (the leader's x 1.1 seen / 2.5 not, distance / range within
+///   it) and at most the leader's speed plus what FOL2_CLOSE_DECEL takes off before the follow distance (the friends'
+///   catch-up that eases off), at most k1.speed_cap. `seen`: the camera sees him (the friends' frustum test).
+/// None: the rule does not apply (in battle, the leader slow or standing): the tree's own way and his own speeds.
+pub(crate) fn sora_follow_way(sora: Vec3, goal: Option<Vec3>, leader: Vec3, leader_velocity: Vec3, in_battle: bool, seen: bool) -> Option<FollowWay> {
+    use kh_party::locomotion::{FOL2_ALONG_AHEAD, FOL2_CLOSE_DECEL, FOL2_GAP_TIME, FOL2_LATERAL_CM, FOL2_LIVE_BEHIND, K};
+    let flat = |v: Vec3| Vec3::new(v.x, v.y, 0.0);
+    let lv = flat(leader_velocity);
+    let ls = lv.length();
+    if in_battle || ls <= K.k1_hold_leader_speed {
+        return None;
+    }
+    let ld = lv / ls;
+    let lateral_of = |v: Vec3| {
+        let side = flat(v) - ld * flat(v).dot(ld);
+        if side.length() > FOL2_LATERAL_CM { side.normalize() * FOL2_LATERAL_CM } else { side }
+    };
+    let behind_spot = leader - ld * K.follow_same_speed_range;
+    let (goal, moved_back) = match goal {
+        Some(g) if flat(g - leader).dot(ld) <= -FOL2_LIVE_BEHIND => (g, false),
+        Some(g) => (behind_spot + lateral_of(g - leader), true),
+        None => (behind_spot, false),
+    };
+    let d = flat(goal - sora);
+    let err = d.dot(ld);
+    if err < FOL2_ALONG_AHEAD {
+        let side = d - ld * err;
+        let aim = sora + ld * 300.0 + side.clamp_length_max(FOL2_LATERAL_CM) * 0.5;
+        return Some(FollowWay { aim: Vec3::new(aim.x, aim.y, sora.z), cap: (ls + err / FOL2_GAP_TIME).max(0.5 * ls), moved_back });
+    }
+    let dl = flat(leader - sora).length();
+    // KH3's follow rule (0x1412196C0, the friends' `follow_speed_with`, continuous): the leader's speed x the view rate (1.1
+    // seen, 2.5 not), within it distance / range, at least his speed
+    let rate = (if seen { K.follow_in_view_rate } else { K.follow_out_view_rate }).min(dl / K.follow_same_speed_range).max(1.0);
+    let ease = ls + (2.0 * FOL2_CLOSE_DECEL * (dl - K.follow_same_speed_range).max(0.0)).sqrt();
+    let cap = (ls * rate).min(ease).min(K.k1_speed_cap);
+    Some(FollowWay { aim: Vec3::new(goal.x, goal.y, sora.z), cap, moved_back })
+}
+
 impl kh_ai::AiBody for SoraBody<'_> {
     fn view(&self) -> kh_ai::BodyView {
         kh_ai::BodyView {
@@ -949,6 +1012,22 @@ impl SoraAi {
         } else {
             self.k1_hold = 0.0;
         }
+        // (CHESTFIX, the user 2026-10-27: "he also keeps trying to run in front of Donald ... he should just follow like
+        // Donald and Goofy do") THE FRIENDS' FORMATION behind a running leader (`sora_follow_way`): on a run MoveTo or the
+        // hold, his goal only a spot behind the leader, his stick along the leader's way once level with it, his speed the
+        // friends' follow speed (kh-core `set_follow_cap`); otherwise his own speeds
+        let follow_goal = match self.cmd.as_ref().map(|c| &c.cmd) {
+            Some(kh_ai::AiCommand::MoveTo { goal, walk: false, .. }) => goal_of(goal).map(Some),
+            None | Some(kh_ai::AiCommand::TurnTo { .. }) | Some(kh_ai::AiCommand::Idle { .. }) if self.k1_hold > 0.0 => Some(None),
+            _ => None,
+        };
+        match follow_goal.and_then(|g| sora_follow_way(out.position, g, leader.position, leader.velocity, in_battle, seen)) {
+            Some(way) => {
+                stick = towards(way.aim, 1.0);
+                sora.set_follow_cap(Some(way.cap));
+            }
+            None => sora.set_follow_cap(None),
+        }
         // (ZETTA) AI SORA KEEPS OUT OF ZETTAFLARE'S ZONES (the user: "allies should stay AWAY from the Zettaflare target"): in
         // one, the stick takes him out the nearest way; his stick never leads into one (it goes round); an attack on an
         // enemy in one is dropped (he disengages)
@@ -1125,4 +1204,37 @@ impl SoraAi {
 /// (party P) the leader's members by view (a convenience for hosts): the leading member's view after the last step.
 pub fn leader_member(rt: &PartyRuntime) -> Option<&MemberView> {
     rt.leader.and_then(|l| rt.current.iter().find(|v| v.id == l))
+}
+
+#[cfg(test)]
+mod chestfix_tests {
+    use super::*;
+
+    /// (CHESTFIX, the user 2026-10-27: "he also keeps trying to run in front of Donald ... he should just follow like Donald
+    /// and Goofy do") Behind a leader running +X at 650 cm/s: a spot of the tree's ahead of or beside him becomes the spot
+    /// 300 cm behind him; level with or past it AI Sora goes along the leader's way at most at the leader's speed plus the
+    /// gap (ahead of the leader: half his speed, so the leader passes him); far behind he closes at a capped catch-up
+    /// speed; in battle or behind a standing leader the rule does not apply.
+    #[test]
+    fn ai_sora_follows_behind_like_the_friends() {
+        let leader = Vec3::new(1000.0, 0.0, 0.0);
+        let v = Vec3::new(650.0, 0.0, 0.0);
+        // the tree's spot 200 cm AHEAD of the leader: moved behind him, the sideways offset kept
+        let w = sora_follow_way(Vec3::new(650.0, 100.0, 0.0), Some(Vec3::new(1200.0, 150.0, 0.0)), leader, v, false, true).unwrap();
+        assert!(w.moved_back);
+        // AI Sora 350 cm behind the leader, his goal 300 behind: level with it -> along the way, the leader's speed + the gap
+        assert!(w.aim.x > 650.0 && w.cap <= 650.0 + 50.0 / kh_party::locomotion::FOL2_GAP_TIME + 1.0, "{w:?}");
+        // 100 cm short of the spot: KH3's follow rule (x 400 / 300, at most x 1.1 in view)
+        let near = sora_follow_way(Vec3::new(600.0, 150.0, 0.0), Some(Vec3::new(1200.0, 150.0, 0.0)), leader, v, false, true).unwrap();
+        assert!((near.cap - 650.0 * 1.1).abs() < 1.0, "{near:?}");
+        // AI Sora AHEAD of the leader: half the leader's speed, along his way (never turned back, never faster than him)
+        let ahead = sora_follow_way(Vec3::new(1300.0, 0.0, 0.0), None, leader, v, false, true).unwrap();
+        assert!((ahead.cap - 325.0).abs() < 1.0 && ahead.aim.x > 1300.0, "{ahead:?}");
+        // far behind (30 m): toward the spot, faster than the leader but capped
+        let far = sora_follow_way(Vec3::new(-2000.0, 0.0, 0.0), Some(Vec3::new(500.0, 0.0, 0.0)), leader, v, false, false).unwrap();
+        assert!(!far.moved_back && far.cap > 650.0 * 2.0 && far.cap <= kh_party::locomotion::K.k1_speed_cap && (far.aim - Vec3::new(500.0, 0.0, 0.0)).length() < 1.0, "{far:?}");
+        // in battle, or the leader standing / walking: not this rule
+        assert!(sora_follow_way(Vec3::ZERO, None, leader, v, true, true).is_none());
+        assert!(sora_follow_way(Vec3::ZERO, None, leader, Vec3::new(100.0, 0.0, 0.0), false, true).is_none());
+    }
 }

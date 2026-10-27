@@ -160,6 +160,11 @@ impl AbilitySet {
         self.form[Self::slot(kind)]
     }
 
+    /// (CHESTFIX) A wear form supplies any ability now.
+    pub fn any_form(&self) -> bool {
+        self.form.iter().any(|c| *c > 0)
+    }
+
     /// The wear form changed: its ability list replaces the previous form's (an empty list =
     /// wear form NORMAL). Each entry is (ability, copies); the equipment counter's cap applies.
     pub fn set_form(&mut self, list: &[(ETresAbilityKind, u8)]) {

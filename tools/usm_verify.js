@@ -279,7 +279,7 @@ if (process.argv[2] === '--one') {
   const env = { ...process.env };
   if (mask.ok) env.USM_VIDEO_MASK = mask.m2.toString('hex'); // handed to the workers in memory only; never written to disk
   const finish = () => {
-    rows.sort((a, b) => a.path.localeCompare(b.path));
+    rows.sort((a, b) => a.path.localeCompare(b.path, 'en'));
     const totals = summarise(rows, errors, mask);
     if (only.length === all.length) {
       writeJson(OUT, {

@@ -30,6 +30,8 @@ are not covered by the MIT licence, and nothing from the games themselves is inc
 | crates.io packages | `Cargo.lock` | Referenced, not copied. |
 | npm packages | the repository: `package.json`, `package-lock.json` (referenced). A **release download**: `node_modules/` (bundled) | In git they are referenced only. A release download bundles them, unmodified, at the versions `package-lock.json` locks (production only; `release-tools/make_release.js` runs `npm ci --omit=dev`), so the setup never installs or downloads packages. Each keeps its licence file; the two `@wasm-audio-decoders` packages, which have none, get the MIT text with their author's name. All texts are collected in the download's `THIRD-PARTY-NOTICES.txt`; the packages and their licences are listed below. The Ogg Vorbis decoder bundle is copied from `@wasm-audio-decoders/ogg-vorbis` into `tools/third_party` by the setup. |
 | Node.js 24.21.0 (win-x64), built into `setup.exe` | a **release download** only: `setup.exe` (its licence in `THIRD-PARTY-NOTICES.txt`) | Node.js is MIT; its `LICENSE` file, which also carries the licences of the components built into `node.exe` (V8, ICU, OpenSSL, libuv and others), is reproduced in full in the download's `THIRD-PARTY-NOTICES.txt`. `setup.exe` is the official `node.exe` from nodejs.org, unmodified except for three things: its Authenticode signature is removed, its version information names the mod's setup, and our dispatcher `release-tools/sea_main.js` is injected as a Node.js single executable application (`release-tools/sea_build.mjs`, with the pinned build tools postject and resedit, both MIT, which are not shipped). The Node build is pinned in `release-tools/node_pin.json` by the zip's SHA-256 from that release's `SHASUMS256.txt` and by `node.exe`'s own hash. The build is deterministic; `setup.exe`'s SHA-256 is recorded in `release-tools/setup_exe.json`, and `release-tools/scan.js` allows that binary by this hash only. No separate `node.exe` or npm is shipped. A source checkout without a Node 20+ downloads the pinned zip (`setup/get_node.ps1`, its hash checked). Never in git. |
+| Node.js 24.21.0 (linux-x64), built into `setup-linux` | the **linux-x64 release download** only: `setup-linux` (its licence in `THIRD-PARTY-NOTICES.txt`) | The same as `setup.exe`: the official `bin/node` of nodejs.org's linux-x64 tarball (pinned in `release-tools/node_pin.json`, `linux_x64`, by the tarball's SHA-256 from `SHASUMS256.txt` and by `bin/node`'s own hash), unmodified except that `release-tools/sea_main.js` is injected as a single executable application (an ELF note, by the pinned postject). Its `LICENSE` file is reproduced in full in the download's `THIRD-PARTY-NOTICES.txt`. Deterministic; its SHA-256 is in `release-tools/setup_linux.json`, and `release-tools/scan.js` allows that binary by this hash only. A source checkout without Node 20+ downloads the pinned tarball (`setup/get_node.sh`, its hash checked). Never in git. |
+| In the linux-x64 release download: `tools/bin/kh-shaderc`, `kh-oodle`, `kh-er-selfcheck` | `tools/bin/` | Our code (crates `kh-shaderc`, `kh-oodle`, `kh-selfcheck`), compiled for Linux as static programs. They contain musl libc (MIT; its licence is in `THIRD-PARTY-NOTICES.txt`) and LLVM's libunwind (Apache-2.0 with the LLVM exception, which needs no notice in compiled code), as every static Rust program for Linux does. `kh-oodle` contains no Oodle code: it loads the player's own Elden Ring `oo2core_6_win64.dll`. They get the same binary checks as the DLLs. |
 
 The bundled npm packages:
 
@@ -60,11 +62,40 @@ The bundled npm packages:
 | Sheets regenerated from the games: `sheets/reflect`, `sheets/entities`, `sheets/systems`, `sheets/exe`, `sheets/native`, ... | Data extracted from KH3's executable and tables. Where the build needs it, it is made on the player's PC (`setup/PACK_PIPELINE.md`). |
 | Generated code (`build/gen`) | Generated from the sheets, the pack's manifest and KH3's reflected enums by `tools/gen_port.js` on the player's PC. |
 | Research data (`audit/sora_port`, `audit/reflection.json`, the sound-trigger and effect inventories, ...) | Data decoded from KH3 (animation graphs, KineDriver / Bonamik data, reflected classes). Made on the player's PC by the research scripts (`setup/PACK_PIPELINE.md`). |
-| The DirectX shader compiler (`dxc.exe`, `dxil.dll`) | Microsoft's. The setup uses the Windows SDK's copy, or downloads Microsoft's own release (DirectXShaderCompiler v1.8.2502 from its GitHub releases, checked by SHA-256, with its licences) into the git-ignored `tools/bin/dxc`. It is never committed or put in a release download. |
+| The DirectX shader compiler (`dxc.exe`, `dxil.dll`) | Microsoft's. The setup uses the Windows SDK's copy, or downloads Microsoft's own release (DirectXShaderCompiler v1.8.2502 from its GitHub releases, checked by SHA-256, with its licences) into the git-ignored `tools/bin/dxc`. On Linux the setup downloads the same release's Linux build (`linux_dxc_2025_02_20.x86_64.tar.gz`: `dxc`, `libdxcompiler.so`, `libdxil.so`, with the same licences), checked by SHA-256, into the same folder. It is never committed or put in a release download. |
 | KH1 voice clips for the KH1 outfit | Recordings from another game. Not part of the release: the KH1 outfit speaks with Sora's KH3 battle voice. |
 | Saves, logs, me3 itself, build output, `node_modules` | Personal, downloaded or generated. |
 | Third-party C code used only by the decompilation tooling (zlib 1.2.8, hde64) | Not needed by the mod. |
 | Development aids: test profiles and launchers, the instant-Zettaflare test aid, the extra test control file (`KH_ER_CTL_EXTRA`), debug probes and cheats | Not part of the released mod. The test-aid module is removed. kh-er ignores every development or cheat key in its settings file `kh-er.ini` (or the old `kh-er.ctl`) (`test.*`, `dbg.*`, `party.word`, `party.recover`, invulnerability, unlocks or levels given, scripted input; list in `crates/kh-er/src/control.rs`), unless it is built with the cargo feature `dev-aids`, which is off and never used by the setup. |
+
+## The files the setup makes: never share them
+
+The setup (`setup.exe`, `setup-linux`, `setup/setup.js`) builds everything the mod needs **on the player's PC, from the
+player's own copies of the games**. Those files contain content of KINGDOM HEARTS III and ELDEN RING, or are derived
+from it: the extracted and converted game files, the research data made from them, the asset pack and its data tables,
+and the shaders translated from the game's own compiled shaders (`materials.wgsl` and the other `.wgsl` / `.dxil` files of
+the pack). They are:
+
+| Where | What |
+|---|---|
+| `assets/` | the KH3 files extracted from the player's paks |
+| `assets_converted/` | the same files converted: models, textures, animations, sounds, packages as JSON |
+| `audit/` | the research data decoded from KH3 (reflection, animation graphs, physics, sound and effect tables), and where the pak key is in the player's executable |
+| `build/` | the asset pack (`build/sora_pack`: models, textures, sounds, menus, movies, translated shaders, the `gen` data tables), the generated code (`build/gen`), the research scripts' outputs and work files (`build/sora_tmp`, `build/packgen`), and the work folders of the converters and the shader tools (`build/cache` holds the game's compiled shaders and their disassembly) |
+| `sheets/` other than `sheets/port` | the sheets regenerated from KH3 (`sheets/reflect`, `sheets/entities`, `sheets/systems`, `sheets/schemas`, ...) |
+| `sheets/port/sora-assets.json`, `party-assets.json`, `sora-sounds.json` | the setup rewrites rows of these: the sizes and hashes of the pack's files, and names read from the player's install |
+| `er/mods/kh-er-selfcheck.txt`, `er/logs/` | the self-check's report and the mod's logs, which quote lines of the game's text |
+| `er/saves/`, the mod's save file `KHSora.sl2` | the player's own progress |
+
+`tools/config.json` (where the games are) and `tools/third_party/ogg-vorbis-decoder/ogg-vorbis-decoder.min.js` (a copy
+from the npm package) hold no game content, but are the player's own as well.
+
+**These files must not be distributed** (uploaded, shared, or included in anything that is). Each player must build them
+from their own copies of the games, with the setup. The project distributes only its own code and tools (and the
+third-party code listed above, with its licences), never a file the setup makes, and it is not responsible for anyone
+who distributes files made by the setup. The MIT licence ([LICENSE](LICENSE)) covers the project's own code and
+documentation only: it never covers the files the setup makes, which stay the game owners' content. Every folder above
+is git-ignored, and `release-tools/scan.js` refuses game files in the repository and in a release download.
 
 ## Sheets: what was changed for release
 
@@ -94,7 +125,9 @@ node release-tools/scan.js [--key-from "<KINGDOM HEARTS III.exe>" --key-offset <
 
 The scan refuses:
 - game file types, by extension and by file signature (DCX, BND4, BHF4, DDS, RIFF, Ogg, glTF, Unreal packages,
-  executables; in a release folder, `--release-binaries`, only the three prebuilt binaries are allowed);
+  executables, Linux programs; in a release folder, `--release-binaries`, only the three prebuilt binaries (in the
+  linux-x64 folder also the three Linux tools) and the setup program of `release-tools/setup_exe.json` /
+  `setup_linux.json` are allowed);
 - PEM keys, and with `--key-from`, the KH3 key;
 - files over 50 MB;
 - absolute paths of the developer's machine in code and config files;

@@ -102,6 +102,13 @@ fn leader_action(feed: &crate::leader_magic::MenuFeed, status: &FriendStatus, ki
     }
 }
 
+/// (2026-10-28, the user: "remove the "error" sound from shortcut commands for every character, spamming magic makes it
+/// constantly play", "only play the error sound when you don't have enough MP for it") A refused SHORTCUT plays the
+/// refused SE only when its row is short of MP, or is an MP command while MP Charge runs; any other refusal is silent.
+fn out_of_mp(status: &FriendStatus, row: &CommandRow) -> bool {
+    row.mp_short || (status.mp_charge_left > 0.0 && kh_core::magic::items::item_of_command(row.kind).is_none())
+}
+
 /// (party X2) The row of a leader's entry (the HUD's row for a slot or a shortcut).
 fn leader_row(feed: &crate::leader_magic::MenuFeed, status: &FriendStatus, kind: u8) -> CommandRow {
     use kh_core::command::leader::{goofy, LeaderKind};
@@ -233,7 +240,9 @@ impl FriendMenu {
                         Some(a)
                     }
                     None => {
-                        self.events.push(MenuEvent::Refused);
+                        if out_of_mp(status, &row) {
+                            self.events.push(MenuEvent::Refused);
+                        }
                         None
                     }
                 }
@@ -248,7 +257,9 @@ impl FriendMenu {
                 let s = shortcut(chara, slot)?;
                 let row = spell_row(status, &s);
                 if !row.enabled {
-                    self.events.push(MenuEvent::Refused);
+                    if out_of_mp(status, &row) {
+                        self.events.push(MenuEvent::Refused);
+                    }
                     return None;
                 }
                 self.events.push(MenuEvent::ShortcutExecuted);
@@ -850,6 +861,11 @@ impl DonMenu {
                 let s = cx.spell_of(cmd)?;
                 let mut row = cx.spell_row(s);
                 row.kind = kind;
+                // (2026-10-28, the user: "remove how much MP something costs from Donald's shortcut commands") a row short
+                // of MP shows its plain name (still greyed, `mp_short` kept); the Magic list's rows keep their reason
+                if row.mp_short {
+                    row.name = display_name(s, &cx.d);
+                }
                 Some(DonRow { row, act: DonAct::Cast(DonCmd::Spell(s)) })
             }
         }
@@ -1012,7 +1028,7 @@ impl FriendMenu {
                 }
                 let slot = [PadButton::FaceRight, PadButton::FaceTop, PadButton::FaceLeft, PadButton::FaceBottom].iter().position(|b| pressed(*b))?;
                 let Some(r) = panel[slot].filter(|r| r.row.enabled) else {
-                    if panel[slot].is_some() {
+                    if panel[slot].is_some_and(|r| matches!(r.act, DonAct::Cast(_)) && out_of_mp(status, &r.row)) {
                         self.events.push(MenuEvent::Refused);
                     }
                     return None;
@@ -1094,7 +1110,11 @@ impl FriendMenu {
                     if pressed(PadButton::ATTACK) {
                         // the spell may have become uncastable meanwhile (MP, an attune cast)
                         if cx.spell_of(pick.cmd).is_none_or(|s| cx.check(s).is_err()) {
-                            self.events.push(MenuEvent::Refused);
+                            // (2026-10-28, `out_of_mp`) from a shortcut, the refused SE only for MP
+                            let mp = cx.spell_of(pick.cmd).is_some_and(|s| matches!(cx.check(s), Err(Refusal::NotEnoughMp { .. })));
+                            if !pick.shortcut || mp {
+                                self.events.push(MenuEvent::Refused);
+                            }
                             return None;
                         }
                         let who = self.don.feed.members.get(pick.cursor as usize).map(|m| m.id);
@@ -1237,13 +1257,9 @@ impl FriendMenu {
         let mut shortcut = [CommandRow::default(); 4];
         for (slot, r) in panel.iter().enumerate() {
             if let Some(r) = r {
+                // (2026-10-28, the user: "remove how much MP something costs from Donald's shortcut commands") no MP after
+                // the name, Quick Cast's included: Quick Cast keeps only its Reaction mark (`quick`'s glow)
                 shortcut[slot] = r.row;
-                // Quick Cast: the MP after the name (the plain name: a greyed row's reason is replaced by its MP)
-                if let (Some((costs, _)), DonAct::Cast(DonCmd::Spell(s))) = (d.quick, r.act) {
-                    if let Some(mp) = costs[slot] {
-                        shortcut[slot].name = intern(format!("{} {mp}MP", display_name(s, &cx.d)));
-                    }
-                }
             }
         }
         let situations: Vec<SituationRow> = d.y_rows.iter().map(|r| y_situation(&d.feed, r, &cx.d)).collect();
@@ -1440,7 +1456,12 @@ mod don_menu_tests {
 
     #[test]
     fn magic_lists_the_elements_then_each_element_s_three_lines() {
-        let mut t = T::new(DonLearned::start());
+        // (DONLINE2, the user 2026-10-27: "Donald should not start with access to Flood or Flare") the start + Flare / Flood Lv 1
+        // from their line-2 bosses, so that line 2 is listed
+        let mut l = DonLearned::start();
+        l.line2[Element::Fire.index()] = 1;
+        l.line2[Element::Water.index()] = 1;
+        let mut t = T::new(l);
         t.tap(DOWN);
         t.tap(A);
         assert_eq!(t.m.don.list, DonList::Elements);
@@ -1758,11 +1779,11 @@ mod don_menu_tests {
     #[test]
     fn three_palettes_flip_with_lb_and_the_d_pad_and_hold_spells_and_attunements() {
         let mut t = T::new(DonLearned::start());
-        // no block fed yet: the start's palettes
+        // no block fed yet: the start's palettes; (DONLINE2) no Flare / Flood at the start: their slots stay empty until learned
         assert_eq!(t.press(&[LB]), None);
         assert_eq!(t.m.state, MenuState::Shortcut);
         let s = t.snap();
-        assert_eq!(s.shortcut.map(|r| strip(r.name)), ["Fire", "Flare", "Water", "Flood"].map(String::from));
+        assert_eq!(s.shortcut.map(|r| strip(r.name)), ["Fire", "", "Water", ""].map(String::from));
         assert_eq!(t.press(&[LB, B]), cast(SpellRef::Line1(Element::Fire, 1)), "LB + B: the first slot");
         t.press(&[LB]);
         t.press(&[LB, DOWN]);
@@ -1806,12 +1827,30 @@ mod don_menu_tests {
         let (costs, glow) = t.m.don.quick.expect("Quick Cast");
         assert!(costs[0].is_some_and(|c| c > 0) && costs[3].is_none(), "{costs:?}");
         assert_eq!(glow, Some(1), "Thunder on a Wet target: Conduct");
-        assert!(t.snap().shortcut[0].name.ends_with("MP"), "{}", t.snap().shortcut[0].name);
+        assert!(!t.snap().shortcut[0].name.contains("MP"), "no MP on the shortcuts (the user, 2026-10-28): {}", t.snap().shortcut[0].name);
         assert_eq!(t.m.don_view(Chara::Donald, &t.s).unwrap().quick.unwrap().1, Some(1));
         // Fire on Wet is a Fizzle: no mark
         t.m.don.feed.custom.shortcuts[0][1] = 0;
         t.press(&[LB]);
         assert_eq!(t.m.don.quick.unwrap().1, None, "Fizzle is not a reaction worth marking");
+    }
+
+    #[test]
+    fn a_refused_shortcut_buzzes_only_for_mp() {
+        // (2026-10-28, the user: "only play the error sound when you don't have enough MP for it")
+        use kh_core::command::leader::donald as block;
+        let mut t = T::new(DonLearned::all());
+        t.m.don.feed.custom.filled = true;
+        t.m.don.feed.custom.shortcuts[0] = [block::line1(0, 1), block::ultimate(0), 0, 0];
+        t.press(&[LB]);
+        // Inferno below full power: greyed for Resonance, not MP: silent
+        assert_eq!(t.press(&[LB, PadButton::FaceTop]), None);
+        assert!(!t.m.events.contains(&MenuEvent::Refused), "{:?}", t.m.events);
+        t.press(&[LB]);
+        // no MP: Fire is greyed for MP: the refused SE
+        t.s.mp = 0;
+        assert_eq!(t.press(&[LB, B]), None);
+        assert!(t.m.events.contains(&MenuEvent::Refused), "{:?}", t.m.events);
     }
 
     #[test]

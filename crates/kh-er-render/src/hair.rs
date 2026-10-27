@@ -45,7 +45,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-static ON: AtomicBool = AtomicBool::new(true);
+/// (HAIRPERF) off by default: KH3's own hair draw (kh-er `r.hair`, frame.rs); the first read takes it so, no reload.
+static ON: AtomicBool = AtomicBool::new(false);
 /// The shaders as last read: 0 = no hair files for the drawn outfit, 1 = read with the hair path (ER87's files), 2 = there,
 /// not used, 3 = read with ER91's files.
 static READ: AtomicU8 = AtomicU8::new(0);
@@ -104,6 +105,27 @@ pub fn set_late_far(metres: f32) {
 
 pub fn late_far() -> f32 {
     f32::from_bits(LATE_FAR.load(Ordering::Relaxed))
+}
+
+/// (HAIRPERF, `r.hair_point_px`, default 6; 0 = never) ER91's hair coverage at ONE point a pixel instead of four while a
+/// centimetre of him covers at least this many pixels on screen (char_common.wgsl `kh91_cover`, kh.fade.z): MEASURED in
+/// the user's close-up, his hair took ~10 ms of GPU a frame (the game 25 fps, 58 with `r.hair = 0`); the four points only
+/// matter while a strand end is thinner than a pixel. 6 px/cm = about 1.8 m from him at 1440p.
+static POINT_PX: AtomicU32 = AtomicU32::new(0x40C0_0000);
+/// Frames drawn with the one-point coverage / with four since the last status line.
+static POINT_FRAMES: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
+
+pub fn set_point_px(px_per_cm: f32) {
+    POINT_PX.store(px_per_cm.max(0.0).to_bits(), Ordering::Relaxed);
+}
+
+/// The coverage at one point this frame: `px_per_cm` = screen pixels a centimetre of him covers (`height / (2 tan(fov_y / 2)
+/// d)` at his nearest point). Counted for the status line.
+pub(crate) fn point_wanted(px_per_cm: f32) -> bool {
+    let at = f32::from_bits(POINT_PX.load(Ordering::Relaxed));
+    let point = at > 0.0 && px_per_cm >= at;
+    POINT_FRAMES[usize::from(!point)].fetch_add(1, Ordering::Relaxed);
+    point
 }
 
 pub(crate) fn drawn_late() {
@@ -307,7 +329,9 @@ pub(crate) fn status() -> Option<String> {
         r @ (1 | 3) => {
             let (d, m) = (LATE_DRAWN.swap(0, Ordering::Relaxed), LATE_MISSED.swap(0, Ordering::Relaxed));
             let why = LATE_WHY.lock().map(|w| *w).unwrap_or("");
-            Some(format!("({}) hair path on: {n} fringe draw(s) this second{}; at the velocity split (r.hair_late {}): {d} frame(s), {m} missed{}{}", if r == 3 { "ER91" } else { "ER87" }, if FRINGE.load(Ordering::Relaxed) { "" } else { " (no fringe shaders)" }, late() as u8, if m > 0 { format!(" (latest: {why})") } else { String::new() }, if r == 3 { crate::hair91::status() } else { String::new() }))
+            let (one, four) = (POINT_FRAMES[0].swap(0, Ordering::Relaxed), POINT_FRAMES[1].swap(0, Ordering::Relaxed));
+            let point = if r == 3 { format!("; (HAIRPERF) coverage at one point in {one} frame(s), four in {four} (r.hair_point_px {:.1})", f32::from_bits(POINT_PX.load(Ordering::Relaxed))) } else { String::new() };
+            Some(format!("({}) hair path on: {n} fringe draw(s) this second{}; at the velocity split (r.hair_late {}): {d} frame(s), {m} missed{}{point}{}", if r == 3 { "ER91" } else { "ER87" }, if FRINGE.load(Ordering::Relaxed) { "" } else { " (no fringe shaders)" }, late() as u8, if m > 0 { format!(" (latest: {why})") } else { String::new() }, if r == 3 { crate::hair91::status() } else { String::new() }))
         }
         _ => None,
     }

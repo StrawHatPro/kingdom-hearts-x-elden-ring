@@ -2,4 +2,6 @@
 * text=auto eol=lf
 *.bat text eol=crlf
 *.cmd text eol=crlf
+# (the Linux scripts: LF only, or sh cannot run them)
+*.sh text eol=lf
 *.dxil binary

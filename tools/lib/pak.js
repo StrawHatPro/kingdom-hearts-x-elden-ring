@@ -161,7 +161,7 @@ function overlayLanguages(p) {
 function mountAll() {
   const paks = listPaks().filter((p) => !isOverlayPak(p)).sort((a, b) => {
     const pa = /_P\.pak$/i.test(a) ? 1 : 0, pb = /_P\.pak$/i.test(b) ? 1 : 0;
-    return pa - pb || a.localeCompare(b);
+    return pa - pb || a.localeCompare(b, 'en');
   });
   const files = new Map();
   for (const p of paks) {

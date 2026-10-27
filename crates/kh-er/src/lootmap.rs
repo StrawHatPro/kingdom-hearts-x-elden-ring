@@ -2299,6 +2299,33 @@ pub fn listed_on_kh_screens(item: &ErItem) -> bool {
     !item.hidden
 }
 
+/// (KEYPOP, the user 2026-10-27: "also multiplayer items should give the "key item" pop up that maps do") AN ITEM OF THE
+/// NORMAL INVENTORY THAT GETS KH3'S OBTAINED POPUP when it comes, as the key items (maps) do: by its category, the online
+/// rule's own test (`online_item`: a goods row of the game's "Multiplayer Items" group, sheet sora-er-shop
+/// `online.sort_groups`), never a row Elden Ring hides. (The key-item inventory's own rows get it already: loot.rs.)
+pub fn key_item_popup(item: &ErItem) -> bool {
+    listed_on_kh_screens(item) && online_item(item, &Ctx::of(Source::Unknown, 0)).is_some()
+}
+
+#[cfg(test)]
+mod keypop_tests {
+    use super::*;
+
+    /// (KEYPOP) Every online item (sortGroupId 120: fingers, effigies, the Taunter's Tongue, the Furlcalling Finger Remedy,
+    /// consumable or not) gets the key-item popup; another group, an unknown row or a hidden row never.
+    #[test]
+    fn keypop_online_items_get_the_key_item_popup() {
+        let online = |id: u32, consumable: bool| ErItem { cat: Some(Cat::Goods), id, sort_group: 120, consumable, known: true, ..ErItem::default() };
+        for (id, consumable) in [(100, true), (101, false), (106, false), (102, true), (8170, false)] {
+            assert!(key_item_popup(&online(id, consumable)), "online goods {id}");
+        }
+        assert!(!key_item_popup(&ErItem { sort_group: 10, ..online(1000, true) }), "a flask-like goods of another group");
+        assert!(!key_item_popup(&ErItem { known: false, ..online(106, false) }), "a row not found");
+        assert!(!key_item_popup(&ErItem { hidden: true, ..online(166, false) }), "a row Elden Ring never shows");
+        assert!(!key_item_popup(&ErItem { cat: Some(Cat::Weapon), ..online(106, false) }), "goods only");
+    }
+}
+
 /// (ONLINEITEMS fix) THE NO-NAME HALF OF THE HIDDEN RULE: an item with no name text is hidden only when every name file of
 /// its table has given a name this session (the files are proven readable), so a wrong file number never hides a table.
 pub fn unnamed_hidden(name_files: &[u32], proven: &dyn Fn(u32) -> bool, has_name: bool) -> bool {

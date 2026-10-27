@@ -16,14 +16,12 @@
 //!
 //! (IMPL_ER52, the user 2026-10-13: "remove the grace bit on the ground for every grace as well as it's collision") THE
 //! GRACE'S MOUND = the model of that same map object `AEG099_060`. UNTESTED IN GAME; NO GAME FUNCTION IS CALLED:
-//! - NOT DRAWN (`grace.hide_mound`, default 1): the object's model (`CSGeomModelIns`, a `CSModelIns`: + 0x10 its
-//!   `CSFD4ModelItem` whose name is at + 0x6C0, + 0x18 its `CSModelDispEntity`) is found among the object's own words by
-//!   CLASS and by the model's NAME (it must contain `AEG099_060`), and bit 0 of the display entity's first flag word
-//!   (+ 0x20) is cleared whenever it is set: the bit the cutscene figure (figure.rs, MEASURED) and the scene's grace
-//!   (cutgrace.rs) are hidden with. The object itself stays: its effect slot, its event entity, the grace's character
-//!   (c1000) and with them the game's prompt / talk of the grace are untouched. `grace.hide_mound = 0` sets the bit
-//!   again (only where we cleared it). Every grace object, hidden graces included; in cutscenes the scene's own copies
-//!   are cutgrace.rs's.
+//! - NOT DRAWN (`grace.hide_mound`, default 1): gracehide.rs's (GRACENOSCAN, the user 2026-10-27: "what about the drops in
+//!   frame when I was running around?"): it reads the model of every grace object found here ([`objects`]; MEASURED at
+//!   object + 0x1D0) every frame and clears bit 0 of its display flags. The look made here gave up three frames after an
+//!   object was found, before the game had made its model (`CSGeomModelInsDelayCreator`): moved there and made patient.
+//!   The object itself stays: its effect slot, its event entity, the grace's character (c1000) and with them the game's
+//!   prompt / talk of the grace are untouched. In cutscenes the scene's own copies are cutgrace.rs's.
 //! - NO COLLISION FOR SORA (`grace.mound_collision`, default 0): his casts (world.rs `ErWorld::cast`) skip every contact on
 //!   a body whose owner (`CSPhysIns.owner`, owner type 6) is one of these objects ([`mound_body`]). THE GAME'S OWN BODY
 //!   STAYS IN THE HAVOK WORLD (no route to disable one body is known without reading the executable): the hidden
@@ -65,6 +63,11 @@ pub fn set_ids(ids: [i32; 2]) {
 static MOUNDS: RwLock<Vec<usize>> = RwLock::new(Vec::new());
 static PASSABLE: AtomicBool = AtomicBool::new(false);
 
+/// (GRACENOSCAN) The grace objects known (addresses, checked by class and name this frame): gracehide.rs reads their models.
+pub fn objects() -> Vec<usize> {
+    MOUNDS.read().map(|m| m.clone()).unwrap_or_default()
+}
+
 /// (IMPL_ER52) The body's owner (`CastHit::owner_ptr` of owner type 6) is a grace's map object (its mound).
 pub fn mound_body(owner: usize) -> bool {
     owner != 0 && MOUNDS.read().is_ok_and(|m| m.contains(&owner))
@@ -73,82 +76,6 @@ pub fn mound_body(owner: usize) -> bool {
 /// (IMPL_ER52) Sora's casts pass through the graces' mounds (`grace.mound_collision` is not 1 and the save points are on).
 pub fn mounds_passable() -> bool {
     PASSABLE.load(Relaxed)
-}
-
-/// (IMPL_ER52) Where the model is looked for in the object: its first bytes (the SDK sizes `CSWorldGeomIns` 0x430; its
-/// subclasses are larger); a model past `BASE_END` is taken only by its name.
-const MODEL_SCAN: usize = 0x800;
-const BASE_END: usize = 0x430;
-const MODEL_ITEM: usize = 0x10;
-const MODEL_DISP: usize = 0x18;
-const DISP_FLAGS: usize = 0x20;
-const ITEM_NAME: usize = 0x6C0;
-const MODEL_CLASS: &str = "CSGeomModelIns@CS";
-
-/// (IMPL_ER52) One model-like pointer of an object: (its offset in the object, of class `CSGeomModelIns`, its model name).
-pub type ModelCandidate = (usize, bool, Option<String>);
-
-/// (IMPL_ER52) WHICH OF THE OBJECT'S MODELS IS THE MOUND (pure): every one whose name contains the grace's asset; without
-/// a readable name, the one `CSGeomModelIns` inside the base object's extent when it is the only model there. Indices.
-pub fn pick_models(cands: &[ModelCandidate]) -> Vec<usize> {
-    let named: Vec<usize> = cands.iter().enumerate().filter(|(_, c)| c.2.as_ref().is_some_and(|n| n.to_ascii_uppercase().contains(ASSET))).map(|(k, _)| k).collect();
-    if !named.is_empty() {
-        return named;
-    }
-    let inside: Vec<usize> = cands.iter().enumerate().filter(|(_, c)| c.0 < BASE_END).map(|(k, _)| k).collect();
-    match inside.as_slice() {
-        [k] if cands[*k].1 && cands[*k].2.is_none() => vec![*k],
-        _ => Vec::new(),
-    }
-}
-
-/// (IMPL_ER52) A pointer that is a model (class `...ModelIns`, a `CSModelDispEntity...` at + 0x18): (geom model class,
-/// its name, its display entity).
-fn model_at(p: usize) -> Option<(bool, Option<String>, usize)> {
-    let class = class_of(p)?;
-    if !class.ends_with("ModelIns@CS") {
-        return None;
-    }
-    let disp = word(p + MODEL_DISP).filter(|d| crate::game::plausible(*d))?;
-    if !class_of(disp).is_some_and(|c| c.starts_with("CSModelDispEntity")) {
-        return None;
-    }
-    let name = word(p + MODEL_ITEM).filter(|i| crate::game::plausible(*i)).and_then(|item| crate::probe::dl_string(item + ITEM_NAME));
-    Some((class == MODEL_CLASS, name, disp))
-}
-
-/// (IMPL_ER52) The mound of one grace object.
-#[derive(Clone, Debug, Default)]
-struct Mound {
-    /// (offset in the object, model, display entity) of each model taken; None = not looked for yet, empty = none found.
-    models: Option<Vec<(usize, usize, usize)>>,
-    /// The flag words we cleared bit 0 of (to set it again when the key goes off).
-    cleared: Vec<usize>,
-    told: bool,
-    /// Full looks made (3 at most).
-    looks: u8,
-}
-
-/// (IMPL_ER52) What one model-like pointer of an object is: (its candidate entry, the model, its display entity).
-type Found = (ModelCandidate, usize, usize);
-
-/// (IMPL_ER52) The models among the object's words at `offsets` (None = every word of its first `MODEL_SCAN` bytes).
-fn models_of(geom: usize, offsets: Option<&[usize]>) -> Vec<Found> {
-    let words: Vec<(usize, usize)> = match offsets {
-        Some(list) => list.iter().filter_map(|off| word(geom + off).map(|p| (*off, p))).collect(),
-        None => {
-            let mut raw = vec![0u8; MODEL_SCAN - 0x18];
-            if !read(geom + 0x18, &mut raw) {
-                return Vec::new();
-            }
-            raw.chunks_exact(8).enumerate().map(|(k, c)| (0x18 + k * 8, usize::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))).collect()
-        }
-    };
-    words
-        .into_iter()
-        .filter(|(_, p)| crate::game::plausible(*p) && *p != geom)
-        .filter_map(|(off, p)| model_at(p).map(|(g, n, d)| ((off, g, n), p, d)))
-        .collect()
 }
 
 static VT_GEOM: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];
@@ -173,7 +100,7 @@ fn is_geom(p: usize) -> bool {
 }
 
 /// The object's MSB part name (its first 40 characters).
-fn part_name(geom: usize) -> Option<String> {
+pub(crate) fn part_name(geom: usize) -> Option<String> {
     let name = word(geom + GEOM_PART).and_then(word)?;
     let mut b = [0u8; 80];
     if !read(name, &mut b) {
@@ -368,13 +295,8 @@ struct State {
     /// The records we zeroed: (record, sfx id, what its floats were).
     hidden: Vec<(usize, u32, [f32; FLOATS])>,
     told: Option<bool>,
-    /// (IMPL_ER52) The mounds (by object address; dropped with the object), the model offsets learnt, the plan as said,
-    /// bits cleared again this second (the game had set them), whether this frame's full look was made.
-    mounds: std::collections::HashMap<usize, Mound>,
-    model_offsets: Vec<usize>,
+    /// (IMPL_ER52) The plan as said (the mounds themselves are gracehide.rs's: GRACENOSCAN).
     plan_told: Option<crate::savepoint_rules::MoundPlan>,
-    recleared: u32,
-    looked_now: bool,
     writes: u32,
     spent: std::time::Duration,
     looked: u32,
@@ -420,10 +342,6 @@ pub fn frame(control: &Control, tick: bool) {
         erlog!("grace: the graces' mound (the model of their map object {ASSET}) is {} (grace.hide_mound); its collision is {} (grace.mound_collision)", if plan.hide { "NOT DRAWN" } else { "drawn by the game" }, if plan.collide { "the game's: Sora meets it" } else { "OFF FOR SORA: his casts pass through its body (the game's own body stays: its camera and the hidden Tarnished still meet it)" });
     }
     PASSABLE.store(!plan.collide, Relaxed);
-    if !plan.hide {
-        restore_mounds(state);
-    }
-    state.looked_now = false;
     let started = std::time::Instant::now();
     let Some(system) = crate::probe::fx_system() else { return };
     if !hide {
@@ -467,7 +385,7 @@ pub fn frame(control: &Control, tick: bool) {
                 }
                 if is_geom(geom) && is_grace(geom) && state.graces.len() < 256 {
                     state.graces.push(geom);
-                    crate::gracehide::hurry(); // (SV) its model is searched for soon
+                    crate::gracehide::hurry(); // (SV) its model is looked for (GRACENOSCAN: gracehide.rs reads it from the object)
                 } else {
                     state.other.insert(geom);
                 }
@@ -485,7 +403,6 @@ pub fn frame(control: &Control, tick: bool) {
         let Some(name) = name else {
             state.graces.swap_remove(k);
             state.steady.remove(&geom);
-            state.mounds.remove(&geom);
             continue;
         };
         k += 1;
@@ -505,9 +422,6 @@ pub fn frame(control: &Control, tick: bool) {
             steady.flips = 0;
         }
         state.seen.push(Seen { home: home_of_object(&name, block), block, local, flame, entity });
-        if plan.hide {
-            hold_mound(state, geom, &name, entity, plan);
-        }
         if !hide {
             continue;
         }
@@ -536,10 +450,6 @@ pub fn frame(control: &Control, tick: bool) {
     state.looked += 1;
     if tick {
         erlog!("graceflame: {} grace object(s) known ({} with their flame = shown by the game, {} without = hidden), {} effect(s) zeroed this second ({} held so far) | {:.0} us a frame | search round {} ({} block(s))", state.graces.len(), state.seen.iter().filter(|o| o.flame).count(), state.seen.iter().filter(|o| !o.flame).count(), state.writes, state.hidden.len(), state.spent.as_secs_f64() * 1.0e6 / state.looked.max(1) as f64, state.rounds, state.vectors.len());
-        if state.mounds.values().any(|m| m.models.is_some()) {
-            erlog!("graceflame: (IMPL_ER52) mounds: {} not drawn, {} without a model found; the game drew {} again this second", state.mounds.values().filter(|m| !m.cleared.is_empty()).count(), state.mounds.values().filter(|m| m.models.as_ref().is_some_and(|v| v.is_empty())).count(), state.recleared);
-        }
-        state.recleared = 0;
         state.writes = 0;
         state.spent = std::time::Duration::ZERO;
         state.looked = 0;
@@ -567,90 +477,6 @@ pub fn hurry() {
     }
 }
 
-/// (IMPL_ER52) THE MOUND OF ONE GRACE OBJECT, NOT DRAWN: its model found once (the offsets learnt from an earlier object
-/// are tried first; one full look a frame at most, three per object), then bit 0 of its display flags cleared whenever
-/// it is set.
-fn hold_mound(state: &mut State, geom: usize, name: &str, entity: u32, plan: crate::savepoint_rules::MoundPlan) {
-    let known = state.mounds.get(&geom).is_some_and(|m| m.models.is_some());
-    if !known {
-        let mut found = if state.model_offsets.is_empty() { Vec::new() } else { models_of(geom, Some(&state.model_offsets)) };
-        let mut picked = pick_models(&found.iter().map(|c| c.0.clone()).collect::<Vec<_>>());
-        if picked.is_empty() {
-            if state.looked_now {
-                return;
-            }
-            state.looked_now = true;
-            found = models_of(geom, None);
-            picked = pick_models(&found.iter().map(|c| c.0.clone()).collect::<Vec<_>>());
-            let mound = state.mounds.entry(geom).or_default();
-            mound.looks += 1;
-            if picked.is_empty() {
-                if mound.looks >= 3 {
-                    erlog!("grace: {name} (entity {entity}): NO MODEL OF ITS OWN FOUND among its first {MODEL_SCAN:#x} bytes (3 looks; model-like pointers: {}): ITS MOUND STAYS DRAWN", if found.is_empty() { "none".to_string() } else { found.iter().map(|((off, g, n), _, _)| format!("+{off:#x} {} {:?}", if *g { "CSGeomModelIns" } else { "another ModelIns" }, n)).collect::<Vec<_>>().join(", ") });
-                    mound.models = Some(Vec::new());
-                    mound.told = true;
-                }
-                return;
-            }
-            for k in &picked {
-                let off = found[*k].0 .0;
-                if !state.model_offsets.contains(&off) && state.model_offsets.len() < 8 {
-                    state.model_offsets.push(off);
-                }
-            }
-        }
-        let mound = state.mounds.entry(geom).or_default();
-        if !mound.told {
-            mound.told = true;
-            erlog!("grace: {name} (entity {entity}): ITS MOUND IS NOT DRAWN: {} | its collision: {}", picked.iter().map(|k| { let ((off, g, n), m, d) = &found[*k]; format!("{} at object + {off:#x} ({m:#x}, model {}, display flags {:#x})", if *g { "CSGeomModelIns" } else { "a model" }, n.as_deref().unwrap_or("name unreadable"), u32_at(d + DISP_FLAGS).unwrap_or(0)) }).collect::<Vec<_>>().join("; "), if plan.collide { "the game's (grace.mound_collision = 1)" } else { "OFF FOR SORA (his casts skip this object's bodies)" });
-        }
-        mound.models = Some(picked.iter().map(|k| (found[*k].0 .0, found[*k].1, found[*k].2)).collect());
-    }
-    let Some(mound) = state.mounds.get_mut(&geom) else { return };
-    let Some(models) = mound.models.clone() else { return };
-    for (off, model, disp) in models {
-        // the chain as found: the object still holds the model, the model its display entity
-        if word(geom + off) != Some(model) || word(model + MODEL_DISP) != Some(disp) {
-            mound.models = None;
-            mound.cleared.clear();
-            mound.told = false;
-            return;
-        }
-        let w = disp + DISP_FLAGS;
-        let Some(now) = u32_at(w) else { continue };
-        if now & 1 != 0 {
-            if mound.cleared.contains(&w) {
-                state.recleared += 1;
-            } else if mound.cleared.len() < 8 {
-                mound.cleared.push(w);
-            }
-            // SAFETY: the flag word of a live model's display entity, reached from the object through the chain checked
-            // just now (classes and name checked when it was found), read an instant ago (the write figure.rs makes for
-            // the cutscene figure); game thread.
-            unsafe { std::ptr::write_volatile(w as *mut u32, now & !1) };
-        }
-    }
-}
-
-/// (IMPL_ER52) The mounds we hid are drawn again (bit 0 set again where we cleared it and the chain still holds).
-fn restore_mounds(state: &mut State) {
-    for (geom, mound) in state.mounds.iter_mut() {
-        if let Some(models) = &mound.models {
-            for (off, model, disp) in models {
-                let w = disp + DISP_FLAGS;
-                if mound.cleared.contains(&w) && word(geom + off) == Some(*model) && word(model + MODEL_DISP) == Some(*disp) {
-                    if let Some(now) = u32_at(w).filter(|n| n & 1 == 0) {
-                        // SAFETY: as in `hold_mound`: checked and read an instant ago; game thread.
-                        unsafe { std::ptr::write_volatile(w as *mut u32, now | 1) };
-                    }
-                }
-            }
-        }
-        mound.cleared.clear();
-        mound.told = false;
-    }
-}
-
 /// The effects we zeroed get their floats back, when they are still the same effects.
 fn restore(state: &mut State, system: usize) {
     for (record, sfx, was) in state.hidden.drain(..) {
@@ -668,9 +494,6 @@ pub fn release() {
     if let Ok(mut guard) = STATE.lock() {
         if let (Some(state), Some(system)) = (guard.as_mut(), crate::probe::fx_system()) {
             restore(state, system);
-        }
-        if let Some(state) = guard.as_mut() {
-            restore_mounds(state); // (IMPL_ER52)
         }
         *guard = None;
         if let Ok(mut m) = MOUNDS.write() {
@@ -708,22 +531,6 @@ mod tests {
         s.note((0x10, 1011));
         s.note((0, 0));
         assert_eq!(s.seen, [(0, 0), (0x10, 1011)]);
-    }
-
-    /// (IMPL_ER52) The mound's model is the one named after the grace's asset; an unnamed one only when it is alone.
-    #[test]
-    fn the_mound_is_the_model_named_after_the_grace() {
-        let named = |off: usize, n: &str| (off, true, Some(n.to_string()));
-        // by name, wherever it lies (LOD models of the same asset too); another model is never taken
-        assert_eq!(pick_models(&[named(0x1b0, "AEG099_060"), (0x1c8, false, Some("AEG099_090".into())), named(0x600, "aeg099_060_l1")]), vec![0, 2]);
-        assert_eq!(pick_models(&[named(0x1b0, "AEG007_310")]), Vec::<usize>::new());
-        // no readable name: the one CSGeomModelIns inside the base object, when it is the only model there
-        assert_eq!(pick_models(&[(0x1b0, true, None), (0x500, true, None)]), vec![0]);
-        assert_eq!(pick_models(&[(0x1b0, true, None), (0x1c0, true, None)]), Vec::<usize>::new());
-        assert_eq!(pick_models(&[(0x1b0, false, None)]), Vec::<usize>::new());
-        assert_eq!(pick_models(&[(0x500, true, None)]), Vec::<usize>::new());
-        assert_eq!(pick_models(&[(0x1b0, true, None), (0x1c0, true, Some("AEG001_000".into()))]), Vec::<usize>::new());
-        assert_eq!(pick_models(&[]), Vec::<usize>::new());
     }
 
     fn object(name: &str, block: u32, local: Option<[f32; 3]>, flame: bool) -> Seen {

@@ -88,7 +88,7 @@ for (const s of dataSecs) {
 let withoutVtable = 0;
 for (const c of cols.values()) if (!classes.has(c.mangled)) { classes.set(c.mangled, { name: c.name, mangled: c.mangled, bases: c.bases, vtables: [] }); withoutVtable++; }
 for (const [m, t] of baseTypes) if (!classes.has(m)) { classes.set(m, t); withoutVtable++; }
-const list = [...classes.values()].sort((a, c) => a.name.localeCompare(c.name));
+const list = [...classes.values()].sort((a, c) => a.name.localeCompare(c.name, 'en'));
 const OUT = path.join(ROOT, 'audit', 'rtti.json');
 fs.writeFileSync(OUT, '[\n' + list.map((c) => JSON.stringify(c)).join(',\n') + '\n]\n');
 fs.mkdirSync(path.join(ROOT, 'build'), { recursive: true });

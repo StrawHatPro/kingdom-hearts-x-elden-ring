@@ -53,6 +53,16 @@ You don't need to install anything else. The setup has everything it needs built
 If something goes wrong, the setup stops and says why. Fix it and run `setup.exe` again: it carries on from where it
 stopped.
 
+**Have other KH3 mods installed?** Take them out before you run the setup. The setup builds the mod from your KH3
+files, and it can't tell modded files from the game's own, so a `~mods` folder makes it fail (or build the wrong
+files).
+1. Move the `~mods` folder out of `KINGDOM HEARTS III\Content\Paks\` (to your Desktop, for example), along with any
+   other `.pak` file a mod added there.
+2. If you already ran the setup with mods installed, delete the `assets`, `assets_converted`, `audit` and `build`
+   folders in the mod's folder, and only those. Keep everything else, especially the `er` folder: your saves and
+   settings are in it.
+3. Run `setup.exe` again. When it says **Ready**, you can put `~mods` back to play KH3 with your mods.
+
 ## Play
 
 The mod is **offline only**. me3 starts Elden Ring without Easy Anti-Cheat, so never take the mod online. Steam must be
@@ -95,7 +105,8 @@ To back up your mod game, or move it to another PC, copy both.
    setup built are kept, because they aren't in the zip.
 3. Double-click `setup.exe` again.
 
-The setup reuses the files it built before, unless the new version needs them rebuilt.
+The setup reuses the files it built before and only rebuilds what the new version changed. For most updates that takes
+a few minutes, not the full first-time build.
 
 ## Uninstalling
 
@@ -106,15 +117,54 @@ The setup reuses the files it built before, unless the new version needs them re
    `%APPDATA%\EldenRing\<your id>\`. Leave `ER0000.sl2` alone: that's your normal game.
 4. Uninstall me3 if you don't use it for anything else.
 
+## Linux / Steam Deck
+
+The mod also runs on Linux, with both games installed through Steam (Proton). On a Steam Deck, do this in Desktop Mode.
+Use the Linux download on Linux: the Windows `setup.exe` run through Proton or Wine isn't supported (it finds your games,
+but can't build the mod's files there, and tells you to use the Linux version).
+
+1. **Download** `kingdom-hearts-x-elden-ring-...-linux-x64.tar.gz` from the
+   [Releases page](https://github.com/StrawHatPro/kingdom-hearts-x-elden-ring/releases), and unpack it into a folder
+   you'll keep.
+2. **Start both games once from Steam**, so Steam sets them up.
+3. **Install me3's Linux version** (0.13.0 or newer), as
+   [its installation guide](https://github.com/garyttierney/me3/blob/main/docs/user-guide/installation.md) says. In a
+   terminal, run:
+   `curl --proto '=https' --tlsv1.2 -sSfL https://github.com/garyttierney/me3/releases/download/v0.13.0/installer.sh | sh`
+   It puts `me3` in `~/.local/bin`.
+4. **Run the setup:** open a terminal in the mod's folder and run `./setup-linux`. It finds your games by itself (Steam,
+   or Epic through Heroic or Lutris). If it can't, it asks you for the folder. Like on Windows, the first run takes about
+   30 minutes. Have other KH3 mods installed? Take them out first, as "Have other KH3 mods installed?" under Install
+   says: on Linux the folder is `KINGDOM HEARTS III/Content/Paks/~mods` in KH3's Steam folder
+   (`steamapps/common/KINGDOM HEARTS III`), and you run `./setup-linux` again afterwards.
+5. **Play:** run `er/play.sh`. Steam must be running. me3 starts Elden Ring with the same Proton version Steam uses for it.
+
+**Updating on Linux:** unpack the new version's tarball into the same place, so it lands on top of your mod folder (your
+saves, settings and the files the setup built are kept), then run `./setup-linux` again. As on Windows, it only rebuilds
+what the new version changed, usually in a few minutes.
+
+The mod's save file `KHSora.sl2` is in Elden Ring's Proton folder:
+`steamapps/compatdata/1245620/pfx/drive_c/users/steamuser/AppData/Roaming/EldenRing/<your id>/`.
+Your KH progress is in `er/saves`, as on Windows. More details are in [docs/BUILDING.md](docs/BUILDING.md), "Linux".
+
 ## Building from source
 
 Want to build it yourself, or need the setup's extra options? See [docs/BUILDING.md](docs/BUILDING.md).
+
+## Don't share the files the setup makes
+
+**Don't share the files the setup makes.** The setup builds the mod's files from your own copies of the games, and they
+contain content from those games. Keep them on your own PC. Don't upload or share the `build`, `assets` or
+`assets_converted` folders, or anything else the setup creates. Anyone who wants to play has to own the games and run the
+setup themselves.
+
+This project only shares its own tools and code. It isn't responsible for anyone who distributes files made by the setup.
 
 ## Credits and legal
 
 - The Elden Ring SDK [fromsoftware-rs](https://github.com/Dasaav-dsv/fromsoftware-rs) by Dasaav and contributors.
 - [me3](https://github.com/garyttierney/me3) by Gary Tierney and contributors.
-- [Node.js](https://nodejs.org), built into `setup.exe`, and the open-source packages listed in
+- [Node.js](https://nodejs.org), built into `setup.exe` (and `setup-linux`), and the open-source packages listed in
   [LEGAL.md](LEGAL.md). Their licences are in `THIRD-PARTY-NOTICES.txt` in the download.
 
 This is an unofficial fan project. It is not affiliated with, endorsed by or sponsored by Square Enix, Disney,

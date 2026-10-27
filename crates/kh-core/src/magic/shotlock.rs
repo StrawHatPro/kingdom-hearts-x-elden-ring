@@ -131,11 +131,14 @@ pub struct AimMode {
     pub is_max: bool,
     /// Real seconds spent aiming after the start delay (for tests and the debug text).
     pub aimed: f32,
+    /// (CHESTFIX, port) How often an aim mode left open by a dropped state was closed (`close_dropped` at a teleport,
+    /// the net in `update`): the hosts log it.
+    pub stale_cleared: u32,
 }
 
 impl Default for AimMode {
     fn default() -> AimMode {
-        AimMode { flags: 0, hold_timer: 0.0, mode: 0, total: 0, locked_targets: 0, lock_timer: 0.0, max_locks: 0, start_delay: 0.0, aim_time: 0.0, slow_rate: 0.4, kind: 0, rr: 0, candidates: Vec::new(), locked: Vec::new(), airstep_candidates: Vec::new(), airstep_targets: Vec::new(), consumed: 0, focus0: 0, saved_lock: TargetId::NONE, saved_soft: TargetId::NONE, can_airstep: false, is_max: false, aimed: 0.0 }
+        AimMode { flags: 0, hold_timer: 0.0, mode: 0, total: 0, locked_targets: 0, lock_timer: 0.0, max_locks: 0, start_delay: 0.0, aim_time: 0.0, slow_rate: 0.4, kind: 0, rr: 0, candidates: Vec::new(), locked: Vec::new(), airstep_candidates: Vec::new(), airstep_targets: Vec::new(), consumed: 0, focus0: 0, saved_lock: TargetId::NONE, saved_soft: TargetId::NONE, can_airstep: false, is_max: false, aimed: 0.0, stale_cleared: 0 }
     }
 }
 
@@ -154,11 +157,28 @@ pub struct AimView {
     pub locks: Vec<(TargetId, i32)>,
     /// The airstep chain: (enemy, point id), nearest hop first, the chosen one last.
     pub airstep: Vec<(TargetId, u32)>,
+    /// (CHESTFIX) `AimMode::stale_cleared`.
+    pub stale_cleared: u32,
 }
 
 impl AimMode {
+    /// (CHESTFIX, the user 2026-10-27: "he stopped moving and even swapping to him from the party menu I couldn't move as
+    /// him") PORT ADDITION: THE RUNNING STATE WAS DROPPED WITHOUT ITS End (`Sora::teleport` makes a new Sora in Idle and
+    /// keeps the pawn's magic). An aim mode that is open (aiming, or fired and waiting for ShootFlow / AthleticFlow to
+    /// report back) is closed as `exit` closes it, and R1 must be let go before it opens again (WAIT_RELEASE). Before: a
+    /// warp of AI Sora during his shotlock's ShootFlow (the user's log 660.360 "AI Sora warps next to Donald", Shootflow
+    /// sub 5) kept mode 2 + RELEASE_PENDING for ever: `update` returned true on every step, so no movement, jump, attack
+    /// or command reached him (as AI Sora, then as the leader after the swap). True when something was closed.
+    pub fn close_dropped(&mut self) -> bool {
+        if self.mode == 0 && self.flags & (flag::ACTIVE | flag::RELEASE_PENDING) == 0 {
+            return false;
+        }
+        *self = AimMode { flags: flag::WAIT_RELEASE, slow_rate: self.slow_rate, stale_cleared: self.stale_cleared + 1, ..AimMode::default() };
+        true
+    }
+
     pub fn view(&self) -> AimView {
-        AimView { mode: self.mode, kind: self.kind, total: self.total, locked_targets: self.locked_targets, max_locks: self.max_locks, aim_time: self.aim_time, is_max: self.is_max, can_airstep: self.can_airstep, locks: self.locked.iter().map(|e| (e.target, e.lock_count)).collect(), airstep: self.airstep_targets.iter().map(|e| (e.target, e.point)).collect() }
+        AimView { mode: self.mode, kind: self.kind, total: self.total, locked_targets: self.locked_targets, max_locks: self.max_locks, aim_time: self.aim_time, is_max: self.is_max, can_airstep: self.can_airstep, locks: self.locked.iter().map(|e| (e.target, e.lock_count)).collect(), airstep: self.airstep_targets.iter().map(|e| (e.target, e.point)).collect(), stale_cleared: self.stale_cleared }
     }
 }
 
@@ -259,6 +279,12 @@ pub(crate) fn exit(cx: &mut Ctx) {
     super::set_aim_dilation(cx, 1.0, 1.0);
     cx.pawn.event(EventKind::SoundState { name: "STATE_SLOW_END" });
     cx.pawn.event(EventKind::AimMode { open: false, reason: 1 });
+}
+
+/// (CHESTFIX) The state a pending release waits for (the one whose End calls `release_done`) runs or is queued.
+fn release_owner_alive(state: &StateData, cx: &Ctx) -> bool {
+    use crate::states::StateId;
+    matches!(state, StateData::ShootFlow(_) | StateData::AthleticFlow(_)) || matches!(cx.pawn.queue.queued_id(), Some(StateId::Shootflow | StateId::Athleticflow))
 }
 
 /// Controller slot 809 (vt+0x1948 0x14140E720): the attack / airstep state's End reports back:
@@ -505,6 +531,16 @@ pub(crate) fn update(state: &mut StateData, cx: &mut Ctx, input: &Input, dt: f32
     }
     // ---- modes 2 and 3: waiting for the state (A3.4)
     if mode == 2 || mode == 3 {
+        // (CHESTFIX, the user 2026-10-27: "Sora ... stopped moving and even swapping to him from the party menu I couldn't
+        // move as him") PORT ADDITION, THE NET: a release is pending only while the state that reports back (ShootFlow /
+        // AthleticFlow: their End calls `release_done`) runs or is queued. Pending with neither (that state was dropped
+        // without its End) it is stale and would hold the aim mode, and with it every movement, jump, attack and command
+        // (this function's `true`), for ever: cleared, and the branch below closes the mode.
+        if cx.pawn.magic.aim.flags & flag::RELEASE_PENDING != 0 && !release_owner_alive(state, cx) {
+            let aim = &mut cx.pawn.magic.aim;
+            aim.flags &= !flag::RELEASE_PENDING;
+            aim.stale_cleared += 1;
+        }
         if cx.pawn.magic.aim.flags & flag::RELEASE_PENDING != 0 {
             return true;
         }

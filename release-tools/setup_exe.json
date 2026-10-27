@@ -1,8 +1,8 @@
 {
  "about": "setup.exe of the release (release-tools/make_release.js): Node.js 24.21.0 (node.exe ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32) as a single executable application of release-tools/sea_main.js; release-tools/scan.js allows setup.exe by this hash. The build is deterministic.",
- "version": "0.1.1b-preview",
+ "version": "0.1.2",
  "node": "24.21.0",
- "sea_main_sha256": "516c911484fe3f53f871ddda173cb6d6cbae73056696dbc0f1b8f62b99c88cff",
- "setup_exe_sha256": "1c67744513812cd01f72989c5b3151086ab73526faca81360e2bbba19962b891",
+ "sea_main_sha256": "35208f32b61d928eea6b23ce63d1b1b26ee74e266600cba1f588a12e8572675e",
+ "setup_exe_sha256": "c25a576da892325e4224c0d70e1b9e775a7d38931232bc718d55705e492af5de",
  "bytes": 93711360
 }

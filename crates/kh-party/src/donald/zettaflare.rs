@@ -5942,9 +5942,12 @@ mod tests {
         let power = SpellRef::Arcane(ArcaneLine::Zettaflare, 1).row(&data()).unwrap().power;
         let kh = |s: &crate::FriendStatus| compute_damage(&s.as_attacker(), &Defender::NONE, &DamageAttack::magic(power, kh_core::enums::ETresDamageAttribute::Notype), &DamageContext::new(s.game_level, 1)).amount;
         let l99 = crate::FriendStatus::test_level99(crate::Chara::Donald);
-        assert_eq!(l99.magic(), 71);
-        let er = (kh(&l99) * 7.0).round();
-        assert!((er - 20000.0).abs() <= 7.0, "level 99: {} KH = {er} Elden Ring HP", kh(&l99));
+        // (2026-10-27) his balanced Magic leading or not (ONESTAT: 84 at level 99, KH3's AI row gave 71) and the host's x12
+        // (damage.out.scale; the user: "allow Zettaflare to be scaled up"); (DONLINE2, the user 2026-10-27: "make Donald's
+        // starting magic 18 at level 1": magic_ratio 1.2, Magic 80 at level 99: 3220 KH = 38640, was 40572 at 84; its power kept)
+        assert_eq!(l99.magic(), crate::balance::base_stats(crate::Chara::Donald, 99).1 + 4);
+        let er = (kh(&l99) * 12.0).round();
+        assert!((er - 38640.0).abs() <= 12.0, "level 99: {} KH = {er} Elden Ring HP", kh(&l99));
         let l1 = crate::FriendStatus::new(crate::Chara::Donald, 0);
         assert!(kh(&l1) < kh(&l99) * 0.5, "level 1 scales down by Magic ({} KH)", kh(&l1));
         // the beam's own hit through the party route, on the rig's level-99 Donald: that number, on a plain and a guarded target

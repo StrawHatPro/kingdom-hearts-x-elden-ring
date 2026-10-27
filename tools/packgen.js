@@ -26,6 +26,13 @@ const path = require('path');
 const cp = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
+// (Linux) this run and every tool it starts list folders in Windows' (NTFS) order, as setup/setup.js does too
+// (tools/lib/ntfs_order.js): a tool that follows the order it finds files in then writes the same files on Linux
+if (process.platform !== 'win32') {
+  const order = path.join(__dirname, 'lib', 'ntfs_order.js');
+  require(order);
+  if (!(process.env.NODE_OPTIONS || '').includes('ntfs_order.js')) process.env.NODE_OPTIONS = [process.env.NODE_OPTIONS, `--require "${order.replace(/[\\"]/g, (c) => '\\' + c)}"`].filter(Boolean).join(' ');
+}
 const RESEARCH_SRC = path.join(ROOT, 'tools', 'research');
 const NOTES = path.join(ROOT, 'tools', 'packgen', 'notes');
 const T = 'build/sora_tmp';

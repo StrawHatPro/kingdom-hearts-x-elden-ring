@@ -163,6 +163,16 @@ pub fn finish_sound(static_se: Option<u32>, event: Option<&str>) -> bool {
     ok
 }
 
+/// (MUNNYSE) A WORLD SOUND OF OURS PLAYED NOW through the audio host by its seam route (`name`, e.g. "PrizeMunnyS.get"),
+/// 3D at `at` (KH3 cm), on the world's sound categories (it pauses with the world; never the menus' gain), whoever leads
+/// and whether or not Sora's own step runs. `handle` names it (a range of the caller's own). False: the audio side is busy
+/// this instant or not there, or the name has no route.
+pub fn world_sound(handle: u32, name: &str, at: glam::Vec3, volume: f32) -> bool {
+    let Ok(mut guard) = AUDIO.try_lock() else { return false };
+    let Some(host) = guard.as_mut() else { return false };
+    host.engine.seam_play(handle, &kh_audio::SeamPlay { name, position: at, volume: volume.max(0.0), pitch: 1.0, looping: false, spatial: true, anim: None }).is_some()
+}
+
 /// (FACE) The party members' voice lines (as of the audio host's last step) for their faces' lip-sync: by member index (0
 /// Donald, 1 Goofy); empty while the audio side is busy or not there (never blocks the frame).
 pub fn party_voices() -> Vec<(u8, Option<kh_anim::face_layer::VoiceInput>)> {

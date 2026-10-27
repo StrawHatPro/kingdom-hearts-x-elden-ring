@@ -8,5 +8,12 @@
  "zip_sha256": "158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541",
  "zip_folder": "node-v24.21.0-win-x64",
  "node_exe_sha256": "ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32",
- "license": "MIT (Node.js), with the third-party licences of its bundled components in the same LICENSE file"
+ "license": "MIT (Node.js), with the third-party licences of its bundled components in the same LICENSE file",
+ "linux_x64": {
+  "about": "The same Node.js for Linux: the official linux-x64 tarball of nodejs.org (glibc 2.28 or newer: every current distribution and SteamOS 3). setup-linux is its bin/node as a single executable application (release-tools/make_release.js); a source checkout without a Node 20+ downloads it (setup/get_node.sh, from setup/setup.sh). tgz_sha256 is the line of the release's SHASUMS256.txt; node_sha256 is bin/node inside it.",
+  "tgz_url": "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.gz",
+  "tgz_sha256": "6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff",
+  "tgz_folder": "node-v24.21.0-linux-x64",
+  "node_sha256": "7fde7b8afa198da66257f42ee2001d874c7355631e6d1579a5fb5ef1f246df4c"
+ }
 }

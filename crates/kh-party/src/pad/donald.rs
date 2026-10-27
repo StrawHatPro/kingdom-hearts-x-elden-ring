@@ -279,7 +279,11 @@ pub(crate) fn held(p: &NpcPawn, b: PadButton) -> bool {
 
 pub(crate) fn refused(p: &mut NpcPawn, why: &'static str) {
     if let Some(d) = p.pad.as_mut() {
-        d.menu.events.push(kh_core::command::MenuEvent::Refused);
+        // (2026-10-28, the user: "only play the error sound when you don't have enough MP for it") a shortcut's cast refused
+        // when it starts (busy, mid-cast): the panel's row had the MP (menu.rs `out_of_mp`), so no refused SE
+        if !d.menu.events.contains(&kh_core::command::MenuEvent::ShortcutExecuted) {
+            d.menu.events.push(kh_core::command::MenuEvent::Refused);
+        }
         d.donald.note(KitEvent::Refused(why));
     }
 }

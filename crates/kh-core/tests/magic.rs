@@ -750,6 +750,39 @@ fn shotlock_aim_mode() {
     assert_eq!((b.sora.aim().mode, locks_of(&b)), (1, 0));
 }
 
+/// (CHESTFIX, the user 2026-10-27: "he stopped moving and even swapping to him from the party menu I couldn't move as
+/// him") A TELEPORT DURING THE SHOTLOCK'S ShootFlow (the party's warp of AI Sora at 660.360 in the user's log) drops
+/// the state without its End: the aim mode (mode 2, release pending) is closed with it, his invincibility ends, and
+/// the stick moves him and A attacks again. And THE NET: a pending release whose state is gone closes on the next step.
+#[test]
+fn a_teleport_during_shoot_flow_leaves_no_aim_mode_open() {
+    let mut b = Bench::new(level99(&[]), &[dummy(1, 800.0, 0.0), dummy(2, 800.0, 150.0)]);
+    b.hold(&[PadButton::RightShoulder], 17 + 6 + 62);
+    b.step(&[PadButton::RightShoulder, PadButton::ATTACK]);
+    b.until_state(StateId::Shootflow, 3);
+    b.run(30);
+    assert_eq!(b.sora.aim().mode, 2);
+    assert!(b.sora.status().damage_invalid);
+    b.sora.teleport(Pose { position: Vec3::new(0.0, 2000.0, Sora::origin_height_on_floor(&SORA_PARAMS)), yaw: 0.0 });
+    assert_eq!((b.sora.aim().mode, b.sora.aim().stale_cleared), (0, 1));
+    assert!(!b.sora.status().damage_invalid);
+    b.run(5);
+    let start = b.step(&[]).position;
+    let mut moved = StateId::Idle;
+    for _ in 0..30 {
+        let mut input = Input { move_stick: kh_core::Vec2::new(0.0, 1.0), ..Input::default() };
+        input.view = b.view;
+        let (sora, world) = (&mut b.sora, &b.world);
+        moved = b.host.step(world, |h| sora.step_hosted(DT, &input, h)).state;
+    }
+    assert_eq!(moved, StateId::Run, "the stick moves him after the teleport");
+    assert!((b.step(&[]).position - start).length() > 50.0);
+    b.run(60);
+    b.step(&[PadButton::ATTACK]);
+    assert_eq!(b.step(&[]).state, StateId::Attack, "A attacks after the teleport");
+    assert_eq!(b.sora.aim().mode, 0);
+}
+
 /// T9.4: King of Hearts: the timeline from Begin, 7 projectiles per tick, every hit 54
 /// (SF_KCSHOT), targets `locked[i mod lockedTargets]`, Sora invincible throughout, the state
 /// ends at about 4.0 s in the air (lifted 500 cm).

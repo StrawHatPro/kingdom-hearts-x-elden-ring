@@ -47,7 +47,8 @@ if (!args.length || script === path.join(ROOT, 'setup', 'setup.js') && args[0] !
   if (!process.env.KH_SETUP_NO_PAUSE) {
     const env = { ...process.env, KH_SETUP_PICKER: process.env.KH_SETUP_PICKER || '1', KH_SETUP_NO_PAUSE: '1', ...(nodeOpts.length ? { NODE_OPTIONS: [process.env.NODE_OPTIONS, ...nodeOpts].filter(Boolean).join(' ') } : {}) };
     const r = cp.spawnSync(EXE, ['--run', script, ...rest], { stdio: 'inherit', env, windowsHide: false });
-    cp.spawnSync('cmd.exe', ['/d', '/c', 'pause'], { stdio: 'inherit' });
+    // (Windows only: setup-linux runs in a terminal that stays open; under WSL cmd.exe would be the Windows one)
+    if (process.platform === 'win32') cp.spawnSync('cmd.exe', ['/d', '/c', 'pause'], { stdio: 'inherit' });
     process.exit(r.status === null ? 1 : r.status);
   }
 }

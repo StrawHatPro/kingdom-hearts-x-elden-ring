@@ -1,6 +1,6 @@
 # Donald Duck — Playable Kit Overhaul (design)
 
-Status: **design only, nothing implemented.** When built, this document **replaces Donald's whole current kit**: the XD_PLAYABLE_KITS Donald sections, the X2/X3D work, BAL's Donald ratios and anything else already in game. Section 13 lists what gets removed.
+Status: **built** (streams DON-KIT, DON-MAGIC, DON-PROG, DON-UI, ZETTA and later, from 2026-10-22); the numbers below are the game's as of 2026-10-28 (the sheets under `sheets/port` win where they differ). This document **replaces Donald's whole former kit**: the XD_PLAYABLE_KITS Donald sections, the X2/X3D work, BAL's Donald ratios and anything else already in game. Section 13 lists what gets removed.
 
 Pad layout used throughout: KH3 on an Xbox pad. **A** attack/confirm, **B** jump/cancel, **X** dodge/block, **Y** situation command, **LB** shortcuts, **RB** lock-on, **D-pad** command menu. Keyboard is extra, never required.
 
@@ -23,14 +23,16 @@ Design pillars:
 
 | | vs Sora | Notes |
 |---|---|---|
-| Magic | **1.25×** | Highest in the game. |
-| Max MP | **1.5×** | Grows faster per level than Sora's. |
-| Strength | 0.55× | Only matters for his close-range Wand Bonk (5.3). |
-| Max HP | **0.85×** | Glass cannon. |
+| Magic | **1.2×** | Highest in the game: **18 at level 1** on the status screen (his row 14 + the starting staff's 4), 49 at level 50, 80 at level 99 (2026-10-27, the user: "make Donald's starting magic 18 at level 1"; was 1.25×, 19 at level 1). KH3's growth curve kept. |
+| Max MP | **1.25×** | 1.25× **Sora's max MP now**, plus his own MP victory bonuses and his Max MP +3 boss steps (9). Sora's MP does not grow with levels, only from bosses, so Donald's grows with it. Sora's opening choice (100 / 110 / 120 MP for Vitality / Balance / Wisdom) gives Donald **125 / 138 / 150** at the start (2026-10-27, the user: "make Donald have x1.25 MP"; was 1.5×). |
+| Strength | **0.667×** | About **10 at level 1** on the status screen with the starting staff (2026-10-27, the user: "lower Donald's physical damage as well, it should be something like 10 at level 1", "I mean the KH3 attack stat in the status screen"; was 0.55×). Only matters for his close-range Wand Bonk (5.3); his missiles are magic. |
+| Max HP | **0.85×** | 0.85× Sora's max HP now, plus his own HP bonuses. Glass cannon. |
 | Defense | **0.80×** | Glass cannon. |
 | MP regen / MP Charge | KH3 rules, plus attunement refunds (4.4) | MP Charge length scales with Magic, as in KH3. |
 
-Every stat is a sheet row, so it can be tuned without a rebuild.
+**One set of stats, leading or not** (ONESTAT, 2026-10-27, the user: "there should be no party ally/leader seperation, their stats should be their stats same for Goofy and every KH character added later"): the ratios above are his stats whether he leads or follows as an AI ally.
+
+Every stat is a sheet row (`sheets/port/party-balance.json`, the level table `party-balance-levels.json` built from it by `tools/party_balance_sheet.js`), so it can be tuned without touching the code.
 
 ---
 
@@ -212,7 +214,7 @@ When he plays alone (no party), none of these apply.
 
 **Spells cost a fixed amount of MP, exactly like Sora's.** The Y spells (6.3) cost set amounts too. Line 1's first three tiers cost what Sora's KH3 spells cost; attuned, about a quarter less. There is no difficulty select: like Sora's, every cost below is multiplied by **1.5**, which is simply the game's base cost (user, 2026-10-22). As his max MP grows from bosses, more casts fit in a bar, as with Sora.
 
-The -za tier is the expensive one: at his starting max MP (165), **a full MP bar holds exactly four -za casts** (27 × 1.5 = 41 MP each), with no discount. For the line-3 ultimates, reaching Resonance 3 is the real price, not the MP.
+The -za tier is the expensive one: **41 MP** a cast (27 × 1.5), with no discount. At his starting max MP (138 with Sora's Balance start; 125 / 150 with Vitality / Wisdom) **a full MP bar holds three -za casts**. (It was four at the old 1.5× start of 165; with the MP ratio at 1.25× the user chose to keep the -za cost, 2026-10-27.) For the line-3 ultimates, reaching Resonance 3 is the real price, not the MP.
 
 | Spell (MP, before the ×1.5) | Not attuned | Attuned |
 |---|---|---|
@@ -222,7 +224,7 @@ The -za tier is the expensive one: at his starting max MP (165), **a full MP bar
 | Water / Watera / Waterga | 12 / 15 / 22 | 9 / 11 / 17 |
 | Aero / Aerora / Aeroga | 13 / 18 / 26 | 10 / 14 / 20 |
 | Cure / Cura / Curaga | 13 / 17 / 23 | 10 / 12 / 17 |
-| **-za tier** (full-power attunement only; Curaza too) | — | **27** (41 after ×1.5: four per starting bar of 165) |
+| **-za tier** (full-power attunement only; Curaza too) | — | **27** (41 after ×1.5: three per starting bar of 125 / 138 / 150) |
 | Line 2 (Flare, Freeze, Ball Lightning, Flood, Aero Barrier, Banish), Lv 1 / 2 / 3 | 10 / 13 / 17 | 7 / 10 / 12 |
 | **Line 3 ultimates** (full-power attunement, once per attunement period) | — | **20**, and only 13 if cast within 3 s of reaching Resonance 3 |
 | Hybrids (6.4) | — | 15 |
@@ -286,7 +288,7 @@ Every pair of elements has its own hybrid spell (15 in all). A hybrid appears in
 
 ### 6.5 The capstone: Zettaflare (on Y)
 
-**Zettaflare** is his ultimate magic, from a boss mid-way into the DLC (section 9), and the top of the Y Arcane magic. Y lists it alongside the other Y spells when he has **4 Arcane Flow charges** (a full meter) and **every element he has learned has reached Resonance 3 at least once in the current fight**. Small HUD icons track the elements. It needs **a FULL MP bar** (MP = max MP) and spends all of it: he goes into MP Charge (the red bar, as after Cure), which recharges **30 % slower** (`zetta.regen_mult` 0.7) (user, 2026-10-23, revised: "Zettaflare needs to use up all of your magic (it needs all of your current MP to be useable) and then put you into the red MP bar mode with a 30% slower recharge rate"; confirmed as "Requires a full MP bar"). The F7 / L3+R3 test aid tops MP up to full, and it empties his Resonance and Arcane Flow. **Presentation:** it plays KH3's own Zettaflare cutscene (Keyblade Graveyard, kg702b) aimed at the target: a 5 s channel, his cast and "Zettaflare!", with a cinematic camera that mimics the cutscene's shots. While it is cast (channel to hit), **the target is frozen in place and turns to look at Donald**, then **reacts to the beam exactly as Terra-Xehanort does in the cutscene**, held for the whole beam, and **immersed in the white light**: **if Zettaflare kills it, it becomes a black silhouette that crumbles away leaving only the light** (any enemy); if it survives, it is **held in place until the wide shot of the beam shrinking, then thrown straight back along the beam's direction** (user, 2026-10-23); the return to gameplay is seamless; **Donald is invincible for the whole sequence** and **no enemy targets him**, so nothing can interrupt it; **every enemy caught in the blast takes damage**; its damage **scales with Donald's Magic** (its power × his Magic, nothing else; user, 2026-10-23: "make sure Zettaflare scales with your magic stat", "make level 99 Zettaflare do 20,000 damage"): **20,000 Elden Ring HP at level 99** (Magic 71), about 13,000 at level 50 and 5,600 at level 1, landing in full; it **ignores all armour, defence and resistances and overrides everything** (super armour, poise, boss states) so it always works; and **AI allies attack other enemies and keep away from Zettaflare's target and the beam line**. The beam and the camera are aimed **at the target**.
+**Zettaflare** is his ultimate magic, from a boss mid-way into the DLC (section 9), and the top of the Y Arcane magic. Y lists it alongside the other Y spells when he has **4 Arcane Flow charges** (a full meter) and **every element he has learned has reached Resonance 3 at least once in the current fight**. Small HUD icons track the elements. It needs **a FULL MP bar** (MP = max MP) and spends all of it: he goes into MP Charge (the red bar, as after Cure), which recharges **30 % slower** (`zetta.regen_mult` 0.7) (user, 2026-10-23, revised: "Zettaflare needs to use up all of your magic (it needs all of your current MP to be useable) and then put you into the red MP bar mode with a 30% slower recharge rate"; confirmed as "Requires a full MP bar"). The F7 / L3+R3 test aid tops MP up to full, and it empties his Resonance and Arcane Flow. **Presentation:** it plays KH3's own Zettaflare cutscene (Keyblade Graveyard, kg702b) aimed at the target: a 5 s channel, his cast and "Zettaflare!", with a cinematic camera that mimics the cutscene's shots. While it is cast (channel to hit), **the target is frozen in place and turns to look at Donald**, then **reacts to the beam exactly as Terra-Xehanort does in the cutscene**, held for the whole beam, and **immersed in the white light**: **if Zettaflare kills it, it becomes a black silhouette that crumbles away leaving only the light** (any enemy); if it survives, it is **held in place until the wide shot of the beam shrinking, then thrown straight back along the beam's direction** (user, 2026-10-23); the return to gameplay is seamless; **Donald is invincible for the whole sequence** and **no enemy targets him**, so nothing can interrupt it; **every enemy caught in the blast takes damage**; its damage **scales with Donald's Magic** (its power × his Magic, nothing else; user, 2026-10-23: "make sure Zettaflare scales with your magic stat", "make level 99 Zettaflare do 20,000 damage"): at first **20,000 Elden Ring HP at level 99** (Magic 71, the x7 conversion); since 2026-10-27 the host's x12 (the user: "allow Zettaflare to be scaled up") and his balanced Magic (Magic 1.2×, 80 at level 99) make it **about 38,640 at level 99**, about 23,700 at level 50 and 8,700 at level 1 (its power unchanged), landing in full; it **ignores all armour, defence and resistances and overrides everything** (super armour, poise, boss states) so it always works; and **AI allies attack other enemies and keep away from Zettaflare's target and the beam line**. The beam and the camera are aimed **at the target**.
 
 (ZETTA, 2026-10-23) **The beam and its framing.** Every enemy shot is the user's PERFECT frame (the test level's Sora in the beam) scaled about the target: the body's full bounds (height and width with reach) fill the reference's region, 45 % of the height and 63 % of the width (sheet `zetta.frame_body_*`, `zetta.frame_share_*`), never cropped; the beam fills that frame. **The beam always starts at Donald's wand and never reaches behind him** (the user: "the beam MUST start at Donald's wand, and NEVER show the end of it"; "the beam must NEVER extend behind Donald"): the ending beam grows only across its line; its far end is out of every shot's frame from the hit on. **The one exemption: the launch.** Its head travels from the wand to the target before the hit, with its end in view (the user: "keep the travelling head"); the tests (`kh-host/tests/zetta_beam_lines.rs`, kh-party `the_ending_beams_far_end_is_never_in_the_long_shot`) check the far end from the hit on only.
 
@@ -318,7 +320,8 @@ Items
 - **Attunement is its own command, between Magic and Items.** It's reached with one D-pad press from either. Its submenu shows each element's Resonance and whether switching now would trigger a Release.
 - **Navigation:** **Magic always opens the element select** (never straight into the last element's spells). After a spell or an attunement is chosen, the menu returns to the top with the cursor on **Attack**. In every menu (command and camp), **B goes back exactly one level**, never to the top.
 - **Shortcuts:** LB + A / B / X / Y, with **KH3's three shortcut palettes from the start**, swapped exactly as in KH3. Any spell and any Attunement can be put on a shortcut.
-- **Quick Cast** (ability): while LB is held, the shortcut panel shows each spell's MP cost, plus a glow on the spell that would trigger a Reaction on the current target.
+- **Quick Cast** (ability): while LB is held, the shortcut panel shows a glow on the spell that would trigger a Reaction on the current target. (2026-10-28, the user: "remove how much MP something costs from Donald's shortcut commands": the panel never shows MP costs.)
+- **The refused sound on a shortcut only for MP** (2026-10-28, the user: "remove the "error" sound from shortcut commands for every character, spamming magic makes it constantly play", "only play the error sound when you don't have enough MP for it"): a refused shortcut plays the refused SE only when he lacks the MP (the spell greyed for MP, or MP Charge); every other refusal (busy, mid-cast, needs Resonance, ...) is silent. The same rule holds for every character's shortcuts. (The panel shows no MP costs, Quick Cast above; his Magic submenu still shows "N MP" on a greyed row.)
 - **HUD:**
   - the element ring and Resonance pips around his MP bar;
   - status icons (Wet, Chill, Burn, Reveal, Frozen) over the lock-on target;
@@ -388,22 +391,44 @@ He earns abilities from **levelling up**, and his spells and their tiers from **
 
 - **Donald:** each base-game boss of the element gives his next tier, **up to -ga**; once he has -ga, a further base-game boss of that element gives him **Max MP +3**. The element's **DLC boss** gives the **-za tier and the element's ultimate**, plus any lower tiers he is still missing, so nothing is skipped. No base-game boss ever gives a -za tier. He gets all of it even if he isn't in the party yet, and joins with every tier the party has earned.
 - **Sora:** **any** of the same bosses gives his next tier too, whichever comes first. If Sora **already has the -ga tier** of that element, the boss gives him **Max MP +3** instead. Sora **only** gets something from a boss of his own magic: Donald-only rewards (Flare and the other line-2 spells, the ultimates, the Arcane Y upgrades, Zettaflare) give Sora nothing.
-- **Start:** Fire and Water at tier 1 for both, as KH3's prologue gives Sora.
+- **Start:** Fire and Water at tier 1 for both, as KH3's prologue gives Sora. Donald also has their Attunements and Gravity Lv 1, but **no line-2 spell: no Flare, no Flood** (2026-10-27, the user: "Donald should not start with access to Flood or Flare").
 
-**What each tier gives Donald** (Fire as the example; every element alike, except Banish below):
+**What each tier gives Donald** (Fire as the example; every element alike):
 
 | Tier | Donald gets | Sora gets |
 |---|---|---|
-| 1 | Fire, Fire Attunement, Flare Lv 1 | Fire |
-| 2 | Fira, Flare Lv 2 | Fira |
-| 3 | Firaga, Flare Lv 3 | Firaga |
+| 1 | Fire, Fire Attunement (when it is his first fire spell) | Fire |
+| 2 | Fira | Fira |
+| 3 | Firaga | Firaga |
 | 4 (DLC boss only) | **Firaza** and the element's ultimate (**Inferno**) | His next tier, or Max MP +3 if he already has Firaga |
+
+A tier boss gives **no line-2 level** (since 2026-10-27; it used to give Flare Lv 1 / 2 / 3 with tiers 1 / 2 / 3).
 
 Donald casts the -za tier and the ultimate only at full-power attunement (attuned, Resonance 3), and the ultimate once per attunement period (6.1). No Cufflink is needed; the boss gives it.
 
-**Banish comes early, from its own boss.** Donald gets **the next Banish level** from the **Tree Sentinel** (Lv 1 when it is beaten first, as intended), the golden holy knight on horseback near the start of Limgrave, long before any Light boss, so he has a holy attack from early on. Like the other magic bosses, it counts even if he has not joined yet (he joins with it). Sora gets nothing from it. Having it **unlocks Light Attunement** too (any spell of an element unlocks its attunement, 4.1). Light's tiers give Cure (tier 1), Cura + the next Banish level (tier 2), Curaga + the next Banish level (tier 3), and Curaza + Holy (tier 4, from Light's DLC boss only).
+**Line 2 has bosses of its own** (2026-10-27, the user: "Tier 2 magic should be given by different bosses, seperate from tier 1 bosses, following the same rules as tier 1 spell aquirements"). Each element's line-2 spell (Flare, Freeze, Ball Lightning, Flood, Aero Barrier, Banish) has **three base-game bosses**, none of them a boss of line 1, the Arcane lines, Zettaflare or the DLC:
 
-**Banish levels, in any order:** the Tree Sentinel and Light tiers 2 and 3 each raise Banish by **one level** from where it is, up to Lv 3; levels are never skipped. So a Donald who beats two Light bosses first gets Banish Lv 1 from the second, and the Tree Sentinel later gives Lv 2. Once Banish is at Lv 3, any further Banish step (from the Tree Sentinel or a Light tier) gives **Max MP +3** instead.
+- each of them gives **one level more** of that line-2 spell, in any order, never skipping (Lv 1, then 2, then 3);
+- once the spell is at Lv 3, a further line-2 boss of it gives **Max MP +3**;
+- if it is his first spell of that element, it **unlocks that element's Attunement** too (any spell of an element unlocks its attunement, 4.1);
+- it counts even if he has not joined yet (he joins with it); **Sora gets nothing** from a line-2 boss (his share of a boss is that boss's own Sora reward).
+
+Light's line 2 is **Banish**. Its first boss is the **Tree Sentinel**, the golden holy knight on horseback near the start of Limgrave, so he has a holy attack (and Light Attunement) from early on. Light's tiers give Cure (tier 1), Cura (tier 2), Curaga (tier 3) and Curaza + Holy (tier 4, from Light's DLC boss only); they no longer raise Banish.
+
+The bosses of each line are **paced like the element's line 1** (2026-10-28, the user: "will donald's tier 2 magic bosses be appropriate for progression?"): early / mid / late where line 1 starts early, the first level in mid-game where line 1 itself starts in mid-game. Only boss rows the mod already recognises (their defeat flag) were used.
+
+| Element | Line 2 | Lv 1 (any order) | Lv 2 | Lv 3 | Line 1's bosses, for comparison |
+|---|---|---|---|---|---|
+| Fire | Flare | Flying Dragon Agheel (Limgrave) | Magma Wyrm Makar (Liurnia) | Mohg, Lord of Blood (Mohgwyn Palace) | start, Rykard (Mt. Gelmir), Fire Giant (Mountaintops) |
+| Water | Flood | Leonine Misbegotten (Weeping Peninsula) | Regal Ancestor Spirit (Nokron) | Mohg, the Omen (Leyndell, Shunning-Grounds) | start, Ancestor Spirit (Siofra River), Valiant Gargoyles (Siofra Aqueduct) |
+| Thunder | Ball Lightning | Dragonkin Soldier of Nokstella (Ainsel River) | Elemer of the Briar (Altus Plateau) | Godfrey / Hoarah Loux (Leyndell, Ashen Capital) | Margit (Limgrave), Draconic Tree Sentinel (Capital Outskirts), Lichdragon Fortissax (Deeproot Depths) |
+| Blizzard | Freeze | Red Wolf of Radagon (Liurnia, Raya Lucaria) | Mimic Tear (Nokron) | Loretta, Knight of the Haligtree (Haligtree) | Royal Knight Loretta (Liurnia), Rennala (Liurnia), Commander Niall (Mountaintops) |
+| Aero | Aero Barrier | Godskin Noble (Mt. Gelmir, Volcano Manor) | Malenia (Haligtree, Elphael) | Sir Gideon Ofnir (Leyndell, Ashen Capital) | Starscourge Radahn (Caelid), Godskin Duo (Farum Azula), Dragonlord Placidusax (Farum Azula) |
+| Light | Banish | **Tree Sentinel** (Limgrave) | Morgott (Leyndell) | Radagon / Elden Beast (the Erdtree, the last boss) | Godrick (Stormveil), Godfrey's golden shade (Leyndell), Maliketh (Farum Azula) |
+
+Since the steps are "one level more, any order", the columns are the usual route's order, not a rule. Banish Lv 3 comes from the last boss (after it the world can still be explored) and Aero's last two are late, as are Aero's own tiers 2 and 3.
+
+**An existing save** keeps every spell it has (a Flare / Flood Lv 1 from the old start included: a load never takes a spell away) and gets each new line-2 boss it has already beaten **once**, one level more or Max MP +3 at the top, through the same catch-up as any boss step (its Sora's `boss:` records, Donald's `don:` records). A save older than the overhaul starts from the new start (no Flare / Flood) and catches up every beaten boss once.
 
 **The magic bosses** (Sora's current bosses for tiers 1 to 3, plus one **Shadow of the Erdtree** boss per element for the -za tier; the DLC ones are suggestions):
 
@@ -412,7 +437,7 @@ Donald casts the -za tier and the ultimate only at full-power attunement (attune
 | Fire | start, Rykard, Fire Giant | *Midra, Lord of Frenzied Flame* |
 | Water | start, Ancestor Spirit, Valiant Gargoyles | *Putrescent Knight* |
 | Thunder | Margit, Draconic Tree Sentinel, Lichdragon Fortissax | *Bayle the Dread* |
-| Light (Cure) | Godrick, Godfrey (golden shade), Maliketh; early: **Tree Sentinel** (the next Banish level only, Donald only) | *Scadutree Avatar* |
+| Light (Cure) | Godrick, Godfrey (golden shade), Maliketh (Banish: its own line-2 bosses, above) | *Scadutree Avatar* |
 | Blizzard | Royal Knight Loretta, Rennala, Commander Niall | *Rellana, Twin Moon Knight* |
 | Aero | Starscourge Radahn, Godskin Duo, Dragonlord Placidusax | *Divine Beast Dancing Lion* |
 
@@ -434,7 +459,7 @@ Donald casts the -za tier and the ultimate only at full-power attunement (attune
 
 | Level | Unlocks |
 |---|---|
-| Start | Fire and Water (tier 1, as Sora), their Attunements, base missiles, Magic Block, **Scan**, and **Gravity** on Y |
+| Start | Fire and Water (tier 1, as Sora), their Attunements (no Flare / Flood: line 2 comes from its bosses, 9), base missiles, Magic Block, **Scan**, and **Gravity** on Y |
 | 10 | Low Profile |
 | 25 | Hide Behind |
 | 30–50 | Combo Plus, Swift Attune, Distraction, Elemental Insight |

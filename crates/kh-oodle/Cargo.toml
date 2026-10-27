@@ -1,0 +1,10 @@
+[package]
+name = "kh-oodle"
+description = "The Linux setup's Oodle helper (tools/bin/kh-oodle; release-tools/make_release.js builds it for x86_64-unknown-linux-musl): undoes Elden Ring's DCX (KRAK) with the game's own oo2core_6_win64.dll, loaded by a small PE loader, for tools/er_icons.js (on Windows the same DLL is called through PowerShell). No dependencies; not part of the mod in the game."
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "kh-oodle"
+path = "src/main.rs"

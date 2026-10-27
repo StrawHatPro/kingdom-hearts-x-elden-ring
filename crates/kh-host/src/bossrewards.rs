@@ -24,8 +24,8 @@
 //! - (DON-PROG, the Donald overhaul: documentation/DONALD_OVERHAUL.md 9) MAGIC AT THE TOP: a magic row of an element whose
 //!   -ga tier (3) Sora already has gives him MAX MP +3 instead ("If Sora already has the -ga tier of that element, the boss
 //!   gives him Max MP +3"). Each element has one boss more than Sora's tiers (the extra bosses shared with Donald).
-//! - (DON-PROG) DONALD'S STEPS of a boss: rows `don.<boss row id>` = { name, steps: ["magic:<element>" | "banish" |
-//!   "arcane:<line>"] } ([`DonRow`], `Table::don`): the party host gives them to Donald, joined or not (kh-partyhost
+//! - (DON-PROG) DONALD'S STEPS of a boss: rows `don.<boss row id>` = { name, steps: ["magic:<element>" | "dlc:<element>" |
+//!   "line2:<element>" (DONLINE2: the line-2 spell's own bosses; "banish" = "line2:light") | "arcane:<line>"] } ([`DonRow`], `Table::don`): the party host gives them to Donald, joined or not (kh-partyhost
 //!   `donald::don_due`, record `don:<row id>`). Sora gets nothing from them: Donald-only rewards (Flare and the line-2
 //!   spells, the ultimates, Banish, the Arcane Y lines, Zettaflare) are not Sora's.
 
@@ -160,7 +160,7 @@ pub struct DonRow {
     /// The boss row id (`margit`).
     pub boss: String,
     pub name: String,
-    /// The step tokens (`magic:thunder`, `banish`, `arcane:meteor`; kh_party::donald::DonStep::parse).
+    /// The step tokens (`magic:thunder`, `line2:fire`, `banish`, `arcane:meteor`; kh_party::donald::DonStep::parse).
     pub steps: Vec<String>,
 }
 
@@ -171,7 +171,7 @@ pub fn don_token_ok(t: &str) -> bool {
         return true;
     }
     match t.split_once(':') {
-        Some(("magic" | "element" | "dlc" | "magic_dlc", e)) => ["fire", "blizzard", "thunder", "water", "aero", "light", "cure"].contains(&e.trim().to_ascii_lowercase().as_str()),
+        Some(("magic" | "element" | "dlc" | "magic_dlc" | "line2" | "l2" /* (DONLINE2) */, e)) => ["fire", "blizzard", "thunder", "water", "aero", "light", "cure"].contains(&e.trim().to_ascii_lowercase().as_str()),
         Some(("arcane" | "y", l)) => ["comet", "gravity", "meteor", "ultima", "zettaflare"].contains(&l.trim().to_ascii_lowercase().as_str()),
         _ => false,
     }
@@ -409,7 +409,7 @@ impl Table {
                 let steps: Vec<String> = value["steps"].as_array().map_or(&[][..], |a| a.as_slice()).iter().filter_map(|t| t.as_str().map(str::to_string)).collect();
                 let bad: Vec<&String> = steps.iter().filter(|t| !don_token_ok(t)).collect();
                 if steps.is_empty() || !bad.is_empty() {
-                    out.problems.push(format!("{id}: Donald's step(s) not understood: {bad:?} (magic:<element> | banish | arcane:<line>)"));
+                    out.problems.push(format!("{id}: Donald's step(s) not understood: {bad:?} (magic:<element> | dlc:<element> | line2:<element> | banish | arcane:<line>)"));
                 }
                 out.don.push(DonRow { boss: key.to_string(), name: value["name"].as_str().unwrap_or(key).to_string(), steps: steps.into_iter().filter(|t| don_token_ok(t)).collect() });
                 continue;
@@ -1031,6 +1031,24 @@ mod tests {
         assert_eq!(of("magic:aero"), ["radahn", "godskin_duo", "placidusax"]);
         assert_eq!(["fire", "water", "thunder", "light", "blizzard", "aero"].map(|e| of(&format!("dlc:{e}"))), [["midra"], ["putrescent"], ["bayle"], ["scadutree_avatar"], ["rellana"], ["dancing_lion"]]);
         assert_eq!(of("banish"), ["tree_sentinel"]);
+        // (DONLINE2, the user 2026-10-27: "Tier 2 magic should be given by different bosses, seperate from tier 1 bosses")
+        // each element's line 2 has three base-game bosses of its own (Light: the Tree Sentinel's banish + two), none of
+        // them a boss of another don.* row, every one a boss row the mod can tell is beaten (a defeat flag or a chr id)
+        let line2: Vec<Vec<&str>> = ["fire", "water", "thunder", "blizzard", "aero", "light"].iter().map(|e| of(&format!("line2:{e}"))).collect();
+        assert_eq!(line2, [vec!["agheel", "makar", "mohg_lord"], vec!["leonine", "regal_ancestor", "mohg_omen"], vec!["dragonkin_nokstella", "elemer", "hoarah_loux"], vec!["red_wolf", "mimic_tear", "loretta_haligtree"], vec!["godskin_noble", "malenia", "gideon"], vec!["morgott", "elden_beast"]]);
+        let line2_bosses: Vec<&str> = line2.iter().flatten().copied().chain(of("banish")).collect();
+        for id in &line2_bosses {
+            let d = table.don_of(id).unwrap();
+            assert_eq!(d.steps.len(), 1, "{id}: one line-2 step only");
+            assert!(table.don.iter().filter(|o| o.boss == *id).count() == 1, "{id}: one don row");
+            let row = table.row(id).unwrap();
+            assert!(row.flag.is_some() || row.chr.is_some(), "{id}: detectable");
+            assert!(!row.region.contains("Shadow of the Erdtree"), "{id}: a base-game boss");
+        }
+        let others: Vec<&str> = table.don.iter().filter(|d| !d.steps.iter().any(|s| s.starts_with("line2:") || s == "banish")).map(|d| d.boss.as_str()).collect();
+        assert!(line2_bosses.iter().all(|b| !others.contains(b)), "the line-2 bosses are not the tier / Arcane / DLC bosses");
+        assert_eq!(line2_bosses.iter().collect::<std::collections::HashSet<_>>().len(), 18);
+        assert!(don_token_ok("line2:fire") && don_token_ok("l2:cure") && !don_token_ok("line2:dark"));
         assert_eq!((of("arcane:comet"), of("arcane:gravity"), of("arcane:meteor"), of("arcane:ultima"), of("arcane:zettaflare")), (vec!["smarag", "fallingstar_beast"], vec!["onyx_lord", "alabaster_lord"], vec!["fullgrown_fallingstar", "astel_stars", "adula"], vec!["astel"], vec!["messmer"]));
         assert!(don_token_ok("magic:cure") && don_token_ok("dlc:fire") && don_token_ok("BANISH") && !don_token_ok("magic:dark") && !don_token_ok("arcane:holy"));
         // every element's bosses, forward and backward: one tier at a time, then Max MP +3

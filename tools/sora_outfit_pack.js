@@ -264,7 +264,7 @@ function main() {
   const sheetFile = path.join(ROOT, 'sheets/port/sora-assets.json');
   if (fs.existsSync(sheetFile)) {
     const sheet = JSON.parse(fs.readFileSync(sheetFile, 'utf8'));
-    const walk = (d, prefix) => { for (const f of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) { const p = path.join(d, f.name); if (f.isDirectory()) { walk(p, prefix + f.name + '/'); continue; }
+    const walk = (d, prefix) => { for (const f of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name, 'en'))) { const p = path.join(d, f.name); if (f.isDirectory()) { walk(p, prefix + f.name + '/'); continue; }
       if (!/^outfits\/[^/]+\/(model\.glb|manifest\.json|materials\/materials\.json)$|^outfits\/outfits\.json$/.test(prefix + f.name)) continue; // one row per outfit's main files (textures and shaders: listed in materials.json)
       const b = fs.readFileSync(p); const id = prefix + f.name; const o = index.find((e) => e.dir && id.startsWith(e.dir + '/'));
       rows.push([id, /\.glb$/.test(id) ? 'mesh' : 'data', '-', o ? `${sp.CONTENT}/Character/pc/${o.model}/mdl/${o.model}_0.uasset` : `${sp.CONTENT}/Blueprints/Player/p_ex001/p_ex001_Pawn.uasset`, '-', b.length, sha(b), '-', '-', '-', '-', 'read back by the renderer (crates/kh-er-render outfit.rs) and the offline harness', 'tools/sora_outfit_pack.js (IMPL_ER59): Sora\'s outfit models of ETresPlayerUniqueID (player pawn table FUN_140ea70b0)']); } };

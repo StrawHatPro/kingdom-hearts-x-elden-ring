@@ -135,7 +135,7 @@ impl DonAbility {
             DonAbility::SwiftAttune => "Attune to an element in half the time.",
             DonAbility::InstantAttune => "Attune to an element instantly.",
             DonAbility::DualAttunement => "Attune to two elements at once. Each has its own Resonance, and their hybrid spell becomes available.",
-            DonAbility::QuickCast => "While holding the shortcut button, see each spell's MP cost and which one would trigger a Reaction on your target.",
+            DonAbility::QuickCast => "While holding the shortcut button, see which spell would trigger a Reaction on your target.",
             DonAbility::SpellEcho => "After casting a -za spell, your next base spell of the same element costs no MP.",
             DonAbility::Scan => kh_gendata::line("kh3_system.ability.detail_sup_0010"),
             DonAbility::ElementalInsight => "See the target's weak and resisted elements, and the best element to attune to against it.",

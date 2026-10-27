@@ -405,6 +405,15 @@ fn run_tick(r: &mut Run, cx: &mut Ctx, dt: f32, draw: &mut bool) {
         let (walk, run) = (s.cmc.max_walk_speed * p.speed_walk_rate, s.cmc.max_walk_speed);
         s.cmc.speed_limit_override = Some(walk + (run - walk) * r.gait);
     }
+    // (CHESTFIX, the user 2026-10-27: "he also keeps trying to run in front of Donald ... he should just follow like Donald
+    // and Goofy do") PORT ADDITION: AI SORA'S FOLLOW SPEED (`Sora::set_follow_cap`, kh-partyhost's AI behind a friend
+    // leader: the friends' formation speed, kh-party locomotion FOL2): the loop's speed limit at most the cap (never below
+    // his walk), so he can match a leader's run instead of passing him at his own run / sprint; the speed-matched cycle
+    // below blends walk and run by the speed he really has. None (the player's Sora, every host but that AI): unchanged.
+    if let (Some(cap), 0) = (s.follow_cap, r.sub) {
+        let limit = s.cmc.speed_limit_override.unwrap_or(s.cmc.max_walk_speed * if s.cmc.walk_mode { p.speed_walk_rate } else { 1.0 });
+        s.cmc.speed_limit_override = Some(limit.min(cap.max(p.speed_run * p.speed_walk_rate)));
+    }
     // PORT OPTION `Tuning::speed_matched_anim` (a user decision, not the game's playback): in the
     // loop the walk cycle and the run blend space are blended by his actual speed and share one
     // phase whose rate makes the feet's stride match the ground covered: stride per cycle =

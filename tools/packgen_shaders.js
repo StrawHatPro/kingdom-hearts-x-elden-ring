@@ -30,11 +30,11 @@ const exists = (p) => fs.existsSync(p);
 const abs = (p) => path.resolve(ROOT, p);
 
 function findShaderc() {
-  for (const c of [opt('--shaderc'), process.env.KH_SHADERC, path.join(ROOT, 'tools', 'bin', 'kh-shaderc.exe'), path.join(ROOT, 'target', 'release', 'kh-shaderc.exe')]) if (c && exists(c)) return path.resolve(c);
+  for (const c of [opt('--shaderc'), process.env.KH_SHADERC, path.join(ROOT, 'tools', 'bin', 'kh-shaderc.exe'), path.join(ROOT, 'target', 'release', 'kh-shaderc.exe'), path.join(ROOT, 'tools', 'bin', 'kh-shaderc'), path.join(ROOT, 'target', 'release', 'kh-shaderc')]) if (c && exists(c)) return path.resolve(c);
   throw new Error('kh-shaderc.exe not found (the release has it in tools/bin; from source: cargo build --release -p kh-shaderc)');
 }
 function findDxc() {
-  for (const c of [opt('--dxc'), process.env.KH_DXC, path.join(ROOT, 'tools', 'bin', 'dxc', 'bin', 'x64', 'dxc.exe')]) if (c && exists(c)) return path.resolve(c);
+  for (const c of [opt('--dxc'), process.env.KH_DXC, path.join(ROOT, 'tools', 'bin', 'dxc', 'bin', 'x64', 'dxc.exe'), path.join(ROOT, 'tools', 'bin', 'dxc', 'bin', 'dxc')]) if (c && exists(c)) return path.resolve(c);
   const kits = 'C:\\Program Files (x86)\\Windows Kits\\10\\bin';
   if (exists(kits)) { const v = fs.readdirSync(kits).map((d) => path.join(kits, d, 'x64', 'dxc.exe')).filter(exists).sort(); if (v.length) return v[v.length - 1]; }
   throw new Error('dxc.exe not found: the setup downloads the DirectX shader compiler into tools/bin/dxc (or install the Windows 10/11 SDK)');

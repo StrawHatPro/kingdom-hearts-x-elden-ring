@@ -251,7 +251,7 @@ fn feeder(rx: Receiver<Feed>, pack: Arc<Pack>, stats: Arc<Stats>, log: fn(&str),
                 }
             }
             if let Some(why) = why {
-                log(&format!("audio: the output device \"{}\" is closed: {why}; reopening", name.clone().unwrap_or_default()));
+                log(&format!("audio: the output device is closed: {why}; reopening")); // (LOGPRIV) no device name
                 device = None;
                 stats.device.store(false, Ordering::Relaxed);
                 next_open = now;
@@ -272,7 +272,8 @@ fn feeder(rx: Receiver<Feed>, pack: Arc<Pack>, stats: Arc<Stats>, log: fn(&str),
                     pulled = (stats.frames.load(Ordering::Relaxed), now);
                     checked = now;
                     told_no_device = false;
-                    log(&format!("audio: output device \"{}\" opened ({} Hz, {} channel(s), shared mode through rodio / cpal)", name.clone().unwrap_or_default(), sink.config().sample_rate(), sink.config().channel_count()));
+                    // (LOGPRIV) no device name: a headset is often named after its owner
+                    log(&format!("audio: the default output device opened ({} Hz, {} channel(s), shared mode through rodio / cpal)", sink.config().sample_rate(), sink.config().channel_count()));
                     device = Some((sink, name));
                 }
                 Err(error) => {

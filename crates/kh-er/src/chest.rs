@@ -6,24 +6,41 @@
 //! there). 60110 was no row of `own.*`, so Sora went on driving the body meanwhile and showed his own pose.
 //!
 //! THE RULE NOW (default ON, `chest.kh = 0` = as before): while the body plays one of the chest animations (`chest.anims`,
-//! default 60110; 15 s at most) Sora FOLLOWS the body (`Follow::Action`: the game places and turns its body at the chest,
+//! default 60080, 60110 (CHESTFIX); 15 s at most) Sora FOLLOWS the body (`Follow::Action`: the game places and turns its body at the chest,
 //! Sora is seated on it, facing the chest; the pad is the game's; nothing of ours writes the body, so the chest opens and
 //! gives its item exactly as before) and, `chest.delay` s (default 0) after it began, his own simulation is asked for
-//! KH3's `TresPlayerState_OpenTreasureBox` (kh-core states/open_treasure_box.rs): `OpenTreasureL` (2.97 s: the Keyblade
-//! drawn, the voice, `se00001_023`, the Keyblade's hit at 1.75 s, the box "told" at 2.0 s) or with `chest.size = s`
+//! KH3's `TresPlayerState_OpenTreasureBox` (kh-core states/open_treasure_box.rs): (CHESTFIX) by default `OpenTreasureS` (the tap before the game's lid, see `large`); `chest.size = l` `OpenTreasureL` (2.97 s: the Keyblade
+//! drawn, the voice, `se00001_023`, the Keyblade's hit at 1.75 s, the box "told" at 2.0 s);
 //! `OpenTreasureS` (0.97 s, the hit at 0.47 s; `auto`: L when the body's animation lasts 2.5 s or more). Its notifies
 //! play their sounds and effects through the usual path. The retargeted Elden Ring pose is NOT laid over him meanwhile.
 //! When the body's animation ends the body is handed back as after a door (the wait for the ground).
 
-/// The chest animations of the body (c0000) by default: what the user's log showed.
-pub const DEFAULT_ANIMS: (i32, i32) = (60110, 60110);
+/// The chest animations of the body (c0000) by default: what the user's logs showed.
+/// (CHESTFIX, the user 2026-10-27: "Sora should play his chest animation for ALL chests") MEASURED in the user's logs
+/// (er/logs/kh-er.log of 15:55): 60110 (4.03 s, under the prompt text 3100 "Open": the item at its end, 273.0 s and
+/// 744.8 s) and 60080 (2.00 s, under "Open" at 361.3 s: the lid of a chest whose prompt then reads text 2030 "Search
+/// treasure chest"). NOT 60090 (the user, after the CHESTFIX build: "It also plays again when he picks up the item from
+/// the chest"): under "Search treasure chest" the body takes the item out of a chest already open (the item is given at
+/// the press): one opening per chest. "Open" (3100) is also the doors' text (60370 after it at 357.3 s), so no
+/// unlisted animation counts. `chest.anims` replaces the list.
+pub const DEFAULT_LIST: [(i32, i32); 2] = [(60080, 60080), (60110, 60110)];
 
-/// The size of KH3's box to open: `chest.size` = l (default) | s | auto (by the length of the body's animation).
+/// (CHESTFIX) One of the default chest animations.
+pub fn default_anim(anim: i32) -> bool {
+    DEFAULT_LIST.iter().any(|(a, b)| (*a..=*b).contains(&anim))
+}
+
+/// The size of KH3's box to open: `chest.size` = s (default) | l | auto (by the length of the body's animation).
+/// (CHESTFIX, the user 2026-10-27: "the chest opens AFTER he taps it with the keyblade") SMALL BY DEFAULT: the game's lid
+/// runs on the chest's own time from the press and cannot be held (the CHESTFIX build froze the body's animation: the
+/// lid opened all the same, and the frozen body stopped the game's world update flag, which paused Sora and handed the
+/// camera to the game: its view behind the chest; the user's log 367.144 - 368.595), so the tap must come early:
+/// OpenTreasureS taps at 0.47 s (the box told at 0.5 s), OpenTreasureL only at 1.75 s (told at 2.0 s), after the lid.
 pub fn large(size: Option<&str>, body_length: f32) -> bool {
     match size.map(|s| s.trim().to_ascii_lowercase()) {
-        Some(s) if s == "s" || s == "small" => false,
+        Some(s) if s == "l" || s == "large" => true,
         Some(s) if s == "auto" => body_length >= 2.5,
-        _ => true,
+        _ => false,
     }
 }
 
@@ -138,9 +155,19 @@ mod tests {
         assert!((0..100).all(|_| !off.frame(60110, true, false, 0.0, DT).0));
     }
 
+    /// (CHESTFIX, the user 2026-10-27: "Sora should play his chest animation for ALL chests" / "It also plays again when he
+    /// picks up the item from the chest") The chest openings of the user's logs (60110, 60080) are chests; the item's
+    /// pickup from the open chest (60090) is not, nor a door's animation (60370 under "Open").
+    #[test]
+    fn chestfix_one_opening_per_chest() {
+        assert!(default_anim(60110) && default_anim(60080));
+        assert!(!default_anim(60090) && !default_anim(60370) && !default_anim(60071) && !default_anim(60030));
+    }
+
     #[test]
     fn the_size_of_kh3s_box() {
-        assert!(large(None, 4.03));
+        assert!(!large(None, 4.03), "(CHESTFIX) small by default: the tap before the game's lid");
+        assert!(large(Some("l"), 4.03));
         assert!(!large(Some("s"), 4.03));
         assert!(large(Some("auto"), 4.03));
         assert!(!large(Some("auto"), 1.5));

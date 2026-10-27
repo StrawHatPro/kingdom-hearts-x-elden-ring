@@ -93,6 +93,8 @@ pub(crate) struct Pawn {
     pub aura_evasion: f32,
     pub aura_recovery: f32,
     pub aura_ghost: f32,
+    /// (CHESTFIX) PORT ADDITION: AI Sora's follow speed cap in the run loop, cm/s (`Sora::set_follow_cap`; None = KH3's).
+    pub follow_cap: Option<f32>,
     /// The fields of the action states (actions.rs): availability bits, reaction type, stance.
     pub actions: crate::actions::PawnActions,
 }
@@ -131,6 +133,7 @@ impl Pawn {
             aura_evasion: 0.0, // (DON-KIT)
             aura_recovery: 0.0,
             aura_ghost: 0.0,
+            follow_cap: None,
             actions: crate::actions::PawnActions::default(),
         }
     }

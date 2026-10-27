@@ -100,6 +100,9 @@ pub struct UnlockSheet {
     /// (HUD2) The description in the OBTAINED popup of a new party member (Sora, Donald, Goofy): OUR TEXT (KH3 has no
     /// character captions in its UI strings), sheet rows `text.obtained.sora|donald|goofy`.
     pub obtained: [String; 3],
+    /// (ALLYJOIN) The question after a new member's OBTAINED popup ({name} = his name): Yes = he joins and the Party
+    /// Formation screen opens, No = he is unlocked but stays out of the party. OUR TEXT, sheet row `text.join.question`.
+    pub join_question: String,
     pub prompt: String,
     pub lines: Vec<Line>,
 }
@@ -118,7 +121,7 @@ impl Default for UnlockSheet {
             bullet_stamina: 1,
             bullet_poise: 10.0,
             angry: vec!["M_0908".into(), "IdleN".into()],
-            unlock_rows: [vec!["SelfiePoseChange1".into()], vec!["BattleEnd".into(), "ODanceIdle".into()], vec!["BattleEnd".into(), "ODanceIdle".into()]],
+            unlock_rows: [Vec::new(), Vec::new(), Vec::new()], // (2026-10-28, the user: "remove the dance team members do first joining the party")
             fx_effect: "vs_com_lv1".into(),
             fx_se: 38,
             fx_voice: "BattleStart".into(),
@@ -134,6 +137,7 @@ impl Default for UnlockSheet {
                 "The royal magician of Disney Castle.<br>He fights with magic and heals the party.".into(),
                 "The captain of the royal knights of Disney Castle.<br>He guards the party with his shield.".into(),
             ],
+            join_question: "Have {name} join the party?".into(), // (ALLYJOIN)
             prompt: "Talk".into(),
             lines: Vec::new(),
         }
@@ -237,6 +241,7 @@ impl UnlockSheet {
                 "text.obtained.sora" => s.obtained[0] = v.as_str().unwrap_or("").to_string(), // (HUD2)
                 "text.obtained.donald" => s.obtained[1] = v.as_str().unwrap_or("").to_string(),
                 "text.obtained.goofy" => s.obtained[2] = v.as_str().unwrap_or("").to_string(),
+                "text.join.question" => s.join_question = v.as_str().unwrap_or("").to_string(), // (ALLYJOIN)
                 "text.talk.prompt" => s.prompt = v.as_str().unwrap_or("Talk").to_string(),
                 _ if id.starts_with("talk.donald.") => {
                     let n: usize = id["talk.donald.".len()..].parse().unwrap_or(999);
@@ -259,6 +264,12 @@ impl UnlockSheet {
     /// `{name}` filled.
     pub fn joined_text(&self, c: PartyChara) -> String {
         self.joined.replace("{name}", c.name())
+    }
+
+    /// (ALLYJOIN) The join question, `{name}` filled (empty in the sheet: the default text).
+    pub fn join_question_text(&self, c: PartyChara) -> String {
+        let t = if self.join_question.trim().is_empty() { UnlockSheet::default().join_question } else { self.join_question.clone() };
+        t.replace("{name}", c.name())
     }
 }
 
@@ -290,5 +301,6 @@ mod tests {
         assert!(s.lines[5].text.contains("{leader}"));
         assert_eq!(s.select_options, ["Sora".to_string(), "Donald".to_string(), "Goofy".to_string()]);
         assert_eq!(s.joined_text(PartyChara::Donald), "Donald joined the party!");
+        assert_eq!(s.join_question_text(PartyChara::Goofy), "Have Goofy join the party?", "(ALLYJOIN) the sheet's question");
     }
 }

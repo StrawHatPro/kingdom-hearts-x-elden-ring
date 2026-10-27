@@ -1975,7 +1975,7 @@ fn hc_vis_tap(p: vec2<i32>, n_host: vec3<f32>, cam: vec3<f32>, m0: vec4<f32>, m1
     let vp = er.hy[11 + i32(er.hy[19].w + 0.5)];
     let maps_on = er.hy[19].x > 0.5;
     let at = vp.xy + vec2<f32>(sc.x * 0.5 + 0.5, 0.5 - sc.y * 0.5) * vp.zw;
-    return hc_tap_kh(at, sc.z, er.hy[10].z / 65535.0, select(-1, hc_owner_maps(at, sc.z), maps_on && er.hy[19].x < 1.5), maps_on);
+    return hc_tap_kh(at, sc.z, er.hy[10].z / 65535.0, select(-1, hc_owner_maps(at, sc.z), maps_on && er.hy[19].x < 1.5), maps_on, -1.0);
 }
 
 fn hc_sun(n: vec3<f32>) -> vec3<f32> {
@@ -1993,6 +1993,10 @@ fn hc_sun(n: vec3<f32>) -> vec3<f32> {
 // shaded) it falls back smoothly to 1 (r.hybrid_sun_fit 0: always 1). The rest = the normal-weighted mean of y less k x the
 // samples' own sun parts. The occlusion and the game's visibility: their tent-weighted means (the visibility is used only where
 // no cascade holds the point).
+// (CAPPERF, the user: "the game drops from ~60 to ~30 fps when the camera is close to Sora"; the capture ~12 ms of GPU up close)
+// `full` = false: ONLY the occlusion's mean and `ok` (all that fits 3, 5 and 6, the default, read): no sample's sun visibility
+// (hc_vis_tap: its point from the depth, the cascade's matrix, the atlas and up to 40 KH-map loads, 81 times a texel) and no
+// light; the same sums in the same order, so ao / ok are exactly what the full fit gives. Fits 2 and 4 pass true (rest, k, vis).
 struct HcWide {
     rest: vec3<f32>,
     k: f32,
@@ -2001,7 +2005,7 @@ struct HcWide {
     ok: bool,
 }
 
-fn hc_wide(t: vec2<i32>, n_t: vec3<f32>) -> HcWide {
+fn hc_wide(t: vec2<i32>, n_t: vec3<f32>, full: bool) -> HcWide {
     var o: HcWide;
     o.ok = false;
     o.k = 1.0;
@@ -2055,6 +2059,14 @@ fn hc_wide(t: vec2<i32>, n_t: vec3<f32>) -> HcWide {
             let ns = nn / ln;
             let m = textureLoad(hc_mask, min(p, msize - vec2<i32>(1)), 0);
             let ao_s = clamp(min(m.x, m.y), 0.05, 1.0);
+            let c = max(dot(ns, n_t), 0.0);
+            let w = (c * c * c * c + 0.02) * tent;
+            wsum += w;
+            ao_sum += ao_s * tent;
+            tsum += tent;
+            if (!full) {
+                continue; // (CAPPERF) the occlusion's mean only
+            }
             let l = min(max(textureLoad(hc_light, p, 0).xyz, vec3<f32>(0.0)), vec3<f32>(6.0e4));
             let y = l / ao_s;
             // (the sample's sun part per unit k: the model's N.L x its visibility: the finest cascade's at its own place, else the
@@ -2067,14 +2079,9 @@ fn hc_wide(t: vec2<i32>, n_t: vec3<f32>) -> HcWide {
                 }
             }
             let xs = dot(hc_sun(ns), luma) / max(sun_l, 1.0e-9) * vs;
-            let c = max(dot(ns, n_t), 0.0);
-            let w = (c * c * c * c + 0.02) * tent;
             sum_y += y * w;
             sum_x += xs * w;
-            wsum += w;
-            ao_sum += ao_s * tent;
             vis_sum += vs * tent;
-            tsum += tent;
             let yl = dot(y, luma);
             // (host axes: x is up, math.rs host_from_game)
             let up = ns.x;
@@ -2089,7 +2096,7 @@ fn hc_wide(t: vec2<i32>, n_t: vec3<f32>) -> HcWide {
     o.ok = true;
     o.ao = ao_sum / tsum;
     o.vis = vis_sum / tsum;
-    if (er.hy[16].x > 0.5 && sun_l > 0.0 && a00 > 4.0) {
+    if (full && er.hy[16].x > 0.5 && sun_l > 0.0 && a00 > 4.0) {
         let det = a00 * (a11 * a22 - a12 * a12) - a01 * (a01 * a22 - a12 * a02) + a02 * (a01 * a12 - a11 * a02);
         let scale = a00 * a11 * a22;
         if (abs(det) > 1.0e-6 * max(scale, 1.0e-20)) {
@@ -2118,8 +2125,15 @@ fn hc_shade_ratio(t: vec2<i32>, n_t: vec3<f32>) -> vec4<f32> {
     if (er.hy[10].x < 0.5) {
         return vec4<f32>(1.0, 0.0, 1.0, 0.0);
     }
-    let step = hc_step();
-    let reach = f32(HC_R) * step;
+    // (CAPPERF) AT THE CAPTURE'S LEVEL OF DETAIL (er.hy[17].z = 1: the KH characters' boxes cover `r.hybrid_lod_px` pixels or more,
+    // gfx.rs): the lattice at TWICE the step over the SAME reach (5 x 5 points instead of 9 x 9: each sample's sun visibility, a
+    // cascade lookup with the KH maps, is most of the capture's cost when he fills the screen), each weight x 4 so the sums the
+    // trust is measured on stay of the same size. Off (er.hy[17].z = 0): exactly as before.
+    let stride = select(1, 2, er.hy[17].z > 0.5);
+    let hr = HC_R / stride;
+    let step = hc_step() * f32(stride);
+    let reach = f32(hr * stride) * hc_step();
+    let wk = f32(stride * stride);
     let base = floor((vec2<f32>(t) + vec2<f32>(0.5)) / step);
     let luma = vec3<f32>(0.2126, 0.7152, 0.0722);
     // (round 15) the cascade of the KH caster maps when they are on (row 0 otherwise)
@@ -2132,11 +2146,11 @@ fn hc_shade_ratio(t: vec2<i32>, n_t: vec3<f32>) -> vec4<f32> {
     // (KH lit sum, weight, KH shade sum, weight), the same for the ground
     var kh = vec4<f32>(0.0);
     var gr = vec4<f32>(0.0);
-    for (var j = -HC_R; j <= HC_R; j++) {
-        for (var i = -HC_R; i <= HC_R; i++) {
+    for (var j = -hr; j <= hr; j++) {
+        for (var i = -hr; i <= hr; i++) {
             let pc = (base + vec2<f32>(f32(i), f32(j)) + vec2<f32>(0.5)) * step;
             let d = abs(pc - (vec2<f32>(t) + vec2<f32>(0.5))) / reach;
-            let tent = max(1.0 - d.x, 0.0) * max(1.0 - d.y, 0.0);
+            let tent = max(1.0 - d.x, 0.0) * max(1.0 - d.y, 0.0) * wk;
             if (tent <= 0.0) {
                 continue;
             }
@@ -2487,7 +2501,9 @@ fn hc_owner(q: vec3<f32>) -> i32 {
 }
 
 // a tap of the atlas at texel `at` (atlas pixels) for a point at light depth `z`: 1 lit, 0 shaded, the owner's own body ignored
-fn hc_tap_kh(at: vec2<f32>, z: f32, bias: f32, owner: i32, maps_on: bool) -> f32 {
+// (CAPPERF) `kh_pre` >= 0: the KH maps' maximum around the tap already known (hc_sun_vis at the capture's level of detail: one
+// maximum over the whole filter's footprint); < 0 = searched here, as before
+fn hc_tap_kh(at: vec2<f32>, z: f32, bias: f32, owner: i32, maps_on: bool, kh_pre: f32) -> f32 {
     let a = textureLoad(hc_atlas, vec2<i32>(floor(at)), 0).x;
     let lit = a <= z + bias;
     if (!maps_on) {
@@ -2502,17 +2518,33 @@ fn hc_tap_kh(at: vec2<f32>, z: f32, bias: f32, owner: i32, maps_on: bool) -> f32
     // reaches it (3 x 3 maximum of every slice: the maps are half the atlas's resolution, a point match leaked at hair and
     // Keyblade edges onto his own face and trousers); then only the OTHER characters' maps decide. A world occluder (nearer to
     // the sun than every KH map there) shades.
+    // (CAPPERF) the search stops at the first KH map that reaches the occluder: the maximum only grows, so the answer is then
+    // known (the same answer as the whole 3 x 3 x 4; on the side of him away from the sun, his own body in the atlas, that is
+    // usually the first load instead of 36)
     if (!lit) {
-        var kh_max = 0.0;
-        for (var k = 0; k < 4; k++) {
-            for (var dj = -1; dj <= 1; dj++) {
-                for (var di = -1; di <= 1; di++) {
-                    let q = clamp(m + vec2<i32>(di, dj), vec2<i32>(0), vec2<i32>(i32(size) - 1));
-                    kh_max = max(kh_max, textureLoad(hc_kh_maps, q, k, 0).x);
+        var body = kh_pre >= 0.0 && a <= kh_pre + tol;
+        if (kh_pre < 0.0) {
+            var kh_max = 0.0;
+            for (var k = 0; k < 4; k++) {
+                for (var dj = -1; dj <= 1; dj++) {
+                    for (var di = -1; di <= 1; di++) {
+                        let q = clamp(m + vec2<i32>(di, dj), vec2<i32>(0), vec2<i32>(i32(size) - 1));
+                        kh_max = max(kh_max, textureLoad(hc_kh_maps, q, k, 0).x);
+                        if (a <= kh_max + tol) {
+                            body = true;
+                            break;
+                        }
+                    }
+                    if (body) {
+                        break;
+                    }
+                }
+                if (body) {
+                    break;
                 }
             }
         }
-        if (a > kh_max + tol) {
+        if (!body) {
             return 0.0;
         }
     }
@@ -2547,6 +2579,28 @@ fn hc_owner_maps(at: vec2<f32>, z: f32) -> i32 {
         }
     }
     return best;
+}
+
+// (CAPPERF) the KH maps' maximum (every slice) over the map texels of the atlas span lo..hi (atlas pixels) grown by one on each
+// side, as hc_tap_kh's 3 x 3 around every tap inside it; -1 = the span is larger than 7 x 7 (each tap searches, as before)
+fn hc_kh_union(lo: vec2<f32>, hi: vec2<f32>) -> f32 {
+    let mv = er.hy[18];
+    let size = er.hy[19].y;
+    let top = vec2<i32>(i32(size) - 1);
+    let a = clamp(vec2<i32>(clamp((lo - mv.xy) / mv.zw * size, vec2<f32>(0.0), vec2<f32>(size - 1.0))) - vec2<i32>(1), vec2<i32>(0), top);
+    let z = clamp(vec2<i32>(clamp((hi - mv.xy) / mv.zw * size, vec2<f32>(0.0), vec2<f32>(size - 1.0))) + vec2<i32>(1), vec2<i32>(0), top);
+    if (z.x - a.x > 6 || z.y - a.y > 6) {
+        return -1.0;
+    }
+    var kh_max = 0.0;
+    for (var k = 0; k < 4; k++) {
+        for (var y = a.y; y <= z.y; y++) {
+            for (var x = a.x; x <= z.x; x++) {
+                kh_max = max(kh_max, textureLoad(hc_kh_maps, vec2<i32>(x, y), k, 0).x);
+            }
+        }
+    }
+    return kh_max;
 }
 
 fn hc_sun_vis(t: vec2<i32>, n_host: vec3<f32>) -> f32 {
@@ -2604,7 +2658,7 @@ fn hc_sun_vis(t: vec2<i32>, n_host: vec3<f32>) -> f32 {
     // the KH characters on it lie ~85 m (along the light) behind the tower that shades them.)
     let bias = er.hy[10].z / 65535.0;
     if (step <= 0.0) {
-        return hc_tap_kh(px, best_s.z, bias, owner, maps_on);
+        return hc_tap_kh(px, best_s.z, bias, owner, maps_on, -1.0);
     }
     // (the bilinear PCF: the tent over 3 x 3 texels sampled on a 4 x 4 grid)
     let g = (px - vec2<f32>(0.5 * step)) / step;
@@ -2612,11 +2666,26 @@ fn hc_sun_vis(t: vec2<i32>, n_host: vec3<f32>) -> f32 {
     let f = g - b;
     let wx = vec4<f32>(1.0 - f.x, 1.0, 1.0, f.x);
     let wy = vec4<f32>(1.0 - f.y, 1.0, 1.0, f.y);
+    // (CAPPERF, at the capture's level of detail, er.hy[17].z: a KH character fills the screen) the KH maps' maximum is searched
+    // ONCE for the whole 4 x 4 footprint (every tap's 3 x 3 inside it, at most 7 x 7 map texels x 4 slices), on its first shaded
+    // tap, instead of up to 36 loads at each of the 16: in a world shadow 140 loads a texel instead of 580. The one change: a world
+    // occluder within ~2 map texels (a few cm) of a KH body nearer the sun than it counts as that body (lit) at the very edge.
+    let lod = er.hy[17].z > 0.5 && maps_on;
+    var kh_u = -1.0;
+    var u_done = false;
     var lit = 0.0;
     for (var j = 0; j < 4; j++) {
         for (var i = 0; i < 4; i++) {
             let at = (b + vec2<f32>(f32(i) - 1.0, f32(j) - 1.0)) * step + vec2<f32>(0.5 * step);
-            lit += hc_tap_kh(at, best_s.z, bias, owner, maps_on) * wx[i] * wy[j];
+            var pre = -1.0;
+            if (lod && !(textureLoad(hc_atlas, vec2<i32>(floor(at)), 0).x <= best_s.z + bias)) {
+                if (!u_done) {
+                    u_done = true;
+                    kh_u = hc_kh_union((b - vec2<f32>(1.0)) * step + vec2<f32>(0.5 * step), (b + vec2<f32>(2.0)) * step + vec2<f32>(0.5 * step));
+                }
+                pre = kh_u;
+            }
+            lit += hc_tap_kh(at, best_s.z, bias, owner, maps_on, pre) * wx[i] * wy[j];
         }
     }
     return lit / 9.0;
@@ -2697,7 +2766,8 @@ fn hycap_ps(@builtin(position) position: vec4<f32>) -> HyCapOut {
         // game, rsf13/dumpF: our cascade lookup agrees with it), held AS IF IN THE SUN for the KH staircase (divided by the world
         // factor), and the world factor in geo.w: mix(1, the shade ratio around him, 1 - his visibility), what the ground beside him
         // shows between shade and sun. The colour shaders multiply by it (fs_main). No fitted sun model: nothing to jump.
-        let wide = hc_wide(t, n / len);
+        // (CAPPERF) only fit 4 reads the rest and k: the others take the occlusion's mean alone
+        let wide = hc_wide(t, n / len, er.hy[8].w > 3.5 && er.hy[8].w < 4.5);
         var ao_m = ao;
         if (wide.ok) {
             ao_m = wide.ao;
@@ -2709,7 +2779,12 @@ fn hycap_ps(@builtin(position) position: vec4<f32>) -> HyCapOut {
         var world = 1.0;
         let own_vis = hc_sun_vis(t, n / len);
         if (own_vis >= 0.0) {
-            let sr = hc_shade_ratio(t, n / len);
+            // (CAPPERF) at the capture's level of detail a texel in full sun (its own visibility > 0.999) skips the shade ratio: it
+            // enters below x (1 - its visibility), < 0.1 % of the light; off: as before
+            var sr = vec4<f32>(1.0, 0.0, 1.0, 0.0);
+            if (!(er.hy[17].z > 0.5 && own_vis > 0.999)) {
+                sr = hc_shade_ratio(t, n / len);
+            }
             // (no measured pair: er.hy[17].y for the KH texels, er.hy[17].x for the ground, through the trust)
             game_shade = mix(1.0, mix(clamp(er.hy[17].y, 0.03, 1.0), sr.x, sr.y), 1.0 - own_vis);
             world = mix(1.0, mix(clamp(er.hy[17].x, 0.03, 1.0), sr.z, sr.w), 1.0 - own_vis);
@@ -2753,7 +2828,7 @@ fn hycap_ps(@builtin(position) position: vec4<f32>) -> HyCapOut {
         return o;
     } else if (er.hy[0].x != 0.0 && er.hy[8].w > 1.5) {
         // (round 11) the wide fill: the sun's part with the mean visibility + the rest of the place, x the mean occlusion
-        let wide = hc_wide(t, n / len);
+        let wide = hc_wide(t, n / len, true);
         var rest = max(light / ao - hc_sun(n / len) * vis, vec3<f32>(0.0));
         var k = 1.0;
         if (wide.ok) {

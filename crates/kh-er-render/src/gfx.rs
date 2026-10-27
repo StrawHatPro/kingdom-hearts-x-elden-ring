@@ -582,6 +582,11 @@ fn transition(resource: &ID3D12Resource, subresource: u32, before: D3D12_RESOURC
     }
 }
 
+/// (HAIRPERF, passtime.rs) A buffer the CPU reads back (`bytes`), left as a copy destination.
+pub(crate) unsafe fn readback_buffer(device: &ID3D12Device, bytes: u64) -> windows::core::Result<ID3D12Resource> {
+    committed(device, D3D12_HEAP_TYPE_READBACK, &buffer_desc(bytes), D3D12_RESOURCE_STATE_COPY_DEST, None)
+}
+
 unsafe fn committed(device: &ID3D12Device, kind: D3D12_HEAP_TYPE, desc: &D3D12_RESOURCE_DESC, state: D3D12_RESOURCE_STATES, clear: Option<&D3D12_CLEAR_VALUE>) -> windows::core::Result<ID3D12Resource> {
     let mut out: Option<ID3D12Resource> = None;
     device.CreateCommittedResource(&heap(kind), D3D12_HEAP_FLAG_NONE, desc, state, clear.map(|c| c as *const _), &mut out)?;
@@ -2192,6 +2197,8 @@ impl Core {
         self.device.GetDeviceRemovedReason()?;
         let completed = self.fence.GetCompletedValue();
         self.retired.retain(|(value, _)| *value > completed);
+        // (GPUSAFE) an old outfit, capture or effect target goes once the GPU is past every frame that read it
+        crate::outfit::frame_begins(&self.fence, self.fence_value);
         // (IMPL_ER78, r.hybrid_dump) a dump whose frame the GPU has finished: read back and written (on a thread of its own)
         if self.hy.dump.as_ref().is_some_and(|d| self.frame_no > d.frame + 2 && self.slots.get(d.slot).is_none_or(|s| s.busy_until <= completed)) {
             if let Some(dump) = self.hy.dump.take() {
@@ -2465,6 +2472,7 @@ impl Core {
         let pipelines = &pso_sets[&key];
         let slot = &mut slots[slot_index];
         // The GPU time of this slot's previous frame (it is finished: the slot is free).
+        crate::passtime::collect(slot_index); // (HAIRPERF) and its sections'
         if let (true, Some((_, results, frequency))) = (slot.timed, queries.as_ref()) {
             let range = D3D12_RANGE { Begin: slot_index * 16, End: slot_index * 16 + 16 };
             let mut at: *mut c_void = std::ptr::null_mut();
@@ -3103,6 +3111,7 @@ impl Core {
         if let Some((heap, ..)) = queries.as_ref() {
             list.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, slot_index as u32 * 2);
         }
+        crate::passtime::stamp(device, queue, list, slot_index, 0); // (HAIRPERF) the sections' timing
         // ---- THE GAME'S LIGHT into the game-data texture (light.rs): its constant buffers through
         // its own descriptor tables, then the probes around his feet through ours; a copy for the CPU.
         if let (true, Some(kit), Some(sub)) = (game_on, game.as_mut(), sub) {
@@ -3215,6 +3224,7 @@ impl Core {
             }
             list.ResourceBarrier(&[transition(&kit.texture, 0, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)]);
         }
+        crate::passtime::stamp(device, queue, list, slot_index, 1); // (HAIRPERF)
         // (HY) THE CAPTURE OF THE GAME'S LIGHT, right after its deferred stage, over the box of every G-buffer draw of this frame
         // (his, his form weapons', the friends'): our own two targets (hycap.ps.dxil reads the game's light, mask and G-buffer as
         // they rest readable now: no barrier on any of the game's resources), then every slot's table reads them at 21 / 22
@@ -3230,12 +3240,17 @@ impl Core {
             r
         };
         let mut hy_box = crate::hybrid::scissor_box(&hy_reach, &clip, tan_y, width, height, 24.0);
+        // (CAPPERF) each KH character's own box (the capture's level of detail goes by their pixels, not by the union's)
+        #[allow(unused_mut)]
+        let mut hy_boxes: Vec<[i32; 4]> = hy_box.into_iter().collect();
         #[allow(unused_mut)]
         let mut test_caps: Vec<(Vec3, Vec3, f32)> = if crate::hybrid::TEST.load(Ordering::Relaxed) { hy_caps.clone() } else { Vec::new() };
         #[cfg(feature = "party")]
         if let Some(plan) = party_plan.as_ref() {
             for pm in &plan.members {
-                hy_box = crate::hybrid::union_box(hy_box, crate::hybrid::scissor_box(&pm.reach, &clip, tan_y, width, height, 24.0));
+                let own = crate::hybrid::scissor_box(&pm.reach, &clip, tan_y, width, height, 24.0);
+                hy_boxes.extend(own);
+                hy_box = crate::hybrid::union_box(hy_box, own);
                 if crate::hybrid::TEST.load(Ordering::Relaxed) {
                     test_caps.extend(pm.caps.iter().copied());
                 }
@@ -3256,6 +3271,12 @@ impl Core {
                 let at = (frame_constants - slot.upload.GetGPUVirtualAddress()) as usize + (frame.len() - crate::hybrid::BLOCK_FLOATS + crate::hybrid::BOX_ROW * 4) * 4;
                 let row = crate::hybrid::box_row(bx);
                 std::ptr::copy_nonoverlapping(row.as_ptr() as *const u8, slot.mapped.add(at), 16);
+                // (CAPPERF) the capture's level of detail (row 17.z: hybrid.rs lod_frame, r.hybrid_lod_px): the boxes clamped to the
+                // picture, summed
+                let clamped: Vec<[i32; 4]> = hy_boxes.iter().map(|b| [b[0].clamp(0, width as i32), b[1].clamp(0, height as i32), b[2].clamp(0, width as i32), b[3].clamp(0, height as i32)]).collect();
+                let lod: f32 = if crate::hybrid::lod_frame(crate::hybrid::boxes_px(&clamped)) { 1.0 } else { 0.0 };
+                let at = (frame_constants - slot.upload.GetGPUVirtualAddress()) as usize + (frame.len() - crate::hybrid::BLOCK_FLOATS + crate::hybrid::LOD_ROW * 4 + crate::hybrid::LOD_COMPONENT) * 4;
+                std::ptr::copy_nonoverlapping(lod.to_ne_bytes().as_ptr(), slot.mapped.add(at), 4);
                 // (RSF2 round 6) the cascades read at this frame's cast split, with the depth copy this frame's early list makes:
                 // their rows (else zeros: the capture keeps the round-5 mean) and the three inputs
                 let sun_frame = sun_now.as_ref().filter(|s| kh_copy && s.at.elapsed() < Duration::from_millis(40));
@@ -3387,6 +3408,7 @@ impl Core {
             }
             None => dsv_heap.GetCPUDescriptorHandleForHeapStart(),
         };
+        crate::passtime::stamp(device, queue, list, slot_index, 2); // (HAIRPERF)
         // ---- the contact shadow first: the scene depth is read as a texture (it rests in a shader
         // resource state between the game's passes), the finished picture is multiplied.
         list.ResourceBarrier(&before[..1]);
@@ -3720,7 +3742,16 @@ impl Core {
             None
         };
         let hair_late_now = hair_late_now || (h91_box.is_some() && hair_set.is_some());
+        // (HAIRPERF) his hair's coverage at one point a pixel while he is big on screen: the pixels a centimetre at his head
+        // covers (his feet without the joint), `r.hair_point_px` (hair.rs); handed to the hair shaders as kh.fade.z
+        let hair_point = hair_set.is_some()
+            && input.body.as_ref().is_some_and(|body| {
+                let head = assets.bones.get("atama").and_then(|b| body.component.get(*b)).map(|t| t.then(&body.component_to_world).translation).filter(|h| h.is_finite());
+                let d = (head.unwrap_or(body.component_to_world.translation) - camera_game).length().max(1.0); // (game space, cm)
+                crate::hair::point_wanted(height as f32 / (2.0 * tan_y.max(1.0e-3) * d))
+            });
         let mut late_translucent: Vec<crate::hair::HairDraw> = Vec::new();
+        crate::passtime::stamp(device, queue, list, slot_index, 3); // (HAIRPERF) his colour draws
         for translucent in [false, true] {
             // (ER87) not late: the hair fringe between his opaque / masked and his translucent draws
             if let (true, Some(set), false) = (translucent, hair_set.as_ref(), hair_late_now) {
@@ -3855,6 +3886,7 @@ impl Core {
                     params.sh = sh;
                     // (ER79) a two-sided cloth slot: its interior factor (the _bli shaders shade its back faces as the inside)
                     params.khs.w = material.scalars.get(crate::outfit::INTERIOR_SCALAR).copied().unwrap_or(0.0);
+                    params.fade.z = f32::from(u8::from(hair_point)); // (HAIRPERF) read by the ER91 hair shaders only
                     params.env.y = env_level;
                     (params.env.z, params.env.w) = (env_tint.x - 1.0, env_tint.z - 1.0);
                     let material_constants = match (put(params.as_floats()), routed_at) {
@@ -3909,6 +3941,7 @@ impl Core {
                 }
             }
         }
+        crate::passtime::stamp(device, queue, list, slot_index, 4); // (HAIRPERF) the rest
         // (FP) the whole buffer again for what follows; the routed fragments that did not fit, counted in the log
         limit.set(cap);
         routed_skipped(skipped_routed.iter().filter(|s| **s).count(), routed_count);
@@ -4252,6 +4285,8 @@ impl Core {
             list.ResolveQueryData(heap, D3D12_QUERY_TYPE_TIMESTAMP, slot_index as u32 * 2, 2, results, slot_index as u64 * 16);
             slot.timed = true;
         }
+        crate::passtime::stamp(device, queue, list, slot_index, 5); // (HAIRPERF)
+        crate::passtime::finish(device, list, slot_index);
         if let Some(l) = late.as_mut() {
             l.recomp = recomp_saved;
         }
@@ -5014,6 +5049,7 @@ fn drop_core(core: Option<Core>) {
         while core.fence.GetCompletedValue() < core.fence_value && waited.elapsed() < Duration::from_millis(1000) && core.device.GetDeviceRemovedReason().is_ok() {
             std::thread::sleep(Duration::from_millis(1));
         }
+        crate::outfit::release_all();
         for slot in &core.slots {
             slot.upload.Unmap(0, None);
         }

@@ -475,7 +475,13 @@ fn shortcut(state: &mut StateData, cx: &mut Ctx, slot: usize) {
     }
     let r = row(cx, kind);
     if !r.enabled || !can_execute(state, cx, kind) {
-        cx.pawn.command.events.push(MenuEvent::Refused);
+        // (2026-10-28, the user: "remove the "error" sound from shortcut commands for every character, spamming magic makes
+        // it constantly play", "only play the error sound when you don't have enough MP for it") the refused SE only for
+        // a row short of MP or an MP command during MP Charge; any other refusal (busy, mid-cast) is silent
+        let out_of_mp = r.mp_short || (cx.pawn.status.mp_charging && items::item_of_command(kind).is_none());
+        if out_of_mp {
+            cx.pawn.command.events.push(MenuEvent::Refused);
+        }
         return;
     }
     if execute(state, cx, kind) {

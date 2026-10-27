@@ -16,6 +16,10 @@
 // setup.exe (Node.js as a single executable application of the setup) only when it is the one make_release.js built:
 // the SHA-256 in release-tools/setup_exe.json (it is over 50 MB and never in git). The bundled npm packages
 // (node_modules) are scanned like the rest.
+// A linux-x64 release folder (make_release.js): its three Linux binaries are allowed too (tools/bin/kh-shaderc,
+// tools/bin/kh-oodle, tools/bin/kh-er-selfcheck: static ELF builds of our own crates), and setup-linux (Node.js for Linux
+// as a single executable application of the setup) only when it is the one make_release.js built: the SHA-256 in
+// release-tools/setup_linux.json. Any other Linux executable (ELF) is refused, like a Windows one.
 // Exit code 0 = clean, 1 = something was found.
 'use strict';
 const fs = require('fs');
@@ -27,7 +31,7 @@ const arg = (k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : un
 
 // Not part of the repository (git-ignored): generated, downloaded or the player's own.
 const RELEASE = args.includes('--release-binaries');
-const RELEASE_BINARY = /^(er\/mods\/kh_er\.dll|er\/mods\/kh_er_loader\.dll|tools\/bin\/kh-shaderc\.exe)$/;
+const RELEASE_BINARY = /^(er\/mods\/kh_er\.dll|er\/mods\/kh_er_loader\.dll|tools\/bin\/kh-shaderc\.exe|tools\/bin\/kh-(shaderc|oodle|er-selfcheck))$/;
 const SKIP = RELEASE ? /^(\.git|target|build|assets|assets_converted|audit|user|er\/(saves|logs|live))(\/|$)|^er\/mods\/kh-er\.(cfg|ini|ctl|ctl\.bak\d*|selfcheck\.txt)$|^er\/mods\/kh-er-selfcheck\.txt$|^tools\/config\.json$|^tools\/third_party\/ogg-vorbis-decoder\/ogg-vorbis-decoder\.min\.js$/ : /^(\.git|node_modules|target|build|assets|assets_converted|audit|user|tools\/bin|er\/(mods|saves|logs|live))(\/|$)|^tools\/config\.json$|^tools\/third_party\/ogg-vorbis-decoder\/ogg-vorbis-decoder\.min\.js$|^sheets\/(reflect|entities|systems|exe|native|data|assets|impl|design)(\/|$)/;
 const BANNED_EXT = /\.(exe|dll|pdb|pak|sig|uasset|uexp|ubulk|umap|bnk|wem|awb|acb|usm|bk2|glb|gltf|dds|tga|png|jpg|jpeg|wav|ogg|mp3|mp4|bhd|bdt|dcx|bnd|sl2|co2|khsave|bin|fmg|emevd|flver|tpf|hks)$/i;
 const HUD_DXIL = /^crates\/kh-er-render\/shaders\/hud\/hud\.(ps|vs)\.dxil$/;
@@ -36,13 +40,17 @@ const NODE_EXE = 'setup.exe';
 const NODE_PIN = (() => { try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'setup_exe.json'), 'utf8')); } catch { return null; } })();
 const nodeIsPinned = (abs) => !!NODE_PIN && require('crypto').createHash('sha256').update(fs.readFileSync(abs)).digest('hex') === NODE_PIN.setup_exe_sha256;
 let nodeOk = false;
+// (linux-x64) setup-linux, by its hash
+const LINUX_EXE = 'setup-linux';
+const LINUX_PIN = (() => { try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'setup_linux.json'), 'utf8')); } catch { return null; } })();
+const linuxIsPinned = (abs) => !!LINUX_PIN && require('crypto').createHash('sha256').update(fs.readFileSync(abs)).digest('hex') === LINUX_PIN.setup_linux_sha256;
 // the mod's own logo (the owner's fan art, docs/images): the only images allowed, each by its SHA-256
 const OWN_IMAGES = {
   'docs/images/logo.png': '4c83e7789dc09a59b941c3d0359ba73957e24c7c40eb5da778283d5a90d41c2f',
   'docs/images/logo-640.png': '85233767cf9772a2bde8275876c10679eb2893cc57e6bf10977635de9adf475c',
 };
 let imageOk = false;
-const ALLOWED_BINARY = { test: (r) => HUD_DXIL.test(r) || (RELEASE && RELEASE_BINARY.test(r)) || (RELEASE && r === NODE_EXE && nodeOk) || (imageOk && r in OWN_IMAGES) };
+const ALLOWED_BINARY = { test: (r) => HUD_DXIL.test(r) || (RELEASE && RELEASE_BINARY.test(r)) || (RELEASE && (r === NODE_EXE || r === LINUX_EXE) && nodeOk) || (imageOk && r in OWN_IMAGES) };
 // the pack pipeline's data (recipes, notes, lists) holds no text of the game's: no Japanese at all
 const JP = /[぀-ヿ㐀-鿿ｦ-ﾟ]/;
 const JP_FREE = /^tools\/packgen\//;
@@ -73,10 +81,11 @@ function walk(dir) {
     if (!e.isFile()) continue;
     const size = fs.statSync(abs).size;
     total += size; count++;
-    nodeOk = RELEASE && r === NODE_EXE && nodeIsPinned(abs);
+    nodeOk = RELEASE && ((r === NODE_EXE && nodeIsPinned(abs)) || (r === LINUX_EXE && linuxIsPinned(abs)));
     imageOk = r in OWN_IMAGES && require('crypto').createHash('sha256').update(fs.readFileSync(abs)).digest('hex') === OWN_IMAGES[r];
     if (r in OWN_IMAGES && !imageOk) problems.push(`${r}: not the mod's logo as allowed (release-tools/scan.js OWN_IMAGES)`);
     if (RELEASE && r === NODE_EXE && !nodeOk) problems.push(`${r}: not the setup.exe make_release.js built (release-tools/setup_exe.json)`);
+    if (RELEASE && r === LINUX_EXE && !nodeOk) problems.push(`${r}: not the setup-linux make_release.js built (release-tools/setup_linux.json)`);
     if (size > LIMIT && !nodeOk) problems.push(`${r}: ${(size / 1048576).toFixed(1)} MB (over 50 MB)`);
     if (BANNED_EXT.test(r) && !ALLOWED_BINARY.test(r)) problems.push(`${r}: banned file type`);
     const buf = fs.readFileSync(abs);
@@ -84,6 +93,7 @@ function walk(dir) {
     for (const [m, what] of MAGIC) if (head === m) problems.push(`${r}: looks like a game file (${what})`);
     if (buf.subarray(0, 4).equals(UE_TAG)) problems.push(`${r}: looks like an Unreal package`);
     if (head.startsWith('MZ') && !ALLOWED_BINARY.test(r)) problems.push(`${r}: a Windows executable`);
+    if (head === '\x7fELF' && !ALLOWED_BINARY.test(r)) problems.push(`${r}: a Linux executable`);
     const text = buf.toString('latin1');
     if (/-----BEGIN [A-Z ]*(PUBLIC|PRIVATE) KEY-----\s*\n?[A-Za-z0-9+/=\r\n]{40,}/.test(text)) problems.push(`${r}: contains a PEM key block`);
     if (key && buf.indexOf(key) >= 0) problems.push(`${r}: contains the KH3 pak key`);

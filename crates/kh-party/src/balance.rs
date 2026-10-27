@@ -96,7 +96,7 @@ pub fn defense_cut(s: &FriendStatus) -> f32 {
 /// max HP when he does not lead, the rule is off (`lead.incoming`), or his HP ratio is 0 (the S2 rule as before).
 pub fn incoming_reference(s: &FriendStatus, sora_max_hp: i32) -> f32 {
     let (ratio, _) = ratios(s.chara);
-    if !s.bal.leading || !BP.lead_incoming || ratio <= 0.0 || sora_max_hp <= 0 {
+    if !BP.lead_incoming || ratio <= 0.0 || sora_max_hp <= 0 /* (ONESTAT, the user 2026-10-27: "there should be no party ally/leader seperation, their stats should be their stats same for Goofy and every KH character added later"): leading or not */ {
         return s.max_hp() as f32;
     }
     let own = s.bonuses.totals(s.game_level).0 + s.roster.hp_mp(s.game_level).0;
@@ -177,13 +177,17 @@ mod tests {
     }
 
     #[test]
-    fn ai_friends_keep_kh3s_status() {
+    fn a_friend_has_the_same_status_leading_or_not() {
+        // (ONESTAT, the user 2026-10-27: "there should be no party ally/leader seperation, their stats should be their stats")
         for chara in [Chara::Donald, Chara::Goofy] {
-            let s = FriendStatus::new(chara, crate::tables::level_row(chara, 40).0);
-            let row = crate::tables::level_row(chara, 40);
-            assert_eq!(s.strength(), row.1 + crate::tables::weapon(s.weapon).unwrap().3);
-            assert_eq!(s.max_hp(), crate::tables::cparam(chara, "base.max_hp") as i32);
-            assert_eq!(incoming_reference(&s, 150), s.max_hp() as f32, "an AI friend: the S2 rule");
+            let mut ai = FriendStatus::new(chara, crate::tables::level_row(chara, 40).0);
+            ai.set_sora_reference(Some((160, 150)));
+            let mut led = ai.clone();
+            led.set_leading(true);
+            assert_eq!((ai.strength(), ai.magic(), ai.defense()), (led.strength(), led.magic(), led.defense()), "{chara:?}");
+            assert_eq!((ai.max_hp(), ai.max_mp()), (led.max_hp(), led.max_mp()), "{chara:?}");
+            assert_eq!(incoming_reference(&ai, 160), incoming_reference(&led, 160), "{chara:?}");
+            assert_eq!(ai.strength(), base_stats(chara, 40).0 + crate::tables::weapon(ai.weapon).unwrap().3);
         }
     }
 

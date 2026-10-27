@@ -347,7 +347,9 @@ function buildTriggers() {
 function partyExtraTriggers() {
   const T = [];
   const index = new Map();
-  (function walk(dir) { for (const f of fs.readdirSync(dir, { withFileTypes: true })) { const p = P(dir, f.name); if (f.isDirectory()) walk(p); else if (f.name.endsWith('.uasset.json')) { const r = path.relative(PACKAGES, p).split(path.sep).join('/').replace(/\.uasset\.json$/, ''); const k = r.split('/').pop().toLowerCase(); if (!index.has(k)) index.set(k, []); index.get(k).push(r); } } })(P(PACKAGES, 'Sound', 'SE', '_Data', 'SeAttach'));
+  // (Windows' folder order on every system: tools/lib/ntfs_order.js)
+  const { ntfsCompare } = require('./lib/ntfs_order');
+  (function walk(dir) { for (const f of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => ntfsCompare(a.name, b.name))) { const p = P(dir, f.name); if (f.isDirectory()) walk(p); else if (f.name.endsWith('.uasset.json')) { const r = path.relative(PACKAGES, p).split(path.sep).join('/').replace(/\.uasset\.json$/, ''); const k = r.split('/').pop().toLowerCase(); if (!index.has(k)) index.set(k, []); index.get(k).push(r); } } })(P(PACKAGES, 'Sound', 'SE', '_Data', 'SeAttach'));
   for (const entry of PARTY_EXTRA_EFFECTS) {
     const [name, seName] = entry.includes('=') ? entry.split('=') : [entry, entry]; // (GOOFY-GK) an aliased SeAttach name
     for (const r of index.get(seName.toLowerCase()) || []) {

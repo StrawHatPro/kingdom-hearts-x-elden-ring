@@ -236,7 +236,7 @@ fn donald_magic_menu_lists_his_elements_then_their_spells() {
     rig.idle(1);
     rig.step(Vec2::ZERO, &[PadButton::ATTACK]);
     let snap = rig.party.pad_menu(rig.id).unwrap();
-    assert_eq!(snap.lists[1].iter().map(|r| r.name).collect::<Vec<_>>(), ["Fire", "Flare"], "Fire's list: line 1, line 2");
+    assert_eq!(snap.lists[1].iter().map(|r| r.name).collect::<Vec<_>>(), ["Fire"], "Fire's list: line 1 (DONLINE2: no Flare at the start)");
 }
 
 #[test]

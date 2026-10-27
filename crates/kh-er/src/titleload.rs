@@ -99,7 +99,7 @@ fn summary_flags() -> Option<usize> {
     let man = unsafe { GameDataMan::instance() }.ok()? as *const GameDataMan as usize;
     // SAFETY: a pointer-sized field of the live manager.
     let object = unsafe { std::ptr::read_unaligned((man + 0x78) as *const usize) };
-    if !crate::game::plausible(object) || crate::pause::readable(object, 0x18) < 0x18 {
+    if !crate::game::plausible(object) || !crate::pause::heap_readable(object, 0x18) {
         return None;
     }
     // SAFETY: readable (checked).
@@ -215,6 +215,12 @@ fn deleted_slots(root: &std::path::Path, control: &Control, t: u64) {
         }
         return;
     }
+    // (TITLEPERF) four looks a second are plenty for a change that must stand 1.5 s
+    static NEXT_AT: AtomicU64 = AtomicU64::new(0);
+    if t < NEXT_AT.load(Ordering::Relaxed) {
+        return;
+    }
+    NEXT_AT.store(t + 250, Ordering::Relaxed);
     let Some(at) = summary_flags() else { return };
     let mut now_flags = [0u8; 10];
     // SAFETY: ten readable bytes of the live summary object (checked in `summary_flags`).
@@ -279,14 +285,32 @@ fn deleted_slots(root: &std::path::Path, control: &Control, t: u64) {
 }
 
 /// Once a frame (FRAME_BEGIN; runs at the title too).
+/// (TITLEPERF) This frame step's time in parts since the last [`take_perf`] (ns): the deleted-slot watch, the wait for the
+/// step's state, title_prepare (the HUD's lock and load step), the rest.
+static PERF: [std::sync::atomic::AtomicU64; 4] = [const { std::sync::atomic::AtomicU64::new(0) }; 4];
+
+pub fn take_perf() -> [u64; 4] {
+    std::array::from_fn(|k| PERF[k].swap(0, Ordering::Relaxed))
+}
+
 pub fn frame(control: &Control, root: &std::path::Path) {
+    let started = std::time::Instant::now();
     deleted_slots(root, control, now());
+    PERF[0].fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    let rest = std::time::Instant::now();
+    frame_steps(control);
+    PERF[3].fetch_add(rest.elapsed().as_nanos() as u64, Ordering::Relaxed);
+}
+
+fn frame_steps(control: &Control) {
     // (the masked bytes never outlive their time, whatever else happens)
     if MASKED.load(Ordering::Relaxed) && now() >= UNMASK_AT.load(Ordering::Relaxed) {
         unmask("their time is up");
     }
     UNMASK_MS.store(control.i64("saveload.title.unmask").map_or(0, |v| v.clamp(0, 3000) as u64), Ordering::Relaxed);
+    let waited = std::time::Instant::now();
     let Ok(mut st) = STATE.lock() else { return };
+    PERF[1].fetch_add(waited.elapsed().as_nanos() as u64, Ordering::Relaxed);
     let on = control.on("saveload.kh") && control.on("hud.kh") && control.flag("saveload.title") != Some(false) && title::load_hooked();
     ENABLED.store(on, Ordering::Relaxed);
     let t = now();
@@ -328,7 +352,9 @@ pub fn frame(control: &Control, root: &std::path::Path) {
     match st.step {
         Step::Idle => {
             if on {
+                let prepared = std::time::Instant::now();
                 crate::hud::title_prepare(control);
+                PERF[2].fetch_add(prepared.elapsed().as_nanos() as u64, Ordering::Relaxed);
             }
             if MADE.swap(false, Ordering::SeqCst) && on {
                 st.step = Step::Screen;

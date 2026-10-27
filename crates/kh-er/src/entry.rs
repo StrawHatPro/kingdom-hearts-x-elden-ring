@@ -68,6 +68,14 @@ pub unsafe extern "C" fn kh_er_init(dir: *const u16, len: usize, generation: u32
         crate::log::init(&logs, generation == 0);
         std::panic::set_hook(Box::new(|info| {
             erlog!("panic: {info}");
+            // (TITLEPERF) who called: the first panics of a run name the mod's own functions on the way (the frames of std
+            // and the SDK are left out); the rest are counted only
+            static SHOWN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            if SHOWN.fetch_add(1, Ordering::Relaxed) < 3 {
+                let trace = std::backtrace::Backtrace::force_capture().to_string();
+                let ours: Vec<&str> = trace.lines().map(str::trim).filter(|l| l.contains("kh_er") && !l.starts_with("at ")).take(8).collect();
+                erlog!("panic: called from {}", if ours.is_empty() { "(no names: the debug file is not beside the DLL)".to_string() } else { ours.join(" <- ") });
+            }
         }));
         erlog!("---- kh-er {} payload {generation} from {}", env!("CARGO_PKG_VERSION"), dir.display());
         match exe_file_version() {
@@ -156,6 +164,7 @@ pub extern "C" fn kh_er_frame(phase: u32, dt: f32) {
     let _ = catch_unwind(crate::zfinale::release); // (ZFIN) a body hidden by the finale is drawn again
     let _ = catch_unwind(crate::gracehide::release); // (SV)
     let _ = catch_unwind(crate::gracelock::release); // (SV)
+    let _ = catch_unwind(crate::telescope::release); // (TELESCOPE) the telescopes' rows get their region back
     let _ = catch_unwind(crate::erkeyui::release); // (HUD2)
     let _ = catch_unwind(crate::pause::release); // (IMPL_ER11) our hold on the world is taken back before the hooks go
     let _ = catch_unwind(crate::titleload::shutdown); // (IMPL_ER15) the masked summary bytes go back before anything else
@@ -194,6 +203,7 @@ pub extern "C" fn kh_er_shutdown() {
     let _ = catch_unwind(crate::zfinale::release); // (ZFIN) a body hidden by the finale is drawn again
     let _ = catch_unwind(crate::gracehide::release); // (SV)
     let _ = catch_unwind(crate::gracelock::release); // (SV)
+    let _ = catch_unwind(crate::telescope::release); // (TELESCOPE) the telescopes' rows get their region back
     let _ = catch_unwind(crate::erkeyui::release); // (HUD2)
     let _ = catch_unwind(crate::pause::release); // (IMPL_ER11) our hold on the world is taken back before the hooks go
     let _ = catch_unwind(crate::titleload::shutdown); // (IMPL_ER15) the masked summary bytes go back before anything else

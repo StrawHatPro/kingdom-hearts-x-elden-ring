@@ -1,0 +1,8 @@
+{
+ "about": "setup-linux of the linux-x64 release (release-tools/make_release.js): Node.js 24.21.0 linux-x64 (bin/node 7fde7b8afa198da66257f42ee2001d874c7355631e6d1579a5fb5ef1f246df4c) as a single executable application of release-tools/sea_main.js (the same dispatcher as setup.exe); release-tools/scan.js allows setup-linux by this hash. The build is deterministic.",
+ "version": "0.1.2",
+ "node": "24.21.0",
+ "sea_main_sha256": "35208f32b61d928eea6b23ce63d1b1b26ee74e266600cba1f588a12e8572675e",
+ "setup_linux_sha256": "24037630253f5838fbc9e4735f10ec934850b14a80090626aea83fd49a2d5ae8",
+ "bytes": 126684352
+}

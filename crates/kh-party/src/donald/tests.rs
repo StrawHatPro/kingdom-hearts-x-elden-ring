@@ -150,14 +150,18 @@ fn command_ids_round_trip_and_old_blocks_migrate() {
 fn the_start_and_one_tier_per_boss() {
     let data = d();
     let mut l = DonLearned::start();
-    assert_eq!((l.tier(Element::Fire), l.tier(Element::Water), l.line2(Element::Fire), l.line2(Element::Water)), (1, 1, 1, 1));
+    // (DONLINE2, the user 2026-10-27: "Donald should not start with access to Flood or Flare")
+    assert_eq!((l.tier(Element::Fire), l.tier(Element::Water), l.line2(Element::Fire), l.line2(Element::Water)), (1, 1, 0, 0));
+    assert!(Element::ALL.iter().all(|e| l.line2(*e) == 0), "no line-2 spell at the start");
+    assert!(!l.knows(SpellRef::Line2(Element::Fire, 1)) && !l.knows(SpellRef::Line2(Element::Water, 1)));
     assert_eq!(l.arcane(ArcaneLine::Gravity), 1);
     assert_eq!(l.elements(), ElemSet::of(&[Element::Fire, Element::Water]));
     assert!(!l.attune_unlocked(Element::Thunder));
-    // Fire: Fira + Flare Lv 2, Firaga + Flare Lv 3 from base-game bosses; (DON-PROG) a further base boss past -ga: Max
-    // MP +3; the DLC boss: Firaza + Inferno; again: Max MP +3
-    assert_eq!(l.apply(DonStep::Element(Element::Fire)), vec![Grant::Tier(Element::Fire, 2), Grant::Line2(Element::Fire, 2)]);
-    assert_eq!(l.apply(DonStep::Element(Element::Fire)), vec![Grant::Tier(Element::Fire, 3), Grant::Line2(Element::Fire, 3)]);
+    // Fire: Fira, Firaga from base-game bosses (DONLINE2: no Flare level from them); (DON-PROG) a further base boss past
+    // -ga: Max MP +3; the DLC boss: Firaza + Inferno; again: Max MP +3
+    assert_eq!(l.apply(DonStep::Element(Element::Fire)), vec![Grant::Tier(Element::Fire, 2)]);
+    assert_eq!(l.apply(DonStep::Element(Element::Fire)), vec![Grant::Tier(Element::Fire, 3)]);
+    assert_eq!(l.line2(Element::Fire), 0, "(DONLINE2) tier steps give no line 2");
     assert_eq!(l.apply(DonStep::Element(Element::Fire)), vec![Grant::MaxMp(3)], "(DON-PROG) no base boss gives -za");
     assert_eq!(l.apply(DonStep::ElementDlc(Element::Fire)), vec![Grant::Tier(Element::Fire, 4), Grant::Ultimate(Element::Fire)]);
     assert!(l.knows(SpellRef::Ultimate(Element::Fire)) && l.knows(SpellRef::Line1(Element::Fire, 4)));
@@ -165,32 +169,81 @@ fn the_start_and_one_tier_per_boss() {
     assert_eq!(l.mp_bonus(), 6);
     // (DON-PROG) the DLC boss first: every missing tier, then -za + the ultimate (nothing skipped)
     let mut n = DonLearned::start();
-    assert_eq!(n.apply(DonStep::ElementDlc(Element::Blizzard)), vec![Grant::Tier(Element::Blizzard, 1), Grant::Attunement(Element::Blizzard), Grant::Line2(Element::Blizzard, 1), Grant::Tier(Element::Blizzard, 2), Grant::Line2(Element::Blizzard, 2), Grant::Tier(Element::Blizzard, 3), Grant::Line2(Element::Blizzard, 3), Grant::Tier(Element::Blizzard, 4), Grant::Ultimate(Element::Blizzard)]);
+    assert_eq!(n.apply(DonStep::ElementDlc(Element::Blizzard)), vec![Grant::Tier(Element::Blizzard, 1), Grant::Attunement(Element::Blizzard), Grant::Tier(Element::Blizzard, 2), Grant::Tier(Element::Blizzard, 3), Grant::Tier(Element::Blizzard, 4), Grant::Ultimate(Element::Blizzard)]);
+    assert_eq!(n.line2(Element::Blizzard), 0, "(DONLINE2) the DLC boss gives no Freeze either");
     assert_eq!(n.apply(DonStep::Element(Element::Blizzard)), vec![Grant::MaxMp(3)], "a base boss after it");
     assert_eq!(DonStep::parse("dlc:fire"), Some(DonStep::ElementDlc(Element::Fire)));
     assert_eq!(DonStep::ElementDlc(Element::Light).token(), "dlc:light");
     assert_eq!(sora_gain(DonStep::ElementDlc(Element::Fire), 1), SoraGain::Tier(2));
-    // Thunder from nothing: Thunder + its Attunement + Ball Lightning Lv 1
-    assert_eq!(l.apply(DonStep::Element(Element::Thunder)), vec![Grant::Tier(Element::Thunder, 1), Grant::Attunement(Element::Thunder), Grant::Line2(Element::Thunder, 1)]);
+    // Thunder from nothing: Thunder + its Attunement (DONLINE2: no Ball Lightning)
+    assert_eq!(l.apply(DonStep::Element(Element::Thunder)), vec![Grant::Tier(Element::Thunder, 1), Grant::Attunement(Element::Thunder)]);
     let words: Vec<String> = [Grant::Tier(Element::Fire, 4), Grant::Line2(Element::Fire, 2), Grant::Attunement(Element::Light), Grant::MaxMp(3)].iter().map(|g| g.label(&data)).collect();
     assert_eq!(words, ["Firaza", "Flare Lv 2", "Light Attunement", "Max MP +3"]);
 }
 
 #[test]
 fn banish_levels_in_any_order_and_light_attunement() {
-    // the doc's example: two Light bosses first -> Banish Lv 1 from the second; the Tree Sentinel later gives Lv 2
+    // (DONLINE2) Light's tier steps give no Banish; Banish comes from its own line-2 bosses (the Tree Sentinel's old
+    // `banish` token is one), one level each, in any order with the tiers
     let mut l = DonLearned::start();
     assert_eq!(l.apply(DonStep::Element(Element::Light)), vec![Grant::Tier(Element::Light, 1), Grant::Attunement(Element::Light)]);
-    assert_eq!(l.apply(DonStep::Element(Element::Light)), vec![Grant::Tier(Element::Light, 2), Grant::Line2(Element::Light, 1)]);
-    assert_eq!(l.apply(DonStep::Banish), vec![Grant::Line2(Element::Light, 2)]);
-    assert_eq!(l.apply(DonStep::Element(Element::Light)), vec![Grant::Tier(Element::Light, 3), Grant::Line2(Element::Light, 3)]);
+    assert_eq!(l.apply(DonStep::Element(Element::Light)), vec![Grant::Tier(Element::Light, 2)]);
+    assert_eq!(l.line2(Element::Light), 0);
+    let banish = DonStep::parse("banish").unwrap();
+    assert_eq!(banish, DonStep::Line2(Element::Light));
+    assert_eq!(l.apply(banish), vec![Grant::Line2(Element::Light, 1)], "Light known already: no second Attunement");
+    assert_eq!(l.apply(DonStep::Element(Element::Light)), vec![Grant::Tier(Element::Light, 3)]);
+    assert_eq!(l.apply(DonStep::Line2(Element::Light)), vec![Grant::Line2(Element::Light, 2)]);
     assert_eq!(l.apply(DonStep::ElementDlc(Element::Light)), vec![Grant::Tier(Element::Light, 4), Grant::Ultimate(Element::Light)]); // (DON-PROG) its DLC boss
-    assert_eq!(l.apply(DonStep::Banish), vec![Grant::MaxMp(3)], "past Lv 3: Max MP +3");
+    assert_eq!(l.apply(banish), vec![Grant::Line2(Element::Light, 3)]);
+    assert_eq!(l.apply(banish), vec![Grant::MaxMp(3)], "past Lv 3: Max MP +3");
     // the Tree Sentinel first (as intended): Banish Lv 1 unlocks Light Attunement
     let mut l = DonLearned::start();
-    assert_eq!(l.apply(DonStep::Banish), vec![Grant::Line2(Element::Light, 1), Grant::Attunement(Element::Light)]);
+    assert_eq!(l.apply(banish), vec![Grant::Line2(Element::Light, 1), Grant::Attunement(Element::Light)]);
     assert!(l.attune_unlocked(Element::Light) && l.tier(Element::Light) == 0);
     assert_eq!(l.apply(DonStep::Element(Element::Light)), vec![Grant::Tier(Element::Light, 1)]);
+}
+
+/// (DONLINE2) THE USER (2026-10-27): "Tier 2 magic should be given by different bosses, seperate from tier 1 bosses,
+/// following the same rules as tier 1 spell aquirements": a line-2 step gives one level more of that element's line-2
+/// spell, never skipping, in any order with the tier steps; the Attunement when it is his first spell of the element;
+/// past Lv 3 Max MP +3; Sora gets nothing.
+#[test]
+fn line_2_has_bosses_of_its_own() {
+    let data = d();
+    // Flare: Fire is known from the start (no new Attunement); one level per step; at the top Max MP +3
+    let mut l = DonLearned::start();
+    assert_eq!(l.apply(DonStep::Line2(Element::Fire)), vec![Grant::Line2(Element::Fire, 1)]);
+    assert_eq!(l.tier(Element::Fire), 1, "a line-2 step gives no tier");
+    assert_eq!(l.apply(DonStep::Line2(Element::Fire)), vec![Grant::Line2(Element::Fire, 2)]);
+    assert_eq!(l.apply(DonStep::Element(Element::Fire)), vec![Grant::Tier(Element::Fire, 2)], "any order with the tiers");
+    assert_eq!(l.apply(DonStep::Line2(Element::Fire)), vec![Grant::Line2(Element::Fire, 3)]);
+    assert_eq!(l.apply(DonStep::Line2(Element::Fire)), vec![Grant::MaxMp(3)]);
+    assert_eq!((l.line2(Element::Fire), l.mp_bonus()), (3, 3));
+    assert!(l.knows(SpellRef::Line2(Element::Fire, 3)));
+    // a line-2 boss of an element he has nothing of: its Lv 1 and the Attunement (its first spell); the tier boss after it
+    // gives no second Attunement
+    let mut n = DonLearned::start();
+    assert_eq!(n.apply(DonStep::Line2(Element::Aero)), vec![Grant::Line2(Element::Aero, 1), Grant::Attunement(Element::Aero)]);
+    assert!(n.attune_unlocked(Element::Aero) && n.tier(Element::Aero) == 0);
+    assert_eq!(n.apply(DonStep::Element(Element::Aero)), vec![Grant::Tier(Element::Aero, 1)]);
+    // every element's line 2 the same way, never skipping (three steps = Lv 1, 2, 3 in turn)
+    for e in Element::ALL {
+        let mut m = DonLearned::EMPTY;
+        let got: Vec<Vec<Grant>> = (0..4).map(|_| m.apply(DonStep::Line2(e))).collect();
+        assert_eq!(got, vec![vec![Grant::Line2(e, 1), Grant::Attunement(e)], vec![Grant::Line2(e, 2)], vec![Grant::Line2(e, 3)], vec![Grant::MaxMp(3)]], "{e:?}");
+        assert_eq!(m.tier(e), 0);
+        for sora_tier in 0..=3 {
+            assert_eq!(sora_gain(DonStep::Line2(e), sora_tier), SoraGain::Nothing, "Sora gets nothing from a line-2 step");
+        }
+    }
+    // the tokens: `line2:<element>` (and `l2:`), `banish` = Light's
+    assert_eq!(DonStep::parse("line2:fire"), Some(DonStep::Line2(Element::Fire)));
+    assert_eq!(DonStep::parse(" l2:Water "), Some(DonStep::Line2(Element::Water)));
+    assert_eq!(DonStep::parse("line2:cure"), Some(DonStep::Line2(Element::Light)));
+    assert_eq!(DonStep::parse("line2:nothing"), None);
+    assert_eq!(DonStep::Line2(Element::Thunder).token(), "line2:thunder");
+    assert_eq!(Grant::Line2(Element::Water, 1).label(&data), "Flood");
 }
 
 #[test]
@@ -206,12 +259,12 @@ fn arcane_lines_and_soras_share() {
     assert_eq!(sora_gain(DonStep::Element(Element::Fire), 1), SoraGain::Tier(2));
     assert_eq!(sora_gain(DonStep::Element(Element::Thunder), 0), SoraGain::Tier(1));
     assert_eq!(sora_gain(DonStep::Element(Element::Fire), 3), SoraGain::MaxMp(3));
-    assert_eq!(sora_gain(DonStep::Banish, 0), SoraGain::Nothing);
+    assert_eq!(sora_gain(DonStep::Line2(Element::Light), 0), SoraGain::Nothing); // (DONLINE2) Banish
     assert_eq!(sora_gain(DonStep::Arcane(ArcaneLine::Meteor), 3), SoraGain::Nothing);
     assert_eq!(DonStep::parse("magic:cure"), Some(DonStep::Element(Element::Light)));
     assert_eq!(DonStep::parse("arcane:zettaflare"), Some(DonStep::Arcane(ArcaneLine::Zettaflare)));
-    assert_eq!(DonStep::parse("banish"), Some(DonStep::Banish));
-    for s in [DonStep::Element(Element::Aero), DonStep::Banish, DonStep::Arcane(ArcaneLine::Comet)] {
+    assert_eq!(DonStep::parse("banish"), Some(DonStep::Line2(Element::Light))); // (DONLINE2) the old token
+    for s in [DonStep::Element(Element::Aero), DonStep::ElementDlc(Element::Water), DonStep::Line2(Element::Light), DonStep::Line2(Element::Fire), DonStep::Arcane(ArcaneLine::Comet)] {
         assert_eq!(DonStep::parse(&s.token()), Some(s));
     }
 }
@@ -220,7 +273,8 @@ fn arcane_lines_and_soras_share() {
 fn the_record_parts_round_trip_and_clamp() {
     let mut l = DonLearned::start();
     l.apply(DonStep::Element(Element::Aero));
-    l.apply(DonStep::Banish);
+    l.apply(DonStep::Line2(Element::Light)); // (DONLINE2) Banish
+    l.apply(DonStep::Line2(Element::Fire));
     l.apply(DonStep::Arcane(ArcaneLine::Meteor));
     let (t, l2, a, mp) = l.parts();
     let back = DonLearned::from_parts(&t.map(u64::from), &l2.map(u64::from), &a.map(u64::from), mp as u64);

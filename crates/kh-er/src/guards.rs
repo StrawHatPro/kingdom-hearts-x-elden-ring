@@ -497,7 +497,7 @@ pub const PICKUP_ANIMS: (i32, i32) = (60070, 60079);
 /// (IMPL_ER67) The body's animation is one of the game's pickups that Sora runs through. `keyed`: `pickup.anims`
 /// (`lo-hi,id,...`; "none" = no id). The chest's animations never count (KH3's chest is Sora's own, chest.rs).
 pub fn pickup_anim(anim: i32, keyed: Option<&str>) -> bool {
-    if (crate::chest::DEFAULT_ANIMS.0..=crate::chest::DEFAULT_ANIMS.1).contains(&anim) {
+    if crate::chest::default_anim(anim) { // (CHESTFIX) every default chest animation (60080 - 60090, 60110)
         return false;
     }
     match keyed.map(str::trim) {

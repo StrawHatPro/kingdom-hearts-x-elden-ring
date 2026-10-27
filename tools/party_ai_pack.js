@@ -362,7 +362,7 @@ for (const [name, a] of [...assets.entries()].sort()) {
     (index.enums[en] = index.enums[en] || {})[String(r[col.name]).split('::').pop()] = r[col.value];
   }
 }
-index.census = Object.fromEntries([...census.entries()].sort((a, b) => a[0].localeCompare(b[0])));
+index.census = Object.fromEntries([...census.entries()].sort((a, b) => a[0].localeCompare(b[0], 'en')));
 fs.writeFileSync(OUT + 'index.json', JSON.stringify(index, null, 1));
 const byKind = {}; for (const a of assets.values()) byKind[a.kind] = (byKind[a.kind] || 0) + 1;
 console.log('party_ai_pack:', JSON.stringify(byKind), 'node classes', census.size, 'unresolved', unresolved.size, 'collisions', nameCollisions.length);

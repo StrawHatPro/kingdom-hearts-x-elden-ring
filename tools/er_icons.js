@@ -124,6 +124,15 @@ function undcx(files) {
   fs.mkdirSync(oodle, { recursive: true });
   const dll = path.join(oodle, 'oo2core_6_win64.dll');
   if (!fs.existsSync(dll)) fs.copyFileSync(path.join(GAME, 'oo2core_6_win64.dll'), dll);
+  // (Linux) the same DLL, loaded by the Linux setup's helper tools/bin/kh-oodle (crates/kh-linux): no PowerShell there
+  if (process.platform !== 'win32' || process.env.KH_OODLE) {
+    const exe = [process.env.KH_OODLE, path.join(ROOT, 'tools', 'bin', 'kh-oodle'), path.join(ROOT, 'target', 'x86_64-unknown-linux-musl', 'release', 'kh-oodle'), path.join(ROOT, 'target', 'release', 'kh-oodle')].find((p) => p && fs.existsSync(p));
+    if (!exe) throw new Error('DCX: tools/bin/kh-oodle (the Oodle helper of the Linux setup) is missing');
+    const r = spawnSync(exe, ['--dll', dll, ...todo], { encoding: 'utf8' });
+    process.stdout.write(r.stdout || '');
+    if (r.status !== 0) throw new Error('DCX: ' + (r.stderr || r.stdout || (r.error && r.error.message)));
+    return;
+  }
   const ps1 = path.join(oodle, 'undcx.ps1');
   fs.writeFileSync(ps1, `param([string]$OodleDir, [string]$Files)
 Add-Type -TypeDefinition @"

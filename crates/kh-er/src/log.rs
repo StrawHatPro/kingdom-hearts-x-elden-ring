@@ -1,5 +1,6 @@
 //! The log file of the DLL (`er\logs\kh-er.log`): one line per call, flushed at once (the game may
-//! die under us and the last lines are the ones that matter).
+//! die under us and the last lines are the ones that matter). (LOGPRIV) No personal information: every line goes
+//! through `redact::line`.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -36,6 +37,13 @@ pub fn init(dir: &Path, fresh: bool) {
     }
     let _ = std::fs::create_dir_all(dir);
     let _ = DIR.set(dir.to_path_buf());
+    // (LOGPRIV) the mod's folder (<mod>erlogs) and the game's are never written out
+    if let Some(root) = dir.parent().and_then(|er| er.parent()) {
+        crate::redact::folder(root, "<mod>");
+    }
+    if let Some(game) = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())) {
+        crate::redact::folder(&game, "<game>");
+    }
     let path = dir.join("kh-er.log");
     if fresh {
         let _ = std::fs::rename(&path, dir.join("kh-er.prev.log"));
@@ -50,7 +58,7 @@ pub fn write(text: &str) {
     let Some(log) = LOG.get() else { return };
     let t = START.get().map(|s| s.elapsed().as_secs_f64()).unwrap_or(0.0);
     if let Ok(mut file) = log.lock() {
-        let _ = writeln!(file, "[{t:9.3}] {text}");
+        let _ = writeln!(file, "[{t:9.3}] {}", crate::redact::line(text));
         let _ = file.flush();
     }
 }

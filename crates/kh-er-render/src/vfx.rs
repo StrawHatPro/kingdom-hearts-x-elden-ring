@@ -1990,13 +1990,12 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
         if gpu.scene_copy.as_ref().map(|(_, w, h, f)| (*w, *h, *f)) != Some(wanted) {
             let desc = D3D12_RESOURCE_DESC { Flags: D3D12_RESOURCE_FLAG_NONE, Alignment: 0, ..target_desc };
             let made = committed(cx.device, D3D12_HEAP_TYPE_DEFAULT, &desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE).ok();
-            // (the one before may be named by a frame in flight: kept two more seconds)
+            // (the one before may be named by a frame in flight: kept until the GPU is past it, GPUSAFE)
             if let Some((old, ..)) = std::mem::replace(&mut gpu.scene_copy, made.map(|t| (t, wanted.0, wanted.1, wanted.2))) {
-                RETIRED.lock().unwrap().push((Instant::now(), old));
+                crate::outfit::retire(Box::new(old));
             }
         }
     }
-    RETIRED.lock().unwrap().retain(|(at, _)| at.elapsed() < Duration::from_secs(2));
     let gpu: &Gpu = gpu;
     let copy_ready = wants_copy && copyable && gpu.scene_copy.as_ref().is_some_and(|(_, w, h, f)| (*w, *h, *f) == (target_desc.Width as u32, target_desc.Height, target_desc.Format.0));
 
@@ -2343,9 +2342,6 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
     DRAW_MICROS.fetch_add(micros, Ordering::Relaxed);
     DRAW_MAX.fetch_max(micros, Ordering::Relaxed);
 }
-
-/// Scene copies replaced by one of another size: kept two seconds (frames in flight may read them).
-static RETIRED: Mutex<Vec<(Instant, ID3D12Resource)>> = Mutex::new(Vec::new());
 
 /// What KH3's scene-linear 1.0 of an effect becomes in the host's scene target.
 ///

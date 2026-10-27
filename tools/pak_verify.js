@@ -175,7 +175,7 @@ if (process.argv[2] === '--one') {
     }
   };
   const finish = () => {
-    results.sort((a, b) => a.pak.localeCompare(b.pak));
+    results.sort((a, b) => a.pak.localeCompare(b.pak, 'en'));
     const tot = { paks: results.length, entries: 0, roundtrip_ok: 0, roundtrip_fail: 0, sha1_ok: 0, sha1_fail: 0, header_mismatch: 0, size_mismatch: 0, stored_bytes: 0, extracted_bytes: 0, deflate_settings: {} };
     for (const r of results) {
       for (const k of ['entries', 'roundtrip_ok', 'roundtrip_fail', 'sha1_ok', 'sha1_fail', 'header_mismatch', 'size_mismatch', 'stored_bytes', 'extracted_bytes']) tot[k] += r[k];

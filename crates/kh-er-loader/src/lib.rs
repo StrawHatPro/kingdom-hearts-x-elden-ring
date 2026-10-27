@@ -67,10 +67,15 @@ struct Loader {
 static LOADER: Mutex<Option<Loader>> = Mutex::new(None);
 static LOG: Mutex<Option<(std::fs::File, Instant)>> = Mutex::new(None);
 
+/// (LOGPRIV) the mod's log filter: no personal information in this log either
+#[path = "../../kh-er/src/redact.rs"]
+#[allow(dead_code)]
+mod redact;
+
 fn log(text: &str) {
     if let Ok(mut guard) = LOG.lock() {
         if let Some((file, start)) = guard.as_mut() {
-            let _ = writeln!(file, "[{:9.3}] {text}", start.elapsed().as_secs_f64());
+            let _ = writeln!(file, "[{:9.3}] {}", start.elapsed().as_secs_f64(), redact::line(text));
             let _ = file.flush();
         }
     }
@@ -161,6 +166,10 @@ fn main_thread() {
     let root = dir.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| dir.clone());
     let logs = logs_dir();
     let _ = std::fs::create_dir_all(&logs);
+    redact::folder(&root, "<mod>"); // (LOGPRIV) the folder above er
+    if let Some(game) = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())) {
+        redact::folder(&game, "<game>");
+    }
     if let Ok(file) = OpenOptions::new().create(true).write(true).truncate(true).open(logs.join("kh-er-loader.log")) {
         *LOG.lock().unwrap() = Some((file, Instant::now()));
     }

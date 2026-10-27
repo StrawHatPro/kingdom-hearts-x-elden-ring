@@ -39,6 +39,10 @@ mod x2;
 #[path = "hud_obtained.rs"]
 mod obtained;
 
+// (ALLYJOIN) a new ally's question "join the party?" (KH3's Dialog window, Yes / No; Yes opens the Party Formation screen)
+#[path = "hud_ally.rs"]
+mod ally;
+
 // (EQ) a friend's camp-menu edits by Sora's rules (item slots' Auto-Reload and refill, the weapon family, the benefit)
 #[path = "hud_eq.rs"]
 mod eq;
@@ -283,6 +287,8 @@ pub struct Hud {
     pub obtained_on: bool,
     obtained_wait: std::collections::VecDeque<kh_ui::key_item::Obtained>,
     chara_names: Vec<(crate::party::PartyChara, String)>,
+    /// (ALLYJOIN) a new ally's question (hud_ally.rs)
+    ally: ally::AllyAsk,
     cutscene_pause_result: Option<kh_ui::cutscene_pause::CutscenePauseResult>,
     cutscene_skip_wait: u32,
     /// (new game) THE NEW-GAME CHOICE MENU (kh_ui::newgame; build/sora_tmp/IMPL_NEWGAME_STATE.md): the two
@@ -442,6 +448,7 @@ impl Hud {
         let savepoint = kh_ui::savepoint::SavePointMenu::load(&mut pack, fonts.clone()).map_err(|e| e.to_string())?; // (savepoint)
         let cutscene_pause = kh_ui::cutscene_pause::CutscenePauseMenu::load(&mut pack, fonts.clone()).map_err(|e| e.to_string())?; // (cutscene)
         let key_item = obtained::load(&mut pack, &fonts); // (HUD2)
+        let ally = ally::AllyAsk::load(&mut pack, &fonts); // (ALLYJOIN)
         let chara_names = obtained::chara_names(&mut pack); // (HUD2)
         // (new game) an older UI pack (without the CutsceneText movie) keeps its HUD: only this menu is missing
         // (ER party S8) the talk window (its own copy of the Dialog movie)
@@ -591,6 +598,7 @@ impl Hud {
             cutscene_skip_allowed: true,
             cutscene_pause,
             key_item, // (HUD2)
+            ally, // (ALLYJOIN)
             obtained_on: false,
             obtained_wait: Default::default(),
             chara_names,
@@ -737,7 +745,8 @@ impl Hud {
             "Pause" if self.pause.is_open() => &self.pause.movie,
             "CampMenu" if self.camp_view.is_open() => &self.camp_view.movie,
             "GameHelp" => return self.camp_view.page_movie(),
-            "Dialog" => return self.camp_view.dialog_movie(),
+            // (ALLYJOIN) ... or the ally question's window (never up with the camp menu)
+            "Dialog" => return self.camp_view.dialog_movie().or_else(|| self.ally_movie()),
             // (ER party S8) the talk window / prompt / banner on the layer the new-game menu uses (never up together)
             "NewGameDialog" => return self.talk.as_ref().filter(|w| w.is_open()).map(|w| &w.dialog),
             // (CV1) the speech bubble over the play (not over a menu of ours)
@@ -966,6 +975,9 @@ impl Hud {
             return;
         }
         if self.obtained_frame(f, &menu_words) { // (HUD2) the OBTAINED popup holds the world and the pad
+            return;
+        }
+        if self.ally_frame(f, &nav, &menu_words) { // (ALLYJOIN) a new ally's "join the party?" holds the world and the pad
             return;
         }
         self.talk_frame(f); // (ER party S8) the talk window: its frames; A goes on while a line is up
@@ -1495,7 +1507,7 @@ fn item_piece(item: kh_core::status::ItemKind) -> Piece {
 impl Hud {
     /// True while a menu holds the engine pause.
     pub fn paused(&self) -> bool {
-        self.shop.is_open() /* (SHOP) the shop holds the world like the camp menu */ || self.flow.paused() || self.obtained_open() /* (HUD2) the OBTAINED popup pauses the game */ || self.savepoint.is_open() || self.cutscene_pause.is_open() || self.newgame_choice_open() || self.saveload_open() || self.gameover_seq.as_ref().is_some_and(|s| s.scene_on()) // (game over) the void scene holds the world; (saveload) the Save / Load screens too; (new game) the choice menu holds the world too; (savepoint) the save menu pauses like the camp menu; (cutscene) so does the cutscene pause menu
+        self.shop.is_open() /* (SHOP) the shop holds the world like the camp menu */ || self.flow.paused() || self.obtained_open() /* (HUD2) the OBTAINED popup pauses the game */ || self.ally_holds() /* (ALLYJOIN) the ally question, and a Yes until its Party Formation screen is up */ || self.savepoint.is_open() || self.cutscene_pause.is_open() || self.newgame_choice_open() || self.saveload_open() || self.gameover_seq.as_ref().is_some_and(|s| s.scene_on()) // (game over) the void scene holds the world; (saveload) the Save / Load screens too; (new game) the choice menu holds the world too; (savepoint) the save menu pauses like the camp menu; (cutscene) so does the cutscene pause menu
     }
 
     /// (new game) OPENS THE NEW-GAME CHOICE MENU: the two questions of the opening of Kingdom Hearts III
@@ -2889,6 +2901,7 @@ impl Hud {
         self.right.reset(&self.side);
         self.enemy = EnemyGauge::default();
         self.obtained_reset(); // (HUD2) the old session's OBTAINED popups go too
+        self.ally_reset(); // (ALLYJOIN) and an ally question of the old session
     }
 
     /// (ERUI) See `host_event`: while it is set, Start opens KH3's Pause screen (as in a battle), not the camp menu.
@@ -3700,7 +3713,8 @@ impl Hud {
                             self.camp_view.close();
                             self.flow.begin_close();
                             // (party P) the Party Formation screen closes: the host goes back to its save-point menu
-                            if std::mem::take(&mut self.formation_open) {
+                            // (ALLYJOIN) ... unless the ally question's Yes opened it (no save-point menu was up)
+                            if std::mem::take(&mut self.formation_open) && !self.ally_formation_closed() {
                                 self.formation_closed = true;
                             }
                         }

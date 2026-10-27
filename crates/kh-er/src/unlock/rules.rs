@@ -522,8 +522,11 @@ impl Celebration {
         if !self.started {
             self.started = true;
             acts.push(CelebAct::Start);
-            if let Some(r) = self.rows.first() {
-                acts.push(CelebAct::Row(r.clone()));
+            match self.rows.first() {
+                Some(r) => acts.push(CelebAct::Row(r.clone())),
+                // (2026-10-28, the user: "remove the dance team members do first joining the party") no rows: the popup, the
+                // fanfare and the question only; he is never held, the moment ends with its start
+                None => acts.push(CelebAct::End),
             }
             return acts;
         }
@@ -627,9 +630,39 @@ pub fn parse_map(name: &str) -> Option<(u8, i32, i32)> {
     Some((parts[0].parse().ok()?, parts[1].parse().ok()?, parts[2].parse().ok()?))
 }
 
+/// (ALLYJOIN, the user 2026-10-27: "If no, they are not added but can still be added at a save point like normal") THE
+/// FORMATION WITHOUT A NEW ALLY WHO WAS DECLINED: `chara` leaves the active party (he stays unlocked); the leader stays
+/// unless it was he (then the first of the others). None: he is not in it, or nobody would be left.
+pub fn decline_join(base: &kh_host::formation::Formation, chara: PartyChara) -> Option<kh_host::formation::Formation> {
+    if !base.active().contains(&chara) {
+        return None;
+    }
+    let active: Vec<PartyChara> = base.active().iter().copied().filter(|c| *c != chara).collect();
+    let leader = if base.leader() != chara { base.leader() } else { *active.first()? };
+    kh_host::formation::Formation::new(&active, leader).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// (ALLYJOIN) "No" to a new ally: he leaves the formation, the others and the leader stay; nothing when he is not in
+    /// it or would be the last one.
+    #[test]
+    fn allyjoin_a_declined_ally_leaves_the_formation() {
+        use kh_host::formation::Formation;
+        let f = Formation::new(&[PartyChara::Sora, PartyChara::Goofy], PartyChara::Sora).unwrap();
+        let out = decline_join(&f, PartyChara::Goofy).expect("he leaves");
+        assert_eq!((out.active(), out.leader()), (&[PartyChara::Sora][..], PartyChara::Sora));
+        assert!(decline_join(&out, PartyChara::Goofy).is_none(), "not in it: nothing to do");
+        let three = Formation::new(&[PartyChara::Sora, PartyChara::Donald, PartyChara::Goofy], PartyChara::Donald).unwrap();
+        let out = decline_join(&three, PartyChara::Sora).expect("Sora (a new ally when Donald started) leaves");
+        assert_eq!((out.active(), out.leader()), (&[PartyChara::Donald, PartyChara::Goofy][..], PartyChara::Donald));
+        let led = decline_join(&three, PartyChara::Donald).expect("the leader himself declined");
+        assert!(!led.active().contains(&PartyChara::Donald) && led.active().contains(&led.leader()));
+        let alone = Formation::new(&[PartyChara::Goofy], PartyChara::Goofy).unwrap();
+        assert!(decline_join(&alone, PartyChara::Goofy).is_none(), "never an empty party");
+    }
 
     #[test]
     fn a_new_game_unlocks_the_starter_only_and_the_record_round_trips() {
@@ -970,6 +1003,9 @@ mod tests {
             }
         }
         assert!(ended);
+        // (2026-10-28) no rows (the sheet's unlock rows are empty): it starts and ends at once, nothing played
+        let mut c = Celebration::new(PartyChara::Donald, Vec::new(), 3.0, 5.0);
+        assert_eq!(c.step(0.016, false), vec![CelebAct::Start, CelebAct::End]);
     }
 
     #[test]

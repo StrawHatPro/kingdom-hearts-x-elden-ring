@@ -897,16 +897,32 @@ fn y_casts_the_y_lists_spell_and_the_team_attacks_keep_y() {
 #[test]
 fn the_stats_are_the_docs_ratios_and_max_mp_has_the_steps() {
     use crate::balance::BP;
-    assert_eq!((BP.n_ex001_lead_magic_ratio, BP.n_ex001_lead_mp_ratio, BP.n_ex001_lead_strength_ratio, BP.n_ex001_lead_hp_ratio, BP.n_ex001_lead_defense_ratio), (1.25, 1.5, 0.55, 0.85, 0.8));
+    assert_eq!((BP.n_ex001_lead_magic_ratio, BP.n_ex001_lead_mp_ratio, BP.n_ex001_lead_strength_ratio, BP.n_ex001_lead_hp_ratio, BP.n_ex001_lead_defense_ratio), (1.2, 1.25, 0.667, 0.85, 0.8)); // (2026-10-27) Strength 0.55 -> 0.667: 10 at level 1; (DONLINE2, 2026-10-27) Magic 1.25 -> 1.2: 18 at level 1, MP 1.5 -> 1.25: "make Donald have x1.25 MP"
     let mut rig = Rig::new(&[]);
     let max = rig.m().status.max_mp();
     rig.party.status_mut(rig.id).unwrap().donald.as_mut().unwrap().learned.apply(crate::donald::DonStep::Arcane(crate::donald::ArcaneLine::Ultima));
     let after = rig.m().status.max_mp();
     assert_eq!(after - max, rig.m().status.donald.as_ref().unwrap().learned.mp_bonus(), "Max MP + learned.mp_bonus()");
-    // the leader's Max MP is 1.5x Sora's reference (+ his steps)
+    // the leader's Max MP is 1.25x Sora's reference (+ his steps; DONLINE2, the user 2026-10-27: "make Donald have x1.25 MP")
     let s = &rig.m().status;
     let (_, sora_mp) = crate::balance::sora_reference(s);
-    assert_eq!(s.max_mp() - donald::mp_bonus(s), (1.5 * sora_mp as f32).round() as i32 + s.bonuses.totals(s.game_level).1 + s.roster.hp_mp(s.game_level).1);
+    assert_eq!(s.max_mp() - donald::mp_bonus(s), (1.25 * sora_mp as f32).round() as i32 + s.bonuses.totals(s.game_level).1 + s.roster.hp_mp(s.game_level).1);
+}
+
+/// (DONLINE2) THE USER (2026-10-27): "make Donald's starting magic 18 at level 1" (the status screen's Magic: his row of
+/// party-balance-levels + the starting staff's 4) and "make Donald have x1.25 MP": Sora's opening Vitality / Balance /
+/// Wisdom (100 / 110 / 120 MP) give Donald 125 / 138 / 150 at the start.
+#[test]
+fn donald_starts_with_magic_18_and_1_25x_soras_mp() {
+    let mut s = crate::FriendStatus::new(crate::Chara::Donald, 0);
+    assert_eq!((s.level, s.magic()), (1, 18));
+    assert_eq!(crate::balance::base_stats(crate::Chara::Donald, 1).1 + 4, 18, "his row + the starting staff's 4");
+    for (sora_mp, want) in [(100, 125), (110, 138), (120, 150)] {
+        s.bal.sora = Some((100, sora_mp));
+        assert_eq!(s.max_mp(), want, "Sora {sora_mp} MP");
+    }
+    let l99 = crate::FriendStatus::test_level99(crate::Chara::Donald);
+    assert_eq!(l99.magic(), 80, "level 99");
 }
 
 #[test]

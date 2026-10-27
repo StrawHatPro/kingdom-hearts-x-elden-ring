@@ -264,7 +264,8 @@ for (const rel of ['Blueprints/FriendLink/CallMeteor_Pawn', 'Blueprints/FriendLi
 
 // ------------------------------------------------------------------ effect-attached SE of every party effect (every SeAttach folder)
 const seIndex = new Map(); // effect name (lower) -> [seattach package rel]
-(function walk(dir) { for (const f of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, f.name); if (f.isDirectory()) walk(p); else if (f.name.endsWith('.uasset.json')) { const rel = path.relative(PK, p).split(path.sep).join('/').replace(/\.uasset\.json$/, ''); const k = rel.split('/').pop().toLowerCase(); if (!seIndex.has(k)) seIndex.set(k, []); seIndex.get(k).push(rel); } } })(PK + 'Sound/SE/_Data/SeAttach');
+// (Windows' folder order on every system: tools/lib/ntfs_order.js)
+(function walk(dir) { for (const f of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => require('./lib/ntfs_order').ntfsCompare(a.name, b.name))) { const p = path.join(dir, f.name); if (f.isDirectory()) walk(p); else if (f.name.endsWith('.uasset.json')) { const rel = path.relative(PK, p).split(path.sep).join('/').replace(/\.uasset\.json$/, ''); const k = rel.split('/').pop().toLowerCase(); if (!seIndex.has(k)) seIndex.set(k, []); seIndex.get(k).push(rel); } } })(PK + 'Sound/SE/_Data/SeAttach');
 const seRows = [];
 for (const [eff, by] of [...effects].sort()) {
   const name = eff.split('/').pop();

@@ -153,6 +153,7 @@ mod ersound; // (LADDER2) Elden Ring's own sounds played by the game at run time
 mod hud;
 #[cfg(windows)]
 mod log;
+mod redact;
 #[cfg(windows)]
 mod pad;
 #[cfg(windows)]
@@ -179,6 +180,7 @@ mod bossreward;
 mod graceflame;
 mod gracehide; // (SV) the graces' mound models, found by a memory search, never drawn
 mod gracelock; // (SV) the game's grace actions (Touch grace / Rest) switched off in ActionButtonParam
+mod telescope; // (TELESCOPE) the game's Birdseye Telescopes switched off in ActionButtonParam (`telescope.er = 1`: the game's own)
 mod erprompt; // (RC) every Y interaction (Elden Ring's prompts, party talks, Save) as KH3's green reaction command
 mod talkdrive; // (IMPL_ER36) a story rest driven to its end: the gates, her entry's place, the step machine
 mod talkkh; // (CV2) Elden Ring's character conversations as KH bubbles through crate::conv (`talk.kh`)

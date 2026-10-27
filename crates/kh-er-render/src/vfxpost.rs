@@ -182,17 +182,15 @@ impl PostKit {
         Ok(PostKit { device: gpu.device.as_raw() as usize, formats: gpu.formats, states, rtv, rtv_size, targets: None, decal_frame: 0 })
     }
 
-    /// Our targets for a scene of this size and format (made again when it changes; the old ones kept two seconds).
+    /// Our targets for a scene of this size and format (made again when it changes; the old ones kept until the GPU is past them).
     unsafe fn ensure(&mut self, device: &ID3D12Device, desc: &D3D12_RESOURCE_DESC) -> bool {
         let (w, h, format) = (desc.Width as u32, desc.Height, desc.Format.0);
         if self.targets.as_ref().is_some_and(|t| (t.w, t.h, t.format) == (w, h, format)) {
             return true;
         }
         if let Some(old) = self.targets.take() {
-            let mut retired = RETIRED.lock().unwrap();
-            for r in [old.copy, old.pre].into_iter().chain(old.levels.into_iter().map(|t| t.res)).chain(old.temps.into_iter().map(|t| t.res)).chain([old.ra.res, old.rb.res]) {
-                retired.push((Instant::now(), r));
-            }
+            let kept: Vec<ID3D12Resource> = [old.copy, old.pre].into_iter().chain(old.levels.into_iter().map(|t| t.res)).chain(old.temps.into_iter().map(|t| t.res)).chain([old.ra.res, old.rb.res]).collect();
+            crate::outfit::retire(Box::new(kept));
         }
         let copy_desc = D3D12_RESOURCE_DESC { Flags: D3D12_RESOURCE_FLAG_NONE, Alignment: 0, ..*desc };
         let (Ok(copy), Ok(pre)) = (committed(device, D3D12_HEAP_TYPE_DEFAULT, &copy_desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE), committed(device, D3D12_HEAP_TYPE_DEFAULT, &copy_desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)) else { return false };

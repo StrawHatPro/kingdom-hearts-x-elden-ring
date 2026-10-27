@@ -31,6 +31,7 @@ mod cbcap;
 mod detour;
 mod gfx;
 mod hook;
+mod passtime; // (HAIRPERF) the GPU time of our main list by section
 // (IMPL_ER59) Sora's outfits (Boc's service): which model is drawn, loaded on demand; the pose onto its skeleton.
 pub mod outfit;
 /// (ER83) KH1 Sora's hands on the Keyblade and on his body (contact IK after the retarget).
@@ -567,6 +568,17 @@ pub fn set_options(options: Options) {
     }
 }
 
+/// (TITLEPERF) Our time in the game's Present and ExecuteCommandLists since the last call:
+/// ((Present ns, Present calls), (submission survey ns, submissions)); the counters start again.
+pub fn hook_perf() -> ((u64, u64), (u64, u64)) {
+    hook::take_perf()
+}
+
+/// (TITLEPERF) The game's adapter's local video memory (in use, budget) in bytes, as last read at Present.
+pub fn video_memory() -> Option<(u64, u64)> {
+    hook::video_memory()
+}
+
 /// One line for the host's once-a-second log; resets the counters it reports.
 pub fn status() -> String {
     // (effects) the effect drawing's line follows the renderer's
@@ -574,7 +586,7 @@ pub fn status() -> String {
   {}
   {}
   {}
-  {}", gfx::status(), vfx::status(), pointlight::status(), stable::status(), taa::status()) + &format!("\n  {}", camfade::status()) /* (NF) */ + &format!("\n  {}", finale::status()) /* (ZFIN) */ + &format!("
+  {}", gfx::status(), vfx::status(), pointlight::status(), stable::status(), taa::status()) + &format!("\n  {}", passtime::status()) /* (HAIRPERF) */ + &format!("\n  {}", camfade::status()) /* (NF) */ + &format!("\n  {}", finale::status()) /* (ZFIN) */ + &format!("
   {}", zdraw::status()) // (ZDRAW)
 }
 

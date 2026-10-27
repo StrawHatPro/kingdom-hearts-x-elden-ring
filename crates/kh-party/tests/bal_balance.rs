@@ -425,8 +425,10 @@ fn hits_to_kill_table() {
                 }
             }
             _ => {
-                // (DON-KIT) doc 12: the menu-less Donald (his plain missile combo at 12 m) is weaker than Sora: more combos
-                assert!((1.2..=3.0).contains(combos), "level {level}: Donald needs {combos:.2}x Sora's combos");
+                // (DON-KIT) doc 12: the menu-less Donald (his plain missile combo at 12 m) is weaker than Sora: more combos;
+                // (DONLINE2, the user 2026-10-27: "make Donald's starting magic 18 at level 1": Magic ratio 1.2, his missiles 5 %
+                // weaker, level 1 at 3.12x) up to 3.2x
+                assert!((1.2..=3.2).contains(combos), "level {level}: Donald needs {combos:.2}x Sora's combos");
                 assert!(*fire > 1.1, "level {level}: Donald's Fire {fire:.2}x Sora's");
             }
         }

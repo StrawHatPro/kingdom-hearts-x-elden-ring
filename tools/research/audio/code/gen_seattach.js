@@ -1,7 +1,11 @@
 // Effect -> SE attach data (UParticleSystem.ParticleSeAssets -> SQEX_EffectSeAttachDataAsset.SEDatas). Writes seattach.json (folders given, default pc,magic,system,common,weapon)
 const L=require('./lib');const fs=require('fs'),path=require('path');
 const folders=(process.argv[2]||'pc,magic,system,common,weapon').split(',');const base='Sound/SE/_Data/SeAttach';const out=[];
-function walk(d,cb){for(const f of fs.readdirSync(d,{withFileTypes:true})){const p=path.join(d,f.name);if(f.isDirectory())walk(p,cb);else if(f.name.endsWith('.uasset.json'))cb(p);}}
+// (the folder order of Windows (NTFS: names compared upper-cased) on every system: Linux lists folders in byte order,
+// and the order of seattach.json is the order of the triggers in the audio pack)
+const up=(c)=>c>=97&&c<=122?c-32:c<128?c:((u)=>u.length===1?u.charCodeAt(0):c)(String.fromCharCode(c).toUpperCase());
+const ntfs=(a,b)=>{for(let i=0;i<Math.min(a.length,b.length);i++){const x=up(a.charCodeAt(i)),y=up(b.charCodeAt(i));if(x!==y)return x-y;}return a.length-b.length||(a<b?-1:a>b?1:0);};
+function walk(d,cb){for(const f of fs.readdirSync(d,{withFileTypes:true}).sort((a,b)=>ntfs(a.name,b.name))){const p=path.join(d,f.name);if(f.isDirectory())walk(p,cb);else if(f.name.endsWith('.uasset.json'))cb(p);}}
 for(const fo of folders){walk(path.join(L.PK,base,fo),p=>{const gp=path.relative(L.PK,p).split(path.sep).join('/').replace(/\.uasset\.json$/,'');const pkg=L.loadPkg(gp);if(!pkg)return;
  for(const e of pkg.exports){if(e.class!=='SQEX_EffectSeAttachData')continue;const pr=L.exportProps(pkg,e)||{};const a=pr.Sound?String(pr.Sound).replace(/\.[^.]*$/,''):null;const s=a?L.soundInfo(a):{};
   out.push({folder:fo,seattach:'/Game/'+gp,effect_name:gp.split('/').pop(),entry:e.objectName,GroupID:pr.GroupID??0,bAttach:pr.bAttach??null,bPlayAtEnd:pr.bPlayAtEnd??null,bNoSeFadeAtTheEffectEnd:pr.bNoSeFadeAtTheEffectEnd??null,bEmitterAttach:pr.bEmitterAttach??null,AttachEmitterName:pr.AttachEmitterName??null,AttachHistoryRate:pr.AttachHistoryRate??null,FadeOutTime:pr.FadeOutTime??null,

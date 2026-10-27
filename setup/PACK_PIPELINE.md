@@ -11,6 +11,13 @@ seven phases. Each phase can be run on its own (`setup.exe --run tools/packgen.j
 `node tools/packgen.js <phase>` from source), resumed (`--from STEP`) or listed (`--list`). The log is
 `build/packgen/logs/packgen.log`.
 
+On Linux (`setup-linux`, docs/BUILDING.md "Linux") the same phases make the same files: the two steps that use Windows
+programs use their Linux replacements (the compiled KH3 shaders are read as text by `tools/lib/dxbc_disasm.js`, which
+writes what Windows' `d3dcompiler_47.dll` writes; Elden Ring's icon archives are unpacked by `tools/bin/kh-oodle` with the
+game's own Oodle DLL), and folders are listed in Windows' order (`tools/lib/ntfs_order.js`). To run a phase on its own
+there, start it as the setup does: `NODE_OPTIONS="--require $PWD/tools/lib/ntfs_order.js" ./setup-linux --run
+tools/packgen.js <phase>`.
+
 | Phase | What it makes | Reads |
 |---|---|---|
 | `extract` | the pak key (found in your `KINGDOM HEARTS III.exe`, never written), a check that the executable is the build the tools know (`tools/packgen_exe_check.js`), and the KH3 folders the build reads, extracted from your paks (`setup/pack_inputs.json`: 4,274 folders) | your KH3 install |

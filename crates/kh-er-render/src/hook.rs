@@ -16,7 +16,7 @@
 
 use std::cell::Cell;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use windows::core::{w, Interface, HRESULT};
@@ -192,12 +192,58 @@ thread_local! {
 }
 
 /// Our work in front of a Present of the game (never unwinds).
+/// (TITLEPERF) Our own time in the hooks since the last [`take_perf`]: Present's work (ns, calls), the submission
+/// survey before the game's ExecuteCommandLists (ns, calls).
+static PERF: [AtomicU64; 4] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+
+/// (TITLEPERF) ((Present ns, Present calls), (survey ns, submissions)) since the last call; the counters start again.
+pub fn take_perf() -> ((u64, u64), (u64, u64)) {
+    let t = |k: usize| PERF[k].swap(0, Ordering::Relaxed);
+    ((t(0), t(1)), (t(2), t(3)))
+}
+
+/// (TITLEPERF) The game's adapter's local video memory: (in use, budget) in bytes, read once a second at Present.
+static VRAM: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+
+pub fn video_memory() -> Option<(u64, u64)> {
+    let budget = VRAM[1].load(Ordering::Relaxed);
+    (budget > 0).then(|| (VRAM[0].load(Ordering::Relaxed), budget))
+}
+
+/// Reads the adapter's memory figures (at most once a second; any failure leaves the last reading).
+fn read_video_memory(swap: *mut c_void) {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let now = START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64 + 1000;
+    if now.saturating_sub(VRAM[2].load(Ordering::Relaxed)) < 1000 {
+        return;
+    }
+    VRAM[2].store(now, Ordering::Relaxed);
+    // SAFETY: the swap chain the game is presenting (borrowed, not released); COM calls on objects we own.
+    let read = || -> windows::core::Result<DXGI_QUERY_VIDEO_MEMORY_INFO> {
+        let swap = unsafe { IDXGISwapChain::from_raw_borrowed(&swap) }.ok_or_else(windows::core::Error::empty)?;
+        let device: ID3D12Device = unsafe { swap.GetDevice() }?;
+        let factory: IDXGIFactory4 = unsafe { CreateDXGIFactory1() }?;
+        let adapter: IDXGIAdapter3 = unsafe { factory.EnumAdapterByLuid(device.GetAdapterLuid()) }?;
+        let mut info = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
+        unsafe { adapter.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut info) }?;
+        Ok(info)
+    };
+    if let Ok(info) = read() {
+        VRAM[0].store(info.CurrentUsage, Ordering::Relaxed);
+        VRAM[1].store(info.Budget, Ordering::Relaxed);
+    }
+}
+
 fn before_present(swap: *mut c_void, flags: u32) {
     if DEAD.load(Ordering::Relaxed) || flags & DXGI_PRESENT_TEST.0 != 0 || is_ours() || IN_PRESENT.with(|c| c.get()) {
         return;
     }
     IN_PRESENT.with(|c| c.set(true));
+    let started = std::time::Instant::now();
     let result = std::panic::catch_unwind(|| as_ours(|| crate::gfx::present(swap)));
+    PERF[0].fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    PERF[1].fetch_add(1, Ordering::Relaxed);
+    let _ = std::panic::catch_unwind(|| as_ours(|| read_video_memory(swap)));
     IN_PRESENT.with(|c| c.set(false));
     if result.is_err() {
         DEAD.store(true, Ordering::SeqCst);
@@ -230,6 +276,7 @@ unsafe extern "system" fn present1_hook(this: *mut c_void, sync: u32, flags: u32
 
 unsafe extern "system" fn execute_hook(this: *mut c_void, count: u32, lists: *const *mut c_void) {
     let mut submission = crate::survey::Submission::default();
+    let started = std::time::Instant::now();
     if !DEAD.load(Ordering::Relaxed) && !is_ours() {
         submission = std::panic::catch_unwind(|| {
             if let Ok(mut queues) = QUEUES.lock() {
@@ -253,6 +300,8 @@ unsafe extern "system" fn execute_hook(this: *mut c_void, count: u32, lists: *co
     } else {
         None
     };
+    PERF[2].fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    PERF[3].fetch_add(1, Ordering::Relaxed);
     let original: ExecuteFn = std::mem::transmute(ORIGINAL_EXECUTE.load(Ordering::Relaxed));
     // The game's velocity pass is in this submission: its lists up to that pass, then our own
     // velocity draw (his motion vectors, for the game's temporal anti-aliasing), then the rest.

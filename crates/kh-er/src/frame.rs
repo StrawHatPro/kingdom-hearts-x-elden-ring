@@ -234,11 +234,129 @@ fn render_options(c: &Control) -> kh_er_render::Options {
     }
 }
 
+/// (TITLEPERF) Our time in each task phase since the last report (ns, calls): FrameBegin, PrePhysics, PostPhysics,
+/// every other phase; and the game's frames (FrameBegin calls).
+static PERF: [std::sync::atomic::AtomicU64; 8] = [const { std::sync::atomic::AtomicU64::new(0) }; 8];
+
 pub fn run(phase_id: u32, dt: f32) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let started = std::time::Instant::now();
+    run_phase(phase_id, dt);
+    let k = match phase_id {
+        phase::FRAME_BEGIN => 0,
+        phase::PRE_PHYSICS => 1,
+        phase::POST_PHYSICS => 2,
+        _ => 3,
+    };
+    PERF[k * 2].fetch_add(started.elapsed().as_nanos() as u64, Relaxed);
+    PERF[k * 2 + 1].fetch_add(1, Relaxed);
+    if phase_id == phase::FRAME_BEGIN {
+        // (HAIRPERF, the user: "does the log tell you anything about traversal stutters") the game's frame time, start to start:
+        // the longest and the frames over 50 ms since the last report
+        static LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+        if let Ok(mut last) = LAST.lock() {
+            if let Some(before) = last.replace(started) {
+                let gap = started.duration_since(before).as_micros() as u64;
+                FRAME_LONGEST.fetch_max(gap, Relaxed);
+                if gap > 50_000 {
+                    FRAME_HITCHES.fetch_add(1, Relaxed);
+                }
+            }
+        }
+        perf_report();
+    }
+}
+
+/// (HAIRPERF) The game's longest frame (us) and its frames over 50 ms since the last report.
+static FRAME_LONGEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static FRAME_HITCHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// (TITLEPERF, the user: "quitting ... back to the title screen ... makes the title screen and menu extremely laggy") Once a
+/// second of real time while no world is loaded (once every 10 s in the world, to compare): the game's frames, our time a frame
+/// in each of our places, the process's CPU use and the adapter's video memory.
+fn perf_report() {
+    use std::sync::atomic::Ordering::Relaxed;
+    static AT: std::sync::Mutex<Option<(std::time::Instant, u64)>> = std::sync::Mutex::new(None);
+    let Ok(mut at) = AT.lock() else { return };
+    let cpu_now = process_cpu_ns();
+    let Some((since, cpu_before)) = *at else {
+        *at = Some((std::time::Instant::now(), cpu_now));
+        return;
+    };
+    let world = game::player_mut().is_some();
+    let secs = since.elapsed().as_secs_f64();
+    if secs < if world { 10.0 } else { 1.0 } {
+        return;
+    }
+    *at = Some((std::time::Instant::now(), cpu_now));
+    let take = |k: usize| (PERF[k * 2].swap(0, Relaxed), PERF[k * 2 + 1].swap(0, Relaxed));
+    let phases = [take(0), take(1), take(2), take(3)];
+    let frames = phases[0].1.max(1);
+    let ms = |ns: u64| ns as f64 / 1e6 / frames as f64;
+    let ((present_ns, presents), (survey_ns, submissions)) = kh_er_render::hook_perf();
+    let tl = crate::titleload::take_perf();
+    let tl = format!("titleload parts: slot watch {:.2}, state wait {:.2}, title_prepare {:.2}, steps in all {:.2}", ms(tl[0]), ms(tl[1]), ms(tl[2]), ms(tl[3]));
+    let vram = kh_er_render::video_memory().map_or("unknown".to_string(), |(used, budget)| format!("{:.2} of {:.2} GB", used as f64 / 1e9, budget as f64 / 1e9));
+    erlog!(
+        "perf ({}): {:.1} game frames/s, {:.1} presents/s, longest frame {:.1} ms, {} frame(s) over 50 ms | our ms a frame: frame begin {:.2} (slowest: {}), pre-physics {:.2}, post-physics {:.2}, other phases {:.2} ({} calls), Present {:.2}, the submissions' survey {:.2} ({} submissions) | process CPU {:.0}% of one core | video memory {vram} | {tl}",
+        if world { "in the world" } else { "NO WORLD" },
+        phases[0].1 as f64 / secs,
+        presents as f64 / secs,
+        FRAME_LONGEST.swap(0, Relaxed) as f64 / 1000.0,
+        FRAME_HITCHES.swap(0, Relaxed),
+        ms(phases[0].0),
+        sub_report(frames, phases[0].0),
+        ms(phases[1].0),
+        ms(phases[2].0),
+        ms(phases[3].0),
+        phases[3].1,
+        ms(present_ns),
+        ms(survey_ns),
+        submissions,
+        cpu_now.saturating_sub(cpu_before) as f64 / 1e9 / secs * 100.0
+    );
+}
+
+/// The process's CPU time so far (kernel + user, ns).
+fn process_cpu_ns() -> u64 {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+    let zero = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+    let (mut a, mut b, mut kernel, mut user) = (zero, zero, zero, zero);
+    // SAFETY: the pseudo handle of our own process; plain out parameters.
+    if unsafe { GetProcessTimes(GetCurrentProcess(), &mut a, &mut b, &mut kernel, &mut user) } == 0 {
+        return 0;
+    }
+    let t = |f: FILETIME| ((f.dwHighDateTime as u64) << 32 | f.dwLowDateTime as u64) * 100;
+    t(kernel) + t(user)
+}
+
+/// (TITLEPERF) The frame-begin systems timed one by one (ns since the last report), with their names.
+static SUB: [std::sync::atomic::AtomicU64; 15] = [const { std::sync::atomic::AtomicU64::new(0) }; 15];
+const SUB_NAMES: [&str; 15] = ["save.set_dir", "savegate", "slots", "gracelock+telescope", "erkeyui", "slots.aids", "pause", "title", "tutorial", "probe", "newgame", "titleload", "fx.trace", "track_player", "the tick's work"];
+
+fn sub_timed<R>(k: usize, f: impl FnOnce() -> R) -> R {
+    let started = std::time::Instant::now();
+    let r = f();
+    SUB[k].fetch_add(started.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+    r
+}
+
+/// The three slowest frame-begin systems since the last report, ms a frame, and what none of them took (`total` ns).
+fn sub_report(frames: u64, total: u64) -> String {
+    let mut all: Vec<(u64, &str)> = SUB.iter().zip(SUB_NAMES).map(|(t, n)| (t.swap(0, std::sync::atomic::Ordering::Relaxed), n)).collect();
+    let rest = total.saturating_sub(all.iter().map(|(ns, _)| ns).sum());
+    all.sort_by(|a, b| b.0.cmp(&a.0));
+    let ms = |ns: u64| ns as f64 / 1e6 / frames.max(1) as f64;
+    let top: Vec<String> = all.iter().take(3).map(|(ns, n)| format!("{n} {:.2}", ms(*ns))).collect();
+    format!("{}, the rest {:.2}", top.join(", "), ms(rest))
+}
+
+fn run_phase(phase_id: u32, dt: f32) {
     let mut guard = STATE.lock().unwrap();
     let Some(state) = guard.as_mut() else { return };
     if phase_id == phase::FRAME_BEGIN {
-        game::track_player();
+        sub_timed(13, game::track_player);
         state.frames += 1;
         state.frames_in_tick += 1;
         state.since_tick += dt;
@@ -262,24 +380,26 @@ pub fn run(phase_id: u32, dt: f32) {
             erlog!("control: {}", state.control.dump());
             kh_er_render::set_options(render_options(&state.control));
         }
-        crate::save::set_dir(&state.root, &state.control); // (IMPL_ER13)
-        crate::savegate::frame(&state.control, dt); // (savegate)
-        crate::slots::frame(); // (IMPL_ER13) a save into a slot is followed to its end
-        crate::gracelock::frame(&state.control); // (SV) the game's grace actions switched off at their source
-        crate::erkeyui::frame(&state.control); // (HUD2, ERUI) Elden Ring's banners and item-get UI off (hud.er_banners / hud.er_item_ui = 1: shown)
-        crate::slots::aids(&state.control); // (IMPL_ER13) dbg.slots / dbg.saveto
-        crate::pause::frame(&state.control, state.tick); // (IMPL_ER11)
-        crate::title::watch(state.control.on("dbg.title.watch")); // (IMPL_ER12)
-        crate::tutorial::frame(&state.control); // (IMPL_ER13)
+        sub_timed(0, || crate::save::set_dir(&state.root, &state.control)); // (IMPL_ER13)
+        sub_timed(1, || crate::savegate::frame(&state.control, dt)); // (savegate)
+        sub_timed(2, || crate::slots::frame()); // (IMPL_ER13) a save into a slot is followed to its end
+        sub_timed(3, || crate::gracelock::frame(&state.control)); // (SV) the game's grace actions switched off at their source
+        sub_timed(3, || crate::telescope::frame(&state.control)); // (TELESCOPE) the game's Birdseye Telescopes switched off at their source
+        sub_timed(4, || crate::erkeyui::frame(&state.control)); // (HUD2, ERUI) Elden Ring's banners and item-get UI off (hud.er_banners / hud.er_item_ui = 1: shown)
+        sub_timed(5, || crate::slots::aids(&state.control)); // (IMPL_ER13) dbg.slots / dbg.saveto
+        sub_timed(6, || crate::pause::frame(&state.control, state.tick)); // (IMPL_ER11)
+        sub_timed(7, || crate::title::watch(state.control.on("dbg.title.watch"))); // (IMPL_ER12)
+        sub_timed(8, || crate::tutorial::frame(&state.control)); // (IMPL_ER13)
         // (IMPL_ER12) the running scene's models: ONLY with `cut.actor = 1` (OFF by default: the scene's Tarnished is not
         // one of these models, see IMPL_ER12_STATE.md; the look at a new model costs tens of milliseconds)
         if state.control.on("cut.actor") {
             crate::remo::refresh();
         }
-        crate::probe::frame(&state.control); // (IMPL_ER16) dbg.census / dbg.peek / dbg.poke / dbg.hold
-        crate::newgame::frame(&state.control, &state.root); // (IMPL_ER11)
-        crate::titleload::frame(&state.control, &state.root); // (IMPL_ER15)
-        crate::fx::trace_frame(&state.control, &crate::log::dir()); // (IMPL_ER14) snd.trace / snd.capture
+        sub_timed(9, || crate::probe::frame(&state.control)); // (IMPL_ER16) dbg.census / dbg.peek / dbg.poke / dbg.hold
+        sub_timed(10, || crate::newgame::frame(&state.control, &state.root)); // (IMPL_ER11)
+        sub_timed(11, || crate::titleload::frame(&state.control, &state.root)); // (IMPL_ER15)
+        sub_timed(12, || crate::fx::trace_frame(&state.control, &crate::log::dir())); // (IMPL_ER14) snd.trace / snd.capture
+        let tick_started = std::time::Instant::now();
         if state.tick {
             // (IMPL_ER17) `r.shadow_real = 1`: his real shadow in the game's cascades (the capsule stand-in stays the fallback)
             if let Some(n) = state.control.i64("r.shadow_bias") {
@@ -327,14 +447,24 @@ pub fn run(phase_id: u32, dt: f32) {
             kh_er_render::set_late_sora_taa(state.control.i64("r.late_sora_taa").is_none_or(|v| v != 0));
             // (IMPL_ER80b) `r.shaft_mask = 0`: the game's light shafts are added over him again (as before IMPL_ER80b)
             kh_er_render::set_shaft_mask(state.control.i64("r.shaft_mask").is_none_or(|v| v != 0));
-            // (ER87) `r.hair = 0`: the hair as before ER87 (no hair path: its masks' dither cut hard, every soft texel opaque);
-            // default 1 when the pack has the outfit's `*_hair` / `*_hairf` shaders. A change reloads the drawn outfit.
-            kh_er_render::hair::set_on(state.control.i64("r.hair").is_none_or(|v| v != 0));
+            // (ER87) `r.hair = 1`: the hair path (ER87 / ER91's core, fringe and 4x passes) when the pack has the outfit's hair
+            // shaders. (HAIRPERF, the user 2026-10-27, after `r.hair = 0` in a close-up: "it looked fine") DEFAULT 0: the hair
+            // drawn as KH3 draws it, once, its masks' DitherTemporalAA (the translation's udiv restored, sora_material_pack.js)
+            // smoothed by the game's TAA. MEASURED in the close-up: the hair path ~12-17 ms of GPU (the game 25 fps), KH3's 1.8 ms
+            // (58 fps). A change reloads the drawn outfit.
+            kh_er_render::hair::set_on(state.control.i64("r.hair").is_some_and(|v| v != 0));
             // (ER87) `r.hair_late = 0`: the hair's soft fringe drawn right after him instead of at the velocity split (before the
             // game's TAA, after its forward stage, whose sky / far field would otherwise cover the fringe)
             kh_er_render::hair::set_late(state.control.i64("r.hair_late").is_none_or(|v| v != 0));
             // (ER87) `r.hair_late_far = M` (default 4): the late fringe only while he is nearer the camera than M metres
             kh_er_render::hair::set_late_far(state.control.f32("r.hair_late_far").unwrap_or(4.0));
+            // (HAIRPERF) `r.hair_point_px = P` (default 6; 0 = never): ER91's hair coverage at one point a pixel while a centimetre
+            // of him covers P pixels or more (a close-up: the four sub-pixel points cost ~10 ms of GPU there, for nothing)
+            kh_er_render::hair::set_point_px(state.control.f32("r.hair_point_px").unwrap_or(6.0));
+            // (CAPPERF) `r.hybrid_lod_px = P` (default 1500000; 0 = never): the hybrid's capture at its level of detail (a coarser
+            // shade-ratio lattice, one KH-map search per sun filter) while the KH characters' boxes cover P pixels or more (a
+            // close-up: the capture alone cost ~12 ms of GPU there); off below 0.8 P
+            kh_er_render::hybrid::set_lod_px(state.control.f32("r.hybrid_lod_px").unwrap_or(kh_er_render::hybrid::LOD_PX_DEFAULT));
             // (ER91) `r.hair91 = 0`: ER87's hair files instead of ER91's (the strand mask's sampler fixed, the continuous
             // supersampled coverage); default 1 when the pack has the outfit's `*_h91` / `*_h91f`. A change reloads the outfit.
             kh_er_render::hair::set_v91(state.control.i64("r.hair91").is_none_or(|v| v != 0));
@@ -373,6 +503,7 @@ pub fn run(phase_id: u32, dt: f32) {
             erlog!("{}", crate::savegate::summary()); // (savegate)
             erlog!("{}", crate::tutorial::summary()); // (IMPL_ER13)
         }
+        SUB[14].fetch_add(tick_started.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
         return;
     }
     crate::probe::phase(); // (IMPL_ER16) dbg.hold

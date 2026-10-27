@@ -52,6 +52,8 @@ pub mod newgame;
 // (party PF) the save point's Party Formation screen, icon-based (inside the camp menu's movie)
 pub mod party_formation;
 pub mod player;
+// (ALLYJOIN) a host's Yes / No question in KH3's own Dialog window, alone in the world (a new ally: join the party?)
+pub mod question;
 // (ER party S8) a KH-style talk window over a speaker (movie Dialog in its text form), a prompt, a banner
 pub mod talk;
 pub mod raster;

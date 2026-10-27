@@ -1,0 +1,16 @@
+[package]
+name = "kh-selfcheck"
+description = "The Linux setup's DLL self-check (tools/bin/kh-er-selfcheck; release-tools/make_release.js builds it for x86_64-unknown-linux-musl): the offline check of kh_er.dll's kh_er_selfcheck export (the pack's generated tables read and decoded by the same crates, against the same table list KH_GEN_RUST_DIR), built for Linux, where the DLL only runs inside Proton. Not part of the mod in the game."
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "kh-er-selfcheck"
+path = "src/main.rs"
+
+[dependencies]
+kh-gendata = { path = "../kh-gendata" }
+kh-core = { path = "../kh-core" }
+kh-party = { path = "../kh-party" }
+kh-camera = { path = "../kh-camera" }

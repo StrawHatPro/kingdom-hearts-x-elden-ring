@@ -21,6 +21,12 @@
 //      the reference), none of the KH3 tables moved to run time (samples of their strings), no developer paths; the loader
 //      is the 2.7.1.0 / 2.7.2.0 one; the DLL exports its offline self-check
 //   4. the zip (PowerShell Compress-Archive)
+//   5. the linux-x64 download (Steam's Proton on Linux, Steam Deck): the same folder with setup-linux (the pinned Node.js
+//      linux-x64 as a single executable application of the same sea_main.js; release-tools/setup_linux.json) and the
+//      static Linux builds tools/bin/kh-shaderc, kh-oodle, kh-er-selfcheck (cargo --target x86_64-unknown-linux-musl,
+//      linked with rust-lld) in place of setup.exe and kh-shaderc.exe, the same DLLs and npm packages, the notices of
+//      Node.js for Linux and musl; the same checks; a deterministic <name>-linux-x64.tar.gz (setup/tar.js).
+//      --no-linux skips it.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -53,6 +59,12 @@ const RUSTFLAGS = [`--remap-path-prefix=${REPO}=kh-x-er`, `--remap-path-prefix=$
 if (!args.includes('--skip-build')) run('cargo', ['build', '--release', '-p', 'kh-er', '-p', 'kh-er-loader', '-p', 'kh-shaderc'], { env: { ...process.env, KH_GEN_RUST_DIR: GENRT, CARGO_ENCODED_RUSTFLAGS: RUSTFLAGS } });
 const T = path.join(REPO, 'target', 'release');
 for (const f of ['kh_er.dll', 'kh_er_loader.dll', 'kh-shaderc.exe']) if (!fs.existsSync(path.join(T, f))) fail(`target/release/${f} is missing`);
+// (linux-x64) the Linux setup's three tools, static Linux builds (x86_64-unknown-linux-musl, linked with the Rust
+// toolchain's own rust-lld: they run on any Linux, Steam Deck included): kh-shaderc, kh-oodle, kh-er-selfcheck (the
+// self-check against the same table list as the DLL, KH_GEN_RUST_DIR)
+const LINUX_TARGET = 'x86_64-unknown-linux-musl';
+const TL = path.join(REPO, 'target', LINUX_TARGET, 'release');
+if (!args.includes('--skip-build') && !args.includes('--no-linux')) run('cargo', ['build', '--release', '--target', LINUX_TARGET, '-p', 'kh-shaderc', '-p', 'kh-oodle', '-p', 'kh-selfcheck'], { env: { ...process.env, KH_GEN_RUST_DIR: GENRT, CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: 'rust-lld', CARGO_ENCODED_RUSTFLAGS: RUSTFLAGS.split(String.fromCharCode(31)).filter((f) => !f.startsWith('-Clink-arg=/PDBALTPATH')).join(String.fromCharCode(31)) } });
 
 // ---- 2. the release folder
 fs.rmSync(path.dirname(OUT), { recursive: true, force: true });
@@ -64,7 +76,7 @@ const GENERATED = /^(\.git|node_modules|target|build|assets|assets_converted|aud
 const walkAll = (d, base = d, out = []) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); const r = path.relative(base, p).split(path.sep).join('/'); if (GENERATED.test(r)) continue; if (e.isDirectory()) walkAll(p, base, out); else out.push(r); } return out; };
 let tracked;
 try { tracked = cp.execFileSync('git', ['ls-files', '-co', '--exclude-standard'], { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split('\n').filter(Boolean); } catch { tracked = walkAll(REPO); }
-const LEAVE_OUT = /^(crates|vendor|target|dist)\/|^Cargo\.(toml|lock)$|^release-tools\/(export\.js|overlay\/|make_release\.js|sea_build\.mjs|sea\/)|^docs\/images\/logo\.png$/; // (the README's 640 px logo is shipped, not the 2048 px original)
+const LEAVE_OUT = /^(crates|vendor|target|dist)\/|^Cargo\.(toml|lock)$|^release-tools\/(export\.js|overlay\/|make_release\.js|sea_build\.mjs|sea\/|zip\.js|dxbc_disasm_check\.js|linux_sim\.js|linux_check\.sh)|^docs\/images\/logo\.png$/; // (the README's 640 px logo is shipped, not the 2048 px original)
 let n = 0;
 for (const f of tracked) {
   if (LEAVE_OUT.test(f) || !fs.existsSync(path.join(REPO, f))) continue;
@@ -188,9 +200,109 @@ fs.writeFileSync(path.join(DIST, NAME + '.check.json'), JSON.stringify({ ...repo
 if (problems.length) { for (const p of problems) console.error('PROBLEM: ' + p); fail('the release folder is not clean: no zip made'); }
 
 // ---- 4. the zip
+// (release-tools/zip.js: "/" in every entry name and an entry per folder, as the zip format requires; PowerShell 5.1's
+// Compress-Archive wrote "\", which unzip tools outside Windows keep as part of one flat file name. Sorted, one fixed time
+// stamp: the same folder gives the same zip. The files' bytes are stored as they are: the .bat files keep their CRLF.)
 const zip = path.join(DIST, NAME + '-win64.zip');
 fs.rmSync(zip, { force: true });
-const q = (s) => s.replace(/'/g, "''");
-const z = cp.spawnSync('powershell', ['-NoProfile', '-Command', `Compress-Archive -Path '${q(OUT)}' -DestinationPath '${q(zip)}' -CompressionLevel Optimal`], { stdio: 'inherit' });
-if (z.status !== 0 || !fs.existsSync(zip)) fail('Compress-Archive failed');
+const zipLib = require(path.join(__dirname, 'zip.js'));
+let zipTime = new Date(Date.UTC(2026, 0, 1));
+try { const ct = Number(cp.execFileSync('git', ['log', '-1', '--format=%ct'], { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()); if (ct) zipTime = new Date(ct * 1000); } catch { /* not a git checkout */ }
+const zr = zipLib.zipFolder(OUT, zip, { top: 'kingdom-hearts-x-elden-ring', time: zipTime });
+// the zip read back: every name with "/", none with "\", every file as in the folder
+const back = zipLib.readZip(fs.readFileSync(zip));
+const badNames = back.filter((e) => e.name.includes('\\') || !e.name.startsWith('kingdom-hearts-x-elden-ring/'));
+if (badNames.length) fail(`the zip has ${badNames.length} entry name(s) with "\\" or outside its top folder`);
+for (const e of back.filter((x) => !x.dir)) if (!fs.readFileSync(path.join(OUT, ...e.name.split('/').slice(1))).equals(e.data)) fail(`the zip's ${e.name} is not the release folder's file`);
+console.log(`zip: ${zr.entries} entries (${back.filter((e) => e.dir).length} folders), every name with "/"; read back and checked`);
 console.log(`make_release: ${zip} (${(fs.statSync(zip).size / 1048576).toFixed(1)} MB); checks: ${path.join(DIST, NAME + '.check.json')}`);
+
+// ---- 5. the linux-x64 download (Steam's Proton on Linux, Steam Deck): the same folder with the Linux programs
+// The same player files, the same prebuilt Windows DLLs (they run inside Proton) and the same node_modules; instead of
+// setup.exe and kh-shaderc.exe: setup-linux (the pinned Node.js linux-x64 as a single executable application of the same
+// release-tools/sea_main.js; its hash in release-tools/setup_linux.json; deterministic), tools/bin/kh-shaderc,
+// tools/bin/kh-oodle, tools/bin/kh-er-selfcheck (static Linux builds); er/play.sh and setup/setup.sh are in the
+// repository's files. The same checks, then a deterministic .tar.gz (setup/tar.js: fixed owners, times and order, the
+// executables' modes 755).
+if (args.includes('--no-linux')) process.exit(0);
+const tar = require(path.join(REPO, 'setup', 'tar.js'));
+const LX = PIN.linux_x64;
+if (!LX) fail('release-tools/node_pin.json has no linux_x64 pin');
+const OUTL = path.join(DIST, NAME + '-linux', 'kingdom-hearts-x-elden-ring');
+for (const f of ['kh-shaderc', 'kh-oodle', 'kh-er-selfcheck']) {
+  const p = path.join(TL, f);
+  if (!fs.existsSync(p)) fail(`target/${LINUX_TARGET}/release/${f} is missing`);
+  const b = fs.readFileSync(p);
+  if (b.toString('latin1', 0, 4) !== '\x7fELF') fail(`${f}: not an ELF file`);
+  // static: no program interpreter (PT_INTERP) and no dynamic libraries
+  const phoff = Number(b.readBigUInt64LE(32)), phn = b.readUInt16LE(56), phs = b.readUInt16LE(54);
+  for (let k = 0; k < phn; k++) if (b.readUInt32LE(phoff + k * phs) === 3) fail(`${f}: not a static build (it names a program interpreter)`);
+}
+fs.rmSync(path.dirname(OUTL), { recursive: true, force: true });
+fs.mkdirSync(OUTL, { recursive: true });
+fs.cpSync(OUT, OUTL, { recursive: true, filter: (src) => { const r = path.relative(OUT, src).split(path.sep).join('/'); return r !== 'setup.exe' && r !== 'tools/bin/kh-shaderc.exe' && r !== 'release-tools/setup_exe.json'; } });
+for (const f of ['kh-shaderc', 'kh-oodle', 'kh-er-selfcheck']) fs.copyFileSync(path.join(TL, f), path.join(OUTL, 'tools', 'bin', f));
+// Node.js linux-x64: the pinned tarball (checked against its SHASUMS256.txt hash), cached; its bin/node and LICENSE
+const nodeTgz = path.join(CACHE, path.basename(LX.tgz_url));
+if (!fs.existsSync(nodeTgz) || sha256f(nodeTgz) !== LX.tgz_sha256) {
+  console.log(`> download ${LX.tgz_url}`);
+  const d = cp.spawnSync('powershell', ['-NoProfile', '-Command', `$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -UseBasicParsing -Uri '${LX.tgz_url}' -OutFile '${qps(nodeTgz)}'`], { stdio: 'inherit' });
+  if (d.status !== 0 || !fs.existsSync(nodeTgz)) fail('the Node.js linux-x64 download failed');
+}
+if (sha256f(nodeTgz) !== LX.tgz_sha256) fail(`${nodeTgz} is not the pinned Node.js linux-x64 tarball (SHA-256 of ${PIN.shasums_url})`);
+const nodeEntries = tar.list(fs.readFileSync(nodeTgz));
+const linuxNode = nodeEntries.find((e) => e.name === `${LX.tgz_folder}/bin/node`);
+const linuxLicense = nodeEntries.find((e) => e.name === `${LX.tgz_folder}/LICENSE`);
+if (!linuxNode || require('crypto').createHash('sha256').update(linuxNode.data).digest('hex') !== LX.node_sha256) fail('bin/node of the linux-x64 tarball is not the pinned one (release-tools/node_pin.json linux_x64)');
+const linuxNodeFile = path.join(CACHE, `${LX.tgz_folder}-node`);
+fs.writeFileSync(linuxNodeFile, linuxNode.data);
+const SETUP_LINUX = path.join(OUTL, 'setup-linux');
+run(nodeExe, [path.join(REPO, 'release-tools', 'sea_build.mjs'), '--target', 'linux-x64', '--node', linuxNodeFile, '--blob-node', nodeExe, '--tools', SEA_TOOLS, '--work', path.join(CACHE, 'sea_work_linux'), '--out', SETUP_LINUX, '--version', VERSION]);
+const linuxSha = sha256f(SETUP_LINUX);
+const linuxRecord = JSON.stringify({ about: 'setup-linux of the linux-x64 release (release-tools/make_release.js): Node.js ' + PIN.version + ' linux-x64 (bin/node ' + LX.node_sha256 + ') as a single executable application of release-tools/sea_main.js (the same dispatcher as setup.exe); release-tools/scan.js allows setup-linux by this hash. The build is deterministic.', version: VERSION, node: PIN.version, sea_main_sha256: sha256f(path.join(REPO, 'release-tools', 'sea_main.js')), setup_linux_sha256: linuxSha, bytes: fs.statSync(SETUP_LINUX).size }, null, 1) + '\n';
+fs.writeFileSync(path.join(OUTL, 'release-tools', 'setup_linux.json'), linuxRecord);
+fs.writeFileSync(path.join(REPO, 'release-tools', 'setup_linux.json'), linuxRecord);
+// the notices: Node.js for Linux (its own LICENSE) in place of node.exe's, musl (the C library in the static Linux tools)
+const MUSL = MIT('2005-2020 Rich Felker, et al.') + '\n(musl\'s full COPYRIGHT file, with the list of its authors: https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT)\n';
+let noticesL = fs.readFileSync(path.join(OUT, 'THIRD-PARTY-NOTICES.txt'), 'utf8');
+const nodeHead = `==== Node.js ${PIN.version} (built into setup.exe: a Node.js single executable application) - ${PIN.zip_url}`;
+const nodeAt = noticesL.indexOf(nodeHead), nextAt = noticesL.indexOf('\n==== ', nodeAt + 1);
+if (nodeAt < 0 || nextAt < 0 || !linuxLicense) fail('THIRD-PARTY-NOTICES.txt: the Node.js section was not found');
+noticesL = noticesL.slice(0, nodeAt) + `==== Node.js ${PIN.version} for Linux (built into setup-linux: a Node.js single executable application) - ${LX.tgz_url}\n(the MIT licence of Node.js, then the licences of the components built into bin/node)\n\n${linuxLicense.data.toString('utf8')}\n\n` +
+  `==== musl libc (statically linked into tools/bin/kh-shaderc, kh-oodle and kh-er-selfcheck, the Linux builds of our tools) - https://musl.libc.org\n\n${MUSL}\n` + noticesL.slice(nextAt + 1);
+fs.writeFileSync(path.join(OUTL, 'THIRD-PARTY-NOTICES.txt'), noticesL);
+// the checks: the scan (with the Linux binaries) and the binaries' content, as for the win64 folder
+const problemsL = [];
+const scL = cp.spawnSync(process.execPath, [path.join(OUTL, 'release-tools', 'scan.js'), '--release-binaries'], { cwd: OUTL, encoding: 'utf8', env: { ...process.env, KH_SCAN_PATHS: [process.env.KH_SCAN_PATHS, path.dirname(REPO)].filter(Boolean).join(';') } });
+process.stdout.write(scL.stdout + scL.stderr);
+if (scL.status !== 0) problemsL.push('release-tools/scan.js found problems');
+const reportL = { version: VERSION, platform: 'linux-x64', binaries: {} };
+for (const rel of ['er/mods/kh_er.dll', 'er/mods/kh_er_loader.dll', 'tools/bin/kh-shaderc', 'tools/bin/kh-oodle', 'tools/bin/kh-er-selfcheck']) {
+  const b = fs.readFileSync(path.join(OUTL, rel));
+  const latin = b.toString('latin1'), utf8 = b.toString('utf8');
+  const r = { bytes: b.length, japanese: (utf8.match(new RegExp(JP.source, 'g')) || []).length, game_text_lines: [], runtime_table_strings: 0, developer_paths: 0 };
+  for (const t of gameText) { const probe = t.slice(0, 40); if (probe.length >= 24 && latin.includes(probe)) r.game_text_lines.push(probe); }
+  r.runtime_table_strings = runtimeSamples.filter((s) => latin.includes(s)).length;
+  r.developer_paths = (latin.match(/[A-Za-z]:[\\/]+Users[\\/]+/g) || []).length + (latin.match(/\/home\/[A-Za-z0-9_.-]+\//g) || []).length + [path.dirname(REPO), path.dirname(REPO).split(path.sep).join('/')].reduce((n, p) => n + latin.split(p).length - 1, 0);
+  reportL.binaries[rel] = r;
+  console.log(`${rel}: ${(b.length / 1048576).toFixed(1)} MB; Japanese runs ${r.japanese}; game text lines ${r.game_text_lines.length}; run-time table strings ${r.runtime_table_strings}/${runtimeSamples.length}; developer paths ${r.developer_paths}`);
+  if (r.japanese || r.game_text_lines.length || r.runtime_table_strings || r.developer_paths) problemsL.push(`${rel}: KH3 content or a developer path in the binary`);
+}
+for (const f of ['setup-linux', 'er/play.sh', 'setup/setup.sh', 'setup/get_node.sh']) if (!fs.existsSync(path.join(OUTL, f))) problemsL.push(`${f} is missing`);
+fs.writeFileSync(path.join(DIST, NAME + '-linux.check.json'), JSON.stringify({ ...reportL, problems: problemsL }, null, 1) + '\n');
+if (problemsL.length) { for (const p of problemsL) console.error('PROBLEM: ' + p); fail('the linux-x64 release folder is not clean: no tarball made'); }
+// the tarball: every file under kingdom-hearts-x-elden-ring/, sorted; programs and scripts 755, the rest 644
+const EXEC = /^(setup-linux|tools\/bin\/kh-(shaderc|oodle|er-selfcheck)|er\/play\.sh|setup\/(setup|get_node)\.sh)$/;
+const entries = [];
+(function walk(d, rel) {
+  for (const e of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+    const r = rel ? rel + '/' + e.name : e.name;
+    if (e.isDirectory()) { entries.push({ name: 'kingdom-hearts-x-elden-ring/' + r, dir: true }); walk(path.join(d, e.name), r); }
+    else entries.push({ name: 'kingdom-hearts-x-elden-ring/' + r, mode: EXEC.test(r) ? 0o755 : 0o644, data: fs.readFileSync(path.join(d, e.name)) });
+  }
+})(OUTL, '');
+let mtime = 0;
+try { mtime = Number(cp.execFileSync('git', ['log', '-1', '--format=%ct'], { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()) || 0; } catch { /* not a git checkout */ }
+const tgz = path.join(DIST, NAME + '-linux-x64.tar.gz');
+fs.writeFileSync(tgz, tar.create([{ name: 'kingdom-hearts-x-elden-ring', dir: true }, ...entries], { mtime }));
+console.log(`make_release: ${tgz} (${(fs.statSync(tgz).size / 1048576).toFixed(1)} MB, ${entries.length} entries, sha256 ${sha256f(tgz)}); setup-linux ${linuxSha}; checks: ${path.join(DIST, NAME + '-linux.check.json')}`);

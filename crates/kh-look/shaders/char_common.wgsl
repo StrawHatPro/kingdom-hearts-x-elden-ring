@@ -83,6 +83,7 @@ struct KhParams {
     // (NF) KH3's camera fade of the character this material belongs to (kh-camera camfade.rs): x = 1 - his CameraFade value
     // (0 = whole), y = the screen door's phase. APPENDED: a shader built before it reads the block as before. (The Elden Ring
     // renderer carries the same two numbers in its frame block, er_char.wgsl `er_camfade_keep`, so its velocity pass has them.)
+    // (HAIRPERF) z = 1: the ER91 hair's coverage at one point a pixel (kh91_cover), the character being big on screen.
     fade: vec4<f32>,
 }
 
@@ -262,6 +263,12 @@ fn kh91_cover_at(i: KhIn) -> f32 {
 }
 
 fn kh91_cover(i_in: KhIn) -> f32 {
+    // (HAIRPERF, the user: "the game also lags badly when you zoom into Sora's hair") kh.fade.z = 1: he is big on screen (the
+    // host's `r.hair_point_px`), a strand end spans several pixels and the coverage at the pixel's centre is the same: one
+    // point instead of four (the mask taken 5 times a pixel, not 20). A uniform: the whole draw takes one branch.
+    if (kh.fade.z > 0.5) {
+        return kh91_cover_at(i_in);
+    }
     let g0x = dpdx(i_in.tc0); let g0y = dpdy(i_in.tc0);
     let g1x = dpdx(i_in.tc1); let g1y = dpdy(i_in.tc1);
     let g2x = dpdx(i_in.tc2); let g2y = dpdy(i_in.tc2);

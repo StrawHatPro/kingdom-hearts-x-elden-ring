@@ -517,6 +517,9 @@ pub struct ErLoot {
     /// (HUD2) The key items held at the last scan (item id -> count; None = no baseline yet) and the frames to the next.
     key_seen: Option<HashMap<u32, u32>>,
     key_scan: u32,
+    /// (KEYPOP) Normal-inventory goods by item id: whether they get the key-item popup (lootmap `key_item_popup`; their
+    /// params read once a session).
+    popup_goods: HashMap<u32, bool>,
 }
 
 impl Default for ErLoot {
@@ -527,7 +530,7 @@ impl Default for ErLoot {
 
 impl ErLoot {
     pub fn new() -> ErLoot {
-        ErLoot { types: HashMap::new(), rng: Rng::new(0x4C4F_4F54), kh: false, told: HashSet::new(), kills: 0, boxes: 0, munny: 0, started: false, shop: Vec::new(), shop_on: false, seen: None, purged: false, clock: 0.0, keys_listed: false, key_seen: None, key_scan: 0 }
+        ErLoot { types: HashMap::new(), rng: Rng::new(0x4C4F_4F54), kh: false, told: HashSet::new(), kills: 0, boxes: 0, munny: 0, started: false, shop: Vec::new(), shop_on: false, seen: None, purged: false, clock: 0.0, keys_listed: false, key_seen: None, key_scan: 0, popup_goods: HashMap::new() /* (KEYPOP) */ }
     }
 
     fn start(&mut self, control: &Control) {
@@ -913,6 +916,8 @@ impl ErLoot {
     /// the pack's er_icons). The first read, and a read where more than 4 items came at once (a load, another
     /// character), only take the baseline. NOT DONE: Elden Ring's own item window for the pickup (the gate passes key
     /// items untouched, IMPL_ER25: no safe way to keep the item and drop only its window) still shows under the popup.
+    /// (KEYPOP) The online items of the normal inventory (lootmap `key_item_popup`, by their category) are read with them
+    /// and get the same popup.
     fn key_popups(&mut self, control: &Control) {
         if control.flag("hud.obtained") == Some(false) { // (coordinator 2026-10-20) ON by default
             self.key_seen = None;
@@ -931,6 +936,29 @@ impl ErLoot {
         let mut now: HashMap<u32, u32> = HashMap::new();
         for entry in data.equipment.equip_inventory_data.items_data.current_key_entries().iter().filter_map(|e| e.as_option()) {
             *now.entry(entry.item_id.into_inner()).or_default() += entry.quantity.max(1);
+        }
+        // (KEYPOP, the user 2026-10-27: "also multiplayer items should give the "key item" pop up that maps do") ... and the
+        // NORMAL inventory's goods whose category gets it (the online items: lootmap `key_item_popup`), counted the same way
+        // (a pickup, a gift or a craft that raises the count comes once; using one does not)
+        for entry in data.equipment.equip_inventory_data.items_data.normal_entries().iter().filter_map(|e| e.as_option()) {
+            let raw = entry.item_id.into_inner();
+            if cat_of_item_id(raw) != Some(Cat::Goods) {
+                continue;
+            }
+            let popup = match self.popup_goods.get(&raw) {
+                Some(p) => *p,
+                None => {
+                    let item = describe(Cat::Goods, raw & 0x0FFF_FFFF);
+                    let p = crate::lootmap::key_item_popup(&item);
+                    if item.known {
+                        self.popup_goods.insert(raw, p); // (a row not readable yet is asked again at the next scan)
+                    }
+                    p
+                }
+            };
+            if popup {
+                *now.entry(raw).or_default() += entry.quantity.max(1);
+            }
         }
         for (raw, gained) in key_gains(&mut self.key_seen, now) {
             let Some(item) = key_item_of(raw) else { continue };

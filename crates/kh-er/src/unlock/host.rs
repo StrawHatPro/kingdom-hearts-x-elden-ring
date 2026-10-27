@@ -33,8 +33,18 @@
 //! - THE UNLOCK MOMENT (rules.rs `Celebration`): KH3's `vs_com_lv1` burst at his feet, the BONUS! fanfare (static SE 38),
 //!   his voice, the banner "<Name> joined the party!", his rows (weapon away, KH3's dance; Sora: his selfie pose), his AI
 //!   held meanwhile; S6's join level (the shared EXP) when he spawns.
+//! - (ALLYJOIN, the user 2026-10-27: "when gaining a new ally, have a popup ask if the player wants them to join the party?
+//!   If yes, open up the party creation menu usually accessed from save points. If no, they are not added but can still be
+//!   added at a save point like normal.") RIGHT AFTER HIS OBTAINED POPUP (the unlock moment) the HUD asks the sheet's
+//!   `text.join.question` in KH3's Dialog window (kh-host hud_ally.rs; the world held; the pad: D-pad / stick, A, B = No).
+//!   YES: he stays in the party where the unlock put him (up to 3) and the save point's Party Formation screen opens at
+//!   once (he is unlocked on it: placed, or there to place when the party is full); closing it goes back to the play.
+//!   NO: he stays unlocked and leaves the active party (rules.rs `decline_join`; his celebration ends); a save point's
+//!   Party Formation adds him as for anyone. For whoever is unlocked (any character the sheet unlocks), not per name. A
+//!   pack without the Dialog movie, `unlock.join_ask = 0`, or a load before the answer: he joins as before.
 //!
 //! KEYS (`kh-er.ini`; (INI) once `kh-er.ctl`): `party.unlocks` (1; 0 = everyone available, no scenes, nothing written), `unlock.skip_intro` (1),
+//! (ALLYJOIN) `unlock.join_ask` (1; 0 = a new ally joins at once, no question, as before),
 //! (ER boss) `unlock.double_fallback` (0; 1 = the boss's double when the real boss's AI switch is refused),
 //! `unlock.log` (0; 1 = the facts of every scene once a second). ONE-SHOTS (testing aids; a change of value fires):
 //! `unlock.state` (the whole state in the log, the doubles too), `unlock.give = sora|donald|goofy` (unlock with the celebration),
@@ -431,6 +441,8 @@ pub struct Director {
     prompt_up: bool,
     /// (CV1) Donald's talk as a conversation of crate::conv (its id while it runs).
     conv: Option<crate::conv::ConvId>,
+    /// (ALLYJOIN) New allies whose "join the party?" the HUD asks (their answer not taken yet).
+    join_ask: Vec<PartyChara>,
 }
 
 static DIRECTOR: Mutex<Option<Director>> = Mutex::new(None);
@@ -511,7 +523,7 @@ impl Director {
         // THE UNIVERSAL RULE: one slot per sheet row of kind `fight` (its friend, its boss)
         let fights = sheet.fights.iter().filter_map(|s| s.chara.map(|c| FightSlot { chara: c, scene: s.clone(), dir: FightDirector::new(sheet.lost_after), wake: AiWake::default(), kept_hp: 0, refusal_said: false, double: Double::default(), attack_said: None, boss: None, look_in: 0, said: None })).collect();
         let talk = TalkDirector::new(sheet.lines.len(), sheet.donald.talk_range);
-        Director { sheet, unlocks: None, ask_starter: false, fights, talk, guests: Vec::new(), staged: None, donald: None, sora_stage: None, pilot: Pilot::default(), celebrate: None, joins: Vec::new(), intro_said: false, sec: 0.0, talk_advanced: false, talk_line: None, sec_total: 0.0, prompt_up: false, spare: Vec::new(), crone: None, crone_in: 0, conv: None /* (CV1) */ }
+        Director { sheet, unlocks: None, ask_starter: false, fights, talk, guests: Vec::new(), staged: None, donald: None, sora_stage: None, pilot: Pilot::default(), celebrate: None, joins: Vec::new(), intro_said: false, sec: 0.0, talk_advanced: false, talk_line: None, sec_total: 0.0, prompt_up: false, spare: Vec::new(), crone: None, crone_in: 0, conv: None /* (CV1) */, join_ask: Vec::new() /* (ALLYJOIN) */ }
     }
 
     /// What goes to S1's host: the unlocked and the fight guests.
@@ -807,6 +819,8 @@ struct Keys {
     leader_down: bool,
     /// (ER boss) `unlock.double_fallback` (0): the boss's double only when the real boss's AI switch is refused.
     double_fallback: bool,
+    /// (ALLYJOIN) `unlock.join_ask` (1): a new ally's "join the party?" after his OBTAINED popup.
+    join_ask: bool,
     shots: ShotValues,
 }
 
@@ -820,7 +834,7 @@ struct ShotValues {
     goto: Option<String>,
 }
 
-static KEYS: Mutex<Keys> = Mutex::new(Keys { on: false, log: false, skip_intro: true, leader_down: false, double_fallback: false, shots: ShotValues { state: None, give: None, reset: None, starter: None, jump: None, goto: None } });
+static KEYS: Mutex<Keys> = Mutex::new(Keys { on: false, log: false, skip_intro: true, leader_down: false, double_fallback: false, join_ask: true, shots: ShotValues { state: None, give: None, reset: None, starter: None, jump: None, goto: None } });
 static SHOTS: Mutex<Option<Shots>> = Mutex::new(None);
 
 /// (party/mod.rs `PartySlot::frame`, once a frame) The keys and the one-shots of the control file for the next party
@@ -838,6 +852,7 @@ pub fn frame(control: &Control) {
     k.skip_intro = control.flag("unlock.skip_intro") != Some(false);
     k.leader_down = crate::partyui::fallen_leader(control).is_some();
     k.double_fallback = control.on("unlock.double_fallback");
+    k.join_ask = control.flag("unlock.join_ask") != Some(false); // (ALLYJOIN)
     FLOAT_PROMPT.store(control.on("talk.float_prompt"), std::sync::atomic::Ordering::Relaxed); // (RC)
     let keep = |slot: &mut Option<String>, v: Option<String>| {
         if v.is_some() {
@@ -887,6 +902,7 @@ impl Director {
         self.sora_stage = None;
         self.celebrate = None;
         self.joins.clear();
+        self.join_ask.clear(); // (ALLYJOIN) a load before the answer: he stays as the load has him
         self.intro_said = false;
         SORA_STAGED.store(false, Ordering::Relaxed);
         TALK_HOLD.store(false, Ordering::Relaxed);
@@ -1002,6 +1018,8 @@ impl Director {
         self.joins_step(core);
         // ---- the celebration
         self.celebrate_step(core, ctx, sora, fx);
+        // ---- (ALLYJOIN) the answer to "join the party?"
+        self.join_step(core);
         if let Ok(mut dr) = DRAWS.lock() {
             *dr = draws;
         }
@@ -1364,13 +1382,28 @@ impl Director {
                             hud.talk_banner(&text, banner)
                         }
                     });
-                    if let Some(i) = id {
+                    // (2026-10-28, the user: "remove the dance team members do first joining the party") held for his rows
+                    // only: with none (the sheet's default now) he keeps moving with the party
+                    if let (Some(i), false) = (id, cel.c.rows.is_empty()) {
                         if let Some(ai) = core.rt.ai_of(i) {
                             ai.set_stop_ai(true);
                         }
                         core.rt.party.command(i, MemberCommand::Stop);
                     }
                     erlog!("unlock: THE UNLOCK MOMENT of {}: {} at his feet, static SE {se}, his voice, the banner \"{text}\" ({}), rows {:?}", chara.name(), self.sheet.fx_effect, if shown == Some(true) { "shown" } else { "NOT shown: the HUD has no talk window" }, cel.c.rows);
+                    // (ALLYJOIN) "join the party?" right after his OBTAINED popup (the HUD shows it once that is closed)
+                    if ctx.keys.join_ask {
+                        let question = self.sheet.join_question_text(chara);
+                        let asked = crate::hud::with_hud(|hud| hud.ask_ally_join(chara, &question));
+                        if asked == Some(true) {
+                            if !self.join_ask.contains(&chara) {
+                                self.join_ask.push(chara);
+                            }
+                            erlog!("unlock: (ALLYJOIN) {} is asked \"{question}\" after his OBTAINED popup (Yes: the Party Formation screen; No: unlocked, out of the party)", chara.name());
+                        } else {
+                            erlog!("unlock: (ALLYJOIN) {} could NOT be asked to join ({}): he joins as before", chara.name(), if asked.is_none() { "no HUD" } else { "the UI pack has no Dialog movie" });
+                        }
+                    }
                 }
                 CelebAct::Row(row) => {
                     if chara == PartyChara::Sora {
@@ -1396,6 +1429,47 @@ impl Director {
                     return;
                 }
             }
+        }
+    }
+
+    /// (ALLYJOIN) THE ANSWER TO "JOIN THE PARTY?" (the HUD's, once): Yes = he stays (the HUD opened the Party Formation
+    /// screen itself); No = he leaves the active party (still unlocked), his celebration ends. The HUD no longer asking
+    /// him and no answer (a load cleared it): he stays as he is.
+    fn join_step(&mut self, core: &mut PartyCore) {
+        if self.join_ask.is_empty() {
+            return;
+        }
+        let Some((answer, pending)) = crate::hud::with_hud(|hud| (hud.take_ally_answer(), hud.ally_pending())) else { return };
+        if let Some((chara, yes)) = answer {
+            if !self.join_ask.contains(&chara) {
+                erlog!("unlock: (ALLYJOIN) an answer for {} that nobody waits for: ignored", chara.name());
+            } else if yes {
+                erlog!("unlock: (ALLYJOIN) {} JOINS (Yes): he stays in the party; the Party Formation screen is the HUD's", chara.name());
+            } else {
+                let base = core.asked_formation.clone().unwrap_or_else(|| core.rt.lead.formation.clone());
+                match super::rules::decline_join(&base, chara) {
+                    Some(f) => {
+                        erlog!("unlock: (ALLYJOIN) {} does NOT join (No): unlocked, out of the party: the formation is {:?}, leader {} (a save point's Party Formation adds him)", chara.name(), f.active().iter().map(|c| c.name()).collect::<Vec<_>>(), f.leader().name());
+                        core.asked_formation = Some(f);
+                    }
+                    None => erlog!("unlock: (ALLYJOIN) {} does NOT join (No): he is not in the formation {:?} (nothing to change)", chara.name(), base.active().iter().map(|c| c.name()).collect::<Vec<_>>()),
+                }
+                // his celebration ends now (his AI back): he is leaving the party
+                if self.celebrate.as_ref().is_some_and(|c| c.c.chara == chara) {
+                    if let Some(i) = core.rt.id(chara) {
+                        if let Some(ai) = core.rt.ai_of(i) {
+                            ai.set_stop_ai(false);
+                        }
+                    }
+                    self.celebrate = None;
+                }
+            }
+            self.join_ask.retain(|c| *c != chara);
+        }
+        let lost: Vec<PartyChara> = self.join_ask.iter().copied().filter(|c| !pending.contains(c)).collect();
+        for c in lost {
+            erlog!("unlock: (ALLYJOIN) the HUD no longer asks {} (a load or the HUD going away) and no answer came: he stays as he is", c.name());
+            self.join_ask.retain(|x| *x != c);
         }
     }
 

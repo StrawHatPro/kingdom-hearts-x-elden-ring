@@ -469,6 +469,90 @@ impl Wallet {
     }
 }
 
+/// (MUNNYSE, the user 2026-10-27: "make picking up munny from the world give a sound") THE MUNNY ORBS' GET SOUND, PACED.
+/// KH3 plays its `m_SoundGet` once per orb (TresPrizeBase, se00000_024 for all three munny sizes, 0.2 s before it
+/// arrives); a burst of a dozen orbs reaching him in the same frame would play a dozen at once (a blare). Here every orb
+/// asks one; they come out one at a time, at least `gap` seconds apart, and at most `most` wait (more in a burst are
+/// dropped: the ones that play already say "munny"). Orbs that come in a trickle play one each, as in KH3.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MunnyChime {
+    pub gap: f32,
+    pub most: u32,
+    waiting: u32,
+    wait: f32,
+    at: glam::Vec3,
+}
+
+impl MunnyChime {
+    /// The default pacing: 0.06 s apart, 4 waiting at most.
+    pub const GAP: f32 = 0.06;
+    pub const MOST: u32 = 4;
+
+    pub fn new(gap: f32, most: u32) -> MunnyChime {
+        MunnyChime { gap: gap.max(0.0), most: most.max(1), waiting: 0, wait: 0.0, at: glam::Vec3::ZERO }
+    }
+
+    /// An orb's get sound asked for at `at` (the newest place is where the next one sounds).
+    pub fn ask(&mut self, at: glam::Vec3) {
+        self.waiting = (self.waiting + 1).min(self.most);
+        self.at = at;
+    }
+
+    /// One step of `dt` seconds: the place of the sound to play now, if one is due.
+    pub fn step(&mut self, dt: f32) -> Option<glam::Vec3> {
+        self.wait = (self.wait - dt).max(0.0);
+        if self.waiting == 0 || self.wait > 0.0 {
+            return None;
+        }
+        self.waiting -= 1;
+        self.wait = self.gap;
+        Some(self.at)
+    }
+
+    /// Sounds still to come.
+    pub fn waiting(&self) -> u32 {
+        self.waiting
+    }
+
+    /// Nothing waits (a load, a cutscene).
+    pub fn clear(&mut self) {
+        self.waiting = 0;
+    }
+}
+
+#[cfg(test)]
+mod munnyse_tests {
+    use super::MunnyChime;
+    use glam::Vec3;
+
+    /// (MUNNYSE) One orb: its sound at once. A burst of 12 in one step: 4 sounds, 0.06 s apart, the rest dropped. A
+    /// trickle (one orb every 0.1 s): one sound each.
+    #[test]
+    fn munnyse_the_munny_sound_is_paced() {
+        let dt = 1.0 / 60.0;
+        let mut c = MunnyChime::new(MunnyChime::GAP, MunnyChime::MOST);
+        c.ask(Vec3::X);
+        assert_eq!(c.step(dt), Some(Vec3::X), "a single orb sounds at once");
+        assert_eq!(c.step(dt), None);
+        let mut c = MunnyChime::new(MunnyChime::GAP, MunnyChime::MOST);
+        for _ in 0..12 {
+            c.ask(Vec3::Y);
+        }
+        let played: Vec<usize> = (0..120).filter(|_| c.step(dt).is_some()).collect();
+        assert_eq!(played.len(), 4, "a burst plays MOST sounds, not 12: {played:?}");
+        assert!(played.windows(2).all(|w| (w[1] - w[0]) as f32 * dt >= MunnyChime::GAP - 1e-4), "never closer than GAP: {played:?}");
+        let mut c = MunnyChime::new(MunnyChime::GAP, MunnyChime::MOST);
+        let mut n = 0;
+        for k in 0..60 {
+            if k % 6 == 0 {
+                c.ask(Vec3::Z);
+            }
+            n += c.step(dt).is_some() as u32;
+        }
+        assert_eq!(n, 10, "a trickle: one each");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -223,6 +223,15 @@ struct Aids {
 static AIDS: Mutex<Aids> = Mutex::new(Aids { snap: None, diff: None, hold: None, snaps: Vec::new(), test_until: 0 });
 
 /// The bytes at `base` that can be read (committed, not guarded), at most `len`.
+/// (TITLEPERF) `len` bytes at `base` can be read: tried by a copy, which costs the bytes, not the region. [`readable`]'s
+/// VirtualQuery works out the size of the whole region, MEASURED ~100 ms a call on the game's heap once a world has been
+/// played (the title after a session ran at 10 frames a second). For heap objects only: a copy over a stack's guard page
+/// would take its guard.
+pub fn heap_readable(base: usize, len: usize) -> bool {
+    let mut buf = vec![0u8; len];
+    crate::probe::read(base, &mut buf)
+}
+
 pub fn readable(base: usize, len: usize) -> usize {
     if !crate::game::plausible(base & !7) {
         return 0;

@@ -254,7 +254,7 @@ pub(crate) fn fell_back(why: &'static str) {
 pub fn status() -> String {
     let s = settings();
     format!(
-        "(HY) hybrid {}: {} frame(s) lit by the game's own render pass, {} on today's light (latest reason: {}); shaders {}; capture {}; dumps {}{}; (RSF2 round 11) G-buffer targets 3 / 4 cleared under the KH characters in {} frame(s) (r.hybrid_gbclear {}); (RSF2 round 12) the sun from the game's cascades at each KH texel: {} frame(s), {} cascade read(s) (r.hybrid_sun {}, r.hybrid_sun_soft {}); cascade sets this second: {}; (RSF2 round 14) the KH characters in the game's half-size effect depth: {} pass(es) of {} split(s); (RSF2 round 15) KH caster maps drawn in {} frame(s), read by the capture in {}",
+        "(HY) hybrid {}: {} frame(s) lit by the game's own render pass, {} on today's light (latest reason: {}); shaders {}; capture {}; dumps {}{}; (RSF2 round 11) G-buffer targets 3 / 4 cleared under the KH characters in {} frame(s) (r.hybrid_gbclear {}); (RSF2 round 12) the sun from the game's cascades at each KH texel: {} frame(s), {} cascade read(s) (r.hybrid_sun {}, r.hybrid_sun_soft {}); cascade sets this second: {}; (RSF2 round 14) the KH characters in the game's half-size effect depth: {} pass(es) of {} split(s); (RSF2 round 15) KH caster maps drawn in {} frame(s), read by the capture in {}; (CAPPERF) capture at its level of detail in {} frame(s), full in {} (r.hybrid_lod_px {})",
         if s.on { "on" } else { "OFF (r.hybrid = 0)" },
         FRAMES_ON.swap(0, Ordering::Relaxed),
         FRAMES_BACK.swap(0, Ordering::Relaxed),
@@ -277,12 +277,60 @@ pub fn status() -> String {
         crate::gfx::FX_DRAWN.swap(0, Ordering::Relaxed),
         crate::gfx::FX_SPLITS.swap(0, Ordering::Relaxed),
         crate::gfx::KH_MAPS_DRAWN.swap(0, Ordering::Relaxed),
-        crate::gfx::KH_MAPS_USED.swap(0, Ordering::Relaxed)
+        crate::gfx::KH_MAPS_USED.swap(0, Ordering::Relaxed),
+        LOD_FRAMES.swap(0, Ordering::Relaxed),
+        FULL_FRAMES.swap(0, Ordering::Relaxed),
+        f32::from_bits(LOD_PX.load(Ordering::Relaxed))
     )
 }
 
 /// (RSF2 round 11) frames whose G-buffer targets 3 / 4 were cleared under the KH characters (gfx.rs)
 pub(crate) static GB_CLEARED: AtomicU32 = AtomicU32::new(0);
+
+// ---------------------------------------------------------------------------- (CAPPERF) the capture's level of detail
+
+/// (CAPPERF, the user: the game drops from ~60 to ~30 fps when the camera is close to Sora; MEASURED with passtime.rs: the
+/// capture ~12 ms of ~14 ms of our GPU there, ~1 ms at play distance) `r.hybrid_lod_px = P` (default `LOD_PX_DEFAULT`; 0 = never):
+/// while the KH characters' own boxes (each one's scissor box, summed: about the pixels the capture really works on) cover P
+/// pixels or more, the capture runs at its LEVEL OF DETAIL (er_char.wgsl hycap, er.hy[17].z = 1): the shade ratio's lattice at
+/// twice the step (the same reach) and skipped in full sun, and the KH maps' maximum searched once per filter in hc_sun_vis. Off
+/// below 0.8 P (no switching back and forth at the edge).
+pub const LOD_PX_DEFAULT: f32 = 1_500_000.0;
+static LOD_PX: AtomicU32 = AtomicU32::new(LOD_PX_DEFAULT.to_bits());
+static LOD_ON: AtomicBool = AtomicBool::new(false);
+/// frames captured at the level of detail / at full detail since the last status line
+pub(crate) static LOD_FRAMES: AtomicU32 = AtomicU32::new(0);
+pub(crate) static FULL_FRAMES: AtomicU32 = AtomicU32::new(0);
+/// (CAPPERF) Where the level of detail goes in the block: row 17, component z (the capture shader alone reads row 17).
+pub const LOD_ROW: usize = 17;
+pub const LOD_COMPONENT: usize = 2;
+
+pub fn set_lod_px(px: f32) {
+    LOD_PX.store(if px.is_finite() { px.max(0.0) } else { LOD_PX_DEFAULT }.to_bits(), Ordering::Relaxed);
+}
+
+/// (CAPPERF) The next state of the level of detail: on from `lod_px` pixels, off below 0.8 x; `lod_px` <= 0 = always off.
+pub fn lod_next(was: bool, px: f64, lod_px: f32) -> bool {
+    if !(lod_px > 0.0) || !px.is_finite() {
+        return false;
+    }
+    let at = f64::from(lod_px);
+    if was { px >= 0.8 * at } else { px >= at }
+}
+
+/// (CAPPERF) This frame's level of detail from the pixels of the KH characters' boxes (gfx.rs, with the capture's box row);
+/// counted for the status line.
+pub(crate) fn lod_frame(px: f64) -> bool {
+    let on = lod_next(LOD_ON.load(Ordering::Relaxed), px, f32::from_bits(LOD_PX.load(Ordering::Relaxed)));
+    LOD_ON.store(on, Ordering::Relaxed);
+    if on { &LOD_FRAMES } else { &FULL_FRAMES }.fetch_add(1, Ordering::Relaxed);
+    on
+}
+
+/// (CAPPERF) The pixels a set of screen boxes covers, each counted once (overlaps twice): the capture's work, roughly.
+pub fn boxes_px(boxes: &[[i32; 4]]) -> f64 {
+    boxes.iter().map(|b| f64::from((b[2] - b[0]).max(0)) * f64::from((b[3] - b[1]).max(0))).sum()
+}
 
 // ---------------------------------------------------------------------------- the G-buffer's targets
 
@@ -982,7 +1030,7 @@ mod tests {
         let text = include_str!("../shaders/er_char.wgsl");
         let cap = &text[text.find("#ifdef ER_HYCAP").unwrap()..];
         assert!(cap.contains("fn hc_sun_vis(") && cap.contains("vec2<i32>(24, r)") && cap.contains("vec2<i32>(3, r)") && cap.contains("er.hy[11 + best_r]"));
-        assert!(cap.contains("abs(s.x) > 0.97") && cap.contains("hc_tap_kh(at, best_s.z, bias, owner, maps_on)") && cap.contains("a <= z + bias"));
+        assert!(cap.contains("abs(s.x) > 0.97") && cap.contains("hc_tap_kh(at, best_s.z, bias, owner, maps_on, pre)") && cap.contains("a <= z + bias"));
         let d = Settings::default();
         assert_eq!((d.sun, d.sun_soft), (1.0, 1.0));
         assert_eq!(with_keys(d, &|k: &str| (k == "r.hybrid_sun").then_some(0.0)).sun, 0.0);
@@ -996,6 +1044,27 @@ mod tests {
         assert_eq!(b[16 * 4..16 * 4 + 4], [1.0, 1.0, 8.0, 1.0], "row 16: the sun's fitted strength, on, 1..8 x the model; (round 13) the world shadow's strength");
         assert_eq!(block(&with_keys(d, &|k: &str| (k == "r.hybrid_sun_fit").then_some(0.0)), true, &FrameIn { white: 1.0, k: 1.0, ..Default::default() })[16 * 4], 0.0);
         assert!(text.contains("hy: array<vec4<f32>, 23>") && cap.contains("er.hy[16].x > 0.5"));
+    }
+
+    /// (CAPPERF) the capture's level of detail: on from r.hybrid_lod_px pixels of the KH characters' boxes, off below 0.8 x, never
+    /// with 0; its row (17.z) is zero in the block (gfx.rs writes it with the box) and free of every other use; the shader reads it
+    /// in the shade ratio, its skip and the sun lookup only, and hc_wide skips the sun taps only where fits 3 / 5 / 6 read ao alone
+    #[test]
+    fn capperf_the_level_of_detail_switches_with_hysteresis() {
+        assert!(!lod_next(false, 1_400_000.0, 1_500_000.0));
+        assert!(lod_next(false, 1_500_000.0, 1_500_000.0));
+        assert!(lod_next(true, 1_250_000.0, 1_500_000.0), "stays on above 0.8 x");
+        assert!(!lod_next(true, 1_150_000.0, 1_500_000.0));
+        assert!(!lod_next(true, 1.0e9, 0.0), "0 = never");
+        assert!(!lod_next(false, f64::NAN, 1.0));
+        assert_eq!(boxes_px(&[[0, 0, 10, 20], [5, 5, 4, 100]]), 200.0);
+        let b = block(&Settings::default(), true, &FrameIn { white: 1.0, k: 1.0, ..Default::default() });
+        assert_eq!(b[LOD_ROW * 4 + LOD_COMPONENT], 0.0);
+        let text = include_str!("../shaders/er_char.wgsl");
+        assert_eq!(text.matches("er.hy[17].z > 0.5").count(), 3, "the shade ratio, its skip, hc_sun_vis");
+        let cap = &text[text.find("#ifdef ER_HYCAP").unwrap()..];
+        assert!(cap.contains("let wide = hc_wide(t, n / len, er.hy[8].w > 3.5 && er.hy[8].w < 4.5);") && cap.contains("let wide = hc_wide(t, n / len, true);"));
+        assert!(cap.contains("if (full && er.hy[16].x > 0.5"));
     }
 
     /// (RSF2 round 5) r.hybrid_mask: on by default, row 8.z of the block; 0 switches only it off; the capture's box row; the

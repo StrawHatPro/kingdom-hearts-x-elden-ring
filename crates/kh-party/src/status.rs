@@ -182,15 +182,10 @@ impl FriendStatus {
         tables::level_row(self.chara, self.level)
     }
 
-    /// (GOOFY-BAL) Strength / Magic / Defense before the weapon: KH3's level row, or while he leads his row of
-    /// party-balance-levels (crate::balance).
+    /// (GOOFY-BAL) Strength / Magic / Defense before the weapon: his row of party-balance-levels (crate::balance).
+    /// (ONESTAT, the user 2026-10-27: "there should be no party ally/leader seperation, their stats should be their stats same for Goofy and every KH character added later"): the same row leading or not (KH3's AI row was the friend's before).
     fn lead_row(&self) -> (i32, i32, i32) {
-        if self.bal.leading {
-            crate::balance::base_stats(self.chara, self.level)
-        } else {
-            let r = self.row();
-            (r.1, r.2, r.3)
-        }
+        crate::balance::base_stats(self.chara, self.level)
     }
 
     /// (GOOFY-BAL) He starts / stops leading (`Party::set_pad`): the leader's stats apply; HP and MP keep their share of
@@ -226,7 +221,8 @@ impl FriendStatus {
 
     /// Max HP = base row + HP_UP bonuses (stats spec 8; plan 2.3: 200 / 220 with all bonuses).
     pub fn max_hp(&self) -> i32 {
-        if self.bal.leading {
+        // (ONESTAT, the user 2026-10-27: "there should be no party ally/leader seperation, their stats should be their stats same for Goofy and every KH character added later"): the balanced max HP leading or not
+        {
             if let Some(hp) = crate::balance::max_hp(self) {
                 return hp + self.roster.hp_mp(self.game_level).0; // (GOOFY-BAL) a leader: hp_ratio x Sora's max HP + his bonuses; (IT) + the roster's steps
             }
@@ -237,7 +233,8 @@ impl FriendStatus {
     }
 
     pub fn max_mp(&self) -> i32 {
-        if self.bal.leading {
+        // (ONESTAT) the balanced max MP leading or not
+        {
             if let Some(mp) = crate::balance::max_mp(self) {
                 return mp + self.roster.hp_mp(self.game_level).1 // (GOOFY-BAL) a leader: mp_ratio x Sora's max MP + his bonuses; (IT) + the roster's steps
                     + crate::pad::donald::mp_bonus(self); // (DON-KIT) doc 2: Donald's Max MP +3 steps (DonLearned::mp_bonus)
@@ -250,12 +247,14 @@ impl FriendStatus {
 
     /// Strength = level row + weapon [D].
     pub fn strength(&self) -> i32 {
-        self.lead_row().0 + self.weapon_stats().0 // (GOOFY-BAL) a leader's row of party-balance-levels
+        // (2026-10-27, the user: "lower Donald's physical damage as well, it should be something like 10 at level 1", "I mean
+        // the KH3 attack stat in the status screen": Donald's ratio 0.667, 10 at level 1 with his starting staff; ONESTAT)
+        self.lead_row().0 + self.weapon_stats().0 // (GOOFY-BAL) his row of party-balance-levels
             + self.roster.strength as i32 // (IT) the roster's Strength Boosts
     }
 
     pub fn magic(&self) -> i32 {
-        if self.bal.leading && crate::balance::base_stats(self.chara, self.level).1 == 0 {
+        if crate::balance::base_stats(self.chara, self.level).1 == 0 /* (ONESTAT) leading or not */ {
             return self.roster.magic as i32; // (GOOFY-BAL) a leader without magic (Goofy): no table / weapon magic; (IT) the roster's boosts stay on top
         }
         self.lead_row().1 + self.weapon_stats().1 // (GOOFY-BAL)
@@ -627,10 +626,11 @@ mod tests {
         let d = FriendStatus::test_level99(Chara::Donald);
         let g = FriendStatus::test_level99(Chara::Goofy);
         assert_eq!((d.level, g.level), (99, 99));
-        assert_eq!((d.max_hp(), g.max_hp()), (200, 220)); // plan 2.3
-        assert_eq!(d.strength(), 63 + 3);
-        assert_eq!(d.magic(), 67 + 4);
-        assert_eq!(g.strength(), 65 + 4);
+        // (ONESTAT) the balanced rows, leading or not (KH3's AI rows were 200 / 220 HP, Strength 63 + 3, Magic 67 + 4)
+        assert!(d.max_hp() > 0 && g.max_hp() > d.max_hp(), "{} / {}", d.max_hp(), g.max_hp());
+        assert_eq!(d.strength(), crate::balance::base_stats(Chara::Donald, 99).0 + 3);
+        assert_eq!(d.magic(), crate::balance::base_stats(Chara::Donald, 99).1 + 4);
+        assert_eq!(g.strength(), crate::balance::base_stats(Chara::Goofy, 99).0 + 4);
         assert!(d.ap_in_use() <= d.max_ap());
         assert_eq!(d.abilities.owned(ETresAbilityKind::HyperHealing), 1); // owned; equipped only while AP allows (plan N2)
     }
@@ -641,10 +641,11 @@ mod tests {
         let g = FriendStatus::new(Chara::Goofy, 0);
         assert_eq!(d.revive_time(), 40.0);
         assert_eq!(g.revive_time(), 35.0);
-        assert_eq!(d.revive_hp(), 35); // 140 x 25 %
+        let quarter = ((d.max_hp() as f32 * 0.25 + 0.5).floor() as i32).max(1);
+        assert_eq!(d.revive_hp(), quarter); // max HP x 25 % (ONESTAT: his balanced max HP)
         d.abilities.set(ETresAbilityKind::HyperHealing, 1, 1);
         assert_eq!(d.revive_time(), 20.0);
-        assert_eq!(d.revive_hp(), 70);
+        assert_eq!(d.revive_hp(), ((d.max_hp() as f32 * 0.5 + 0.5).floor() as i32).max(1));
         d.hp = 0;
         assert_eq!(d.heal(9), 5); // halved, rounded up, while KO'd
     }
@@ -656,8 +657,9 @@ mod tests {
         // his KH3 spell abilities (the overhaul replaced them), so the test gives them
         d.abilities.set(ETresAbilityKind::DonaldFire, 1, 1);
         d.abilities.set(ETresAbilityKind::DonaldCure, 1, 1);
+        let full = d.max_mp(); // (ONESTAT) his balanced max MP
         assert!(d.pay("DONALD_FIRE"));
-        assert_eq!(d.mp, 90);
+        assert_eq!(d.mp, full - 10);
         assert!(d.pay("DONALD_CURE")); // all MP
         assert_eq!(d.mp, 0);
         assert_eq!(d.mp_charge_left, 30.0);
@@ -665,7 +667,7 @@ mod tests {
         for _ in 0..(30 * 60 + 1) {
             d.tick(1.0 / 60.0);
         }
-        assert_eq!(d.mp, 100);
+        assert_eq!(d.mp, full);
         assert!(!d.pay("GOOFY_TURBO")); // not his
     }
 
@@ -689,8 +691,8 @@ mod tests {
         let cx = DamageContext::new(GameLevel::Standard, 1);
         let r = compute_damage(&Attacker::enemy(40), &def, &DamageAttack::physical(1.0), &cx);
         assert_eq!(r.base, ((24 + 40 - d.defense()) / 2) as f32); // 40 - 11 = 29 > 24 -> 26
-        let r = compute_damage(&Attacker::enemy(30), &def, &DamageAttack::physical(1.0), &cx);
-        assert_eq!(r.base, 19.0); // under the max: S - D
+        let r = compute_damage(&Attacker::enemy(20), &def, &DamageAttack::physical(1.0), &cx);
+        assert_eq!(r.base, (20 - d.defense()) as f32); // under the max: S - D
         let r = compute_damage(&Attacker::enemy(400), &def, &DamageAttack::physical(1.0), &cx);
         assert_eq!(r.base, 80.0);
     }

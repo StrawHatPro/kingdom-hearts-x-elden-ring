@@ -481,6 +481,11 @@ const BUFFER_TIME: f32 = 0.3;
 fn refused(p: &mut NpcPawn, ok: bool) {
     if !ok {
         if let Some(pad) = p.pad.as_mut() {
+            // (2026-10-28, the user: "only play the error sound when you don't have enough MP for it") a shortcut's command
+            // refused when it starts (busy, mid-cast): its row had the MP (menu.rs `out_of_mp`), so no refused SE
+            if pad.menu.events.contains(&MenuEvent::ShortcutExecuted) {
+                return;
+            }
             pad.menu.events.push(MenuEvent::Refused);
         }
     }

@@ -104,6 +104,12 @@ pub struct PrizeHost {
     members: Vec<PrizeMember>,
     /// (party P2) The random pick of Share Prizes (0x14147A070 draws from the engine's xorshift128; the port's own).
     share_rng: kh_prize::Rng,
+    /// (MUNNYSE, the user 2026-10-27: "make picking up munny from the world give a sound") A HOST THAT SOUNDS THE MUNNY
+    /// ORBS' GET ITSELF: their get sound (KH3's `m_SoundGet`, the moment the orb is 0.2 s from him) is not queued on Sora
+    /// (his next step's seam) but put in `munny_sounds` (class, place) for the host to play now. False (the default):
+    /// through Sora as every other orb sound.
+    pub host_munny_sound: bool,
+    pub munny_sounds: Vec<(PrizeClass, Vec3)>,
 }
 
 /// (party P2) ONE PARTY MEMBER AS KH3'S PRIZE CODE SEES HIM (a getter slot of `PrizeHost::step_party`).
@@ -194,6 +200,11 @@ pub fn prize_recipient(members: &[PrizeMember], slot: usize, kind: kh_core::stat
     open[i]
 }
 
+/// (MUNNYSE) The get sound of a munny orb.
+fn is_get_of_munny(event: &PrizeEvent) -> bool {
+    matches!(*event, PrizeEvent::GetSound { class, .. } if is_munny(class))
+}
+
 fn is_munny(class: PrizeClass) -> bool {
     matches!(class, PrizeClass::Orb(kh_core::status::PrizeKind::Munny1 | kh_core::status::PrizeKind::Munny5 | kh_core::status::PrizeKind::Munny10))
 }
@@ -204,7 +215,7 @@ fn describe(class: PrizeClass) -> &'static str {
 
 impl PrizeHost {
     pub fn new(seed: u32) -> PrizeHost {
-        PrizeHost { prizes: Prizes::new(seed), effects: HashMap::new(), pending: Vec::new(), stats: PrizeStats::default(), log: Vec::new(), glow: 1.0, size: 1.0, pay_expired_munny: false, log_flight: false, tracks: HashMap::new(), getter: Vec3::ZERO, glow_shown: 1.0, members: Vec::new(), share_rng: kh_prize::Rng::new(seed ^ 0x5348_4152) }
+        PrizeHost { prizes: Prizes::new(seed), effects: HashMap::new(), pending: Vec::new(), stats: PrizeStats::default(), log: Vec::new(), glow: 1.0, size: 1.0, pay_expired_munny: false, log_flight: false, tracks: HashMap::new(), getter: Vec3::ZERO, glow_shown: 1.0, members: Vec::new(), share_rng: kh_prize::Rng::new(seed ^ 0x5348_4152), host_munny_sound: false, munny_sounds: Vec::new() /* (MUNNYSE) */ }
     }
 
     /// ONE SIMULATION STEP, after Sora's: the orbs move against `world`; bounce and get sounds and
@@ -284,6 +295,11 @@ impl PrizeHost {
                     _ => {
                         prize_host::apply_to_sora(sora, &event);
                     }
+                }
+            } else if let (PrizeEvent::GetSound { class, position, .. }, true) = (event, self.host_munny_sound && is_get_of_munny(&event)) {
+                // (MUNNYSE) a munny orb's get sound: the host plays it (bounded, so a burst does not pile up while nobody takes them)
+                if self.munny_sounds.len() < 64 {
+                    self.munny_sounds.push((class, position));
                 }
             } else {
                 prize_host::apply_to_sora(sora, &event);
@@ -604,6 +620,40 @@ mod tests {
 
         fn free_gain(&mut self, id: u64, gain: f32) {
             self.gains.push((id, gain));
+        }
+    }
+
+    /// (MUNNYSE) With `host_munny_sound` every munny orb's get sound comes to the host once (class, place), the munny is
+    /// still paid through Sora's status; an HP orb's get sound is not the host's; without the switch nothing comes.
+    #[test]
+    fn munnyse_munny_get_sounds_go_to_the_host() {
+        let world = TestWorld::floor();
+        for own in [true, false] {
+            let mut sora = sora_with_hp();
+            let mut host = PrizeHost::new(5);
+            host.host_munny_sound = own;
+            let at = Vec3::new(150.0, 0.0, 200.0);
+            for kind in [PrizeKind::Munny5, PrizeKind::Munny1, PrizeKind::Munny10, PrizeKind::HpSmall] {
+                let amount = if kind == PrizeKind::HpSmall { 0 } else { 5 };
+                host.prizes.spawn(at, PrizeClass::Orb(kind), Vec3::new(0.0, 60.0, 300.0), &SpawnMods::default(), false, amount);
+            }
+            host.take(&mut sora);
+            for _ in 0..600 {
+                host.step(1.0 / 60.0, &world, &mut sora, Vec3::new(0.0, 0.0, 91.0));
+                sora.step(1.0 / 60.0, &kh_core::Input::default(), &world);
+                if host.prizes.is_empty() {
+                    break;
+                }
+            }
+            assert!(host.prizes.is_empty(), "every orb was collected");
+            let sounds = std::mem::take(&mut host.munny_sounds);
+            if own {
+                assert_eq!(sounds.len(), 3, "one per munny orb: {sounds:?}");
+                assert!(sounds.iter().all(|(c, _)| is_munny(*c)));
+            } else {
+                assert!(sounds.is_empty());
+            }
+            assert_eq!(sora.status().munny, 15, "the munny is paid either way");
         }
     }
 

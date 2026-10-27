@@ -58,6 +58,8 @@ pub struct Form {
     /// Forms begun / ended so far (for tests and the debug text).
     pub begun: u32,
     pub ended: u32,
+    /// (CHESTFIX) PORT ADDITION: times the net gave a form's look and abilities back that no form held (style.rs `tick`).
+    pub nets: u32,
 }
 
 /// The Second Form family: `CHANGE_L1` ... `CHANGE_L5` (0x94 ..= 0x98).

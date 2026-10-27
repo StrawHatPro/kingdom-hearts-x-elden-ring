@@ -830,7 +830,7 @@ function main() {
   const missing = fs.readdirSync(CACHE).filter((f) => f.endsWith('.bin') && !fs.existsSync(path.join(CACHE, f.replace(/\.bin$/, '.asm'))));
   if (missing.length) {
     console.log(`disassembling ${missing.length} shaders (d3dcompiler_47.dll) ...`);
-    const r = cp.spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'lib', 'dxbc_disasm.ps1'), '-Dir', CACHE], { encoding: 'utf8' });
+    const r = require('./lib/dxbc_disasm').systemOrOwn(CACHE);
     if (r.status !== 0) throw new Error('dxbc_disasm.ps1 failed: ' + (r.stderr || r.stdout));
   }
   // ---- translate

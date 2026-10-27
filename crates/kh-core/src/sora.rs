@@ -571,6 +571,22 @@ impl Sora {
         fresh.pawn.carry_counters(&self.pawn);
         // (magic implementer) The pouch, the projectiles in flight and the menu carry over.
         fresh.pawn.magic = std::mem::take(&mut self.pawn.magic);
+        // (CHESTFIX, the user 2026-10-27: "Sora ... stopped moving and even swapping to him ... I couldn't move as him") the
+        // running state is dropped here WITHOUT ITS End: what only that End undoes is undone: a shotlock's aim mode left
+        // open with its pending release (shotlock.rs `close_dropped`), a state's invincibility (every setter of
+        // `damage_invalid` is a state's; the new Sora stands in Idle)
+        fresh.pawn.magic.aim.close_dropped();
+        fresh.pawn.status.damage_invalid = false;
+        // (CHESTFIX, the user 2026-10-27: "Sora was also stuck in a pseudo-second form after transforming into it as an
+        // ally") A FORM GOES ON THROUGH A WARP: the formchange gauge, the situation commands (the form's finish rows) and
+        // the form itself carry over (its clock, its wear form and the charge effect's handle, so that its end gives the
+        // look and the abilities back). Before, the new Sora's form was NONE while the status kept the form's abilities and
+        // the Keyblade its charge effect for ever (the user's log 323.876 "AI Sora warps next to Donald" in Second Form,
+        // then "WEAR FORM 5 -> 0" without the form's end). The world slow is off (the time table is the new Sora's).
+        fresh.pawn.combat.style = std::mem::take(&mut self.pawn.combat.style);
+        fresh.pawn.combat.situation = std::mem::take(&mut self.pawn.combat.situation);
+        fresh.pawn.combat.form = std::mem::take(&mut self.pawn.combat.form);
+        fresh.pawn.combat.form.world_slow = false;
         fresh.pawn.command = std::mem::take(&mut self.pawn.command);
         fresh.requests = std::mem::take(&mut self.requests);
         fresh.hud = std::mem::take(&mut self.hud);
@@ -608,6 +624,19 @@ impl Sora {
             p.speed_run = base.speed_run * s;
             p.speed_sprint = base.speed_sprint * s;
         }
+    }
+
+    /// (CHESTFIX, the user 2026-10-27: "he also keeps trying to run in front of Donald ... he should just follow like Donald
+    /// and Goofy do") PORT ADDITION: AI SORA'S FOLLOW SPEED behind a friend leader (kh-partyhost lead.rs, the friends'
+    /// formation rule): the run loop's speed limit at most `cap` cm/s (never below his walk); None = his own speeds (KH3).
+    /// Set every step by the AI (a teleport forgets it).
+    pub fn set_follow_cap(&mut self, cap: Option<f32>) {
+        self.pawn.follow_cap = cap.filter(|c| c.is_finite());
+    }
+
+    /// (CHESTFIX) The follow speed cap in force (`set_follow_cap`).
+    pub fn follow_cap(&self) -> Option<f32> {
+        self.pawn.follow_cap
     }
 
     /// (DON-KIT) PORT ADDITION: DONALD'S AERO AURA ON SORA (documentation/DONALD_OVERHAUL.md 4.2 "Party evasion and

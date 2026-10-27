@@ -192,6 +192,19 @@ pub(crate) fn tick(state: &StateData, cx: &mut Ctx, dt: f32) {
     if state.id() == StateId::Stylechange {
         return;
     }
+    // (CHESTFIX, the user 2026-10-27: "Sora was also stuck in a pseudo-second form after transforming into it as an ally")
+    // PORT ADDITION, THE NET: outside the transformation a wear form or form abilities with NO FORM HELD (`form.cmd` 0:
+    // `end_style` always puts the wear form back, nothing else sets it) are left over from a form whose end was skipped
+    // (a teleport dropped the form before `Sora::teleport` carried it): the look, the charge effect and the abilities go
+    // back to NORMAL as `end_style` gives them back.
+    if cx.pawn.combat.form.cmd == 0 && (cx.pawn.combat.form.wear_form != 0 || cx.pawn.status.abilities.any_form()) {
+        if cx.pawn.combat.form.wear_form != 0 {
+            form::apply_wear_form(cx, 0);
+        } else {
+            cx.pawn.status.abilities.set_form(&[]);
+        }
+        cx.pawn.combat.form.nets += 1;
+    }
     let max = if P.form_gauge_max > 0.0 { P.form_gauge_max } else { 100.0 };
     {
         let style = &mut cx.pawn.combat.style;

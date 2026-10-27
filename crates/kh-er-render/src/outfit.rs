@@ -4,8 +4,8 @@
 //! The outfits are folders of the pack written by `tools/sora_outfit_pack.js` (`PACK/outfits/<id>/`: `model.glb`,
 //! `manifest.json` with the outfit's own skeleton, `materials/` with its translated shaders, textures, DXIL). The host
 //! names the outfit it wants ([`crate::set_outfit`]); the renderer's worker builds the new model, library, textures and
-//! shaders on its own thread while the old ones are still drawn, then swaps them in; the old ones are kept a few
-//! seconds before they are let go (the GPU may still read them). "kh3" (or "") = the main pack, as before.
+//! shaders on its own thread while the old ones are still drawn, then swaps them in; the old ones are kept until
+//! the GPU has finished the frames that drew them ([`retire`], [`frame_begins`]). "kh3" (or "") = the main pack, as before.
 //!
 //! THE POSE (an outfit has its own skeleton: the same bone names as Sora's for most bones, other lengths and extra
 //! bones): every bone the outfit shares with Sora takes his frame's local rotation AS A CHANGE FROM HIS REFERENCE
@@ -16,20 +16,24 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
 use glam::Vec3;
 use kh_anim::Trs;
+use windows::Win32::Graphics::Direct3D12::ID3D12Fence;
 
 /// The outfit the host wants ("" = the main pack).
 static WANTED: Mutex<String> = Mutex::new(String::new());
 /// The outfit whose assets are drawn (or being made) and the ones that failed to load (not tried again).
 static LOADED: Mutex<String> = Mutex::new(String::new());
 static FAILED: Mutex<Vec<String>> = Mutex::new(Vec::new());
-/// Old assets kept until the GPU is surely done with them.
-type Retired = (Instant, Box<dyn std::any::Any + Send>);
+/// Old assets kept until the GPU is surely done with them: `after` = the frame fence's value the GPU must pass
+/// (None until our next frame begins). (GPUSAFE) Once a fixed 3 s, which a stall longer than that outlived (the AMD
+/// driver then removes the device: a "GPU crash" on an outfit change or a new game).
+struct Retired {
+    after: Option<(ID3D12Fence, u64)>,
+    _item: Box<dyn std::any::Any + Send>,
+}
 static RETIRED: Mutex<Vec<Retired>> = Mutex::new(Vec::new());
-const KEEP_RETIRED: Duration = Duration::from_secs(3);
 
 /// (ER69) The outfits' own Bonamik runs (false: their extra bones keep their pose on the parent, as before).
 const SIM_LIVE: bool = true;
@@ -332,18 +336,30 @@ pub fn retarget_for(pack: &Path, id: &str, host: &kh_anim::Skeleton) -> Result<O
     Ok(Some(retarget))
 }
 
-/// Keeps `assets` alive for a few seconds (the GPU may still read them), letting go of older ones.
+/// Keeps `assets` alive until the GPU has finished every frame that may still read them ([`frame_begins`]).
 pub fn retire(assets: Box<dyn std::any::Any + Send>) {
     if let Ok(mut r) = RETIRED.lock() {
-        r.push((Instant::now(), assets));
+        r.push(Retired { after: None, _item: assets });
     }
-    sweep();
 }
 
-/// Lets go of retired assets old enough (call now and then).
-pub fn sweep() {
+/// (GPUSAFE) Called at the start of each of our frames with the frame fence and its last signaled value: every list
+/// recorded before now was executed (or dropped) by then, so what was retired since the last frame is let go of once
+/// the GPU passes that value; what it has passed is let go of now. A lost device reads as done (UINT64_MAX).
+pub fn frame_begins(fence: &ID3D12Fence, signaled: u64) {
     if let Ok(mut r) = RETIRED.lock() {
-        r.retain(|(at, _)| at.elapsed() < KEEP_RETIRED);
+        for old in r.iter_mut().filter(|o| o.after.is_none()) {
+            old.after = Some((fence.clone(), signaled));
+        }
+        // SAFETY: plain getter.
+        r.retain(|o| o.after.as_ref().is_none_or(|(f, v)| unsafe { f.GetCompletedValue() } < *v));
+    }
+}
+
+/// Lets go of everything retired (our frames are over: the device was waited for, or is gone).
+pub fn release_all() {
+    if let Ok(mut r) = RETIRED.lock() {
+        r.clear();
     }
 }
 

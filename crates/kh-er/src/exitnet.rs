@@ -158,10 +158,75 @@ impl OwnCap {
     }
 }
 
+/// (CHESTFIX, the user 2026-10-27: "opening a chest as Donald completely broke Sora, he stopped moving and even swapping
+/// to him from the party menu I couldn't move as him") THE NET ON SORA'S OWN SIMULATION (pure): his kh-core state has
+/// stood in Idle for `NET_S` with the stick given to it pushed past the run threshold (the pad's while he leads, AI Sora's
+/// while a friend does), on the floor, without moving, while nothing of ours or the game's holds him (no follow of the
+/// body, no action hold, no leap, no menu, no boss finish, alive, no shotlock aim open): in Idle the stick starts his run
+/// on the very next step, so something left in his state refuses every request. The host then makes him afresh where he
+/// stands (`Sora::teleport`: a new state machine, his status, magic and menu kept), as after a warp. The user's run: a
+/// warp of AI Sora in his shotlock's ShootFlow left the aim mode open for 250 s (kh-core shotlock.rs `close_dropped`
+/// fixes that cause; this net catches any other).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StillNet {
+    for_s: f32,
+    moved: f32,
+    /// Times it fired (the log).
+    pub fired: u32,
+}
+
+impl StillNet {
+    pub const NET_S: f32 = 2.0;
+    /// The stick that starts a run from Idle (kh-core run.rs: magnitude above 0.5).
+    pub const STICK: f32 = 0.55;
+    /// Moving less than this (cm) over the window counts as not moving.
+    pub const STILL_CM: f32 = 10.0;
+
+    /// One step of his simulation. `idle`: his state is Idle; `stick`: the magnitude of the stick he was given; `moved`:
+    /// how far (cm, flat) the step carried him; `free`: nothing holds him (see above). True on the step he is to be freed.
+    pub fn step(&mut self, idle: bool, stick: f32, moved: f32, on_floor: bool, free: bool, dt: f32) -> bool {
+        if !(idle && on_floor && free && stick >= Self::STICK) {
+            (self.for_s, self.moved) = (0.0, 0.0);
+            return false;
+        }
+        self.for_s += dt;
+        self.moved += moved;
+        if self.moved >= Self::STILL_CM {
+            (self.for_s, self.moved) = (0.0, 0.0);
+            return false;
+        }
+        if self.for_s >= Self::NET_S {
+            (self.for_s, self.moved) = (0.0, 0.0);
+            self.fired += 1;
+            return true;
+        }
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ladder::{LetGo, LetStep, Watch};
+
+    /// (CHESTFIX) The user's frozen Sora: Idle, the stick full, not moving, nothing holding him -> freed after 2 s, again
+    /// 2 s later if still frozen; a stick under the run threshold, a step that moves him, anything that holds him (a
+    /// follow, a menu, the aim) or another state (Run against a wall, an action) never fires.
+    #[test]
+    fn chestfix_the_still_net_frees_a_frozen_sora() {
+        let mut net = StillNet::default();
+        let fired: Vec<usize> = (0..300).filter(|_| net.step(true, 1.0, 0.0, true, true, DT)).collect();
+        assert_eq!(fired.len(), 2, "{fired:?}");
+        assert!(((fired[0] + 1) as f32 * DT - StillNet::NET_S).abs() < 0.02);
+        assert_eq!(net.fired, 2);
+        let mut quiet = StillNet::default();
+        assert!((0..300).all(|_| !quiet.step(true, 0.3, 0.0, true, true, DT)), "a stick under the run threshold");
+        assert!((0..300).all(|_| !quiet.step(true, 1.0, 0.0, true, false, DT)), "something holds him");
+        assert!((0..300).all(|_| !quiet.step(false, 1.0, 0.0, true, true, DT)), "Run against a wall / an action");
+        assert!((0..300).all(|_| !quiet.step(true, 1.0, 0.0, false, true, DT)), "in the air");
+        assert!((0..300).all(|_| !quiet.step(true, 1.0, 5.0, true, true, DT)), "he moves");
+        assert_eq!(quiet.fired, 0);
+    }
 
     const DT: f32 = 1.0 / 60.0;
 

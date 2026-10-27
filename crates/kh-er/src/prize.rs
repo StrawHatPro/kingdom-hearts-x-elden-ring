@@ -55,6 +55,8 @@
 //! | `prize.weights` | sheet er.slot1_weights (67,36,10) | HP, MP, focus shares of the first slot |
 //! | `prize.test` | - | ONE-SHOT: `hp[,runes[,times]]` drops what an enemy of that maximum HP would, 3 m in front of Sora |
 //! | `munny.mirror` | 1 | the rune counter shows Sora's munny; purchases cost munny; rune gains become munny |
+//! | `prize.munny_sound` | 1 | (MUNNYSE) the munny orbs' get sound (KH3's se00000_024) is played by this host (fx.rs `world_sound`, 3D at the orb, whoever leads), paced by prizemap `MunnyChime`; 0 = through Sora's own step as before |
+//! | `prize.munny_sound_gap`, `prize.munny_sound_most`, `prize.munny_sound_vol` | 0.06, 4, 1 | (MUNNYSE) seconds between two munny sounds, how many wait at most in a burst, their volume |
 //! | `munny.mirror.gains` | 1 | a rune gain that is not a kill's reward (a rune item, a sale) becomes munny; 0 = it is taken away |
 
 use std::collections::HashMap;
@@ -231,6 +233,10 @@ pub struct ErPrizes {
     /// given at once when the game's award is known.
     cutscene: bool,
     dead: bool,
+    /// (MUNNYSE) the munny orbs' get sounds, paced; their volume; the sounds played (their handles' counter) and not played.
+    chime: crate::prizemap::MunnyChime,
+    chime_volume: f32,
+    chimes: (u32, u32),
 }
 
 /// (IMPL_ER20) THE RULE FOR MUNNY THAT IS STILL IN ORBS when he can no longer collect them. An orb's munny is the
@@ -272,7 +278,7 @@ impl ErPrizes {
     pub fn start(control: &Control, rules: PrizeRules) -> ErPrizes {
         let respawn = SESSION.lock().map(|mut s| std::mem::take(&mut s.died)).unwrap_or(false);
         let respawn = crate::save::take_file_munny() || respawn; // (savegate) the file's munny: the counter is synced to it, not adopted
-        ErPrizes { host: PrizeHost::new(0x4552_5052), rule_rng: Rng::new(0x52_554C), on: false, wallet: Wallet::default(), waiting: HashMap::new(), next_key: 1, respawn, stats: None, test: OneShot::new("prize.test", control), mirror_told: None, said_runes: false, awarded: (0, 0, 0), dead_runes: None, holding: false, munny_shot: OneShot::new("dbg.munny", control), epoch: LOAD_EPOCH.load(std::sync::atomic::Ordering::Relaxed), frozen_for: 0.0, rules, unpaid: 0, radius_told: None, cutscene: false, dead: false }
+        ErPrizes { host: PrizeHost::new(0x4552_5052), rule_rng: Rng::new(0x52_554C), on: false, wallet: Wallet::default(), waiting: HashMap::new(), next_key: 1, respawn, stats: None, test: OneShot::new("prize.test", control), mirror_told: None, said_runes: false, awarded: (0, 0, 0), dead_runes: None, holding: false, munny_shot: OneShot::new("dbg.munny", control), epoch: LOAD_EPOCH.load(std::sync::atomic::Ordering::Relaxed), frozen_for: 0.0, rules, unpaid: 0, radius_told: None, cutscene: false, dead: false, chime: crate::prizemap::MunnyChime::new(crate::prizemap::MunnyChime::GAP, crate::prizemap::MunnyChime::MOST), chime_volume: 1.0, chimes: (0, 0) /* (MUNNYSE) */ }
     }
 
     /// `prize.height` over the sheet's row: cm above the dead enemy's centre where its orbs burst out.
@@ -290,6 +296,11 @@ impl ErPrizes {
         self.host.size = control.f32("prize.size").filter(|v| (0.05..=10.0).contains(v)).unwrap_or(self.rules.size);
         self.host.pay_expired_munny = control.flag("prize.munny.expire").unwrap_or(self.rules.munny_expire_pays);
         self.host.log_flight = control.flag("prize.log").unwrap_or(self.rules.log_flight);
+        // (MUNNYSE) the munny orbs' get sound is this host's (prize.munny_sound = 0: Sora's step plays it as before)
+        self.host.host_munny_sound = control.flag("prize.munny_sound") != Some(false);
+        self.chime.gap = control.f32("prize.munny_sound_gap").filter(|v| (0.0..=1.0).contains(v)).unwrap_or(crate::prizemap::MunnyChime::GAP);
+        self.chime.most = control.f32("prize.munny_sound_most").filter(|v| (1.0..=64.0).contains(v)).map_or(crate::prizemap::MunnyChime::MOST, |v| v as u32);
+        self.chime_volume = control.f32("prize.munny_sound_vol").filter(|v| (0.0..=4.0).contains(v)).unwrap_or(1.0);
         self.wallet.set_waits(control.f32("prize.wait").unwrap_or(self.rules.award_wait), control.f32("prize.wait_unpriced").unwrap_or(self.rules.award_wait_unpriced));
     }
 
@@ -454,6 +465,7 @@ impl ErPrizes {
         for line in self.host.log.drain(..) {
             erlog!("prize: {line}");
         }
+        self.munny_sounds(dt);
         // (IMPL_ER19) his magnet radius, said whenever it changes (300 / 600 / 900 cm by Treasure Magnet copies; the
         // Kingdom Key carries one)
         let radius = kh_prize::Getter::sora(sora, capsule_center).radius.map_or(-1, |r| r as i32);
@@ -464,6 +476,36 @@ impl ErPrizes {
         }
         let host = &mut self.host;
         crate::fx::with_effects(|fx| host.show(fx));
+    }
+
+    /// (MUNNYSE, the user 2026-10-27: "make picking up munny from the world give a sound") THE MUNNY ORBS' GET SOUNDS of
+    /// this step (kh-host PrizeHost `munny_sounds`: KH3's `m_SoundGet`, route "PrizeMunnyS/M/L.get" = se00000_024), paced
+    /// (prizemap `MunnyChime`: one per orb, at least `gap` apart, a burst never a blare) and played now through the audio
+    /// host at the orb (fx.rs `world_sound`). Busy audio this instant: it waits for the next step.
+    fn munny_sounds(&mut self, dt: f32) {
+        let asked = std::mem::take(&mut self.host.munny_sounds);
+        let first = asked.first().map(|a| kh_prize::host::sound_name(a.0, false));
+        for (_, at) in &asked {
+            self.chime.ask(*at);
+        }
+        if let Some(at) = self.chime.step(dt) {
+            let name = first.unwrap_or("PrizeMunnyS.get");
+            let handle = 0x7E02_0000 | (self.chimes.0 & 0xFFFF);
+            if crate::fx::world_sound(handle, name, at, self.chime_volume) {
+                self.chimes.0 += 1;
+                if self.chimes.0 == 1 {
+                    erlog!("prize: (MUNNYSE) the first munny pickup sound is played (\"{name}\", 3D at the orb, volume {:.2}; paced {:.2} s apart, {} waiting at most)", self.chime_volume, self.chime.gap, self.chime.most);
+                }
+            } else {
+                self.chimes.1 += 1;
+                if self.chimes.1 <= 3 {
+                    erlog!("prize: (MUNNYSE) a munny pickup sound could not be played now (\"{name}\": the audio side busy / not there, or no route): tried again next step");
+                }
+                if self.chimes.1 < 600 {
+                    self.chime.ask(at);
+                }
+            }
+        }
     }
 
     /// ONCE PER GAME FRAME while the game's player lives (`ChrIns_PrePhysics`): the wallet.

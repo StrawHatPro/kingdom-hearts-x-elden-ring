@@ -1,19 +1,24 @@
 //! (DON1) WHAT DONALD HAS LEARNED (documentation/DONALD_OVERHAUL.md 4.1, 6.3, 9, 10) and the boss-step rules.
 //!
 //! - Elements: each boss of an element gives ONE TIER MORE, in any order, never skipping (Sora's rule, SORA_CURRENT 5).
-//!   Tier 1: the base spell, the element's Attunement and line 2 Lv 1; tiers 2 / 3: the next tier and the next line-2
-//!   level; tier 4: the -za tier and the ultimate. A step past tier 4 gives Max MP +3.
+//!   Tier 1: the base spell and, when new, the element's Attunement; tiers 2 / 3: the next tier; tier 4: the -za tier
+//!   and the ultimate. A step past the top gives Max MP +3. (DONLINE2) A tier step gives NO line-2 level any more.
 //!   (DON-PROG, the user 2026-10-22: "Donald's ZA magic should be unlocked in Elden Ring's DLC") A BASE-GAME boss
 //!   ([`DonStep::Element`]) gives tiers up to -ga only, Max MP +3 past it; the element's DLC boss
 //!   ([`DonStep::ElementDlc`]) gives the -za tier and the ultimate with every missing lower tier first.
-//! - Light: tier 1 Cure; tiers 2 / 3 Cura / Curaga AND the next Banish level; tier 4 Curaza + Holy. Banish also rises
-//!   one level from the Tree Sentinel ([`DonStep::Banish`]); never skipped; past Lv 3 a Banish step gives Max MP +3.
+//! - (DONLINE2, the user 2026-10-27: "Tier 2 magic should be given by different bosses, seperate from tier 1 bosses,
+//!   following the same rules as tier 1 spell aquirements") LINE 2 (Flare, Freeze, Ball Lightning, Flood, Aero Barrier,
+//!   Banish) has bosses of its own ([`DonStep::Line2`], sheet token `line2:<element>`): each gives ONE LEVEL MORE of
+//!   that element's line-2 spell, in any order, never skipping; past Lv 3 Max MP +3; the element's Attunement when it
+//!   is his first spell of it. Light's line 2 is Banish (the old `banish` token = `line2:light`, the Tree Sentinel's).
+//! - Light: tier 1 Cure; tiers 2 / 3 Cura / Curaga; tier 4 Curaza + Holy (Banish only from its line-2 bosses).
 //! - Attunement: an element's Attunement is unlocked as soon as he has ANY spell of it (Banish unlocks Light).
 //! - Arcane (Y): Gravity Lv 1 known from the start; each boss of a line gives its next level; past the top Max MP +3.
 //!   Zettaflare: one boss (Messmer); again = Max MP +3.
-//! - Start (10): Fire and Water at tier 1 (with Flare Lv 1 / Flood Lv 1 and their Attunements), Gravity Lv 1.
+//! - Start (10): Fire and Water at tier 1 (with their Attunements), Gravity Lv 1. (DONLINE2, the user 2026-10-27: "Donald
+//!   should not start with access to Flood or Flare": no line-2 level at the start.)
 //! - Sora: a step of an element gives HIM his next tier too (up to -ga, tier 3); with -ga already, Max MP +3
-//!   ([`sora_gain`]). Banish, Arcane and Zettaflare steps give Sora nothing.
+//!   ([`sora_gain`]). Line-2 (Banish included), Arcane and Zettaflare steps give Sora nothing.
 //!
 //! The state is the ROSTER's (kh-partyhost keeps one, saved in the party record as `donald_magic`): Donald gets every
 //! step even before he joins, and joins with it.
@@ -31,23 +36,25 @@ pub enum DonStep {
     /// (DON-PROG) THE ELEMENT'S DLC BOSS: the -za tier and the ultimate, with every lower tier still missing first (nothing
     /// skipped); at -za already: Max MP +3.
     ElementDlc(Element),
-    /// The next Banish level (the Tree Sentinel).
-    Banish,
+    /// (DONLINE2) The next level of the element's LINE-2 spell (Flare .. Banish), from that line's own bosses; at Lv 3
+    /// already: Max MP +3. Light's = Banish (the sheet's old `banish` token, the Tree Sentinel).
+    Line2(Element),
     /// The next level of a Y line.
     Arcane(ArcaneLine),
 }
 
 impl DonStep {
-    /// The sheet token (`magic:fire`, `banish`, `arcane:meteor`, `arcane:zettaflare`).
+    /// The sheet token (`magic:fire`, `line2:fire`, `banish` = `line2:light`, `arcane:meteor`, `arcane:zettaflare`).
     pub fn parse(token: &str) -> Option<DonStep> {
         let t = token.trim();
         if t.eq_ignore_ascii_case("banish") {
-            return Some(DonStep::Banish);
+            return Some(DonStep::Line2(Element::Light)); // (DONLINE2) the old token: Light's line 2
         }
         let (k, v) = t.split_once(':')?;
         match k.trim() {
             "magic" | "element" => Element::from_key(v).map(DonStep::Element),
             "dlc" | "magic_dlc" => Element::from_key(v).map(DonStep::ElementDlc), // (DON-PROG)
+            "line2" | "l2" => Element::from_key(v).map(DonStep::Line2), // (DONLINE2)
             "arcane" | "y" => ArcaneLine::from_key(v).map(DonStep::Arcane),
             _ => None,
         }
@@ -57,7 +64,7 @@ impl DonStep {
         match self {
             DonStep::Element(e) => format!("magic:{}", e.key()),
             DonStep::ElementDlc(e) => format!("dlc:{}", e.key()), // (DON-PROG)
-            DonStep::Banish => "banish".to_string(),
+            DonStep::Line2(e) => format!("line2:{}", e.key()), // (DONLINE2)
             DonStep::Arcane(l) => format!("arcane:{}", l.key()),
         }
     }
@@ -116,7 +123,7 @@ pub fn sora_gain(step: DonStep, sora_tier: u8) -> SoraGain {
     match step {
         DonStep::Element(_) | DonStep::ElementDlc(_) if sora_tier < 3 => SoraGain::Tier(sora_tier + 1), // (DON-PROG) the DLC boss too
         DonStep::Element(_) | DonStep::ElementDlc(_) => SoraGain::MaxMp(MAX_MP_STEP),
-        DonStep::Banish | DonStep::Arcane(_) => SoraGain::Nothing,
+        DonStep::Line2(_) | DonStep::Arcane(_) => SoraGain::Nothing, // (DONLINE2) Banish included
     }
 }
 
@@ -143,13 +150,12 @@ impl DonLearned {
     /// Nothing at all (a test's blank).
     pub const EMPTY: DonLearned = DonLearned { tier: [0; 6], line2: [0; 6], arcane: [0; 5], mp_steps: 0 };
 
-    /// THE START (10): Fire and Water at tier 1 (Fire, Flare Lv 1, Water, Flood Lv 1, their Attunements), Gravity Lv 1.
+    /// THE START (10): Fire and Water at tier 1 (Fire, Water, their Attunements), Gravity Lv 1. (DONLINE2, the user
+    /// 2026-10-27: "Donald should not start with access to Flood or Flare": no line-2 level.)
     pub fn start() -> DonLearned {
         let mut l = DonLearned::EMPTY;
         l.tier[Element::Fire.index()] = 1;
         l.tier[Element::Water.index()] = 1;
-        l.line2[Element::Fire.index()] = 1;
-        l.line2[Element::Water.index()] = 1;
         l.arcane[ArcaneLine::Gravity as usize] = 1;
         l
     }
@@ -219,21 +225,24 @@ impl DonLearned {
         out.push(Grant::MaxMp(MAX_MP_STEP));
     }
 
-    fn banish_up(&mut self, out: &mut Vec<Grant>) {
-        let i = Element::Light.index();
+    /// (DONLINE2) One level more of `e`'s line-2 spell (Banish for Light), the Attunement when it is his first spell of
+    /// `e`; at Lv 3 already: Max MP +3 (the tier steps' rule).
+    fn line2_up(&mut self, e: Element, out: &mut Vec<Grant>) {
+        let i = e.index();
         if self.line2[i] >= 3 {
             self.mp_step(out);
             return;
         }
-        let unlocked = self.attune_unlocked(Element::Light);
+        let unlocked = self.attune_unlocked(e);
         self.line2[i] += 1;
-        out.push(Grant::Line2(Element::Light, self.line2[i]));
+        out.push(Grant::Line2(e, self.line2[i]));
         if !unlocked {
-            out.push(Grant::Attunement(Element::Light));
+            out.push(Grant::Attunement(e));
         }
     }
 
-    /// One tier more of `e` (below 4): its spell, the Attunement when new, line 2 / Banish, the ultimate at 4.
+    /// One tier more of `e` (below 4): its spell, the Attunement when new, the ultimate at 4. (DONLINE2) Line 2 / Banish
+    /// is no longer raised here: its own bosses give it (`DonStep::Line2`).
     fn tier_up(&mut self, e: Element, out: &mut Vec<Grant>) {
         let i = e.index();
         let unlocked = self.attune_unlocked(e);
@@ -242,15 +251,6 @@ impl DonLearned {
         out.push(Grant::Tier(e, t));
         if !unlocked {
             out.push(Grant::Attunement(e));
-        }
-        if e == Element::Light {
-            // Cure (1), Cura + Banish (2), Curaga + Banish (3), Curaza + Holy (4)
-            if t == 2 || t == 3 {
-                self.banish_up(out);
-            }
-        } else if t <= 3 && self.line2[i] < 3 {
-            self.line2[i] += 1;
-            out.push(Grant::Line2(e, self.line2[i]));
         }
         if t == 4 {
             out.push(Grant::Ultimate(e));
@@ -261,7 +261,7 @@ impl DonLearned {
     pub fn apply(&mut self, step: DonStep) -> Vec<Grant> {
         let mut out = Vec::new();
         match step {
-            DonStep::Banish => self.banish_up(&mut out),
+            DonStep::Line2(e) => self.line2_up(e, &mut out), // (DONLINE2)
             DonStep::Arcane(l) => {
                 let i = l as usize;
                 if self.arcane[i] >= l.max_level() {

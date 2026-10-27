@@ -19,7 +19,8 @@ use kh_react::HitOutcome;
 #[test]
 fn zetta_the_er_route_keeps_the_magic_scaled_damage_in_step() {
     let p = Params::default();
-    let (low, high) = (p.damage_out(800.0), p.damage_out(1600.0));
+    // (2026-10-27, the conversion x12: numbers whose ask stays under the bullet's 60,000)
+    let (low, high) = (p.damage_out(400.0), p.damage_out(800.0));
     assert!(low > 0 && high > low, "more KH damage, more ER HP asked ({low} / {high})");
     assert_eq!(high, low * 2, "on one scale: no cap, no boss scaling here");
     // the forced hit's ask through a measured negation (a boss that took a fifth): the full number, whatever its defence
@@ -34,8 +35,13 @@ fn zetta_the_er_route_keeps_the_magic_scaled_damage_in_step() {
 #[test]
 fn zetta_a_forced_hit_lands_in_full_and_level_99_kills_malenia() {
     let p = Params::default();
-    let full = p.damage_out(2857.0); // level 99: Magic 71 x power 40.2394
-    assert!((full - 20000).abs() <= 7, "{full}");
+    // level 99: Magic 71 x power 40.2394 = 2857 KH; 20,000 at the conversion x7, 34,284 at x12 since 2026-10-27 (the user:
+    // "allow Zettaflare to be scaled up"); (DONLINE2, the user 2026-10-27: "make Donald's starting magic 18 at level 1")
+    // his Magic at level 99 is 80 now (ratio 1.2, kh-party balance): 80 x 40.2394 = 3220 KH = 38,640 at x12, power kept
+    let magic = kh_party::balance::base_stats(kh_party::Chara::Donald, 99).1 + 4;
+    assert_eq!(magic, 80);
+    let full = p.damage_out(3220.0);
+    assert!((full - 38640).abs() <= 12, "{full}");
     // first hit on her: nothing measured yet, the bullet asks the full number; she keeps 17.3 % (the user's run)
     let ask = crate::targets::forced_ask(full, 0.0);
     assert_eq!(ask, full);

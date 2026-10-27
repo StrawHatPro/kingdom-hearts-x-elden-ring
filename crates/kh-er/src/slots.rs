@@ -146,7 +146,7 @@ fn from_memory() -> Option<[RawSlot; SLOTS]> {
     // SAFETY: a pointer-sized field of the live manager (the SDK's private `profile_summary`, + 0x78).
     let object = unsafe { std::ptr::read_unaligned((man + 0x78) as *const usize) };
     let len = SLOTS * MEM_RECORD + 0x18;
-    if !crate::game::plausible(object) || crate::pause::readable(object, len) < len {
+    if !crate::game::plausible(object) || !crate::pause::heap_readable(object, len) {
         return None;
     }
     // SAFETY: `len` readable bytes (checked just now); plain data.
@@ -265,7 +265,7 @@ fn clear_in_use(n: usize) -> bool {
     let Some(man) = (unsafe { GameDataMan::instance() }).ok().map(|m| m as *const GameDataMan as usize) else { return false };
     // SAFETY: a pointer-sized field of the live manager (the SDK's private `profile_summary`, + 0x78).
     let object = unsafe { std::ptr::read_unaligned((man + 0x78) as *const usize) };
-    if !crate::game::plausible(object) || crate::pause::readable(object, 0x18) < 0x18 {
+    if !crate::game::plausible(object) || !crate::pause::heap_readable(object, 0x18) {
         return false;
     }
     // SAFETY: ten readable bytes of the live summary object (checked); each is 0 or 1 (checked before the write).

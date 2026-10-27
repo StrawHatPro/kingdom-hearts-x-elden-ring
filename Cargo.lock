@@ -641,6 +641,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "kh-oodle"
+version = "0.1.0"
+
+[[package]]
 name = "kh-party"
 version = "0.1.0"
 dependencies = [
@@ -684,6 +688,16 @@ version = "0.1.0"
 dependencies = [
  "glam",
  "kh-core",
+]
+
+[[package]]
+name = "kh-selfcheck"
+version = "0.1.0"
+dependencies = [
+ "kh-camera",
+ "kh-core",
+ "kh-gendata",
+ "kh-party",
 ]
 
 [[package]]

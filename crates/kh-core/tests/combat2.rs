@@ -599,6 +599,38 @@ fn the_transformation_into_second_form() {
     assert!(bench.sora.combat().style.gauge > 0.0);
 }
 
+/// (CHESTFIX, the user 2026-10-27: "Sora was also stuck in a pseudo-second form after transforming into it as an ally")
+/// A TELEPORT IN SECOND FORM (the party's warp of AI Sora, 323.876 in the user's log): the form, its look and its
+/// abilities go on, and its end gives them back. THE NET: a wear form with no form held (the old teleport's leftover)
+/// is given back on the next frame.
+#[test]
+fn chestfix_a_teleport_in_second_form_keeps_the_form_until_its_end() {
+    let mut bench = Bench::new(level99(Some(&[])), &[]);
+    formchange(&mut bench);
+    bench.idle(200);
+    assert_eq!(bench.sora.combat().form.wear_form, 5);
+    let at = bench.sora.output().position + Vec3::new(500.0, 0.0, 0.0);
+    bench.sora.teleport(Pose { position: at, yaw: 0.0 });
+    let form = bench.sora.combat().form;
+    assert_eq!((form.cmd, form.wear_form), (0x94, 5), "the form goes on through the warp");
+    assert!(bench.sora.status().has(Ability::Highjump));
+    bench.idle(30 * 60 + 5);
+    let form = bench.sora.combat().form;
+    assert_eq!((form.cmd, form.wear_form, form.ended, form.nets), (0, 0, 1, 0), "its own end");
+    assert!(!bench.sora.status().has(Ability::Highjump));
+    // the old leftover: a wear form and its abilities while no form is held -> given back by the net
+    let mut bench = Bench::new(level99(Some(&[])), &[]);
+    formchange(&mut bench);
+    bench.idle(200);
+    let form = bench.sora.combat().form;
+    (bench.sora.combat_mut().form.cmd, bench.sora.combat_mut().form.time_left) = (0, 0.0);
+    assert_eq!(form.wear_form, 5);
+    bench.idle(2);
+    let form = bench.sora.combat().form;
+    assert_eq!((form.wear_form, form.nets), (0, 1));
+    assert!(!bench.sora.status().has(Ability::Highjump), "the form's abilities are gone");
+}
+
 #[test]
 fn form_time_finish_levels_and_the_end_of_the_form() {
     // 10.6: each full gauge in the form raises the finish command (172, 173) and adds 3 s of

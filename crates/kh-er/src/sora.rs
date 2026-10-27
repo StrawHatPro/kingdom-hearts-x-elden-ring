@@ -224,10 +224,17 @@ pub struct SoraHost {
     ladder_go: crate::ladder::LetGo,
     /// (LADDER2) the game's "Descend" prompt was up last frame (the log's edge)
     descend_told: bool,
+    /// (TELESCOPE) a Birdseye Telescope's prompt was up last frame (the log's edge)
+    telescope_told: bool,
     leap_wait: Option<(Vec3, f32, f32)>,
     leap: Option<crate::ladder::SoraLeap>,
     leap_show: crate::ladder::Show,
     chest: crate::chest::Chest,
+    /// (CHESTFIX) the net on his own simulation (exitnet.rs `StillNet`), kh-core's closes of a dropped aim mode and its
+    /// form nets as last logged
+    still_net: crate::exitnet::StillNet,
+    aim_closed_seen: u32,
+    form_nets_seen: u32,
     /// (ANIMS) the ladder state as believed (a stale module after a let-go: -1), the net, the actions' cap
     ladder_truth: crate::exitnet::LadderTruth,
     busy_net: crate::exitnet::BusyNet,
@@ -739,10 +746,14 @@ impl SoraHost {
             ladder: Default::default(),
             ladder_go: Default::default(),
             descend_told: false,
+            telescope_told: false,
             leap_wait: None,
             leap: None,
             leap_show: crate::ladder::Show::Own,
             chest: Default::default(),
+            still_net: Default::default(),
+            aim_closed_seen: 0,
+            form_nets_seen: 0,
             ladder_truth: Default::default(),
             busy_net: Default::default(),
             own_cap: Default::default(),
@@ -972,23 +983,35 @@ impl SoraHost {
             }
             // (IMPL_ER58) A CHEST (chest.rs; `chest.kh = 0`: as before, the body's chest animation is no action of ours): Sora
             // follows the body (the game places and turns it at the chest), and his simulation opens KH3's treasure box
+            // (CHESTFIX, the user 2026-10-27: "Sora should play his chest animation for ALL chests" / "It also plays again when
+            // he picks up the item from the chest") every chest OPENING of the user's logs (chest.rs `DEFAULT_LIST`: 60080,
+            // 60110); not the item's pickup from an open chest (60090 under "Search treasure chest"): one opening per chest
             let chest_listed = match control.str("chest.anims").map(ermap::own_ranges) {
                 Some(ranges) => ranges.iter().any(|(a, b)| (*a..=*b).contains(&anim)),
-                None => (crate::chest::DEFAULT_ANIMS.0..=crate::chest::DEFAULT_ANIMS.1).contains(&anim),
+                None => crate::chest::default_anim(anim),
             };
             crate::loot::note_chest_anim(chest_listed); // (PU) the gate tells a chest's item by it (any leader)
             let chest_allowed = !cutscene && control.flag("chest.kh") != Some(false) && self.lead_alive() /* (ER party S2) */ && !(relocated || fresh);
-            let (on_chest, chest_edge) = self.chest.frame(anim, chest_listed, chest_allowed, control.f32("chest.delay").unwrap_or(0.0).clamp(0.0, 10.0), dt);
+            // (CHESTFIX, the user 2026-10-27: "the chest opens AFTER he taps it with the keyblade") NO HOLD OF THE BODY: the game's
+            // lid runs on the chest's own time (the CHESTFIX build froze the body: the lid opened all the same, and the frozen
+            // body stopped the game's world update flag: Sora paused, the game's camera behind the chest; the user's log
+            // 367.144 - 368.595). KH3's state is asked for at once and is OpenTreasureS by default (its tap at 0.47 s, the
+            // earliest KH3 has: chest.rs `large`); `chest.delay` (s) and `chest.size = l` as before
+            let body_len = ta.anim_queue[(ta.read_idx as usize) % 10].anim_length;
+            let large = crate::chest::large(control.str("chest.size"), body_len);
+            let friend_chest = self.friend_lead().is_some();
+            let delay = control.f32("chest.delay").unwrap_or(0.0).clamp(0.0, 10.0);
+            let (on_chest, chest_edge) = self.chest.frame(anim, chest_listed, chest_allowed, delay, dt);
             match chest_edge {
-                crate::chest::Edge::Begin { anim } => erlog!("chest: THE BODY OPENS A CHEST (animation {anim}, {:.2} s): Sora FOLLOWS it (seated on the body, facing the chest) and plays KH3's own treasure-box opening (chest.kh = 0: off)", ta.anim_queue[(ta.read_idx as usize) % 10].anim_length),
-                // (ER party S2, U13) a friend leading has no KH3 chest clip: the body's own chest opening, retargeted onto him
-                crate::chest::Edge::Ask if self.friend_lead().is_some() => erlog!("chest: the leader opens it with the body's own chest animation, retargeted onto him (KH3 has no chest clip for the friends)"),
+                crate::chest::Edge::Begin { anim } => erlog!("chest: THE BODY OPENS A CHEST (animation {anim}, {body_len:.2} s): {} (chest.kh = 0: off)", if friend_chest { format!("the leader ({}) is seated on the body, facing the chest, and plays NO chest animation (his own idle)", self.lead_chara_name()) } else { "Sora FOLLOWS it (seated on the body, facing the chest) and plays KH3's own treasure-box opening".to_string() }),
+                // (CHESTFIX, the user 2026-10-27: "Goofy and Donald should have no chest animation") a friend leading: no KH3
+                // clip and no retargeted body animation (own_frame); he stands facing the chest while the game opens it
+                crate::chest::Edge::Ask if friend_chest => erlog!("chest: the leader ({}) opens it with no chest animation: he stands facing the chest while the game opens it (the item comes through the gate as always)", self.lead_chara_name()),
                 crate::chest::Edge::Ask => {
-                    let large = crate::chest::large(control.str("chest.size"), ta.anim_queue[(ta.read_idx as usize) % 10].anim_length);
                     let asked = self.sora.open_treasure_box(large);
-                    erlog!("chest: KH3's TresPlayerState_OpenTreasureBox {} ({})", if asked { "ASKED FOR" } else { "NOT ASKED (Sora is dead)" }, if large { "large: OpenTreasureL, 2.97 s, the box opens at 2.0 s" } else { "small: OpenTreasureS, 0.97 s, the box opens at 0.5 s" });
+                    erlog!("chest: KH3's TresPlayerState_OpenTreasureBox {} ({}; {delay:.2} s after the body's begin; the body is not held: the game's lid keeps its own time)", if asked { "ASKED FOR" } else { "NOT ASKED (Sora is dead)" }, if large { "large: OpenTreasureL, 2.97 s, the box opens at 2.0 s" } else { "small: OpenTreasureS, 0.97 s, the box opens at 0.5 s" });
                 }
-                crate::chest::Edge::End { anim, seconds, asked } => erlog!("chest: the body's chest animation {anim} is over after {seconds:.2} s (KH3's opening {}; Sora's state now {:?}): the body is handed back as after a door", if asked { "was played" } else { "WAS NOT asked for" }, self.out.state),
+                crate::chest::Edge::End { anim, seconds, asked } => erlog!("chest: the body's chest animation {anim} is over after {seconds:.2} s ({}; Sora's state now {:?}): the body is handed back as after a door", if friend_chest { format!("the leader {} played none", self.lead_chara_name()) } else if asked { "KH3's opening was played".to_string() } else { "KH3's opening WAS NOT asked for".to_string() }, self.out.state),
                 crate::chest::Edge::None => {}
             }
             // (LADDER2) the game's ladder animations are never followed (the leap has the leader)
@@ -2116,6 +2139,33 @@ impl SoraHost {
                 }
             };
             self.leap_after_step(&out);
+            // (CHESTFIX, the user 2026-10-27: "he stopped moving and even swapping to him from the party menu I couldn't move
+            // as him") kh-core closed a shotlock aim mode that a dropped state had left open (shotlock.rs `close_dropped` at a
+            // teleport, the net in its update): said, as every net
+            let closed = self.sora.aim().stale_cleared;
+            if closed != self.aim_closed_seen {
+                self.aim_closed_seen = closed;
+                erlog!("!!! sora: A SHOTLOCK AIM MODE LEFT OPEN BY A DROPPED STATE (a warp or a teleport during ShootFlow) WAS CLOSED by kh-core (#{closed}): before, it refused every movement, jump, attack and command of his for ever ({})", if self.friend_lead().is_some() { "AI Sora" } else { "Sora leading" });
+            }
+            // (CHESTFIX, the user 2026-10-27: "Sora was also stuck in a pseudo-second form after transforming into it as an
+            // ally") kh-core's form net (style.rs `tick`): a wear form / form abilities that no form held were given back
+            let nets = self.sora.combat().form.nets;
+            if nets != self.form_nets_seen {
+                self.form_nets_seen = nets;
+                erlog!("!!! sora: A FORM'S LOOK AND ABILITIES WITH NO FORM HELD (a form whose end was skipped) WERE GIVEN BACK by kh-core (#{nets}; {}): wear form {} now", if self.friend_lead().is_some() { "AI Sora" } else { "Sora leading" }, self.sora.combat().form.wear_form);
+            }
+            // (CHESTFIX) THE NET ON HIS OWN SIMULATION (exitnet.rs `StillNet`): Idle with the run stick for 2 s, on the floor,
+            // not moving, nothing of ours or the game's holding him -> a fresh Sora where he stands (his status, magic, menu
+            // kept), whoever leads. `sora.still_net = 0`: off
+            {
+                let aim_mode = self.sora.aim().mode;
+                let free = self.follow.is_none() && !self.own_hold && self.leap.is_none() && self.leap_wait.is_none() && !self.finish.locked() && self.sora.status().hp > 0 && !matches!(aim_mode, 1 | 4) && control.flag("sora.still_net") != Some(false);
+                let moved = Vec2::new(out.position.x - self.out.position.x, out.position.y - self.out.position.y).length();
+                if self.still_net.step(out.state == kh_core::StateId::Idle, input.move_stick.length(), moved, out.on_floor, free, STEP) {
+                    erlog!("!!! sora: HIS SIMULATION REFUSED THE STICK for {:.1} s ({}: Idle/{} at kh ({:.0}, {:.0}, {:.0}), the stick {:.2}, aim mode {aim_mode}, nothing holding him): A FRESH SORA WHERE HE STANDS (the net, #{})", crate::exitnet::StillNet::NET_S, if self.friend_lead().is_some() { "AI Sora behind the leader" } else { "Sora leading" }, out.sub_step, out.position.x, out.position.y, out.position.z, input.move_stick.length(), self.still_net.fired);
+                    self.sora.teleport(Pose { position: out.position, yaw: out.yaw });
+                }
+            }
             // (ER party S1) steps 3 - 5: the party's step (AI, Party::step, Team::step), the poses, the leader's lock, the
             // trail and the fallbacks, the bodies' want list; then S2's leader body (its view of the leader, its orders)
             #[cfg(feature = "party")]
@@ -2672,6 +2722,17 @@ impl SoraHost {
             }
         }
         self.descend_told = descend;
+        // (TELESCOPE, the user 2026-10-27: "disable using eagle eye telescopes entirely, give no prompt for them") the second
+        // line under telescope.rs (their rows' region is nothing): a telescope prompt the manager still shows (a reload of
+        // the params before the next check) is no prompt for us: no KH3 command, Y never reaches the game for it
+        let telescope = crate::erprompt::shown().is_some_and(|s| crate::telescope::hides_prompt(control, s.text_id, s.text.as_deref()));
+        if telescope && self.prompt {
+            self.prompt = false;
+            if !self.telescope_told {
+                erlog!("telescope: (TELESCOPE) the game offers a Birdseye Telescope: NOT OFFERED (no command, Y is not the game's; telescope.er = 1 gives it back)");
+            }
+        }
+        self.telescope_told = telescope;
         crate::erprompt::set_er_up(self.prompt);
         self.ui_states = now;
     }
@@ -3817,9 +3878,11 @@ impl SoraHost {
         let anim = ta.anim_queue[(ta.read_idx as usize) % 10].anim_id;
         // (IMPL_ER33) while the body attunes to / rests at a site of grace he is held (no input) but does NOT take its pose: he neither kneels nor sits (`savepoint.sit_pose = 1`)
         let owned = matches!(self.follow, Some(Follow::Action | Follow::Grab)) || (self.own_hold && !(self.savepoint.hides_grace_pose() && crate::story::grace_animation(anim)));
-        // (ER party S2) a friend leading takes the body's pose (also its chest opening: U13); Sora keeps his own
+        // (ER party S2) a friend leading takes the body's pose; Sora keeps his own
+        // (CHESTFIX, the user 2026-10-27: "Goofy and Donald should have no chest animation") NOT the body's chest opening
+        // (U13's retarget is gone): seated facing the chest, he shows his own pose (his idle) while the game opens it
         #[cfg(feature = "party")]
-        let held_by_body = owned;
+        let held_by_body = owned && !(self.follow == Some(Follow::Action) && self.chest.on());
         let owned = owned && self.friend_lead().is_none();
         // (IMPL_ER58) a chest shown with KH3's own animation: no Elden Ring pose laid over him
         let owned = owned && !(self.follow == Some(Follow::Action) && self.chest.on());

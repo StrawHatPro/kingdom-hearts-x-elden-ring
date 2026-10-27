@@ -738,7 +738,7 @@ function main() {
   const missing = fs.readdirSync(CACHE).filter((f) => f.endsWith('.bin') && !fs.existsSync(path.join(CACHE, f.replace(/\.bin$/, '.asm'))));
   if (missing.length) {
     console.log(`disassembling ${missing.length} shaders (d3dcompiler_47.dll) ...`);
-    const r = cp.spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'lib', 'dxbc_disasm.ps1'), '-Dir', CACHE], { encoding: 'utf8' });
+    const r = require('./lib/dxbc_disasm').systemOrOwn(CACHE);
     if (r.status !== 0) throw new Error('dxbc_disasm.ps1 failed: ' + (r.stderr || r.stdout));
   }
   // ---- translate
@@ -928,7 +928,7 @@ function assetRows() {
   const sheet = JSON.parse(fs.readFileSync(sheetFile, 'utf8'));
   const byFile = new Map(); for (const r of texCache.values()) if (!r.missing) byFile.set('materials/' + r.file, r);
   const rows = [];
-  const walk = (dir, prefix) => { for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) { const p = path.join(dir, e.name); if (e.isDirectory()) { walk(p, prefix + e.name + '/'); continue; }
+  const walk = (dir, prefix) => { for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name, 'en'))) { const p = path.join(dir, e.name); if (e.isDirectory()) { walk(p, prefix + e.name + '/'); continue; }
     const id = prefix + e.name; const b = fs.readFileSync(p); const t = byFile.get(id);
     // (the source column names an asset file: the model's mesh asset for what the tool derives from several assets)
     let kind = 'data', logical = '-', source = CONTENT + '/Character/pc/p_ex001/mdl/p_ex001_0.uasset', validation = 'read back', evidence = '';
@@ -973,7 +973,7 @@ function ownKhs() {
   const ownKey = 'khs.' + asset.split('/').pop().split('.')[0] + '.pp';
   const own = khsPrepare(dump, asset, ownKey); if (!own) throw new Error(asset + ': no post-process pixel shader in its shader map');
   const std = khsPrepare(dump); if (!std) throw new Error(KHS + ': not found');
-  const r = cp.spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'lib', 'dxbc_disasm.ps1'), '-Dir', cache], { encoding: 'utf8' });
+  const r = require('./lib/dxbc_disasm').systemOrOwn(cache);
   if (r.status !== 0) throw new Error('dxbc_disasm.ps1 failed: ' + (r.stderr || r.stdout));
   const asmOf = (k) => { const x = fs.readFileSync(path.join(cache, k + '.asm'), 'utf8'); if (/^HRESULT/.test(x)) throw new Error(k + ': disassembly failed'); return x; };
   const t = transpile(asmOf(ownKey), own.meta); if (!t.ok) throw new Error(asset + ': NOT TRANSLATED: ' + t.why);

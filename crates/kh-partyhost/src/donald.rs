@@ -533,9 +533,15 @@ mod tests {
     fn the_record_round_trips_and_an_old_save_reads_as_the_start() {
         let mut l = DonLearned::start();
         l.apply(DonStep::Element(Element::Thunder));
-        l.apply(DonStep::Banish);
+        l.apply(DonStep::Line2(Element::Light)); // (DONLINE2) Banish
+        l.apply(DonStep::Line2(Element::Water));
         l.apply(DonStep::Arcane(ArcaneLine::Comet));
         assert_eq!(from_json(&to_json(&l)), Some(l));
+        // (DONLINE2) a record of a save made before the line-2 change (Flare Lv 1 / Flood Lv 1 from the old start) keeps them:
+        // a load never strips a learned spell
+        let old = json!({ "v": 1, "tier": [1, 0, 0, 1, 0, 0], "line2": [1, 0, 0, 1, 0, 0], "arcane": [0, 1, 0, 0, 0], "mp_steps": 0 });
+        let o = from_json(&old).unwrap();
+        assert_eq!((o.line2(Element::Fire), o.line2(Element::Water)), (1, 1));
         assert_eq!(from_json(&Value::Null), None);
         let odd = json!({ "tier": [9, "x"], "arcane": [5] });
         let o = from_json(&odd).unwrap();
@@ -563,7 +569,7 @@ mod tests {
     fn steps_reach_donald_joined_or_not_and_the_party_record_keeps_them() {
         let mut rt = new();
         // not joined: the roster keeps it
-        assert_eq!(rt.don_step(DonStep::Element(Element::Aero)), vec![Grant::Tier(Element::Aero, 1), Grant::Attunement(Element::Aero), Grant::Line2(Element::Aero, 1)]);
+        assert_eq!(rt.don_step(DonStep::Element(Element::Aero)), vec![Grant::Tier(Element::Aero, 1), Grant::Attunement(Element::Aero)]); // (DONLINE2) no line 2
         rt.spawn_one(kh_host::party::PartyChara::Donald, kh_core::Vec3::ZERO, 0.0);
         let id = rt.id(kh_host::party::PartyChara::Donald).unwrap();
         let st = rt.party.status(id).unwrap().donald.as_ref().unwrap();
@@ -652,7 +658,8 @@ mod prog_host_tests {
         }
         // every boss beaten, in the table's order then backwards: every line at its top, every Banish level. (the user,
         // 2026-10-22: -za in the DLC) Forward the DLC boss comes last (no MP step); backward it comes first and gives every
-        // missing tier, so each base boss after it gives Max MP +3 (Fire / Water: 2 base bosses, the others 3; 16 in all)
+        // missing tier, so each base boss after it gives Max MP +3 (Fire / Water: 2 base bosses, the others 3; 16 in all).
+        // (DONLINE2) line 2 from its own three bosses per element (Light: the Tree Sentinel + two): exactly Lv 3, no MP step
         for reverse in [false, true] {
             let mut r = rt(true);
             let mut rows = t.don.clone();
@@ -686,11 +693,11 @@ mod prog_host_tests {
         rec.push("boss:bayle".into());
         let got = th.don_claim_due(&table().don, &mut rec);
         assert_eq!(got[0].1, vec![Grant::Tier(Element::Thunder, 4), Grant::Ultimate(Element::Thunder)]);
-        // Margit: Thunder 1 (+ its Attunement, Ball Lightning Lv 1); Messmer: Zettaflare
+        // Margit: Thunder 1 (+ its Attunement; DONLINE2: no Ball Lightning); Messmer: Zettaflare
         records.push("boss:margit".into());
         records.push("boss:messmer".into());
         let got = r.don_claim_due(&t.don, &mut records);
-        assert_eq!(got[0].1, vec![Grant::Tier(Element::Thunder, 1), Grant::Attunement(Element::Thunder), Grant::Line2(Element::Thunder, 1)]);
+        assert_eq!(got[0].1, vec![Grant::Tier(Element::Thunder, 1), Grant::Attunement(Element::Thunder)]);
         assert_eq!(got[1].1, vec![Grant::Arcane(ArcaneLine::Zettaflare, 1)]);
         // a step before Donald joins reaches him at his join
         r.spawn_one(PartyChara::Donald, kh_core::Vec3::ZERO, 0.0);
@@ -722,6 +729,31 @@ mod prog_host_tests {
         // the old save's records are only added to (don:<id>), never changed
         assert!(records.starts_with(&old));
         assert_eq!(records.len(), old.len() + 4);
+    }
+
+    /// (DONLINE2, the user 2026-10-27: "Tier 2 magic should be given by different bosses") THE NEW LINE-2 ROWS AND AN EXISTING
+    /// SAVE: a save whose Donald already had his steps (don: records, Flare from the old start and the old tier rule) gets
+    /// each new line-2 row of a boss its Sora has beaten once, one level more (Max MP +3 at the top), through the same
+    /// catch-up; it is not stripped of anything.
+    #[test]
+    fn an_existing_save_gets_the_new_line_2_rows_of_its_beaten_bosses_once() {
+        let t = table();
+        let mut r = rt(true);
+        // an older Donald: Fire tier 3 with Flare Lv 3 (start + Rykard + Fire Giant under the old rule), Water tier 1 + Flood Lv 1
+        r.load_party_record(&json!({ "format": 2, "leader": "sora", "donald_magic": { "v": 1, "tier": [3, 0, 0, 1, 0, 0], "line2": [3, 0, 0, 1, 0, 0], "arcane": [0, 1, 0, 0, 0], "mp_steps": 0 } }));
+        assert!(!r.don_unrecorded);
+        let mut records: Vec<String> = ["boss:rykard", "don:rykard", "boss:fire_giant", "don:fire_giant", "boss:agheel", "boss:leonine", "boss:tree_sentinel", "don:tree_sentinel"].map(String::from).to_vec();
+        let got = r.don_claim_due(&t.don, &mut records);
+        assert_eq!(got, vec![("agheel".to_string(), vec![Grant::MaxMp(3)]), ("leonine".to_string(), vec![Grant::Line2(Element::Water, 2)])]);
+        let l = r.don_learned();
+        assert_eq!((l.tier(Element::Fire), l.line2(Element::Fire), l.line2(Element::Water), l.mp_steps), (3, 3, 2, 1));
+        assert!(r.don_claim_due(&t.don, &mut records).is_empty(), "once");
+        // a new game: the line-2 bosses give Flare / Flood from Lv 1
+        let mut n = rt(true);
+        n.load_party_record(&json!({ "format": 2, "leader": "sora" }));
+        let mut rec: Vec<String> = ["boss:agheel", "boss:mimic_tear", "boss:leonine"].map(String::from).to_vec();
+        let got = n.don_claim_due(&t.don, &mut rec);
+        assert_eq!(got, vec![("agheel".to_string(), vec![Grant::Line2(Element::Fire, 1)]), ("leonine".to_string(), vec![Grant::Line2(Element::Water, 1)]), ("mimic_tear".to_string(), vec![Grant::Line2(Element::Blizzard, 1), Grant::Attunement(Element::Blizzard)])]);
     }
 
     #[test]
