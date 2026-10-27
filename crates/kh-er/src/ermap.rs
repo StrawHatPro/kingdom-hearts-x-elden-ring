@@ -448,7 +448,7 @@ const OWN_ANIM_DEFAULTS: [(i32, i32); 7] = [(60071, 60071), (26011, 26011), (680
 impl Default for Params {
     fn default() -> Params {
         Params {
-            out_scale: 12.0, // (2026-10-27) = the sheet's damage.out.scale (was 7)
+            out_scale: 8.0, // (2026-10-28) = the sheet's damage.out.scale (was 7, then 12 on 2026-10-27)
             in_scale: 1.0,
             blow_share: 0.25,
             min_share: 0.004,
@@ -776,7 +776,7 @@ mod tests {
     #[test]
     fn damage_out_is_one_scale() {
         let p = Params { out_scale: 2.5, ..Params::default() };
-        assert_eq!(Params::default().out_scale, 12.0);
+        assert_eq!(Params::default().out_scale, 8.0);
         assert_eq!(p.damage_out(100.0), 250);
         assert_eq!(p.damage_out(0.1), 1);
         assert_eq!(p.damage_out(0.0), 0);
@@ -787,7 +787,7 @@ mod tests {
     /// max HP 2949 (it had 2246 left). Before: 182 asked a bullet, 4368 in all (the game took 2038).
     #[test]
     fn a_shotlock_is_scaled_and_capped_per_target() {
-        // (the measured case at the conversion of that day, x7; the sheet is x12 since 2026-10-27)
+        // (the measured case at the conversion of that day, x7; the sheet is x12 since 2026-10-27, x8 since 2026-10-28)
         let p = Params { out_scale: 7.0, ..Params::default() };
         assert_eq!(p.shotlock, ShotlockRules::DEFAULT);
         let mut ledger = ShotlockLedger::new();

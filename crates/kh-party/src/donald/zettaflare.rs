@@ -5946,8 +5946,9 @@ mod tests {
         // (damage.out.scale; the user: "allow Zettaflare to be scaled up"); (DONLINE2, the user 2026-10-27: "make Donald's
         // starting magic 18 at level 1": magic_ratio 1.2, Magic 80 at level 99: 3220 KH = 38640, was 40572 at 84; its power kept)
         assert_eq!(l99.magic(), crate::balance::base_stats(crate::Chara::Donald, 99).1 + 4);
-        let er = (kh(&l99) * 12.0).round();
-        assert!((er - 38640.0).abs() <= 12.0, "level 99: {} KH = {er} Elden Ring HP", kh(&l99));
+        // (2026-10-28) the host's conversion x8 (the user: "lower the scale to 8"): 3220 KH = 25760
+        let er = (kh(&l99) * 8.0).round();
+        assert!((er - 25760.0).abs() <= 8.0, "level 99: {} KH = {er} Elden Ring HP", kh(&l99));
         let l1 = crate::FriendStatus::new(crate::Chara::Donald, 0);
         assert!(kh(&l1) < kh(&l99) * 0.5, "level 1 scales down by Magic ({} KH)", kh(&l1));
         // the beam's own hit through the party route, on the rig's level-99 Donald: that number, on a plain and a guarded target

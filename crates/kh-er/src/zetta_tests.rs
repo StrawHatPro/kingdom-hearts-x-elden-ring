@@ -41,7 +41,8 @@ fn zetta_a_forced_hit_lands_in_full_and_level_99_kills_malenia() {
     let magic = kh_party::balance::base_stats(kh_party::Chara::Donald, 99).1 + 4;
     assert_eq!(magic, 80);
     let full = p.damage_out(3220.0);
-    assert!((full - 38640).abs() <= 12, "{full}");
+    // (2026-10-28) the conversion x8 (the user: "lower the scale to 8"): 3220 KH = 25,760
+    assert!((full - 25760).abs() <= 8, "{full}");
     // first hit on her: nothing measured yet, the bullet asks the full number; she keeps 17.3 % (the user's run)
     let ask = crate::targets::forced_ask(full, 0.0);
     assert_eq!(ask, full);
