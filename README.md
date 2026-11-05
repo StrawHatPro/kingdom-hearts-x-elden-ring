@@ -29,7 +29,7 @@ needs from them, on your PC.
 ## What you need
 
 - **ELDEN RING** on PC (Steam), version **1.17.2** and DLC.
-- **KINGDOM HEARTS III + Re Mind** on PC (Steam or Epic).
+- **KINGDOM HEARTS III + Re Mind** on PC (STEAM ONLY).
 - **me3 (Mod Engine 3)**, version **0.13.0 or newer**: the tool that loads the mod. Get it from
   [its releases page](https://github.com/garyttierney/me3/releases).
 - About **80 GB of free disk space** while the setup runs.
@@ -133,7 +133,7 @@ but can't build the mod's files there, and tells you to use the Linux version).
    `curl --proto '=https' --tlsv1.2 -sSfL https://github.com/garyttierney/me3/releases/download/v0.13.0/installer.sh | sh`
    It puts `me3` in `~/.local/bin`.
 4. **Run the setup:** open a terminal in the mod's folder and run `./setup-linux`. It finds your games by itself (Steam,
-   or Epic through Heroic or Lutris). If it can't, it asks you for the folder. Like on Windows, the first run takes about
+   or Steam through Heroic or Lutris). If it can't, it asks you for the folder. Like on Windows, the first run takes about
    30 minutes. Have other KH3 mods installed? Take them out first, as "Have other KH3 mods installed?" under Install
    says: on Linux the folder is `KINGDOM HEARTS III/Content/Paks/~mods` in KH3's Steam folder
    (`steamapps/common/KINGDOM HEARTS III`), and you run `./setup-linux` again afterwards.
