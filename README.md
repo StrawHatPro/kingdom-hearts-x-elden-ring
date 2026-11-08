@@ -35,10 +35,10 @@ needs from them, on your PC.
 - **Mimic Tear bosses:** both Mimic Tear fights copy your party leader, with their full moveset, and their own music.
 
 ### Progression, synthesis and shops
-- Levels, abilities and **munny**: Elden Ring's text says Munny instead of runes.
-- **KH3 save points** at the sites of grace.
+- **Levels, abilities and munny**: Progress how you would as if you were playing Kingdom Hearts 3!
+- **KH3 save points** replace the sites of grace.
 - **Synthesis:** a Moogle at the Roundtable Hold synthesizes items from the materials you find, with KH3's Collector's
-  Goals. The smiths power up your Keyblades (KH3's Keyblade Forge).
+  Goals. The smiths power up your Keyblades.
 - **Journey to the Erdtree:** 20 boss milestones that unlock new synthesis recipes, with a final reward for the end.
 - **Merchants** sell KH items, and their stock grows as you progress.
 
@@ -54,7 +54,7 @@ needs from them, on your PC.
 - **Spiritsprings:** the leader jumps as high as Torrent does, and nearby allies jump up after them.
 - **Gestures:** quest events that need a gesture show a prompt for it once you know the gesture.
 - **Grabs** use KH3's caught animations. Sora opens chests with his KH3 animation.
-- **Its own save file**, so your normal Elden Ring save is never touched (see "Your saves").
+- **Its own save files**, so your normal Elden Ring saves are never touched (see "Your saves").
 
 ### Controls
 - **Made for a controller**, with KH3's Xbox layout. Keyboard and mouse use KH3's PC keys.
