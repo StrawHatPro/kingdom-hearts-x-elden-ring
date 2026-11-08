@@ -137,19 +137,22 @@ To back up your mod game, or move it to another PC, copy both.
 ## Updating
 
 1. Close Elden Ring.
-2. Unzip the new version to the same place as before, so its `kingdom-hearts-x-elden-ring` folder lands on top of
+2. To be safe, back up your mod game: copy `er\saves` and `KHSora.sl2` somewhere safe (see "Your saves").
+3. Unzip the new version to the same place as before, so its `kingdom-hearts-x-elden-ring` folder lands on top of
    your mod folder. Say yes when Windows asks to replace files. Your saves (`er\saves`), your settings and the files the
    setup built are kept, because they aren't in the zip.
-3. Double-click `setup.exe` again. **Always do this after updating**, even for a small update: the mod won't work
-   properly until the setup has finished.
+4. Double-click `setup.exe` again. **Always do this after updating**, even for a small update: the mod won't work
+   properly until the setup says **Ready**.
+5. Play with `er\play.bat`, as before.
 
-**Do I have to rebuild the assets?** The setup decides for you. It checks what the new version changed and rebuilds only
-that. For most updates that takes a few minutes. When an update changes how the mod's files are made, the setup rebuilds
-all of them, just like the first install: it takes as long as the first install and needs about 85 GB of free disk space
-while it runs. Each release's notes say which kind of update it is.
-
-**Updating to 0.1.3 from an earlier version is a full rebuild.** Running `setup.exe` rebuilds all the mod's asset files
-from your KH3 install, like the first install did.
+**Do I have to rebuild the assets?** The setup decides for you: it checks what the new version changed and rebuilds only
+that. Each release's notes say which kind of update it is.
+- **From 0.1.3 to 0.2.0:** no rebuild. The setup checks your files, finds them up to date and says **Ready** within a
+  few minutes.
+- **From 0.1.2 or older:** a full rebuild. The setup builds all the mod's asset files again from your KH3 install, like
+  the first install: about an hour, and about 85 GB of free disk space while it runs. Your saves and settings are kept.
+  The first time you visit the Moogle, your old Photo Missions turn into Journey to the Erdtree: every boss you have
+  already beaten counts.
 
 ## Uninstalling
 
@@ -182,10 +185,11 @@ but can't build the mod's files there, and tells you to use the Linux version).
    (`steamapps/common/KINGDOM HEARTS III`), and you run `./setup-linux` again afterwards.
 5. **Play:** run `er/play.sh`. Steam must be running. me3 starts Elden Ring with the same Proton version Steam uses for it.
 
-**Updating on Linux:** unpack the new version's tarball into the same place, so it lands on top of your mod folder (your
-saves, settings and the files the setup built are kept), then run `./setup-linux` again. Always do this after updating.
-As on Windows, it rebuilds only what the new version changed, usually in a few minutes; when an update changes how the
-mod's files are made, it rebuilds all of them like the first install. **Updating to 0.1.3 is a full rebuild.**
+**Updating on Linux:** close Elden Ring, back up `er/saves` and `KHSora.sl2`, unpack the new version's tarball into the
+same place so it lands on top of your mod folder (your saves, settings and the files the setup built are kept), run
+`./setup-linux` again until it says **Ready**, then play with `er/play.sh`. Always run the setup after updating. As on
+Windows: **from 0.1.3 to 0.2.0** there is no rebuild (a few minutes); **from 0.1.2 or older** it rebuilds all the asset
+files like the first install (about an hour, about 85 GB free).
 
 The mod's save file `KHSora.sl2` is in Elden Ring's Proton folder:
 `steamapps/compatdata/1245620/pfx/drive_c/users/steamuser/AppData/Roaming/EldenRing/<your id>/`.
