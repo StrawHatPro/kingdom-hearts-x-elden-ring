@@ -32,8 +32,7 @@ needs from them, on your PC.
 ### Bosses
 - **KH3 rewards from Elden Ring bosses**: abilities, spells and items.
 - **Revenge:** like in KH3, bosses that take too many hits break out of your combo and start their own.
-- **Mimic Tear bosses:** both Mimic Tear fights copy your party leader, with their full moveset, and take on the whole
-  party, with their own music.
+- **Mimic Tear bosses:** both Mimic Tear fights copy your party leader, with their full moveset, and their own music.
 
 ### Progression, synthesis and shops
 - Levels, abilities and **munny**: Elden Ring's text says Munny instead of runes.
