@@ -21,7 +21,6 @@ use kh_anim::Trs;
 use kh_er_render::{Body, Camera, FrameInput, Options, Weapon};
 use windows::core::{w, Interface};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
@@ -81,25 +80,32 @@ fn main() {
 
     // SAFETY: plain Win32 / Direct3D 12 object creation and use on one thread.
     unsafe {
-        let mut debug: Option<ID3D12Debug> = None;
-        let debug_layer = D3D12GetDebugInterface(&mut debug).is_ok() && debug.is_some() && !args.iter().any(|a| a == "--no-debug");
-        if debug_layer {
-            debug.as_ref().unwrap().EnableDebugLayer();
-        }
-        println!("standalone: debug layer {}", if debug_layer { "ON" } else { "off (not installed or --no-debug)" });
+        // (GPU-VALIDATE) the debug layer as before (on unless --no-debug; KH_D3D12_DEBUG=1 adds GPU-based validation), WARP by
+        // KH_D3D12_WARP=1; every message into KH_D3D12_LOG
+        let mut gpu_mode = kh_er_render::gpudebug::Mode::from_env();
+        gpu_mode.layer = !args.iter().any(|a| a == "--no-debug");
+        gpu_mode.gbv &= gpu_mode.layer;
+        let (factory, device) = match kh_er_render::gpudebug::create_device_with(&gpu_mode) {
+            Ok(d) => d,
+            Err(e) => {
+                println!("standalone: no debug layer ({e}): plain device");
+                gpu_mode.layer = false;
+                gpu_mode.gbv = false;
+                kh_er_render::gpudebug::create_device_with(&gpu_mode).unwrap()
+            }
+        };
+        println!("standalone: device: {} on {}", gpu_mode.describe(), kh_er_render::gpudebug::adapter_name(&factory, &device));
         let instance = GetModuleHandleW(None).unwrap();
         let class = WNDCLASSW { lpfnWndProc: Some(window_proc), hInstance: instance.into(), lpszClassName: w!("kh-er-render-standalone"), ..Default::default() };
         RegisterClassW(&class);
         let window = CreateWindowExW(WINDOW_EX_STYLE(0), w!("kh-er-render-standalone"), w!("kh-er-render standalone"), WS_OVERLAPPEDWINDOW | WS_VISIBLE, 60, 60, WIDTH as i32 + 16, HEIGHT as i32 + 39, None, None, Some(instance.into()), None).unwrap();
-        let factory: IDXGIFactory2 = CreateDXGIFactory1().unwrap();
-        let mut device: Option<ID3D12Device> = None;
-        D3D12CreateDevice(None, D3D_FEATURE_LEVEL_11_0, &mut device).unwrap();
-        let device = device.unwrap();
         let queue: ID3D12CommandQueue = device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC { Type: D3D12_COMMAND_LIST_TYPE_DIRECT, ..Default::default() }).unwrap();
+        kh_er_render::gpudebug::name(&queue, "harness:standalone:queue");
         let desc = DXGI_SWAP_CHAIN_DESC1 { Width: WIDTH, Height: HEIGHT, Format: DXGI_FORMAT_R8G8B8A8_UNORM, SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 }, BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT, BufferCount: 3, SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, ..Default::default() };
         let swap: IDXGISwapChain3 = factory.CreateSwapChainForHwnd(&queue, window, &desc, None, None).unwrap().cast().unwrap();
         let allocator: ID3D12CommandAllocator = device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT).unwrap();
         let list: ID3D12GraphicsCommandList = device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None).unwrap();
+        kh_er_render::gpudebug::name(&list, "harness:standalone:list");
         list.Close().unwrap();
         let fence: ID3D12Fence = device.CreateFence(0, D3D12_FENCE_FLAG_NONE).unwrap();
         let mut fence_value = 0u64;
@@ -291,6 +297,11 @@ fn main() {
         }
         println!("standalone: {}", kh_er_render::outfit::sim_report());
         kh_er_render::shutdown();
+        // (GPU-VALIDATE) the validation summary (nothing unless KH_D3D12_DEBUG is set); KH_D3D12_STRICT=1: exit 3 on any error
+        let gpu = kh_er_render::gpudebug::finish("standalone");
+        if gpu_mode.layer && std::env::var("KH_D3D12_STRICT").is_ok_and(|v| v == "1") && (gpu.errors + gpu.corruption > 0 || gpu.removed.is_some()) {
+            std::process::exit(3);
+        }
         println!("standalone: done");
     }
 }

@@ -467,8 +467,11 @@ impl State {
                 let mark = texture(f.device, (f.width, f.height), MARK, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_RENDER_TARGET, Some(zero(MARK)))?;
                 let slots = 23u32;
                 let srv: ID3D12DescriptorHeap = f.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, NumDescriptors: slots, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, NodeMask: 0 })?;
+                crate::gpudebug::name(&srv, "kh:hair91:srv");
                 let rtv: ID3D12DescriptorHeap = f.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 5, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 })?;
+                crate::gpudebug::name(&rtv, "kh:hair91:rtv");
                 let dsv: ID3D12DescriptorHeap = f.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV, NumDescriptors: 2, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 })?;
+                crate::gpudebug::name(&dsv, "kh:hair91:dsv");
                 let ss = f.device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) as usize;
                 let rs = f.device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) as usize;
                 let s0 = srv.GetCPUDescriptorHandleForHeapStart();

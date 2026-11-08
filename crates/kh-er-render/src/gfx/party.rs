@@ -1618,6 +1618,7 @@ impl PicKit {
         for _ in 0..3 {
             let allocator: ID3D12CommandAllocator = device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)?;
             let list: ID3D12GraphicsCommandList = device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)?;
+            crate::gpudebug::name(&list, "kh:gfx/party:list");
             list.Close()?;
             let upload = committed(device, D3D12_HEAP_TYPE_UPLOAD, &buffer_desc(UPLOAD_BYTES as u64), D3D12_RESOURCE_STATE_GENERIC_READ, None)?;
             let mut at: *mut c_void = std::ptr::null_mut();
@@ -1625,7 +1626,9 @@ impl PicKit {
             slots.push((allocator, list, upload, at as *mut u8, 0u64));
         }
         let rtv: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 1, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 })?;
+        crate::gpudebug::name(&rtv, "kh:gfx/party:rtv");
         let dsv: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV, NumDescriptors: 1, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 })?;
+        crate::gpudebug::name(&dsv, "kh:gfx/party:dsv");
         Ok(PicKit { slots, rtv, dsv, target: None, khs: None })
     }
 

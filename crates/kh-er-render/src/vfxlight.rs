@@ -326,6 +326,7 @@ impl LitKit {
         let rows_desc = D3D12_RESOURCE_DESC { Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D, Width: ROWS_TEXELS as u64, Height: 1, DepthOrArraySize: 1, MipLevels: 1, Format: DXGI_FORMAT_R32G32B32A32_UINT, SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 }, Flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, ..Default::default() };
         let rows = committed(device, D3D12_HEAP_TYPE_DEFAULT, &rows_desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE).map_err(|e| text("lit rows", e))?;
         let rows_rtv: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 1, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| text("lit rows rtv", e))?;
+        crate::gpudebug::name(&rows_rtv, "kh:vfxlight:rows_rtv");
         device.CreateRenderTargetView(&rows, None, rows_rtv.GetCPUDescriptorHandleForHeapStart());
         let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
         let mut total = 0u64;

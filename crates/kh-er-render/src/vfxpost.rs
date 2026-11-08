@@ -250,6 +250,7 @@ impl PostKit {
             }
         }
         let rtv: ID3D12DescriptorHeap = gpu.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| format!("rtv heap: {e}"))?;
+        crate::gpudebug::name(&rtv, "kh:vfxpost:rtv");
         let rtv_size = gpu.device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) as usize;
         Ok(PostKit { device: gpu.device.as_raw() as usize, formats: gpu.formats, states, tested, rtv, rtv_size, targets: None, decal_frame: 0 })
     }

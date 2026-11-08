@@ -767,7 +767,10 @@ pub fn on_execute(queue: usize, count: u32, lists: *const *mut c_void) -> Submis
         // (RSF2 round 14) the first list of the submission that rebuilt the half-size depth: the effects' split
         if let (Some(h), 0, Some((scene, ..))) = (half_here, out.effects_split, depth) {
             let planes = |r: usize| state.resources.get(&r).map(|i| [i.states.first().copied().unwrap_or(0), i.states.get(1).copied().unwrap_or(0)]).unwrap_or([0; 2]);
-            if state.resources.get(&h).is_some_and(|i| i.mismatch != state.frame) && !open_splits.contains(&h) {
+            // (GPU-VALIDATE) both depths as the other passes require them: their record not contradicted in this frame, no split
+            // barrier of the game open on them, one mip and one slice (the planes are subresources 0 and 1)
+            let sound = |r: usize| state.resources.get(&r).is_some_and(|i| i.mismatch != state.frame && i.mips == 1 && i.layers == 1) && !open_splits.contains(&r);
+            if sound(h) && sound(scene) {
                 out.effects_split = k + 1;
                 out.effects_half = Some((h, planes(h), scene, planes(scene)));
             }
@@ -1000,6 +1003,25 @@ pub fn states_now(pointer: usize) -> Option<[i32; 2]> {
     let info = state.resources.get(&pointer).filter(|i| i.seen == state.frame && i.mismatch != state.frame)?;
     let first = *info.states.first()?;
     Some([first, info.states.get(1).copied().unwrap_or(first)])
+}
+
+/// (GPU-VALIDATE) The state of one subresource of a resource of the game as of the latest executed list (None: not tracked, or
+/// a barrier of the game contradicted the record in this frame).
+pub fn subresource_state(pointer: usize, subresource: u32) -> Option<i32> {
+    let guard = STATE.lock().ok()?;
+    let state = guard.as_ref()?;
+    let info = state.resources.get(&pointer).filter(|i| i.mismatch != state.frame)?;
+    info.states.get(subresource as usize).copied()
+}
+
+/// (GPU-VALIDATE) The one state every subresource of a resource of the game is in (None: not tracked, contradicted in this frame,
+/// or its subresources differ): a whole-resource barrier may name it as its "before".
+pub fn uniform_state(pointer: usize) -> Option<i32> {
+    let guard = STATE.lock().ok()?;
+    let state = guard.as_ref()?;
+    let info = state.resources.get(&pointer).filter(|i| i.mismatch != state.frame)?;
+    let first = *info.states.first()?;
+    info.states.iter().all(|s| *s == first).then_some(first)
 }
 
 /// HARDENING: everything learnt about the game's resources is dropped (the device was lost).

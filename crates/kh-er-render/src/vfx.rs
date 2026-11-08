@@ -1154,6 +1154,7 @@ impl FogKit {
         let rows_desc = D3D12_RESOURCE_DESC { Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D, Width: FOG_TEXELS as u64, Height: 1, DepthOrArraySize: 1, MipLevels: 1, Format: DXGI_FORMAT_R32G32B32A32_UINT, SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 }, Flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, ..Default::default() };
         let rows = committed(device, D3D12_HEAP_TYPE_DEFAULT, &rows_desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE).map_err(|e| text("fog rows", e))?;
         let rows_rtv: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 1, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| text("fog rows rtv", e))?;
+        crate::gpudebug::name(&rows_rtv, "kh:vfx:rows_rtv");
         device.CreateRenderTargetView(&rows, None, rows_rtv.GetCPUDescriptorHandleForHeapStart());
         let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
         let mut total = 0u64;
@@ -1694,7 +1695,10 @@ impl Uploader {
         let to = D3D12_TEXTURE_COPY_LOCATION { pResource: std::mem::transmute_copy(&texture), Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 } };
         let from = D3D12_TEXTURE_COPY_LOCATION { pResource: std::mem::transmute_copy(&staging), Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { PlacedFootprint: footprint } };
         self.list.CopyTextureRegion(&to, 0, 0, 0, &from, None);
-        self.list.ResourceBarrier(&[transition(&texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)]);
+        // (GPU-VALIDATE) readable by EVERY shader stage: some effect materials sample their textures in the vertex stage (the
+        // effect root table is visible to all stages); PIXEL_SHADER_RESOURCE alone made those reads invalid (GPU-based validation
+        // 1358 in the hero-light run with Crystal Snow: a 128 x 128 effect texture read by a vertex shader)
+        self.list.ResourceBarrier(&[transition(&texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)]);
         self.list.Close().map_err(|e| text("Close", e))?;
         self.queue.ExecuteCommandLists(&[Some(self.list.cast::<ID3D12CommandList>().map_err(|e| text("cast", e))?)]);
         self.value += 1;
@@ -1736,6 +1740,7 @@ impl Gpu {
 
         // ---- the samplers: every pair of address modes, then the scene's
         let sampler_heap: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, NumDescriptors: 2048, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, NodeMask: 0 }).map_err(|e| text("sampler heap", e))?;
+        crate::gpudebug::name(&sampler_heap, "kh:vfx:sampler_heap");
         let sampler_size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER) as usize;
         let sampler_start = sampler_heap.GetCPUDescriptorHandleForHeapStart();
         let modes = [D3D12_TEXTURE_ADDRESS_MODE_WRAP, D3D12_TEXTURE_ADDRESS_MODE_CLAMP, D3D12_TEXTURE_ADDRESS_MODE_MIRROR];
@@ -1746,8 +1751,10 @@ impl Gpu {
             device.CreateSampler(&desc, D3D12_CPU_DESCRIPTOR_HANDLE { ptr: sampler_start.ptr + k * sampler_size });
         }
         let srv_heap: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, NumDescriptors: (MAX_MATERIALS * MATERIAL_TEXTURES + FRAME_SLOTS * FRAME_VIEWS /* (PARTY-NATIVE) */ + post::POST_DESCRIPTORS /* (VFXR) */) as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, NodeMask: 0 }).map_err(|e| text("srv heap", e))?;
+        crate::gpudebug::name(&srv_heap, "kh:vfx:srv_heap");
         let srv_size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) as usize;
         let dsv_heap: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV, NumDescriptors: FRAME_SLOTS as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| text("dsv heap", e))?;
+        crate::gpudebug::name(&dsv_heap, "kh:vfx:dsv_heap");
         let dsv_size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV) as usize;
         let queue: ID3D12CommandQueue = device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC { Type: D3D12_COMMAND_LIST_TYPE_DIRECT, ..Default::default() }).map_err(|e| text("upload queue", e))?;
         let allocator: ID3D12CommandAllocator = device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT).map_err(|e| text("allocator", e))?;

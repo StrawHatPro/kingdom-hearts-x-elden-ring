@@ -146,7 +146,8 @@ pub unsafe fn handle_of(chr: usize) -> u64 {
     if !crate::game::plausible(chr) {
         return 0;
     }
-    std::ptr::read_unaligned((chr + std::mem::offset_of!(eldenring::cs::ChrIns, field_ins_handle)) as *const u64)
+    // (CRASH 2026-11-08) copied by probe.rs: a word that only looked like a character gives 0, never a fault.
+    crate::probe::word(chr + std::mem::offset_of!(eldenring::cs::ChrIns, field_ins_handle)).map_or(0, |w| w as u64)
 }
 
 /// WHO THIS CHARACTER STANDS IN FOR (None: not ours: an enemy, an NPC, another player, nothing). `live_player`: the main
@@ -248,40 +249,51 @@ fn from_bits(bits: u64) -> eldenring::cs::FieldInsHandle {
     unsafe { std::mem::transmute::<u64, eldenring::cs::FieldInsHandle>(bits) }
 }
 
-/// Every character pointer of the game's sets (conv.rs's walk).
+/// Every character pointer of the game's sets (conv.rs's walk, made fault-proof).
+///
+/// (CRASH 2026-11-08, the user's game at 124 s: an access violation reading 0xbed714f0 here, an entry word that passed
+/// `plausible` but pointed at unmapped memory while the game streamed enemies in.) Nothing the sets point at is followed
+/// directly: a set's header, its entry block and each character's handle are copied by probe.rs (`ReadProcessMemory`),
+/// so a stale, half-written or garbage word is "not read", never a fault. One copy per set, one per character.
 fn each_chr(f: &mut dyn FnMut(usize)) {
     use eldenring::cs::{ChrIns, ChrSet, WorldChrMan};
     use fromsoftware_shared::FromStatic;
-    // SAFETY: game thread; the singleton lives as long as the game; every pointer is checked before it is followed.
-    let Ok(wcm) = (unsafe { WorldChrMan::instance_mut() }) else { return };
-    unsafe fn each<T>(set: &ChrSet<T>, f: &mut dyn FnMut(usize))
-    where
-        T: fromsoftware_shared::Subclass<ChrIns> + 'static,
-    {
-        let entries = crate::word!(set.entries);
-        let capacity = set.capacity as usize;
+    const CAPACITY: usize = std::mem::offset_of!(ChrSet<ChrIns>, capacity);
+    const ENTRIES: usize = std::mem::offset_of!(ChrSet<ChrIns>, entries);
+    fn walk(set: usize, buf: &mut Vec<u8>, f: &mut dyn FnMut(usize)) {
+        let (Some(capacity), Some(entries)) = (crate::probe::u32_at(set + CAPACITY), crate::probe::word(set + ENTRIES)) else {
+            return;
+        };
+        let capacity = capacity as usize;
         if !crate::game::plausible(entries) || capacity == 0 || capacity > 8192 {
             return;
         }
-        for k in 0..capacity {
-            let p = std::ptr::read_unaligned((entries + k * 16) as *const usize);
+        buf.clear();
+        buf.resize(capacity * 16, 0);
+        if !crate::probe::read(entries, buf) {
+            return;
+        }
+        let (entries, _) = buf.as_chunks::<16>();
+        for entry in entries {
+            let p = entry.first_chunk::<8>().map_or(0, |w| usize::from_le_bytes(*w));
             if crate::game::plausible(p) {
                 f(p);
             }
         }
     }
-    // SAFETY: as above.
-    unsafe {
-        each(&wcm.summon_buddy_chr_set, f);
-        each(&wcm.debug_chr_set, f);
-        for k in 0..wcm.chr_sets.len() {
-            let w = crate::word!(wcm.chr_sets[k]);
-            if crate::game::plausible(w) {
-                each(&*(w as *const ChrSet<ChrIns>), f);
-            }
+    // SAFETY: game thread; the singleton lives as long as the game. Only addresses inside it are taken here; every read
+    // past it goes through probe.rs.
+    let Ok(wcm) = (unsafe { WorldChrMan::instance_mut() }) else { return };
+    let mut buf = Vec::new();
+    walk(std::ptr::addr_of!(wcm.summon_buddy_chr_set) as usize, &mut buf, f);
+    walk(std::ptr::addr_of!(wcm.debug_chr_set) as usize, &mut buf, f);
+    for k in 0..wcm.chr_sets.len() {
+        let w = crate::word!(wcm.chr_sets[k]);
+        if crate::game::plausible(w) {
+            walk(w, &mut buf, f);
         }
-        each(&wcm.open_field_chr_set.base, f);
     }
+    walk(std::ptr::addr_of!(wcm.open_field_chr_set.base) as usize, &mut buf, f);
 }
 
 #[cfg(test)]

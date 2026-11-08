@@ -556,6 +556,8 @@ struct CensusCx<'a> {
     frame: u64,
     target: &'a ID3D12Resource,
     geo: &'a ID3D12Resource,
+    /// (GPU-VALIDATE) bound with the census heap (no root table left pointing into an unset heap)
+    sampler_heap: &'a ID3D12DescriptorHeap,
     bx: [u32; 4],
     width: u32,
     height: u32,
@@ -568,7 +570,7 @@ struct CensusCx<'a> {
 /// # Safety
 /// `list` is open with `root` set; `target` and `geo` alive; `census_before` recorded the copy in this list.
 unsafe fn census_count(x: &CensusCx, c: &mut HyCensus) {
-    let CensusCx { device, list, slot, frame, target, geo, bx, width, height } = *x;
+    let CensusCx { device, list, slot, frame, target, geo, sampler_heap, bx, width, height } = *x;
     let Some((_, before)) = c.before.as_ref() else { return };
     let size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) as usize;
     let cpu = c.heap.GetCPUDescriptorHandleForHeapStart().ptr + slot * SLOT_TEXTURES * size;
@@ -578,7 +580,8 @@ unsafe fn census_count(x: &CensusCx, c: &mut HyCensus) {
     device.CreateShaderResourceView(before, Some(&view(format)), D3D12_CPU_DESCRIPTOR_HANDLE { ptr: cpu + 12 * size });
     device.CreateShaderResourceView(geo, Some(&view(DXGI_FORMAT_R16G16B16A16_FLOAT)), D3D12_CPU_DESCRIPTOR_HANDLE { ptr: cpu + 13 * size });
     list.ResourceBarrier(&[transition(target, 0, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)]);
-    list.SetDescriptorHeaps(&[Some(c.heap.clone())]);
+    list.SetDescriptorHeaps(&[Some(c.heap.clone()), Some(sampler_heap.clone())]);
+    list.SetGraphicsRootDescriptorTable(4, sampler_heap.GetGPUDescriptorHandleForHeapStart());
     list.SetGraphicsRootDescriptorTable(3, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: c.heap.GetGPUDescriptorHandleForHeapStart().ptr + (slot * SLOT_TEXTURES * size) as u64 });
     list.OMSetRenderTargets(0, None, false, None);
     list.RSSetViewports(&[D3D12_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: width as f32, Height: height as f32, MinDepth: 0.0, MaxDepth: 1.0 }]);
@@ -1010,6 +1013,7 @@ pub fn worker() {
                         Some((d, q)) if *d == device.as_raw() as usize => q.clone(),
                         _ => {
                             let q: ID3D12CommandQueue = device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC { Type: D3D12_COMMAND_LIST_TYPE_DIRECT, ..Default::default() }).map_err(|e| format!("CreateCommandQueue: {e}"))?;
+                            crate::gpudebug::name(&q, "kh:upload queue");
                             upload_queue = Some((device.as_raw() as usize, q.clone()));
                             q
                         }
@@ -1641,6 +1645,7 @@ unsafe fn ensure_capture(device: &ID3D12Device, root: &ID3D12RootSignature, hy: 
         // (RSF round 19) + a table per probe level (its level below alone at t9)
         let tables = FRAME_SLOTS + HY_PROBE_LEVELS;
         let inputs: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, NumDescriptors: (tables * SLOT_TEXTURES) as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, NodeMask: 0 }).map_err(|e| format!("the capture's input heap: {e}"))?;
+        crate::gpudebug::name(&inputs, "kh:gfx:inputs");
         // (every entry a valid view: null views of a 2-D texture until the frame writes its five)
         let size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) as usize;
         let null = D3D12_SHADER_RESOURCE_VIEW_DESC { Format: DXGI_FORMAT_R8G8B8A8_UNORM, ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D, Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 { Texture2D: D3D12_TEX2D_SRV { MostDetailedMip: 0, MipLevels: 1, PlaneSlice: 0, ResourceMinLODClamp: 0.0 } } };
@@ -1653,6 +1658,7 @@ unsafe fn ensure_capture(device: &ID3D12Device, root: &ID3D12RootSignature, hy: 
             device.CreateShaderResourceView(None, Some(&null_array), D3D12_CPU_DESCRIPTOR_HANDLE { ptr: inputs.GetCPUDescriptorHandleForHeapStart().ptr + (t * SLOT_TEXTURES + 9) * size });
         }
         let rtv: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 2, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| format!("the capture's view heap: {e}"))?;
+        crate::gpudebug::name(&rtv, "kh:gfx:rtv");
         let rtv_size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) as usize;
         device.CreateRenderTargetView(&light, None, rtv.GetCPUDescriptorHandleForHeapStart());
         device.CreateRenderTargetView(&geo, None, D3D12_CPU_DESCRIPTOR_HANDLE { ptr: rtv.GetCPUDescriptorHandleForHeapStart().ptr + rtv_size });
@@ -1681,6 +1687,7 @@ unsafe fn ensure_capture(device: &ID3D12Device, root: &ID3D12RootSignature, hy: 
         let pso: ID3D12PipelineState = device.CreateGraphicsPipelineState(&desc).map_err(|e| format!("the capture's pipeline state: {e}"))?;
         // (RSF2 round 11) the G-buffer's targets 3 / 4 cleared under the KH characters: not fatal (without the file: as before)
         let gb_rtv: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: (2 * FRAME_SLOTS) as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| format!("the G-buffer clear's view heap: {e}"))?;
+        crate::gpudebug::name(&gb_rtv, "kh:gfx:gb_rtv");
         let gb_pso = match std::fs::read(dir.join("hygb.ps.dxil")) {
             Ok(gb_pixel) => {
                 let mut gb_desc: std::mem::ManuallyDrop<D3D12_GRAPHICS_PIPELINE_STATE_DESC> = std::mem::ManuallyDrop::new(std::ptr::read(&desc));
@@ -1716,6 +1723,7 @@ unsafe fn ensure_capture(device: &ID3D12Device, root: &ID3D12RootSignature, hy: 
             let pclear = D3D12_CLEAR_VALUE { Format: pf, Anonymous: D3D12_CLEAR_VALUE_0 { Color: [0.0; 4] } };
             let tex = committed(device, D3D12_HEAP_TYPE_DEFAULT, &texture_desc(w0, h0, HY_PROBE_SLICES as u16, HY_PROBE_LEVELS as u16, pf, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, Some(&pclear)).map_err(|e| format!("the probes: {e}"))?;
             let prtv: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: (HY_PROBE_SLICES * HY_PROBE_LEVELS) as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| format!("the probes' view heap: {e}"))?;
+            crate::gpudebug::name(&prtv, "kh:gfx:prtv");
             for l in 0..HY_PROBE_LEVELS {
                 for k in 0..HY_PROBE_SLICES {
                     let view = D3D12_RENDER_TARGET_VIEW_DESC { Format: pf, ViewDimension: D3D12_RTV_DIMENSION_TEXTURE2DARRAY, Anonymous: D3D12_RENDER_TARGET_VIEW_DESC_0 { Texture2DArray: D3D12_TEX2D_ARRAY_RTV { MipSlice: l as u32, FirstArraySlice: k as u32, ArraySize: 1, PlaneSlice: 0 } } };
@@ -1764,6 +1772,7 @@ unsafe fn ensure_capture(device: &ID3D12Device, root: &ID3D12RootSignature, hy: 
                 // (a bitwise copy: the root signature pointer is the caller's, never released here)
                 let pso = device.CreateGraphicsPipelineState::<ID3D12PipelineState>(&*c_desc)?;
                 let heap: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, NumDescriptors: (FRAME_SLOTS * SLOT_TEXTURES) as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, NodeMask: 0 })?;
+                crate::gpudebug::name(&heap, "kh:gfx:heap");
                 for k in 0..FRAME_SLOTS * SLOT_TEXTURES {
                     device.CreateShaderResourceView(None, Some(&null), D3D12_CPU_DESCRIPTOR_HANDLE { ptr: heap.GetCPUDescriptorHandleForHeapStart().ptr + k * size });
                 }
@@ -1814,6 +1823,9 @@ struct CaptureFrame<'a> {
     inputs: [usize; 8],
     kh_maps: usize,
     white: &'a ID3D12Resource,
+    /// (GPU-VALIDATE) the frame's sampler heap: bound with the capture's inputs (a table of the root signature never points into
+    /// a heap that is not set: the debug layer's error 554, undefined on drivers that fetch the bound tables)
+    sampler_heap: &'a ID3D12DescriptorHeap,
     frame_constants: u64,
     bx: [i32; 4],
     /// (ER-NATIVE) the game's specular accumulation (entry 10, R11G11B10; 0 = none: white, never read) and the native mode (the
@@ -1828,7 +1840,7 @@ struct CaptureFrame<'a> {
 /// targets go RENDER_TARGET -> PIXEL_SHADER_RESOURCE (they rest readable for every later draw of the frame, the hair fringe's
 /// at the velocity split included); no barrier on any resource of the game.
 unsafe fn record_capture(device: &ID3D12Device, list: &ID3D12GraphicsCommandList, root: &ID3D12RootSignature, cap: &mut HyCapture, frame: &CaptureFrame) {
-    let CaptureFrame { slot_index, inputs, kh_maps, white, frame_constants, bx, spec, native } = *frame;
+    let CaptureFrame { slot_index, inputs, kh_maps, white, sampler_heap, frame_constants, bx, spec, native } = *frame;
     let size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) as usize;
     let table = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: cap.inputs.GetCPUDescriptorHandleForHeapStart().ptr + slot_index * SLOT_TEXTURES * size };
     // (RSF2 round 15) entry 8: the KH caster maps (a 2D array, R16); none = a null array view (reads 0: no KH caster)
@@ -1886,7 +1898,8 @@ unsafe fn record_capture(device: &ID3D12Device, list: &ID3D12GraphicsCommandList
     let bx = [bx[0].clamp(0, cap.width as i32), bx[1].clamp(0, cap.height as i32), bx[2].clamp(0, cap.width as i32), bx[3].clamp(0, cap.height as i32)];
     list.RSSetScissorRects(&[RECT { left: bx[0], top: bx[1], right: bx[2], bottom: bx[3] }]);
     list.SetGraphicsRootSignature(root);
-    list.SetDescriptorHeaps(&[Some(cap.inputs.clone())]);
+    list.SetDescriptorHeaps(&[Some(cap.inputs.clone()), Some(sampler_heap.clone())]);
+    list.SetGraphicsRootDescriptorTable(4, sampler_heap.GetGPUDescriptorHandleForHeapStart());
     list.SetGraphicsRootConstantBufferView(0, frame_constants);
     list.SetGraphicsRootDescriptorTable(3, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: cap.inputs.GetGPUDescriptorHandleForHeapStart().ptr + (slot_index * SLOT_TEXTURES * size) as u64 });
     list.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -1922,6 +1935,15 @@ unsafe fn record_capture(device: &ID3D12Device, list: &ID3D12GraphicsCommandList
     }
     list.ResourceBarrier(&[transition(&cap.light, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE), transition(&cap.geo, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)]);
     cap.last_box = Some(bx);
+}
+
+/// (GPU-VALIDATE) The planes of a depth format (depth + stencil: 2; depth only: 1), for whole-depth barriers: a barrier on a
+/// subresource that does not exist is undefined (the copies of the shaft mask / late kit had 2 hard-coded).
+pub(crate) fn depth_planes(format: DXGI_FORMAT) -> u32 {
+    match format {
+        DXGI_FORMAT_R32G8X24_TYPELESS | DXGI_FORMAT_D32_FLOAT_S8X24_UINT | DXGI_FORMAT_R24G8_TYPELESS | DXGI_FORMAT_D24_UNORM_S8_UINT => 2,
+        _ => 1,
+    }
 }
 
 /// (RSF2 round 6) The view format of a depth resource's depth plane (None: not a depth format we read).
@@ -2037,6 +2059,7 @@ impl Assets {
         let allocator: ID3D12CommandAllocator = device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT).map_err(|e| text("CreateCommandAllocator", e))?;
         let list: ID3D12GraphicsCommandList = device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None).map_err(|e| text("CreateCommandList", e))?;
         list.Close().map_err(|e| text("Close", e))?;
+        crate::gpudebug::name(&list, "kh:upload");
         let fence: ID3D12Fence = device.CreateFence(0, D3D12_FENCE_FLAG_NONE).map_err(|e| text("CreateFence", e))?;
         let mut fence_value = 0u64;
         let mut texture_bytes = 0u64;
@@ -2377,6 +2400,7 @@ impl Core {
 
         // ---- the samplers: naga's heap of 2048, the first three used
         let sampler_heap: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, NumDescriptors: 2048, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, NodeMask: 0 })?;
+        crate::gpudebug::name(&sampler_heap, "kh:gfx:sampler_heap");
         let sampler_size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER) as usize;
         let sampler_start = sampler_heap.GetCPUDescriptorHandleForHeapStart();
         let sampler = |address: D3D12_TEXTURE_ADDRESS_MODE, filter: D3D12_FILTER, anisotropy: u32| D3D12_SAMPLER_DESC { Filter: filter, AddressU: address, AddressV: address, AddressW: address, MipLODBias: 0.0, MaxAnisotropy: anisotropy, ComparisonFunc: D3D12_COMPARISON_FUNC_NEVER, BorderColor: [0.0; 4], MinLOD: 0.0, MaxLOD: D3D12_FLOAT32_MAX };
@@ -2397,7 +2421,9 @@ impl Core {
         let sampler_index = upload_buffer(&device, std::slice::from_raw_parts(index_words.as_ptr() as *const u8, 16))?;
 
         let rtv_heap: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 3 * FRAME_SLOTS as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 })?;
+        crate::gpudebug::name(&rtv_heap, "kh:gfx:rtv_heap");
         let dsv_heap: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV, NumDescriptors: 1 + FRAME_SLOTS as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 })?;
+        crate::gpudebug::name(&dsv_heap, "kh:gfx:dsv_heap");
         let dsv_size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV) as usize;
         let fence: ID3D12Fence = device.CreateFence(0, D3D12_FENCE_FLAG_NONE)?;
         let mut slots = Vec::new();
@@ -2417,6 +2443,11 @@ impl Core {
             let early_allocator: ID3D12CommandAllocator = device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)?;
             let early_list: ID3D12GraphicsCommandList = device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &early_allocator, None)?;
             early_list.Close()?;
+            // (GPU-VALIDATE) names for the harnesses' debug messages (nothing in the game)
+            for (l, n) in [(&list, "kh:main"), (&velo_list, "kh:velocity"), (&late_list, "kh:late"), (&early_list, "kh:early")] {
+                crate::gpudebug::name(l, n);
+            }
+            crate::gpudebug::name(&upload, "kh:frame upload");
             slots.push(FrameSlot { allocator, list, upload, mapped: at as *mut u8, busy_until: 0, timed: false, readback: None, read_pending: false, velo_allocator, velo_list, late_allocator, late_list, early_allocator, early_list, stencil_rb: None, stencil_taps: Vec::new(), stencil_pending: false });
         }
         // Timestamp queries for the GPU time of our list (optional: without them nothing is measured).
@@ -2722,9 +2753,10 @@ impl Core {
         if let (true, Some((scene_now, view_format)), Some(snap)) = (recomp_now, &scene, early_reads.as_ref()) {
             let (target, depth, snapshot) = (back.as_raw() as usize, scene_now.resource.as_raw() as usize, snap.as_raw() as usize);
             if self.late_kit.as_ref().map(|k| (k.target, k.depth, k.snapshot)) != Some((target, depth, snapshot)) {
+                // (GPU-VALIDATE) the WHOLE old kit (its shader-visible heap and pipelines too, which the lists in flight bind) goes
+                // once the GPU is past them (it was only the two copies: the heap and pipelines were freed in flight)
                 if let Some(old) = self.late_kit.take() {
-                    self.retired.push((self.fence_value, old.saved));
-                    self.retired.push((self.fence_value, old.him));
+                    crate::outfit::retire(Box::new(old));
                 }
                 let depth_view = match scene_now.info.format {
                     DXGI_FORMAT_R32G8X24_TYPELESS | DXGI_FORMAT_D32_FLOAT_S8X24_UINT => Some(DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS),
@@ -2740,6 +2772,7 @@ impl Core {
                     let saved = committed(&self.device, D3D12_HEAP_TYPE_DEFAULT, &colour_desc, D3D12_RESOURCE_STATE_COPY_DEST, None)?;
                     let him = committed(&self.device, D3D12_HEAP_TYPE_DEFAULT, &scene_now.resource.GetDesc(), D3D12_RESOURCE_STATE_COPY_DEST, None)?;
                     let heap: ID3D12DescriptorHeap = self.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, NumDescriptors: SLOT_TEXTURES as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, NodeMask: 0 })?;
+                    crate::gpudebug::name(&heap, "kh:gfx:heap");
                     let size = self.device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) as usize;
                     let at = |k: usize| D3D12_CPU_DESCRIPTOR_HANDLE { ptr: heap.GetCPUDescriptorHandleForHeapStart().ptr + k * size };
                     let dview = D3D12_SHADER_RESOURCE_VIEW_DESC { Format: depth_view, ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D, Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 { Texture2D: D3D12_TEX2D_SRV { MostDetailedMip: 0, MipLevels: 1, PlaneSlice: 0, ResourceMinLODClamp: 0.0 } } };
@@ -3543,7 +3576,11 @@ impl Core {
                 // (HARDENING: the views are written every frame: a resource made again at the same
                 // address, after a resolution change, must not keep a view of the dead one; and only
                 // a target the game transitioned in this frame is taken)
-                let pointer = &(if k == 0 || survey::usable_now(*pointer, width, height) { *pointer } else { 0 });
+                // (GPU-VALIDATE) the scene target (entry 0) only when it rests readable by pixel shaders (its state was only checked
+                // to be no RT / depth write: COPY_SOURCE or NON_PIXEL_SHADER_RESOURCE alone would be read in a wrong state)
+                // (COMMON / PRESENT: implicitly promoted to a read state, which a texture may be)
+                let readable = rest.0 & D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE.0 != 0 || rest.0 == 0;
+                let pointer = &(if (k == 0 && readable) || (k != 0 && survey::usable_now(*pointer, width, height)) { *pointer } else { 0 });
                 let at = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: start.ptr + (probe_table * SLOT_TEXTURES + k) * assets.srv_size };
                 let raw = *pointer as *mut c_void;
                 match ID3D12Resource::from_raw_borrowed(&raw) {
@@ -3712,6 +3749,9 @@ impl Core {
                 let rows = sun_frame.map_or([0.0f32; 24], |s| { let h = crate::hybrid::settings(); crate::hybrid::sun_rows(h.sun_soft, h.sun_bias, &s.viewports) });
                 let at = (frame_constants - slot.upload.GetGPUVirtualAddress()) as usize + (frame.len() - crate::hybrid::BLOCK_FLOATS + crate::hybrid::SUN_ROW * 4) * 4;
                 std::ptr::copy_nonoverlapping(rows.as_ptr() as *const u8, slot.mapped.add(at), rows.len() * 4);
+                // (GPU-VALIDATE) the game's sun atlas only when the game transitioned it in THIS frame into a state pixel shaders may read
+                // (its pointer is from the cast split, up to 40 ms old and not held: a stale or still-written atlas is not read)
+                let sun_frame = sun_frame.filter(|s| survey::states_now(s.atlas).is_some_and(|st| crate::hybrid::readable(st[0])));
                 let sun_inputs = match (sun_frame, kh_depth.as_ref(), sun_kit.as_ref()) {
                     (Some(s), Some((depth, _)), Some(kit)) => [depth.as_raw() as usize, s.atlas, kit.texture.as_raw() as usize],
                     // (RSF round 19) the depth with the KH characters all the same (no sun: hc_blur's reach on their bodies)
@@ -3733,7 +3773,7 @@ impl Core {
                 std::ptr::copy_nonoverlapping(rows.as_ptr() as *const u8, slot.mapped.add(at), rows.len() * 4);
                 let maps_ptr = if maps_row.is_some() { kh_maps.as_ref().map_or(0, |m| m.texture.as_raw() as usize) } else { 0 };
                 KH_MAPS_USED.fetch_add(u32::from(maps_ptr != 0), Ordering::Relaxed);
-                record_capture(device, list, root, cap, &CaptureFrame { slot_index, inputs: [*light, *mask, ordered[0].resource, ordered[1].resource, ordered[2].resource, sun_inputs[0], sun_inputs[1], sun_inputs[2]], kh_maps: maps_ptr, white: &assets.white, frame_constants, bx, spec: hy_spec, native: hy_settings.native });
+                record_capture(device, list, root, cap, &CaptureFrame { slot_index, inputs: [*light, *mask, ordered[0].resource, ordered[1].resource, ordered[2].resource, sun_inputs[0], sun_inputs[1], sun_inputs[2]], kh_maps: maps_ptr, white: &assets.white, sampler_heap, frame_constants, bx, spec: hy_spec, native: hy_settings.native });
                 crate::hybrid::SPEC_FRAMES.fetch_add(u32::from(hy_spec != 0), Ordering::Relaxed);
                 *crate::hybrid::CAPTURE.lock().unwrap_or_else(|e| e.into_inner()) = format!("{}x{} box {:?}, light {}, mask {}", cap.width, cap.height, bx, survey::describe_resource(*light), if *mask == 0 { "(none: white)".to_string() } else { survey::describe_resource(*mask) });
                 true
@@ -4715,6 +4755,7 @@ impl Core {
                 let made = (|| -> windows::core::Result<(ID3D12Resource, ID3D12DescriptorHeap)> {
                     let mask = committed(device, D3D12_HEAP_TYPE_DEFAULT, &desc, D3D12_RESOURCE_STATE_DEPTH_READ | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, None)?;
                     let heap: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV, NumDescriptors: 2, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 })?;
+                    crate::gpudebug::name(&heap, "kh:gfx:heap");
                     let start = heap.GetCPUDescriptorHandleForHeapStart();
                     let view = |flags: D3D12_DSV_FLAGS| D3D12_DEPTH_STENCIL_VIEW_DESC { Format: *dsv_format, ViewDimension: D3D12_DSV_DIMENSION_TEXTURE2D, Flags: flags, Anonymous: D3D12_DEPTH_STENCIL_VIEW_DESC_0 { Texture2D: D3D12_TEX2D_DSV { MipSlice: 0 } } };
                     device.CreateDepthStencilView(&mask, Some(&view(D3D12_DSV_FLAG_NONE)), start);
@@ -4734,7 +4775,7 @@ impl Core {
                 let read_view = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: write_view.ptr + dsv_size };
                 let mut first = vec![transition(mask, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_DEPTH_READ | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST)];
                 let mut then = vec![transition(mask, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_DEPTH_WRITE)];
-                for plane in 0..2u32 {
+                for plane in 0..depth_planes(scene_now.info.format) {
                     first.push(transition(&scene_now.resource, plane, D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_COPY_SOURCE));
                     then.push(transition(&scene_now.resource, plane, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE));
                 }
@@ -4800,6 +4841,7 @@ impl Core {
                             };
                             let state: ID3D12PipelineState = device.CreateGraphicsPipelineState(&pso).ok()?;
                             let heap: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, NumDescriptors: SLOT_TEXTURES as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, NodeMask: 0 }).ok()?;
+                            crate::gpudebug::name(&heap, "kh:gfx:heap");
                             let size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) as usize;
                             let view = D3D12_SHADER_RESOURCE_VIEW_DESC { Format: stencil_view, ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D, Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 { Texture2D: D3D12_TEX2D_SRV { MostDetailedMip: 0, MipLevels: 1, PlaneSlice: 1, ResourceMinLODClamp: 0.0 } } };
                             for k in 0..SLOT_TEXTURES {
@@ -4808,7 +4850,12 @@ impl Core {
                             Some((state, heap, mask.as_raw() as usize))
                         });
                         match made {
-                            Some(m) => glow.maskdown = Some(m),
+                            // (GPU-VALIDATE) the old pipeline and its shader-visible heap go once the GPU is past the lists that bind them
+                            Some(m) => {
+                                if let Some(old) = glow.maskdown.replace(m) {
+                                    crate::outfit::retire(Box::new(old));
+                                }
+                            }
                             None => {
                                 glow.maskdown_failed = true;
                                 rlog!("render: (IMPL_ER80b) his reduced-size masks cannot be made (materials/er/maskdown.ps.dxil missing?): the light shafts are masked only where the game composes them at full size");
@@ -4823,6 +4870,7 @@ impl Core {
                                 let made = (|| -> windows::core::Result<(ID3D12Resource, ID3D12DescriptorHeap)> {
                                     let small = committed(device, D3D12_HEAP_TYPE_DEFAULT, &desc, D3D12_RESOURCE_STATE_DEPTH_READ, None)?;
                                     let heap: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV, NumDescriptors: 2, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 })?;
+                                    crate::gpudebug::name(&heap, "kh:gfx:heap");
                                     let start = heap.GetCPUDescriptorHandleForHeapStart();
                                     let view = |flags: D3D12_DSV_FLAGS| D3D12_DEPTH_STENCIL_VIEW_DESC { Format: *dsv_format, ViewDimension: D3D12_DSV_DIMENSION_TEXTURE2D, Flags: flags, Anonymous: D3D12_DEPTH_STENCIL_VIEW_DESC_0 { Texture2D: D3D12_TEX2D_DSV { MipSlice: 0 } } };
                                     device.CreateDepthStencilView(&small, Some(&view(D3D12_DSV_FLAG_NONE)), start);
@@ -4878,7 +4926,7 @@ impl Core {
             let geo = cap.geo.clone();
             if let Some(c) = cap.census.as_mut() {
                 list.SetGraphicsRootSignature(&*root);
-                census_count(&CensusCx { device, list, slot: slot_index, frame: *frame_no, target: back, geo: &geo, bx, width, height }, c);
+                census_count(&CensusCx { device, list, slot: slot_index, frame: *frame_no, target: back, geo: &geo, sampler_heap, bx, width, height }, c);
                 list.SetDescriptorHeaps(&[Some(assets.srv_heap.clone()), Some(sampler_heap.clone())]);
                 list.SetGraphicsRootConstantBufferView(0, frame_constants);
                 list.SetGraphicsRootDescriptorTable(4, sampler_heap.GetGPUDescriptorHandleForHeapStart());
@@ -4928,7 +4976,7 @@ impl Core {
             let shader = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
             let mut first = vec![transition(back, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE)];
             let mut then = vec![transition(back, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET)];
-            for plane in 0..2u32 {
+            for plane in 0..depth_planes(scene_now.info.format) {
                 first.push(transition(&scene_now.resource, plane, D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_COPY_SOURCE));
                 then.push(transition(&scene_now.resource, plane, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE));
             }
@@ -5092,8 +5140,10 @@ impl Core {
                             }
                             la.OMSetRenderTargets(2, Some(&first), true, None);
                             let size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) as u64;
-                            la.SetDescriptorHeaps(&[Some(cap.inputs.clone())]);
+                            // (GPU-VALIDATE) with the sampler heap: no table of the root signature left pointing into an unset heap
+                            la.SetDescriptorHeaps(&[Some(cap.inputs.clone()), Some(sampler_heap.clone())]);
                             la.SetGraphicsRootSignature(&*root);
+                            la.SetGraphicsRootDescriptorTable(4, sampler_heap.GetGPUDescriptorHandleForHeapStart());
                             la.SetGraphicsRootConstantBufferView(0, frame_constants);
                             la.SetGraphicsRootDescriptorTable(3, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: cap.inputs.GetGPUDescriptorHandleForHeapStart().ptr + slot_index as u64 * SLOT_TEXTURES as u64 * size });
                             la.RSSetViewports(&[D3D12_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: width as f32, Height: height as f32, MinDepth: 0.0, MaxDepth: 1.0 }]);
@@ -5698,9 +5748,17 @@ unsafe fn redo_stage_copies(la: &ID3D12GraphicsCommandList, s: &survey::Submissi
         let (Some(dst), Some(src)) = (ID3D12Resource::from_raw_borrowed(&dst_raw), ID3D12Resource::from_raw_borrowed(&src_raw)) else { continue };
         let mut to: Vec<D3D12_RESOURCE_BARRIER> = src_states.iter().filter(|(_, st)| *st != D3D12_RESOURCE_STATE_COPY_SOURCE.0).map(|(k, st)| transition(src, *k, D3D12_RESOURCE_STATES(*st), D3D12_RESOURCE_STATE_COPY_SOURCE)).collect();
         let mut back: Vec<D3D12_RESOURCE_BARRIER> = src_states.iter().filter(|(_, st)| *st != D3D12_RESOURCE_STATE_COPY_SOURCE.0).map(|(k, st)| transition(src, *k, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATES(*st))).collect();
-        if c.dst_state != D3D12_RESOURCE_STATE_COPY_DEST.0 {
-            to.push(transition(dst, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATES(c.dst_state), D3D12_RESOURCE_STATE_COPY_DEST));
-            back.push(transition(dst, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATES(c.dst_state)));
+        // (GPU-VALIDATE) the destination's barrier names exactly what is copied into, from ITS state now (was: every subresource
+        // from subresource 0's state at the split, wrong for a mip / plane / slice destination): CopyTextureRegion -> its subresource;
+        // CopyResource -> every subresource, only when they all share one state. Unknown: the copy is not redone.
+        let (dst_sub, dst_state) = match c.subresources {
+            Some(r) => (r.dst_sub, survey::subresource_state(c.dst, r.dst_sub)),
+            None => (D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, survey::uniform_state(c.dst)),
+        };
+        let Some(dst_state) = dst_state.filter(|s| *s != 0) else { continue };
+        if dst_state != D3D12_RESOURCE_STATE_COPY_DEST.0 {
+            to.push(transition(dst, dst_sub, D3D12_RESOURCE_STATES(dst_state), D3D12_RESOURCE_STATE_COPY_DEST));
+            back.push(transition(dst, dst_sub, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATES(dst_state)));
         }
         if !to.is_empty() {
             la.ResourceBarrier(&to);
@@ -5845,12 +5903,25 @@ impl Core {
 
 /// Waits for the GPU to finish our frames, then frees the objects.
 fn drop_core(core: Option<Core>) {
-    let Some(core) = core else { return };
+    let Some(mut core) = core else { return };
+    // (GPU-VALIDATE) the game's light-shaft draws stop naming his masks now; the masks themselves are never freed (game lists
+    // recorded but not yet executed may still name them, and our fence does not cover the game's lists): left alive, as the
+    // masks of an earlier scene depth always were
+    crate::shaft::set_masks(&[]);
+    let masks = (core.glow.shaft.take(), std::mem::take(&mut core.glow.old_masks), std::mem::take(&mut core.glow.small_masks));
+    std::mem::forget(masks);
     // SAFETY: plain getters.
     unsafe {
+        // (GPU-VALIDATE) up to 10 s (was 1 s: a long hitch outlived it and the objects were freed under lists still on the GPU, a
+        // device removal on AMD); still not done on a live device: everything is LEFT ALIVE (leaked) instead of freed in flight
         let waited = Instant::now();
-        while core.fence.GetCompletedValue() < core.fence_value && waited.elapsed() < Duration::from_millis(1000) && core.device.GetDeviceRemovedReason().is_ok() {
+        while core.fence.GetCompletedValue() < core.fence_value && waited.elapsed() < Duration::from_secs(10) && core.device.GetDeviceRemovedReason().is_ok() {
             std::thread::sleep(Duration::from_millis(1));
+        }
+        if core.fence.GetCompletedValue() < core.fence_value && core.device.GetDeviceRemovedReason().is_ok() {
+            rlog!("render: the GPU did not finish our frames within 10 s: our objects are left alive (not freed under work in flight)");
+            std::mem::forget(core);
+            return;
         }
         crate::outfit::release_all();
         for slot in &core.slots {
@@ -6039,6 +6110,9 @@ struct CastKit {
     depth_atlas: ID3D12PipelineState,
     depth_dbg: ID3D12PipelineState,
     lists: Vec<(ID3D12CommandAllocator, ID3D12GraphicsCommandList, u64)>,
+    /// (GPU-VALIDATE) our own depth view of the game's atlas (a single-subresource D16 atlas): the game's own DSV slot, read at
+    /// our recording, may already describe another resource if the game reuses its descriptors
+    dsv: ID3D12DescriptorHeap,
 }
 
 const CAST_ROW: u32 = 128;
@@ -6073,6 +6147,7 @@ unsafe fn make_kh_maps(device: &ID3D12Device) -> windows::core::Result<KhMaps> {
     let clear = D3D12_CLEAR_VALUE { Format: DXGI_FORMAT_D16_UNORM, Anonymous: D3D12_CLEAR_VALUE_0 { DepthStencil: D3D12_DEPTH_STENCIL_VALUE { Depth: 0.0, Stencil: 0 } } };
     let texture = committed(device, D3D12_HEAP_TYPE_DEFAULT, &desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, Some(&clear))?;
     let dsv: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV, NumDescriptors: KH_SLICES as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 })?;
+    crate::gpudebug::name(&dsv, "kh:gfx:dsv");
     let inc = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV) as usize;
     for k in 0..KH_SLICES {
         let view = D3D12_DEPTH_STENCIL_VIEW_DESC { Format: DXGI_FORMAT_D16_UNORM, ViewDimension: D3D12_DSV_DIMENSION_TEXTURE2DARRAY, Flags: D3D12_DSV_FLAG_NONE, Anonymous: D3D12_DEPTH_STENCIL_VIEW_DESC_0 { Texture2DArray: D3D12_TEX2D_ARRAY_DSV { MipSlice: 0, FirstArraySlice: k as u32, ArraySize: 1 } } };
@@ -6106,9 +6181,11 @@ impl Core {
         let desc = texture_desc(CAST_ROW, 1, 1, 1, format, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
         let texture = committed(&self.device, D3D12_HEAP_TYPE_DEFAULT, &desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, None).map_err(|e| text("shadow data texture", e))?;
         let rtv: ID3D12DescriptorHeap = self.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 1, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| text("shadow data rtv heap", e))?;
+        crate::gpudebug::name(&rtv, "kh:gfx:rtv");
         self.device.CreateRenderTargetView(&texture, None, rtv.GetCPUDescriptorHandleForHeapStart());
         // (the table of root parameter 3 as his vertex shader sees it: every entry is the data texture; it reads entry 16)
         let heap: ID3D12DescriptorHeap = self.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, NumDescriptors: SLOT_TEXTURES as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, NodeMask: 0 }).map_err(|e| text("shadow data view heap", e))?;
+        crate::gpudebug::name(&heap, "kh:gfx:heap");
         let size = self.device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) as usize;
         for k in 0..SLOT_TEXTURES {
             self.device.CreateShaderResourceView(&texture, None, D3D12_CPU_DESCRIPTOR_HANDLE { ptr: heap.GetCPUDescriptorHandleForHeapStart().ptr + k * size });
@@ -6150,12 +6227,15 @@ impl Core {
         for _ in 0..FRAME_SLOTS + 1 {
             let allocator: ID3D12CommandAllocator = self.device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT).map_err(|e| text("shadow allocator", e))?;
             let list: ID3D12GraphicsCommandList = self.device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None).map_err(|e| text("shadow list", e))?;
+            crate::gpudebug::name(&list, "kh:cast");
             list.Close().map_err(|e| text("Close", e))?;
             lists.push((allocator, list, 0u64));
         }
         rlog!("render: HIS REAL SHADOW: his skinned mesh is drawn depth-only into the game's cascaded shadow atlas (r.shadow_real), each cascade with the game's own light matrices of that pass");
         rlog!("render: {}", crate::castbias::status());
-        Ok(CastKit { texture, rtv, heap, root, copy, depth, depth_atlas, depth_dbg, lists })
+        let dsv: ID3D12DescriptorHeap = self.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV, NumDescriptors: 1, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| text("cast dsv heap", e))?;
+        crate::gpudebug::name(&dsv, "kh:cast dsv");
+        Ok(CastKit { texture, rtv, heap, root, copy, depth, depth_atlas, depth_dbg, lists, dsv })
     }
 
     unsafe fn make_fx_kit(&mut self) -> Result<FxKit, String> {
@@ -6186,11 +6266,14 @@ impl Core {
         let merge = make(&merge_ps).map_err(|e| text("the effect depth's pipeline", e))?;
         let fill = fill_ps.and_then(|p| make(&p).ok());
         let srv: ID3D12DescriptorHeap = self.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, NumDescriptors: (SLOT_TEXTURES * FRAME_SLOTS) as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, NodeMask: 0 }).map_err(|e| text("the effect depth's view heap", e))?;
+        crate::gpudebug::name(&srv, "kh:gfx:srv");
         let dsv: ID3D12DescriptorHeap = self.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV, NumDescriptors: FRAME_SLOTS as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| text("the effect depth's depth view heap", e))?;
+        crate::gpudebug::name(&dsv, "kh:gfx:dsv");
         let mut lists = Vec::new();
         for _ in 0..FRAME_SLOTS {
             let allocator: ID3D12CommandAllocator = self.device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT).map_err(|e| text("allocator", e))?;
             let list: ID3D12GraphicsCommandList = self.device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None).map_err(|e| text("list", e))?;
+            crate::gpudebug::name(&list, "kh:effects-depth");
             list.Close().map_err(|e| text("Close", e))?;
             lists.push((allocator, list, 0u64));
         }
@@ -6290,6 +6373,7 @@ impl Core {
         let desc = texture_desc(CAST_ROW, crate::hybrid::CASC_MAX as u32, 1, 1, format, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
         let texture = committed(&self.device, D3D12_HEAP_TYPE_DEFAULT, &desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, None).map_err(|e| text("cascade texture", e))?;
         let rtv: ID3D12DescriptorHeap = self.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 1, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| text("cascade rtv heap", e))?;
+        crate::gpudebug::name(&rtv, "kh:gfx:rtv");
         self.device.CreateRenderTargetView(&texture, None, rtv.GetCPUDescriptorHandleForHeapStart());
         let root = game_root(&self.device).map_err(|e| text("game root signature", e))?;
         let copy = screen_pipeline(&self.device, &root, &screen, &scene, format).map_err(|e| text("cascade copy pipeline", e))?;
@@ -6297,6 +6381,7 @@ impl Core {
         for _ in 0..FRAME_SLOTS + 1 {
             let allocator: ID3D12CommandAllocator = self.device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT).map_err(|e| text("cascade allocator", e))?;
             let list: ID3D12GraphicsCommandList = self.device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None).map_err(|e| text("cascade list", e))?;
+            crate::gpudebug::name(&list, "kh:sun-read");
             list.Close().map_err(|e| text("Close", e))?;
             lists.push((allocator, list, 0u64));
         }
@@ -6395,6 +6480,11 @@ impl Core {
         if desc.Format != DXGI_FORMAT_R16_TYPELESS || desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.SampleDesc.Count != 1 {
             return Ok(());
         }
+        // (GPU-VALIDATE) the state our barrier names must still be the atlas's at the end of the game's submission (it is taken from
+        // one barrier of the game; a later transition in the same submission would make our "before" wrong): else no cast now
+        if survey::states_now(sun.resource).is_some_and(|s| s[0] != sun.state) {
+            return Ok(());
+        }
         // (RSF2 round 15) the pass of the finest cascade (the largest viewport the cascades are read from: hybrid.rs cascade_passes)
         let all_vps: Vec<[f32; 4]> = sun.passes.iter().take(sun.count).map(|p| if p.table.handle == 0 { [0.0; 4] } else { p.viewport }).collect();
         let maps_pass = crate::hybrid::cascade_passes((desc.Width as u32, desc.Height), &all_vps).last().copied();
@@ -6413,7 +6503,15 @@ impl Core {
         let list = kit.lists[k].1.clone();
         let rest = D3D12_RESOURCE_STATES(sun.state);
         let data_view = kit.rtv.GetCPUDescriptorHandleForHeapStart();
-        let depth_view = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: sun.view };
+        // (GPU-VALIDATE) a one-subresource atlas: our own view of it (the game's DSV slot only for a layout we cannot describe)
+        let depth_view = if desc.DepthOrArraySize == 1 && desc.MipLevels == 1 {
+            let view = kit.dsv.GetCPUDescriptorHandleForHeapStart();
+            let dsv_desc = D3D12_DEPTH_STENCIL_VIEW_DESC { Format: DXGI_FORMAT_D16_UNORM, ViewDimension: D3D12_DSV_DIMENSION_TEXTURE2D, Flags: D3D12_DSV_FLAG_NONE, Anonymous: D3D12_DEPTH_STENCIL_VIEW_DESC_0 { Texture2D: D3D12_TEX2D_DSV { MipSlice: 0 } } };
+            self.device.CreateDepthStencilView(atlas, Some(&dsv_desc), view);
+            view
+        } else {
+            D3D12_CPU_DESCRIPTOR_HANDLE { ptr: sun.view }
+        };
         list.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         let debug = CAST_DEBUG.swap(0, Ordering::Relaxed) as usize;
         let mut drawn = 0u32;
@@ -7016,6 +7114,7 @@ impl Core {
         let mut bytes = 0u64;
         self.device.GetCopyableFootprints(&desc, 0, 1, 0, Some(&mut footprint), None, None, Some(&mut bytes));
         let rtv: ID3D12DescriptorHeap = self.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 1, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| text("game-data rtv heap", e))?;
+        crate::gpudebug::name(&rtv, "kh:gfx:rtv");
         self.device.CreateRenderTargetView(&texture, None, rtv.GetCPUDescriptorHandleForHeapStart());
         let root = game_root(&self.device).map_err(|e| text("game root signature", e))?;
         let copy_light = screen_pipeline(&self.device, &root, &vertex, &light, format).map_err(|e| text("copy pipeline", e))?;
@@ -7050,6 +7149,7 @@ impl Core {
             self.device.GetCopyableFootprints(&desc, 0, 1, 0, Some(&mut footprint), None, None, Some(&mut total));
             let readback = committed(&self.device, D3D12_HEAP_TYPE_READBACK, &buffer_desc(total), D3D12_RESOURCE_STATE_COPY_DEST, None).map_err(|e| text("dump readback", e))?;
             let rtv: ID3D12DescriptorHeap = self.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 1, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| text("dump rtv heap", e))?;
+            crate::gpudebug::name(&rtv, "kh:gfx:rtv");
             self.device.CreateRenderTargetView(&texture, None, rtv.GetCPUDescriptorHandleForHeapStart());
             let root = game_root(&self.device).map_err(|e| text("game root signature", e))?;
             let mut pipelines = Vec::new();
@@ -7059,6 +7159,7 @@ impl Core {
             }
             let allocator: ID3D12CommandAllocator = self.device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT).map_err(|e| text("dump allocator", e))?;
             let list: ID3D12GraphicsCommandList = self.device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None).map_err(|e| text("dump list", e))?;
+            crate::gpudebug::name(&list, "kh:dump");
             list.Close().map_err(|e| text("Close", e))?;
             self.dump = Some(DumpKit { texture, readback, footprint, rtv, root, pipelines, allocator, list });
         }
@@ -7237,6 +7338,15 @@ pub fn status() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// (GPU-VALIDATE) whole-depth barriers name only the planes the format has
+    #[test]
+    fn depth_planes_follow_the_format() {
+        assert_eq!(depth_planes(DXGI_FORMAT_R32G8X24_TYPELESS), 2);
+        assert_eq!(depth_planes(DXGI_FORMAT_D24_UNORM_S8_UINT), 2);
+        assert_eq!(depth_planes(DXGI_FORMAT_R32_TYPELESS), 1);
+        assert_eq!(depth_planes(DXGI_FORMAT_D32_FLOAT), 1);
+    }
 
     /// (FP) the routed fragments' reserve: the later skins (now and a frame ago) and material blocks, 256-aligned, plus the
     /// margin; FINAL's worst frame (Sora + friends + 160 fragments, about 1.2 MB) still leaves the fragments room in 2 MB.

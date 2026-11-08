@@ -657,6 +657,15 @@ struct RawHit {
     damage: f32,
 }
 
+/// (2026-11-08, THE USER: "enemies getting hit as I approach them but not actually hit them ... It was on animals") WHO THE
+/// DIRECTOR STEERS: an engaged hostile of a FIGHTING kind only. A passive kind (the game's threatLv 0: wildlife) is never
+/// given a choice, so it never takes a hate hit (a real 1-point hit: its flinch, hit sound and effect, with no swing seen):
+/// an animal's flight / startle animations sit in the attack range (x3000 - x3999) and made one near the party "engaged".
+/// It is left to the game's own targeting; battle mode for it stays targets.rs's rule (BM).
+pub fn directed(engaged: bool, passive: bool) -> bool {
+    engaged && !passive
+}
+
 /// (GF-THREAT) The member nearest `at` of `members` (chara, position), within `reach`.
 pub fn nearest_of(members: &[(Who, Vec3)], at: Vec3, reach: f32) -> Option<Who> {
     members.iter().filter(|(_, p)| p.distance(at) <= reach).min_by(|a, b| a.1.distance(at).total_cmp(&b.1.distance(at))).map(|m| m.0)
@@ -917,7 +926,7 @@ mod live {
             if targets.fought_lately(e.id) || (e.in_attack && near) || hits.iter().any(|h| h.foe == e.id) {
                 st.engaged.insert(e.id, now + s.engaged_for);
             }
-            if st.engaged.get(&e.id).is_some_and(|until| now <= *until) && !targets.passive_now(e) {
+            if super::directed(st.engaged.get(&e.id).is_some_and(|until| now <= *until), e.passive) {
                 foes.push(Foe { id: e.id, pos: e.pos, yaw: e.yaw, hp_max: e.hp_max as f32 });
             }
         }
@@ -1078,6 +1087,15 @@ mod tests {
     const SORA: Who = Who::Sora;
     const DONALD: Who = Who::Donald;
     const GOOFY: Who = Who::Goofy;
+
+    /// (2026-11-08) Wildlife is never steered (no hate hit on an animal, fighting or not); fighters engaged are.
+    #[test]
+    fn aggro_wildlife_takes_no_hate_hit() {
+        assert!(directed(true, false), "an engaged fighter is steered");
+        assert!(!directed(false, false), "a fighter not engaged is not");
+        assert!(!directed(true, true), "an engaged animal (its flight in the attack range, or hit) is not");
+        assert!(!directed(false, true), "an animal near the party is not");
+    }
 
     // (GF-POLISH) whose attacks warn
 

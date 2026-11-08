@@ -960,8 +960,11 @@ unsafe fn make(device: &ID3D12Device) -> Result<Gpu, String> {
     let (Some(up_vs), Some(up_ps)) = (shader("zdraw_up.vs.dxil"), shader("zdraw_up.ps.dxil")) else { return Err("materials/er/zdraw_up.vs.dxil / zdraw_up.ps.dxil missing".to_string()) };
     let up = pipeline_in(device, &root, &up_vs, &up_ps, &PipeState { format: DXGI_FORMAT_R8G8B8A8_UNORM, blend: max, soup: false, depth: None }).map_err(|e| format!("the mask's lay-over: {e}"))?;
     let small_dsv: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV, NumDescriptors: 1, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| format!("views: {e}"))?;
+    crate::gpudebug::name(&small_dsv, "kh:zdraw:small_dsv");
     let small_rtv: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 1, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| format!("views: {e}"))?;
+    crate::gpudebug::name(&small_rtv, "kh:zdraw:small_rtv");
     let small_srv: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, NumDescriptors: 7, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, NodeMask: 0 }).map_err(|e| format!("views: {e}"))?;
+    crate::gpudebug::name(&small_srv, "kh:zdraw:small_srv");
     let size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) as usize;
     for k in 0..7 {
         let desc = D3D12_SHADER_RESOURCE_VIEW_DESC { Format: DXGI_FORMAT_R8G8B8A8_UNORM, ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D, Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 { Texture2D: D3D12_TEX2D_SRV { MostDetailedMip: 0, MipLevels: 1, PlaneSlice: 0, ResourceMinLODClamp: 0.0 } } };

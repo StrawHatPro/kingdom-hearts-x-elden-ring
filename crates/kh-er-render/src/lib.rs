@@ -28,6 +28,8 @@ pub mod blood;
 pub mod hybrid;
 // (LIGHT-RT) The depth bias of the KH casters in the game's sun atlas (no shadow acne on them in the Elden Ring Style).
 pub mod castbias;
+// (GPU-VALIDATE) the harnesses' D3D12 debug layer / GPU-based validation / WARP switches (inert in the game)
+pub mod gpudebug;
 
 mod cbcap;
 mod detour;

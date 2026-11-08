@@ -27,7 +27,6 @@ use kh_host::menu::MenuInput;
 use kh_host::rig::{Dummy, Rig, Script, STEP};
 use windows::core::{w, Interface};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
@@ -136,7 +135,7 @@ fn main() {
     let text = value("--script").unwrap_or_else(|| "stop 2".to_string());
     let (mut pad_words, mut instants): (String, Vec<(usize, String)>) = (String::new(), Vec::new());
     for word in text.split(';').map(str::trim).filter(|w| !w.is_empty()) {
-        if ["hurt", "recover", "hud-cmd", "die", "savepoint"].contains(&word.split_whitespace().next().unwrap_or("")) {
+        if ["hurt", "recover", "hud-cmd", "die", "savepoint", "camp", "settings", "outfits", "shop", "workshop", "forge"].contains(&word.split_whitespace().next().unwrap_or("")) {
             let at = Script::parse(&pad_words).map(|s| s.len()).unwrap_or(0);
             instants.push((at, word.to_string()));
         } else {
@@ -205,17 +204,18 @@ fn main() {
         } else {
             CreateWindowExW(WINDOW_EX_STYLE(0), w!("kh-er-render-hud"), w!("kh-er-render HUD harness"), if flag("--hidden") { WS_OVERLAPPEDWINDOW } else { WS_OVERLAPPEDWINDOW | WS_VISIBLE }, 40, 40, 1280 + 16, 720 + 39, None, None, Some(instance.into()), None).unwrap()
         };
-        let factory: IDXGIFactory2 = CreateDXGIFactory1().unwrap();
-        let mut device: Option<ID3D12Device> = None;
-        D3D12CreateDevice(None, D3D_FEATURE_LEVEL_11_0, &mut device).unwrap();
-        let device = device.unwrap();
+        // (GPU-VALIDATE) KH_D3D12_DEBUG=1|layer (debug layer, GPU-based validation, every message into KH_D3D12_LOG), KH_D3D12_WARP=1
+        let (factory, device, gpu_mode) = kh_er_render::gpudebug::create_device().unwrap();
+        println!("hud harness: device: {} on {}", gpu_mode.describe(), kh_er_render::gpudebug::adapter_name(&factory, &device));
         let queue: ID3D12CommandQueue = device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC { Type: D3D12_COMMAND_LIST_TYPE_DIRECT, ..Default::default() }).unwrap();
+        kh_er_render::gpudebug::name(&queue, "harness:hud:queue");
         let format = if flag("--ten-bit") { DXGI_FORMAT_R10G10B10A2_UNORM } else { DXGI_FORMAT_R8G8B8A8_UNORM };
         // (the buffers have the asked size whatever the window's: DXGI stretches them into it)
         let desc = DXGI_SWAP_CHAIN_DESC1 { Width: width, Height: height, Format: format, SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 }, BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT, BufferCount: 3, SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, Scaling: DXGI_SCALING_STRETCH, ..Default::default() };
         let swap: IDXGISwapChain3 = factory.CreateSwapChainForHwnd(&queue, window, &desc, None, None).unwrap().cast().unwrap();
         let allocator: ID3D12CommandAllocator = device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT).unwrap();
         let list: ID3D12GraphicsCommandList = device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None).unwrap();
+        kh_er_render::gpudebug::name(&list, "harness:hud:list");
         list.Close().unwrap();
         let fence: ID3D12Fence = device.CreateFence(0, D3D12_FENCE_FLAG_NONE).unwrap();
         let mut fence_value = 0u64;
@@ -293,6 +293,17 @@ fn main() {
                         let _ = C::Save;
                         hud.open_savepoint_grace(kh_host::savepoint_menu::GraceMenu { sit: parts.get(1) == Some(&"sit"), talk: parts.get(1) == Some(&"talk") /* (IMPL_ER33) `savepoint talk` */, ..kh_host::savepoint_menu::GraceMenu::DEFAULT });
                     }
+                    // (GPU-VALIDATE) the menus opened directly as the Elden Ring host opens them: `camp` (the camp menu), `settings` (its
+                    // System entry), `outfits`, `shop` (a merchant, buy tab), `workshop` (the Moogle) / `forge` (a smith)
+                    "camp" => println!("hud harness: camp menu {}", hud.open_camp_menu()),
+                    "settings" => println!("hud harness: settings {}", hud.open_camp_settings()),
+                    "outfits" => println!("hud harness: outfits {}", hud.open_outfits()),
+                    "shop" => {
+                        let open = kh_host::hud::ShopOpen { title: String::new(), tier: 3, tab: kh_ui::shop::ShopTab::Buy, extra: Vec::new(), growth: None };
+                        println!("hud harness: shop {}", hud.open_shop(open, &rig.sora));
+                    }
+                    "workshop" => println!("hud harness: workshop {}", kh_host::hud_workshop::open(kh_ui::workshop::Entry::Workshop, "", &|_| true)),
+                    "forge" => println!("hud harness: forge {}", kh_host::hud_workshop::open(kh_ui::workshop::Entry::Forge, "", &|_| true)),
                     _ => words.push(word["hud-cmd".len()..].trim().to_string()),
                 }
             }
@@ -432,6 +443,11 @@ fn main() {
         println!("hud harness: {frames} frames in {:.2} s | host: HUD logic {:.3} ms per frame (max {:.2}), pictures {:.3} ms per frame (max {:.2}; {} layer picture(s) handed over) | layers: {}", started.elapsed().as_secs_f32(), hud_seconds * 1000.0 / n, hud_max * 1000.0, raster_seconds * 1000.0 / n, raster_max * 1000.0, uploads, layers.report());
         println!("hud harness: {}", kh_er_render::hud::status());
         kh_er_render::shutdown();
+        // (GPU-VALIDATE) the validation summary (nothing unless KH_D3D12_DEBUG is set); KH_D3D12_STRICT=1: exit 3 on any error
+        let gpu = kh_er_render::gpudebug::finish("hud");
+        if gpu_mode.layer && std::env::var("KH_D3D12_STRICT").is_ok_and(|v| v == "1") && (gpu.errors + gpu.corruption > 0 || gpu.removed.is_some()) {
+            std::process::exit(3);
+        }
         println!("hud harness: done");
     }
 }

@@ -75,7 +75,7 @@ use kh_host::seam::{AudioQueue, EffectQueue};
 use kh_host::vfx::{AssetGeo, EffectHost, Scene};
 use windows::core::{w, Interface, PCSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Direct3D::{ID3DBlob, D3D_FEATURE_LEVEL_11_0, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST};
+use windows::Win32::Graphics::Direct3D::{ID3DBlob, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
@@ -604,18 +604,20 @@ fn main() {
         } else {
             CreateWindowExW(WINDOW_EX_STYLE(0), w!("kh-er-render-effects"), w!("kh-er-render effects"), WS_OVERLAPPEDWINDOW | WS_VISIBLE, 60, 60, width() as i32 + 16, height() as i32 + 39, None, None, Some(instance.into()), None).unwrap()
         };
-        let factory: IDXGIFactory2 = CreateDXGIFactory1().unwrap();
-        let mut device: Option<ID3D12Device> = None;
-        D3D12CreateDevice(None, D3D_FEATURE_LEVEL_11_0, &mut device).unwrap();
-        let device = device.unwrap();
+        // (GPU-VALIDATE) KH_D3D12_DEBUG=1|layer (debug layer, GPU-based validation, every message into KH_D3D12_LOG), KH_D3D12_WARP=1
+        let (factory, device, gpu_mode) = kh_er_render::gpudebug::create_device().unwrap();
+        println!("effects: device: {} on {}", gpu_mode.describe(), kh_er_render::gpudebug::adapter_name(&factory, &device));
         let queue: ID3D12CommandQueue = device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC { Type: D3D12_COMMAND_LIST_TYPE_DIRECT, ..Default::default() }).unwrap();
+        kh_er_render::gpudebug::name(&queue, "harness:effects:queue");
         let desc = DXGI_SWAP_CHAIN_DESC1 { Width: width(), Height: height(), Format: DXGI_FORMAT_R8G8B8A8_UNORM, SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 }, BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT, BufferCount: 3, SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, ..Default::default() };
         let swap: IDXGISwapChain3 = factory.CreateSwapChainForHwnd(&queue, window, &desc, None, None).unwrap().cast().unwrap();
         let allocator: ID3D12CommandAllocator = device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT).unwrap();
         let list: ID3D12GraphicsCommandList = device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None).unwrap();
+        kh_er_render::gpudebug::name(&list, "harness:effects:list");
         list.Close().unwrap();
         let allocator2: ID3D12CommandAllocator = device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT).unwrap();
         let list2: ID3D12GraphicsCommandList = device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator2, None).unwrap();
+        kh_er_render::gpudebug::name(&list2, "harness:effects:list2");
         list2.Close().unwrap();
         let fence: ID3D12Fence = device.CreateFence(0, D3D12_FENCE_FLAG_NONE).unwrap();
         let mut fence_value = 0u64;
@@ -1101,6 +1103,7 @@ fn main() {
         });
         let allocator5: ID3D12CommandAllocator = device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT).unwrap();
         let list5: ID3D12GraphicsCommandList = device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator5, None).unwrap();
+        kh_er_render::gpudebug::name(&list5, "harness:effects:list5");
         list5.Close().unwrap();
         let velocity_rtv: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 1, ..Default::default() }).unwrap();
         device.CreateRenderTargetView(&velocity_target, None, velocity_rtv.GetCPUDescriptorHandleForHeapStart());
@@ -1109,9 +1112,11 @@ fn main() {
         }
         let allocator3: ID3D12CommandAllocator = device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT).unwrap();
         let list3: ID3D12GraphicsCommandList = device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator3, None).unwrap();
+        kh_er_render::gpudebug::name(&list3, "harness:effects:list3");
         list3.Close().unwrap();
         let allocator4: ID3D12CommandAllocator = device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT).unwrap();
         let list4: ID3D12GraphicsCommandList = device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator4, None).unwrap();
+        kh_er_render::gpudebug::name(&list4, "harness:effects:list4");
         list4.Close().unwrap();
         let _ = PCSTR::null();
         // The frame constants of the harness's passes (`ErFrame`), one 256-byte block per frame slot.
@@ -1993,7 +1998,27 @@ fn main() {
             // (RSF) `--no-sora`: Sora is not drawn (a friend leads, Sora is out of the party): the friends are the only figures
             let (body, weapon, forms) = if flag("--no-sora") { (None, None, Vec::new()) } else { (body, weapon, forms) };
             let hy_feet = body.as_ref().map_or(Vec3::ZERO, |b| b.component_to_world.translation);
-            kh_er_render::submit(FrameInput { camera, origin: Vec3::ZERO, clock: step as f32 * STEP, body, weapon, forms });
+            // (GPU-VALIDATE) the GPUSAFE paths by script: `--outfit-at STEP:ID[,STEP:ID]` (kh-er boc.rs set_outfit mid-run: "kh3" =
+            // the main pack; the old outfit is retired while frames in flight still read it), `--clear-at FROM,TO` (nothing submitted
+            // from FROM to TO: kh-er frame.rs clear() at a death / new game / loading screen), `--style-at-native STEP:0|1[,..]` (the
+            // Style flipped mid-run: r.hybrid_native, Elden Ring 1 / Kingdom Hearts 3 0)
+            let at_step = |name: &str| value(name).and_then(|v| v.split(',').filter_map(|e| e.split_once(':')).find(|(k, _)| k.trim().parse::<usize>().ok() == Some(step)).map(|(_, v)| v.trim().to_string()));
+            if !warming {
+                if let Some(id) = at_step("--outfit-at") {
+                    println!("effects: (GPU-VALIDATE) step {step}: outfit -> {id}");
+                    kh_er_render::set_outfit(if id == "kh3" { "" } else { &id });
+                }
+                if let Some(v) = at_step("--style-at-native") {
+                    println!("effects: (GPU-VALIDATE) step {step}: Style native = {v}");
+                    kh_er_render::set_hybrid(kh_er_render::hybrid::Settings { native: v == "1", ..kh_er_render::hybrid::settings() });
+                }
+            }
+            let cleared = !warming && value("--clear-at").and_then(|v| v.split_once(',').and_then(|(a, b)| Some((a.trim().parse::<usize>().ok()?, b.trim().parse::<usize>().ok()?)))).is_some_and(|(a, b)| (a..b).contains(&step));
+            if cleared {
+                kh_er_render::clear();
+            } else {
+                kh_er_render::submit(FrameInput { camera, origin: Vec3::ZERO, clock: step as f32 * STEP, body, weapon, forms });
+            }
             // (ER party S4) the party of this frame
             #[cfg(feature = "party")]
             if let Some(p) = party_harness.as_mut() {
@@ -2231,6 +2256,9 @@ fn main() {
                     list4.SetGraphicsRootDescriptorTable(1, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: srv_heap.GetGPUDescriptorHandleForHeapStart().ptr + srv_size });
                     list4.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                     list4.SetPipelineState(fx);
+                    // (GPU-VALIDATE) root CBV 0 set even when no layer is drawn (`--late-pass` / `--no-layers`): the velocity stand-in
+                    // below read an unset root argument (GPU-based validation error 935, the harness's own)
+                    list4.SetGraphicsRootConstantBufferView(0, constants.GetGPUVirtualAddress() + 1024);
                     // (IMPL_ER80) `--no-layers`: the forward stage without its decal / panels / sky glow layers (the velocity pass stays)
                     for k in 0..if flag("--no-layers") || late_pass /* (AUDIT-A CAMS) */ { 0 } else { layers.len() } {
                         if erdtree && k == 0 {
@@ -2550,6 +2578,11 @@ fn main() {
             std::thread::sleep(std::time::Duration::from_secs(4));
         }
         kh_er_render::shutdown();
+        // (GPU-VALIDATE) the validation summary (nothing unless KH_D3D12_DEBUG is set); KH_D3D12_STRICT=1: exit 3 on any error
+        let gpu = kh_er_render::gpudebug::finish("effects");
+        if gpu_mode.layer && std::env::var("KH_D3D12_STRICT").is_ok_and(|v| v == "1") && (gpu.errors + gpu.corruption > 0 || gpu.removed.is_some()) {
+            std::process::exit(3);
+        }
         println!("effects: done");
     }
 }

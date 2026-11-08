@@ -554,10 +554,12 @@ unsafe fn present_comp(device: &ID3D12Device, queue: &ID3D12CommandQueue, swap: 
         for _ in 0..3 {
             let allocator: ID3D12CommandAllocator = device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)?;
             let list: ID3D12GraphicsCommandList = device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)?;
+            crate::gpudebug::name(&list, "kh:finale:list");
             list.Close()?;
             slots.push((allocator, list, 0u64));
         }
         let rtv_heap: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 3, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 })?;
+        crate::gpudebug::name(&rtv_heap, "kh:finale:rtv_heap");
         let rtv_size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) as usize;
         *guard = Some(DispGpu { device: device.as_raw() as usize, queue: queue.as_raw() as usize, fence, fence_value: 0, slots, rtv_heap, rtv_size, pipelines: Vec::new() });
         rlog!("render: (ZFIN round 9) the finale's display pass is made (back buffer {}x{} format {}, {}): the beam's colour over the silhouette in the test level's display colours", desc.Width, desc.Height, desc.Format.0, if mode > 0.5 { "linear values" } else { "display-encoded values" });
@@ -764,6 +766,7 @@ unsafe fn make_kit(device: &ID3D12Device) -> Result<Kit, String> {
     let root: ID3D12RootSignature = device.CreateRootSignature(0, std::slice::from_raw_parts(blob.GetBufferPointer() as *const u8, blob.GetBufferSize())).map_err(|e| text("root signature", e))?;
     let root = &root;
     let heap: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, NumDescriptors: (SLOTS * 2 * TABLE) as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, NodeMask: 0 }).map_err(|e| text("views", e))?;
+    crate::gpudebug::name(&heap, "kh:finale:heap");
     let srv_size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) as usize;
     // every entry a null view until a frame writes its own
     for k in 0..SLOTS * 2 * TABLE {
@@ -772,6 +775,7 @@ unsafe fn make_kit(device: &ID3D12Device) -> Result<Kit, String> {
         device.CreateShaderResourceView(None, Some(&desc), D3D12_CPU_DESCRIPTOR_HANDLE { ptr: heap.GetCPUDescriptorHandleForHeapStart().ptr + k * srv_size });
     }
     let rtv_heap: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 5, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| text("target views", e))?;
+    crate::gpudebug::name(&rtv_heap, "kh:finale:rtv_heap");
     let rtv_size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) as usize;
     let rtv = |k: usize| D3D12_CPU_DESCRIPTOR_HANDLE { ptr: rtv_heap.GetCPUDescriptorHandleForHeapStart().ptr + k * rtv_size };
     let memory = [texture(device, MEMORY_WIDTH, 1, DXGI_FORMAT_R32G32B32A32_FLOAT).map_err(|e| text("memory", e))?, texture(device, MEMORY_WIDTH, 1, DXGI_FORMAT_R32G32B32A32_FLOAT).map_err(|e| text("memory", e))?];
