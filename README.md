@@ -12,19 +12,55 @@ This is a **developer preview**. It's playable, but expect rough edges.
 **No game files are included.** You need your own PC copies of both games. A setup program builds everything the mod
 needs from them, on your PC.
 
-## What's in it
+## What's in the mod
 
+### Sora, Donald and Goofy
 - **Three playable characters.** Start your journey as Sora, Donald or Goofy. The others join you along the way,
-  follow you as party members, and can take the lead. **GOOFY IS STILL A HEAVY WIP, PLAYING AS HIM IS NOT RECOMMENDED OR FUN**
-- **KH3 combat.** Combos, finishers, blocking, dodging, air combos and team attacks. Enemies, bosses included, can be
-  launched and juggled.
+  follow you as party members, and can take the lead.
+- **KH3 combat.** Combos, finishers, blocking, dodging, air combos, shotlocks and team attacks. Elden Ring's enemies,
+  bosses included, can be launched and juggled.
+- **Keyblades and Formchanges.** Sora's 17 KH3 Keyblades, each with its Formchanges, finishers, effects and sounds.
+  Donald and Goofy have their KH3 weapons too.
 - **Magic.** Sora's spells, and Donald as a real mage, all the way up to his ultimate spell, Zettaflare.
-- **KH3's look and menus.** The HUD, the command menu, the camp menu, the save screens and the cameras.
-- **Progression.** Levels and abilities, KH3 rewards from Elden Ring bosses, munny, a Moogle shop, and KH3 save
-  points at the sites of grace.
+- **Goofy's own kit**, with his combos, Shield Arts and guard.
 - **Sora's outfits** from KH1, KH2 and the KH3 worlds.
+
+### The party
+- Whoever isn't leading fights alongside you as AI, and you can change the party at save points.
+- Knocked-out allies get back up after a while, when a fight ends, or at a save point.
+
+### Bosses
+- **KH3 rewards from Elden Ring bosses**: abilities, spells and items.
+- **Revenge:** like in KH3, bosses that take too many hits break out of your combo and start their own.
+- **Mimic Tear bosses:** both Mimic Tear fights copy your party leader, with their full moveset, and take on the whole
+  party, with their own music.
+
+### Progression, synthesis and shops
+- Levels, abilities and **munny**: Elden Ring's text says Munny instead of runes.
+- **KH3 save points** at the sites of grace.
+- **Synthesis:** a Moogle at the Roundtable Hold synthesizes items from the materials you find, with KH3's Collector's
+  Goals. The smiths power up your Keyblades (KH3's Keyblade Forge).
+- **Journey to the Erdtree:** 20 boss milestones that unlock new synthesis recipes, with a final reward for the end.
+- **Merchants** sell KH items, and their stock grows as you progress.
+
+### KH3's look in Elden Ring
+- KH3's HUD, command menu, camp menu, save screens, item popups and cameras. Elden Ring's event messages and questions
+  open in KH-style dialog boxes.
+- **Two lighting Styles** (Settings > Graphics > Style): **Elden Ring** (the default) lights the party with Elden
+  Ring's own lighting; **Kingdom Hearts 3** keeps KH3's look.
+- Frozen enemies get KH3's frozen look.
+
+### Fitting into Elden Ring
 - **Ladders:** press Y at a ladder and the whole party jumps to the top in one leap. To go down, just drop off.
-- **Made for a controller**, with KH3's Xbox layout.
+- **Spiritsprings:** the leader jumps as high as Torrent does, and nearby allies jump up after them.
+- **Gestures:** quest events that need a gesture show a prompt for it once you know the gesture.
+- **Grabs** use KH3's caught animations. Sora opens chests with his KH3 animation.
+- **Its own save file**, so your normal Elden Ring save is never touched (see "Your saves").
+
+### Controls
+- **Made for a controller**, with KH3's Xbox layout. Keyboard and mouse use KH3's PC keys.
+- Buttons and keys can be remapped in the settings, with Xbox, PlayStation or keyboard-and-mouse button icons.
+- **Linux and Steam Deck:** there is a Linux download for playing through Proton (see "Linux / Steam Deck").
 
 ## What you need
 
@@ -34,6 +70,8 @@ needs from them, on your PC.
   [its releases page](https://github.com/garyttierney/me3/releases).
 - About **85 GB of free disk space** while the setup runs.
 - A **controller** is strongly recommended.
+
+**The mod currently supports the Steam version of both games only** (on Linux and Steam Deck: Steam with Proton).
 
 You don't need to install anything else. The setup has everything it needs built in.
 
@@ -47,7 +85,7 @@ You don't need to install anything else. The setup has everything it needs built
    - Windows may say "Windows protected your PC", because `setup.exe` isn't signed. Click **More info**, then
      **Run anyway**. Your antivirus may also ask about it.
    - The setup finds your games by itself. If it can't, it opens a window so you can pick the game's folder.
-4. **Wait.** The first time, the setup builds the mod's files from your KH3 install. **This takes about 30 minutes**, and
+4. **Wait.** The first time, the setup builds the mod's files from your KH3 install. **This takes about an hour**, and
    longer on a slower PC. When it says **Ready**, you can play.
 
 If something goes wrong, the setup stops and says why. Fix it and run `setup.exe` again: it carries on from where it
@@ -138,9 +176,9 @@ but can't build the mod's files there, and tells you to use the Linux version).
    terminal, run:
    `curl --proto '=https' --tlsv1.2 -sSfL https://github.com/garyttierney/me3/releases/download/v0.13.0/installer.sh | sh`
    It puts `me3` in `~/.local/bin`.
-4. **Run the setup:** open a terminal in the mod's folder and run `./setup-linux`. It finds your games by itself (Steam,
-   or Steam through Heroic or Lutris). If it can't, it asks you for the folder. Like on Windows, the first run takes about
-   30 minutes. Have other KH3 mods installed? Take them out first, as "Have other KH3 mods installed?" under Install
+4. **Run the setup:** open a terminal in the mod's folder and run `./setup-linux`. It finds your Steam games by itself.
+   If it can't, it asks you for the folder. Like on Windows, the first run takes about
+   an hour. Have other KH3 mods installed? Take them out first, as "Have other KH3 mods installed?" under Install
    says: on Linux the folder is `KINGDOM HEARTS III/Content/Paks/~mods` in KH3's Steam folder
    (`steamapps/common/KINGDOM HEARTS III`), and you run `./setup-linux` again afterwards.
 5. **Play:** run `er/play.sh`. Steam must be running. me3 starts Elden Ring with the same Proton version Steam uses for it.

@@ -155,10 +155,13 @@ its setup used the prebuilt DLLs (no Rust), checked them against the pack's tabl
 tables and the game's text from the pack. The prebuilt `kh-shaderc.exe` rebuilt all 5,554 shader and texture files of
 the pack byte for byte.
 
-## Steam and Epic
+## Steam only (for now)
+
+The mod currently supports the Steam version of KINGDOM HEARTS III only. Epic support is planned for later.
+
 
 The pak key is found by searching your executable and checking it against the paks' own index hashes, so it works for
 any build. The research tools read the executable at fixed addresses: `tools/packgen_exe_check.js` checks that your
 executable's code and data sections are the ones the tools were made with (the Steam build; the Steam wrapper section
-is not compared, so a store copy with the same code passes). An Epic copy has not been tested. If the check fails, the
+is not compared). If the check fails, the
 setup stops with the sections that differ, before it makes any research data.

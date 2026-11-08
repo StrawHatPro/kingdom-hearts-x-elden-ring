@@ -65,8 +65,8 @@ them all.
 
 1. Checks Node, the npm packages, the DirectX shader compiler (it downloads Microsoft's release if the Windows SDK isn't
    installed), me3, and Rust when it builds from source.
-2. Finds KINGDOM HEARTS III (Steam libraries, then Epic manifests) and ELDEN RING (Steam), and checks Elden Ring's
-   version.
+2. Finds KINGDOM HEARTS III and ELDEN RING in your Steam libraries, and checks Elden Ring's version. The mod currently
+   supports the Steam version of both games only (Epic support is planned for later).
 3. Finds the KH3 pak key in your own KH3 executable. Only its location and a hash are kept.
 4. Builds the asset pack (`build\sora_pack`) from your KH3 install with `tools/packgen.js`. See
    [setup/PACK_PIPELINE.md](../setup/PACK_PIPELINE.md). A finished pack is kept. After an update the setup compares two
@@ -103,7 +103,7 @@ game files. The mod stays the same Windows DLLs: they run inside Proton, with El
 |---|---|---|
 | The setup program | `setup.exe` (Node.js win-x64 as a single executable) | `setup-linux` (the same Node.js version, linux-x64, the same `release-tools/sea_main.js`; its hash in `release-tools/setup_linux.json`). It can't be called `setup`: that's the setup's folder. |
 | Without the release download | `setup\setup.bat`, `setup\get_node.ps1` | `setup/setup.sh`, `setup/get_node.sh` (the pinned linux-x64 Node of `release-tools/node_pin.json`, checked by SHA-256) |
-| Finding the games | Steam (registry), Epic's manifests | Steam's folders (`~/.steam/steam`, `~/.local/share/Steam`, the Flatpak and Snap ones) and every library in `libraryfolders.vdf`; Epic games installed by Heroic (or legendary), and those of an Epic launcher in a Wine prefix (Lutris). Folders are found whatever their case. |
+| Finding the games | Steam (registry) | Steam's folders (`~/.steam/steam`, `~/.local/share/Steam`, the Flatpak and Snap ones) and every library in `libraryfolders.vdf`. Folders are found whatever their case. Steam only for now: other stores are not supported yet. |
 | Folder picker | Windows' folder dialog | zenity or kdialog when there is a desktop, else a typed path |
 | Elden Ring's version | PowerShell | read from `eldenring.exe`'s version resource |
 | DirectX shader compiler | the Windows SDK's, or Microsoft's v1.8.2502 zip | Microsoft's v1.8.2502 Linux build (`bin/dxc`, `lib/libdxcompiler.so`, `lib/libdxil.so`), downloaded and checked by SHA-256 |
