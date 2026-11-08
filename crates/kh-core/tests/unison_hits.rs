@@ -82,6 +82,13 @@ impl Targets for Field {
         }
     }
     fn friend_link(&mut self, _req: FriendLinkRequest) {}
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
+    }
 }
 
 /// The effects spawned at a world point (name, point).

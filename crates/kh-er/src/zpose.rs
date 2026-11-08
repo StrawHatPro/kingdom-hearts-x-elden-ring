@@ -199,7 +199,7 @@ mod tests {
         let order: Vec<Ask> = (0..8).map_while(ask_of).collect();
         assert_eq!(order.iter().map(|a| a.level).collect::<Vec<_>>(), vec![3, 2, 1, 8], "heaviest first, then down");
         assert!(order.iter().all(|a| a.break_armour), "its armour broken for every ask");
-        assert!(FORCE_POISE > 80.0 * 100.0, "past any poise (Margit 80)");
+        const { assert!(FORCE_POISE > 80.0 * 100.0, "past any poise (Margit 80)") };
         // the boss plays nothing for any level: frozen as it is, then held
         let dt = 1.0 / 60.0;
         let mut s = Stage::Asked { level: 0, waited: 0.0, before: anim(2000020, 0.4, 2.0) };
@@ -227,7 +227,7 @@ mod tests {
         loop {
             match step(&mut s, anim(8050, time, length), dt) {
                 Do::Speed(v) => {
-                    assert!(v <= FORWARD_SPEED_MAX && v >= 1.0);
+                    assert!((1.0..=FORWARD_SPEED_MAX).contains(&v));
                     time += v * dt;
                     frames += 1;
                     assert!(time <= length * FREEZE_SHARE + FREEZE_TOLERANCE_S + 1e-4, "never past the middle ({time})");

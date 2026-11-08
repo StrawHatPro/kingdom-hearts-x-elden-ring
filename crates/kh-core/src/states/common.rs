@@ -41,7 +41,17 @@ pub(crate) fn ground_probe(s: &Pawn, w: &dyn World, range: f32) -> (bool, f32, f
 /// `Turn(yaw, a)` (pawn slot 438 -> 0x1405DDD90): slerp of the actor rotation toward
 /// (0, yaw, 0) by clamp01(a); with pitch = roll = 0 a linear fraction of the remaining angle.
 pub(crate) fn turn(s: &mut Pawn, yaw: f32, a: f32) {
-    s.yaw = wrap_degrees(s.yaw + wrap_degrees(yaw - s.yaw) * a.clamp(0.0, 1.0));
+    turn_to(s, 0.0, yaw, a); // (F-LOCO) the rotator (0, yaw, 0): a pitch eases back to 0 as well
+}
+
+/// (F-LOCO) `Turn(rotator, a)` with a pitch (the same slot 438 = vt+0xDB0: Attack Facing 0x14134D0E0 passes (+0x218,
+/// +0x1FC, 0)): pitch and yaw each by the fraction clamp01(a) of what remains (the slerp for one axis at a time).
+pub(crate) fn turn_to(s: &mut Pawn, pitch: f32, yaw: f32, a: f32) {
+    let a = a.clamp(0.0, 1.0);
+    s.yaw = wrap_degrees(s.yaw + wrap_degrees(yaw - s.yaw) * a);
+    if s.pitch != 0.0 || pitch != 0.0 {
+        s.pitch += (pitch - s.pitch) * a;
+    }
 }
 
 /// `SetMovementInputXY((cos yaw, sin yaw), 1.0)` (pawn slot 724 0x1405B9BD0): assigned.

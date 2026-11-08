@@ -33,8 +33,12 @@
 //!
 //! BODY: one upright capsule from `CSChrPhysicsModule::hit_radius / hit_height` (the SDK exposes
 //! no per-part hurt shapes); the weight class is taken from its size (ermap.rs) and sets the push
-//! level. Every body is `BodyReaction::Default` (no guard, no armour): Elden Ring's own guard and
-//! poise act when the damage goes through its pipeline, which the HP route does not (damage.rs).
+//! level. Every body is `BodyReaction::Default` (no armour) or kh-react's STRONG one: Elden Ring's own
+//! poise acts when the damage goes through its pipeline, which the HP route does not (damage.rs).
+//! (THE USER 2026-11-02: "fix 'Shields don't count as guarding.'") GUARD: while the game's own guard of a hostile is up
+//! (shieldguard.rs: its TAE guard flag, its NpcParam guard angle and cut rates) the body is guarding behind a shield with
+//! that arc; KH3's classification decides each hit from it (guarded from the front: KH3's guard spark, the attacker bounces
+//! off, the bullet goes to the game's own guard without dmgLevel / poise; from behind a plain hit).
 
 use std::collections::HashMap;
 
@@ -137,6 +141,14 @@ pub struct Enemy {
     /// (IMPL_ER23A) IT HOVERS ABOVE ITS POSITION NODE by animation: `pos` / `er_pos` (and so its capsule, the marker, the
     /// camera's point, the bullets) are this far (cm) above the game's physics position; 0 for everything else.
     pub lift: f32,
+    /// (THE USER 2026-11-02: "Shields don't count as guarding") ITS RAISED GUARD as KH3 is told of it (shieldguard.rs: the
+    /// game's TAE guard flag, the facing, its NpcParam guardAngle; `None`: not guarding now) and its row's guard cut rates
+    /// (percent: physical, magic, fire, lightning, holy).
+    pub shield: Option<kh_core::host::Shield>,
+    pub guard_cuts: [f32; 5],
+    /// (COMBAT-FIX, THE USER 2026-11-06: "Rennala can currently be hit in her shield bubble during phase 1") Elden Ring's own
+    /// "cannot be damaged" state of a living hostile this frame (invuln.rs): shut = no hit, no lock; frames = no hit.
+    pub invuln: crate::invuln::State,
 }
 
 // (ER party S7) a row for the offline harnesses (party/team/tests.rs): no game object behind it (`chr` 0 is never
@@ -146,12 +158,12 @@ impl Enemy {
     pub fn stub(id: u32, pos: Vec3, radius: f32, half_height: f32, hp: i32, weight: Weight) -> Enemy {
         // SAFETY: a plain handle value (two integers), never used to reach the game.
         let handle = unsafe { std::mem::zeroed::<FieldInsHandle>() };
-        Enemy { id: TargetId(id), handle, chr: 0, er_pos: Vec3::ZERO, pos, velocity: Vec3::ZERO, yaw: 180.0, radius, half_height, hp, hp_max: hp, hp_game: hp /* (HUD2) */, team: 6, chr_type: 0, npc_id: 4000 + id as i32, npc_param: 40000000 + id as i32, think_param: 0, alive: true, hostile: true, friendly: false, disguised: false, can_target_raw: 1, summon: false, lock_disabled: false, weight, active: true, anim: -1, poise_max: 0.0, poise: 0.0, hyper: None, in_attack: false, threat_lv: Some(1), passive: false /* (BM) */, poise_recover: 0.0, puppet_ok: weight != Weight::Large, airborne: false, grounded: true, lift: 0.0 }
+        Enemy { id: TargetId(id), handle, chr: 0, er_pos: Vec3::ZERO, pos, velocity: Vec3::ZERO, yaw: 180.0, radius, half_height, hp, hp_max: hp, hp_game: hp /* (HUD2) */, team: 6, chr_type: 0, npc_id: 4000 + id as i32, npc_param: 40000000 + id as i32, think_param: 0, alive: true, hostile: true, friendly: false, disguised: false, can_target_raw: 1, summon: false, lock_disabled: false, weight, active: true, anim: -1, poise_max: 0.0, poise: 0.0, hyper: None, in_attack: false, threat_lv: Some(1), passive: false /* (BM) */, poise_recover: 0.0, puppet_ok: weight != Weight::Large, airborne: false, grounded: true, lift: 0.0, shield: None, guard_cuts: [0.0; 5], invuln: crate::invuln::State::Open /* (COMBAT-FIX) */ }
     }
 }
 
 /// (ZETTA 2026-10-23) The body's armour broken (super armour, toughness to 0); what it was (None: no armour module read).
-fn break_armour(chr: &mut ChrIns) -> Option<(f32, f32)> {
+pub(crate) fn break_armour(chr: &mut ChrIns) -> Option<(f32, f32)> {
     let sa_ok = game::plausible(crate::word!(chr.modules.super_armor));
     let t_ok = game::plausible(crate::word!(chr.modules.toughness));
     if !sa_ok && !t_ok {
@@ -169,7 +181,7 @@ fn break_armour(chr: &mut ChrIns) -> Option<(f32, f32)> {
 }
 
 /// (ZETTA 2026-10-23) The body's armour put back as it was (a survivor fights on with it).
-fn put_armour(chr: &mut ChrIns, sa: f32, tough: f32) {
+pub(crate) fn put_armour(chr: &mut ChrIns, sa: f32, tough: f32) {
     if game::plausible(crate::word!(chr.modules.super_armor)) {
         let m = chr.modules.super_armor.as_mut();
         m.sa_durability = sa.min(m.sa_durability_max.max(sa));
@@ -422,6 +434,14 @@ struct Pending {
     /// the Elden Ring HP it must take in FULL; what the game's defences / absorption keep is written to its HP directly
     /// (`reconcile`). 0: an ordinary hit.
     full: i32,
+    /// (THE USER 2026-11-02: "Shields don't count as guarding") a hit into the body's raised guard (shieldguard.rs): what the
+    /// game takes is its guard's chip, never a measure of its defences (no ratio is learnt), and nothing taken is the guard
+    /// holding (no retry, no HP write).
+    guarded: bool,
+    /// (THE IN-GAME TESTER 2026-11-03, hitcap.rs) the HP the KH side expects it to take, the most the game may keep of it
+    /// (what it took over that, past the tolerance, is given back to a living body). 0: no ceiling (a kill the KH side
+    /// counts on, a friendly NPC, a raised guard).
+    expect: i32,
 }
 
 /// (ZETTA 2026-10-23) How far past its capsule a body's limbs and weapon reach, sideways and up (the framing and the beam's
@@ -433,6 +453,44 @@ pub const ZETTA_REACH_HEIGHT: f32 = 1.25;
 /// (`zfinale::coincident`: one body, whichever row was locked); undrawn rows count for nothing.
 pub(crate) fn drawn_body(e: &Enemy, list: &[Enemy]) -> (f32, f32) {
     list.iter().filter(|o| o.active && crate::zfinale::coincident(o.pos, o.radius, e.pos, e.radius)).fold((e.radius, e.half_height), |(r, h), o| (r.max(o.radius), h.max(o.half_height)))
+}
+
+/// (PARTY-AI, THE USER 2026-11-03: "Protect the slam") The KH damage a party hit may ask of a target with `left` HP while a
+/// Breaker winds up on it: at most what leaves 1 HP (`kh_of_er`: an Elden Ring HP number in KH damage). The Breaker's own slam
+/// (`HIT_FLAG_BREAKER`) is untouched: its defeat rule decides.
+/// (FINAL-FIX) The ask is at most [`PROTECT_SHARE`] of the HP above 1 ([`protect_room`]): the game's defences are an estimate
+/// (`kh_of_er`), and a hit asked to leave exactly 1 HP that the game took a little more of killed it; with the share it keeps at
+/// least 1, and the next hits close in on 1 from above.
+/// (FINAL-FIX) `left`: the game's HP; `ours`: our side's, which counts each party hit at its ask (the bullets in flight).
+pub(crate) fn protect_slam(damage: f32, flags: u32, left: i32, ours: i32, kh_of_er: impl Fn(i32) -> f32) -> f32 {
+    protect_slam_room(damage, flags, protect_room(left, ours), kh_of_er)
+}
+
+/// (FINAL-FIX) [`protect_slam`] with the room already known (ER HP a party hit may still take: [`protect_room`]).
+pub(crate) fn protect_slam_room(damage: f32, flags: u32, room: i32, kh_of_er: impl Fn(i32) -> f32) -> f32 {
+    if flags & kh_core::host::HIT_FLAG_BREAKER != 0 {
+        return damage;
+    }
+    damage.min(kh_of_er(room.max(0))).max(0.0)
+}
+
+/// (FINAL-FIX, FINAL-FIX launches 5 / 6: two Ball Lightning bullets in one wind-up, each asked to leave 1 of the game's 218 HP,
+/// killed it together) THE ROOM LEFT FOR THE PARTY'S HITS while a Breaker winds up, in ER HP: [`PROTECT_SHARE`] of the game's HP
+/// above 1 (`game_left`), less what the party's hits already asked and the game has not taken yet (`game_left - ours_left`,
+/// ours being the side that counts each hit at its ask). The bullets in flight together stay inside it.
+pub(crate) fn protect_room(game_left: i32, ours_left: i32) -> i32 {
+    let room = ((game_left - 1).max(0) as f32 * PROTECT_SHARE).floor() as i32;
+    (room - (game_left - ours_left).max(0)).max(0)
+}
+
+/// (FINAL-FIX) [`protect_slam`]'s share of the HP above 1 a party hit may ask while a Breaker winds up.
+pub(crate) const PROTECT_SHARE: f32 = 0.9;
+
+/// (PARTY-AI) "Protect the slam" for the party's side bullets (a hate hit, Over Here!: 1 HP each): none at a target a Breaker
+/// winds up on, or one at 1 HP would end it before the slam. (The side bullets are the party build's.)
+#[cfg(feature = "party")]
+pub(crate) fn side_hit_allowed(id: TargetId) -> bool {
+    !crate::stance::slam_held(id)
 }
 
 /// (ZETTA 2026-10-23) A forced hit's bullet: its full number (within the attack value's limit); the rest the game's defences
@@ -476,6 +534,8 @@ struct Memory {
     hit_frame: u64,
     /// Elden Ring HP actually taken per attack point asked (defences), smoothed; 0 = not measured.
     ratio: f32,
+    /// (THE IN-GAME TESTER 2026-11-03, hitcap.rs) the most it was ever seen to take per attack point (the worst case's margin)
+    ratio_max: f32,
     /// (IMPL_ER23A) it was last seen hovering above its position node (the log line is written at a change).
     hovering: bool,
     /// (IMPL_ER51) Seen hostile while alive (Sora's rewards for a death need it: a target the game made untargetable for
@@ -489,6 +549,8 @@ struct Memory {
     attack_seen_step: u64,
     /// (IMPL_ER57) whether it was drawn when last told (the `target:` line of a hostile that is not drawn).
     drawn_told: Option<bool>,
+    /// (COMBAT-FIX) Elden Ring's "cannot be damaged" state as last told in the log (`invuln:` lines at a change, frames not told).
+    invuln_told: crate::invuln::State,
 }
 
 pub struct ErTargets {
@@ -588,6 +650,17 @@ pub struct ErTargets {
     pub passive_rule: bool,
     /// (BM) NpcParam row -> its `threatLv` (`None`: not readable), read once per row (and told once in the log).
     threat_book: HashMap<i32, Option<u32>>,
+    /// (THE SHIELDS AGENT'S FINDING 2026-11-03, hitcap.rs `split_side`) the party's 1-point bullets in flight (the hate
+    /// hits, Over Here!): (target, frame fired, attack points); what they take is never a KH bullet's
+    side_hits: Vec<(u32, u64, i32)>,
+    /// (HUD-REVIVE-COMBAT) THE PARTY'S OTHER PLACES (KH3 cm, feet) besides the leader's `sora`: the members who are up (a friend
+    /// leader too) and AI Sora; set once a frame by the host (sora.rs `party_marks`), empty with Sora alone.
+    pub party_at: Vec<Vec3>,
+    /// (HUD-REVIVE-COMBAT) The hostiles whose own Elden Ring AI has a party member's body as its target now (telegraph.rs
+    /// `ai_target`, the game's `get_target_ene0_position`, matched to the member at that place: party/aggro.rs `aims_now`).
+    pub party_aims: Vec<TargetId>,
+    /// (HUD-REVIVE-COMBAT) `combat.aims` (default on; 0 = the aim sign is not used, the range and hit memory as before).
+    pub aims_rule: bool,
 }
 
 /// 5 s at 60 Hz.
@@ -604,9 +677,25 @@ pub fn engages(within: bool, passive: bool, fought: bool, attacking: bool) -> bo
     fought || (within && (!passive || attacking))
 }
 
+/// (HUD-REVIVE-COMBAT, THE USER 2026-11-07: "if an enemy is actively fighting the party leader or any party member, the whole
+/// party should still be in combat. Combat only ends when no enemy is targetting the party") ONE HOSTILE ENGAGES THE WHOLE
+/// PARTY: the engaged rule ([`engages`], `within` measured round every party place), or Elden Ring's own AI has one of the
+/// party's bodies as its target (`aimed`), a passive kind excepted (a deer's AI watches the body it flees from: BM's rule
+/// stands, it engages only once it fights). Pure.
+pub fn engages_party(within_any: bool, passive: bool, fought: bool, attacking: bool, aimed: bool) -> bool {
+    engages(within_any, passive, fought, attacking) || (aimed && !passive)
+}
+
 impl ErTargets {
     pub fn new(frame: Frame, params: Params) -> ErTargets {
-        ErTargets { lock_gate_live: false, zwhole_plan: HashMap::new(), zwhole: Vec::new(), zwhole_late: Vec::new(), zkeep: Vec::new(), zdeaths: Vec::new(), zetta_kills: Vec::new(), zpose: None, zlevel: None, zdefer: Default::default(), zowner: Default::default(), zowned: false /* (ZETTA 2026-10-23) */, params, sheet: params, list: Vec::new(), ids: HashMap::new(), next_id: 1, memory: HashMap::new(), frame, step: 0, sora: Vec3::ZERO, sora_on_floor: false, player_handle: None, hover: true, visible_only: true, drawgroups: true, bystanders: true, npcs: true, disguised_ids: DISGUISED.to_vec(), kills: Vec::new(), deaths: Vec::new(), puppets: crate::puppet::Puppets::default(), cast_filter: crate::havok::FILTER_SORA, landed_now: Vec::new(), hits: 0, route: crate::damage::Route::default(), bullets: crate::bullet::Bullets::default(), shape: crate::bullet::Shape::default(), pending: Vec::new(), aim: HashMap::new(), events: Vec::new(), frame_no: 0, landed: 0, missed: 0, diag: false, stats: HashMap::new(), retried: 0, waiting: std::collections::VecDeque::new(), fired_frame: 0, props: crate::breakables::Props::default(), poise_book: crate::poise::Book::default(), passive_rule: true, threat_book: HashMap::new() /* (BM) */ }
+        ErTargets { lock_gate_live: false, zwhole_plan: HashMap::new(), zwhole: Vec::new(), zwhole_late: Vec::new(), zkeep: Vec::new(), zdeaths: Vec::new(), zetta_kills: Vec::new(), zpose: None, zlevel: None, zdefer: Default::default(), zowner: Default::default(), zowned: false /* (ZETTA 2026-10-23) */, params, sheet: params, list: Vec::new(), ids: HashMap::new(), next_id: 1, memory: HashMap::new(), frame, step: 0, sora: Vec3::ZERO, sora_on_floor: false, player_handle: None, hover: true, visible_only: true, drawgroups: true, bystanders: true, npcs: true, disguised_ids: DISGUISED.to_vec(), kills: Vec::new(), deaths: Vec::new(), puppets: crate::puppet::Puppets::default(), cast_filter: crate::havok::FILTER_SORA, landed_now: Vec::new(), hits: 0, route: crate::damage::Route::default(), bullets: crate::bullet::Bullets::default(), shape: crate::bullet::Shape::default(), pending: Vec::new(), aim: HashMap::new(), events: Vec::new(), frame_no: 0, landed: 0, missed: 0, diag: false, stats: HashMap::new(), retried: 0, waiting: std::collections::VecDeque::new(), fired_frame: 0, props: crate::breakables::Props::default(), poise_book: crate::poise::Book::default(), passive_rule: true, threat_book: HashMap::new() /* (BM) */, side_hits: Vec::new(), party_at: Vec::new(), party_aims: Vec::new(), aims_rule: true /* (HUD-REVIVE-COMBAT) */ }
+    }
+
+    /// (THE SHIELDS AGENT'S FINDING 2026-11-03) A bullet of the party's that is no KH hit (the aggro director's hate hit,
+    /// Donald's aggro, Over Here!: `phys` attack points) went out at target `id` in this frame: what it takes is its own
+    /// (`reconcile`, hitcap.rs `split_side`), never a KH bullet's measure.
+    pub fn note_side_hit(&mut self, id: TargetId, phys: i32) {
+        self.side_hits.push((id.0, self.frame_no, phys.max(0)));
     }
 
     /// (IMPL_ER32) A BULLET AT A MAP OBJECT, IN ITS TURN: one bullet a frame (see `waiting`), the enemies' waiting
@@ -690,14 +779,40 @@ impl ErTargets {
         v
     }
 
+    /// (HUD-REVIVE-COMBAT) The party's places as the host set them this frame: the leader's (`sora`) and `party_at`.
+    pub fn party_places(&self) -> impl Iterator<Item = Vec3> + '_ {
+        std::iter::once(self.sora).chain(self.party_at.iter().copied())
+    }
+
+    /// (HUD-REVIVE-COMBAT) The nearest party place to `at` (cm; the leader's when there is no other).
+    fn party_dist(&self, at: Vec3) -> f32 {
+        self.party_places().map(|p| (at - p).length()).fold(f32::INFINITY, f32::min)
+    }
+
+    /// (HUD-REVIVE-COMBAT) THE ENGAGED RULE OF ONE LIVING, ACTIVE HOSTILE FOR THE WHOLE PARTY ([`engages_party`]): within
+    /// `target.engage_range` of ANY party place, the hit / attack memory (either way, any member), or its Elden Ring AI targets a
+    /// party member's body (`party_aims`, unless `aims_rule` is off).
+    pub fn engages_the_party(&self, e: &Enemy) -> bool {
+        let within = self.party_dist(e.pos) <= self.params.engage_range;
+        engages_party(within, e.passive, self.fought_lately(e.id), self.attacked_lately(e.id), self.aims_rule && self.party_aims.contains(&e.id))
+    }
+
+    /// (HUD-REVIVE-COMBAT) The host's marks of this frame: the party's other places and the hostiles aiming at the party.
+    pub fn set_party_marks(&mut self, at: Vec<Vec3>, aims: Vec<TargetId>) {
+        self.party_at = at;
+        self.party_aims = aims;
+    }
+
     /// (BM) For the log: who engages the party now, and the passive ones within the engage range left out.
+    /// (HUD-REVIVE-COMBAT) Distances to the nearest party place; "aims at the party" for an enemy only its AI target holds in.
     pub fn engaged_report(&self) -> String {
         let (mut on, mut off) = (Vec::new(), Vec::new());
         for e in self.list.iter().filter(|e| e.hostile && e.alive && e.active) {
-            let d = (e.pos - self.sora).length();
+            let d = self.party_dist(e.pos);
             let within = d <= self.params.engage_range;
-            if engages(within, e.passive, self.fought_lately(e.id), self.attacked_lately(e.id)) {
-                on.push(format!("c{:04} {:.1} m{}", e.npc_id, d / CM_PER_M, if e.passive { " (passive kind, fighting)" } else { "" }));
+            if self.engages_the_party(e) {
+                let only_aim = !engages(within, e.passive, self.fought_lately(e.id), self.attacked_lately(e.id));
+                on.push(format!("c{:04} {:.1} m{}{}", e.npc_id, d / CM_PER_M, if e.passive { " (passive kind, fighting)" } else { "" }, if only_aim { " (its AI targets the party)" } else { "" }));
             } else if within && e.passive {
                 off.push(format!("c{:04} {:.1} m", e.npc_id, d / CM_PER_M));
             }
@@ -794,6 +909,9 @@ impl ErTargets {
             // from the list whatever this says.
             let shown = crate::guards::drawn(chr.chr_flags1c5.enable_render(), chr.chr_flags1c4.is_render_group_enabled(), drawgroups);
             // (a character the game hides inside a disguise asset, IMPL_ER54: Boc in his bush, is hit across it as before)
+            // (MIMIC-BOSS) a Mimic Tear boss's body hidden by us (its KH copy is drawn there) is the copy's target: shown
+            #[cfg(feature = "party")]
+            let shown = shown || crate::mimic_boss::is_held(&chr.field_ins_handle);
             let active = active && (shown || !self.visible_only || self.disguised_ids.contains(&chr.npc_id));
             // (IMPL_ER51) hostile / friendly NPC / bystander
             let npc_type = chr.chr_type as i32 == 5; // ChrType::Npc
@@ -885,6 +1003,30 @@ impl ErTargets {
             } else {
                 0.0
             };
+            // (THE USER 2026-11-02: "Shields don't count as guarding") THE GAME'S OWN GUARD of a living hostile, every frame
+            // (shieldguard.rs: its TAE guard flag, its facing, its NpcParam guard angle and cut rates; the first guard seen on a
+            // kind is told in the log)
+            let guard = if hostile_now { crate::shieldguard::read(chr) } else { None };
+            // (COMBAT-FIX, THE USER 2026-11-06: "Rennala can currently be hit in her shield bubble during phase 1, this is not
+            // correct she should only be targetable when her shield has broken") ELDEN RING'S OWN "CANNOT BE DAMAGED" STATE of a
+            // living hostile, every frame (invuln.rs: its invincible / no-hit flags, its SpEffects' damage cut rates, its
+            // animation's invincibility frames); a change of the held state is told once
+            let invuln = if class == Class::Hostile && alive { crate::invuln::read(chr) } else { crate::invuln::State::Open };
+            // (MIMIC-BOSS) a Mimic Tear boss / its summoned Mimic not yet transformed into the leader: held the same way
+            let invuln = if class == Class::Hostile && alive && crate::mimic_boss::forming(key) { crate::invuln::State::Shut(crate::invuln::Why::Forming) } else { invuln };
+            let told = if invuln == crate::invuln::State::Frames { crate::invuln::State::Open } else { invuln };
+            let memory = self.memory.entry(id).or_default();
+            if memory.invuln_told != told {
+                memory.invuln_told = told;
+                match told {
+                    crate::invuln::State::Shut(why) => erlog!("invuln: target {id} c{:04} (NpcParam {}, event entity {}, hp {}/{}): ELDEN RING HOLDS IT INVULNERABLE by {}: no KH hit lands on it, no KH lock-on / soft target / AI pick takes it", chr.npc_id, chr.npc_param_id, chr.event_entity_id, data.hp, data.max_hp, why.text()),
+                    _ => erlog!("invuln: target {id} c{:04} (NpcParam {}, event entity {}, hp {}/{}): Elden Ring lets it be damaged again: a target and hittable as in the game", chr.npc_id, chr.npc_param_id, chr.event_entity_id, data.hp, data.max_hp),
+                }
+            }
+            let shield = guard.and_then(|g| crate::shieldguard::shield_of(&self.params.shield, &g, coords::yaw_kh_of_er_quat(game::quat(&physics.orientation))));
+            if let (Some(g), Some(s)) = (guard, shield) {
+                crate::shieldguard::tell_first(chr.npc_id, chr.npc_param_id, now_anim, &g, &s);
+            }
             self.list.push(Enemy {
                 id: TargetId(id),
                 handle: chr.field_ins_handle,
@@ -922,6 +1064,9 @@ impl ErTargets {
                 airborne: false,
                 grounded: lift == 0.0 && (physics.standing_on_solid_ground || physics.touching_solid_ground) && !physics.is_falling,
                 lift,
+                shield, // (2026-11-02)
+                guard_cuts: guard.map_or([0.0; 5], |g| g.cuts),
+                invuln, // (COMBAT-FIX)
                 active,
                 anim: crate::puppet::damage_anim(chr).map_or_else(|| crate::chranim::now(chr).id, |a| a.id),
             });
@@ -948,9 +1093,21 @@ impl ErTargets {
         let (route, attacker) = (self.route, self.player_handle);
         for k in 0..self.list.len() {
             let e = &self.list[k];
-            let (id, hp, alive) = (e.id.0, e.hp, e.alive);
+            let (id, mut hp, alive) = (e.id.0, e.hp, e.alive);
+            let mut given_back = false; // (hitcap.rs) HP given back in this frame: the row follows
             let memory = self.memory.entry(id).or_default();
             let drop = if memory.hp > 0 { memory.hp - hp.max(0) } else { 0 };
+            // (THE SHIELDS AGENT'S FINDING 2026-11-03, hitcap.rs `split_side`) what the party's side hits in flight (the
+            // 1-point hate hits, Over Here!) took is theirs: a drop no bigger than they could take leaves the KH bullets in
+            // flight, nothing learnt (it was Margit's "x0.02" first sample)
+            let side_landed = || self.side_hits.iter().filter(|s| s.0 == id && s.1 < frame_no);
+            let (side_least, side_worst) = side_landed().fold((0, 0), |(a, b), s| (a + s.2.max(1), b + crate::hitcap::worst_of(s.2.max(1), 0, crate::hitcap::CEILING)));
+            let (side_take, drop) = crate::hitcap::split_side(drop, side_least, side_worst);
+            if side_take > 0 {
+                let n_side = side_landed().count();
+                self.side_hits.retain(|s| !(s.0 == id && s.1 < frame_no));
+                erlog!("hit: target {id} (c{:04}) took {side_take} HP for {n_side} side hit(s) of the party (a hate hit / Over Here!, at most {side_worst} at the worst): theirs; {} left to the KH bullets in flight (no share learnt from the side hits)", e.npc_id, drop);
+            }
             let recent = memory.hit_frame > 0 && frame_no.saturating_sub(memory.hit_frame) <= 600;
             if drop > 0 || (!alive && memory.was_alive) {
                 let asked: i32 = self.pending.iter().filter(|p| p.id == id && p.frame < frame_no).map(|p| p.wanted).sum();
@@ -973,12 +1130,23 @@ impl ErTargets {
                     // (ZETTA 2026-10-23) forced hits land in full: what the game's defences kept is written to its HP
                     let (full, forced_asked): (i32, i32) = self.pending.iter().filter(|p| p.id == id && p.frame < frame_no && p.full > 0).fold((0, 0), |a, p| (a.0 + p.full, a.1 + p.wanted));
                     let short = forced_shortfall(full, drop, forced_asked, asked);
+                    // (2026-11-02) a bullet into a raised guard took the guard's chip: no measure of the body's defences
+                    let into_guard = self.pending.iter().any(|p| p.id == id && p.frame < frame_no && p.guarded);
+                    // (THE IN-GAME TESTER 2026-11-03, hitcap.rs) the HP the KH side expected these bullets to take, the most
+                    // the game may keep (0: one of them has no ceiling: a kill counted on, a friendly NPC, a raised guard)
+                    let landed_now = || self.pending.iter().filter(|p| p.id == id && p.frame < frame_no);
+                    let expect = if landed_now().all(|p| p.expect > 0) { landed_now().map(|p| p.expect).sum() } else { 0 };
                     self.pending.retain(|p| !(p.id == id && p.frame < frame_no));
                     self.landed += n as u32;
-                    if short > 0 && alive && route.fallback {
+                    // (hitcap.rs) the most this body was ever seen to take per attack point: the worst case's margin
+                    if alive && !into_guard {
+                        memory.ratio_max = memory.ratio_max.max(drop as f32 / asked as f32);
+                    }
+                    // (COMBAT-FIX) never past Elden Ring's own invulnerability (invuln.rs): what it refused stays refused
+                    if short > 0 && alive && route.fallback && !e.invuln.refuses_damage() {
                         // SAFETY: `e.chr` was read from the character sets in this frame phase and found complete.
                         let outcome = unsafe { crate::damage::deal_hp(route, &mut *(e.chr as *mut ChrIns), attacker, short, false) };
-                        erlog!("hit: a FORCED hit on target {id} (c{:04}) asked {full} in full; the game took {drop}: the {short} its defences kept written to its HP directly: -> {}", e.npc_id, outcome.hp_after);
+                        erlog!("hit: a hit that must land IN FULL on target {id} (c{:04}: forced, or capped by hitcap.rs) asked {full} in full; the game took {drop}: the {short} its defences kept written to its HP directly: -> {}", e.npc_id, outcome.hp_after);
                         let e = &mut self.list[k];
                         e.hp = outcome.hp_after;
                         e.hp_game = e.hp;
@@ -989,10 +1157,20 @@ impl ErTargets {
                     }
                     self.stats.entry(e.npc_id).or_default().0 += n as u32;
                     let ratio = (drop as f32 / asked as f32).clamp(0.02, 5.0);
-                    if alive {
+                    if alive && !into_guard {
                         memory.ratio = if memory.ratio > 0.0 { memory.ratio * 0.5 + ratio * 0.5 } else { ratio };
                     }
                     erlog!("hit: LANDED on target {id} (c{:04}): the game took {drop} HP for {n} bullet(s) asking {asked} (x{ratio:.2} after its defences): hp {} -> {}{}; poise {:.0}/{:.0}, animation {}", e.npc_id, memory.hp, hp, if alive { "" } else { " DEAD" }, e.poise, e.poise_max, e.anim);
+                    // (THE IN-GAME TESTER 2026-11-03, hitcap.rs) A KH HIT NEVER TAKES MORE THAN THE KH SIDE EXPECTS: what the
+                    // game took over the expected HP (past the tolerance) is given back to a body that lives
+                    let back = if alive && route.fallback { crate::hitcap::give_back(drop, expect) } else { 0 };
+                    if back > 0 {
+                        // SAFETY: `e.chr` was read from the character sets in this frame phase and found complete.
+                        let outcome = unsafe { crate::damage::give_back_hp(&mut *(e.chr as *mut ChrIns), back) };
+                        erlog!("hit: CAPPED on target {id} (c{:04}): the game took {drop} HP where the KH side expected {expect} (tolerance {}): the {back} over it {}: hp -> {}", e.npc_id, crate::hitcap::tolerance(expect), outcome.route, outcome.hp_after);
+                        hp = outcome.hp_after;
+                        given_back = true;
+                    }
                     if e.friendly || !memory.hostile_alive && memory.friendly_hits > 0 {
                         erlog!("npc: the game's reaction on friendly target {id} (c{:04} team {}): took {drop} HP, hp {} -> {}{}, animation {}, {}", e.npc_id, e.team, memory.hp, hp, if alive { "" } else { " DEAD" }, e.anim, if e.hostile { "HOSTILE now" } else { "still not hostile" });
                     }
@@ -1013,7 +1191,14 @@ impl ErTargets {
             }
             memory.hp = hp;
             memory.was_alive = alive;
+            if given_back {
+                let e = &mut self.list[k];
+                e.hp = hp;
+                e.hp_game = hp; // (HUD2) written to the game's HP: real at once
+            }
         }
+        // (2026-11-03) side hits that took nothing within the miss frames are gone
+        self.side_hits.retain(|s| frame_no.saturating_sub(s.1) < MISS_FRAMES);
         // (IMPL_ER51) A friendly NPC's bullet that took no HP but made the game play another animation (a reaction, Boc's
         // reveal) landed: no retry, no HP write.
         let mut k = 0;
@@ -1044,6 +1229,12 @@ impl ErTargets {
                     erlog!("blt: NOTHING from the bullet at target {} (c{:04}, team {}, {}{}): from ({:.2}, {:.2}, {:.2}) along ({:.2}, {:.2}), at {:.2} of its height; body feet NOW ({:.2}, {:.2}, {:.2}) = {:.2} m from the spawn point ({:.2} m off the line), r {:.2} h {:.2} m, animation {}, poise {:.0}/{:.0}", p.id, e.npc_id, e.team, if e.active { "active" } else { "INACTIVE" }, if e.airborne { ", our puppet in the air" } else { "" }, p.from.x, p.from.y, p.from.z, p.dir.x, p.dir.z, p.fraction, e.er_pos.x, e.er_pos.y, e.er_pos.z, flat.length(), flat.cross(p.dir).length(), e.radius / CM_PER_M, e.half_height * 2.0 / CM_PER_M, e.anim, e.poise, e.poise_max);
                 }
             }
+            // (THE USER 2026-11-02: "Shields don't count as guarding") a bullet into a raised guard that took nothing: the
+            // guard held it all; no retry, no HP write, no other height learnt
+            if p.guarded {
+                self.landed += 1;
+                continue;
+            }
             {
                 // (another height next time, unless one is known to land on this kind of body)
                 let memo = self.aim.entry(p.npc_id).or_default();
@@ -1057,6 +1248,14 @@ impl ErTargets {
             }
             // ONCE MORE, from Sora's side at another height (MEASURED: a bullet 0.13 s after one that
             // landed took nothing, the next one 0.27 s later landed).
+            // (COMBAT-FIX, THE USER 2026-11-06: "Rennala can currently be hit in her shield bubble during phase 1") THE GAME TOOK
+            // NOTHING BECAUSE IT HOLDS THE BODY INVULNERABLE (invuln.rs: a barrier, its no-damage flags, its invincibility
+            // frames): no retry, never the HP write below (it was what hurt Rennala inside her barrier)
+            if self.list[k_e].invuln.refuses_damage() {
+                let e = &self.list[k_e];
+                erlog!("hit: a bullet asking {} took nothing off target {} (c{:04}): Elden Ring holds it invulnerable ({:?}): no retry, no HP write", p.wanted, p.id, e.npc_id, e.invuln);
+                continue;
+            }
             // (IMPL_ER51: a friendly NPC gets one try more at most: every bullet that lands is a hit the game counts on it)
             if p.attack.is_some() && p.tries < if p.friendly { 1 } else { RETRIES } && self.bullets.available() && attacker.is_some() {
                 self.retried += 1;
@@ -1159,21 +1358,47 @@ impl ErTargets {
 
     /// (ZETTA 2026-10-23) As `ask_animation`, its bullet carrying `poise` damage (Zettaflare's heavy hurt: past the armour).
     pub fn ask_animation_with(&mut self, id: TargetId, level: u8, poise: f32) {
-        let (Some(owner), true) = (self.player_handle, level > 0 && self.route.mode == crate::damage::Mode::Bullet && self.bullets.available()) else { return };
-        let Some(e) = self.get(id) else { return };
-        if !e.alive {
+        if level == 0 {
             return;
+        }
+        let attack = crate::bullet::Attack { phys: self.route.landing_damage.max(1), poise, stamina: 0, level, ..crate::bullet::Attack::PLAIN };
+        match self.ask_bullet(id, attack) {
+            Ok(Some(_)) => erlog!("puppet: target {} flies without a throw animation: one asked of the game (dmgLevel {level})", id.0),
+            Ok(None) => {}
+            Err(why) => erlog!("puppet: target {}: the animation bullet failed: {why}", id.0),
+        }
+    }
+
+    /// (COMBAT-FIX, THE USER 2026-11-06: "enemies who's stagger is broken by Goofy need to play the animation they play when their
+    /// stance meter is broken") ELDEN RING'S OWN STANCE BREAK, ASKED THROUGH ITS DAMAGE: one bullet of the player's carrying more
+    /// poise damage than any body has and no `dmgLevel` (`stance::break_attack`), at a body whose armour is left as it is, so the
+    /// game's own damage code empties its stance meter: the game then plays the break this character plays for the Tarnished
+    /// (its own kneel, its critical window, its stance refilled, its recovery). MEASURED: Sora's dmgLevel-0 bullets with poise
+    /// damage made c3251 / c4690 / c2270 / c2130 kneel ("ELDEN RING'S STANCE BREAK ... it kneels", poise back to 80/80).
+    /// Ok: the bullet's row. Err: none went (why).
+    pub fn ask_stance_break(&mut self, id: TargetId) -> Result<u32, String> {
+        let left = self.get(id).map_or(0, |e| e.hp_game.min(e.hp));
+        if left <= 1 {
+            return Err(format!("{left} HP left: its point of damage could kill it"));
+        }
+        let attack = crate::stance::break_attack(self.route.landing_damage);
+        self.ask_bullet(id, attack)?.ok_or_else(|| "no bullet route now (the damage route is not the bullet's, or no player)".to_string())
+    }
+
+    /// (COMBAT-FIX) One asking bullet of the player's at `id`, from Sora's side, aimed as a hit's (`ask_animation_with`'s path).
+    /// Ok(None): no bullet route now, or no living target.
+    fn ask_bullet(&mut self, id: TargetId, attack: crate::bullet::Attack) -> Result<Option<u32>, String> {
+        let (Some(owner), true) = (self.player_handle, self.route.mode == crate::damage::Mode::Bullet && self.bullets.available()) else { return Ok(None) };
+        let Some(e) = self.get(id) else { return Ok(None) };
+        if !e.alive {
+            return Ok(None);
         }
         let sora_er = self.frame.pos_kh_to_er(self.sora);
         let memo = self.aim.get(&e.npc_id).copied().unwrap_or_default();
         let (e, shape) = led(e, self.puppets.lead(id, 2), self.shape);
         let e = &e;
         let (from, dir) = aim(e, Vec3::new(sora_er.x, e.er_pos.y + 0.3, sora_er.z), e.er_pos - sora_er, self.shape.back, memo.fraction().or(Some(0.3)));
-        let attack = crate::bullet::Attack { phys: self.route.landing_damage.max(1), poise, stamina: 0, level, ..crate::bullet::Attack::PLAIN };
-        match self.bullets.fire(owner, Some(e.handle), from, dir, attack, shape) {
-            Ok(_) => erlog!("puppet: target {} flies without a throw animation: one asked of the game (dmgLevel {level})", id.0),
-            Err(why) => erlog!("puppet: target {}: the animation bullet failed: {why}", id.0),
-        }
+        self.bullets.fire(owner, Some(e.handle), from, dir, attack, shape).map(Some)
     }
 
     /// (discovery, `dbg.raw = who,bulletId`) A bullet row of the game, unpatched, from Sora at a target.
@@ -1198,7 +1423,7 @@ impl ErTargets {
         let side = if from_sora { sora_er } else { centre * 2.0 - sora_er };
         let (from, dir) = aim(&e, Vec3::new(side.x, centre.y, side.z), centre - side, shape.back, None);
         let bullet = self.bullets.fire(owner, Some(e.handle), from, dir, attack, shape_for(&e, shape))?;
-        self.pending.push(Pending { id: id.0, frame: self.frame_no, wanted: attack.phys as i32, hp_before: e.hp, fraction: 0.5, npc_id: -1, from, dir, attack: None, tries: 0, friendly: e.friendly, anim_before: e.anim, full: 0 });
+        self.pending.push(Pending { id: id.0, frame: self.frame_no, wanted: attack.phys as i32, hp_before: e.hp, fraction: 0.5, npc_id: -1, from, dir, attack: None, tries: 0, friendly: e.friendly, anim_before: e.anim, full: 0, guarded: false, expect: 0 });
         self.memory.entry(id.0).or_default().hit_frame = self.frame_no;
         Ok(format!("bullet row {bullet} from ({:.2}, {:.2}, {:.2}) along ({:.2}, {:.2}, {:.2}); target hp {} poise {:.0}/{:.0} animation {}", from.x, from.y, from.z, dir.x, dir.y, dir.z, e.hp, e.poise, e.poise_max, e.anim))
     }
@@ -1223,7 +1448,7 @@ impl ErTargets {
         // (ZETTA) a forced hit (Zettaflare): the game's own defence and negation are cancelled by the ratio this target
         // was measured to take (full damage), at most the attack value's limit
         let wanted = if hit.flags & kh_core::host::HIT_FLAG_FORCE != 0 { let r = if memory.ratio > 0.0 { memory.ratio } else { 1.0 }; ((wanted as f32 / r.max(0.05)).round() as i32).min(60000) } else { wanted };
-        let kind = hit.damage_kind.value() as i32;
+        let kind = hit.damage_kind.value();
         let level = self.puppets.level_for(e.npc_id, crate::puppet::Role::Flinch);
         let poise = params.reaction(kind).poise * params.poise_scale;
         let contact_er = self.frame.pos_kh_to_er(hit.position);
@@ -1238,7 +1463,7 @@ impl ErTargets {
         let memo = self.aim.get(&e.npc_id).copied().unwrap_or_default();
         let at = ((contact_er.y - e.er_pos.y) / (e.half_height * 2.0 / CM_PER_M).max(0.01)).clamp(0.15, 0.85);
         let how = if self.fired_frame == frame_no || !self.bullets.free_slot() {
-            self.waiting.push_back(Pending { id: e.id.0, frame: frame_no, wanted, hp_before: before, fraction: memo.fraction().unwrap_or(at), npc_id: e.npc_id, from: Vec3::ZERO, dir: Vec3::Z, attack: Some(attack), tries: 0, friendly: true, anim_before: e.anim, full: 0 });
+            self.waiting.push_back(Pending { id: e.id.0, frame: frame_no, wanted, hp_before: before, fraction: memo.fraction().unwrap_or(at), npc_id: e.npc_id, from: Vec3::ZERO, dir: Vec3::Z, attack: Some(attack), tries: 0, friendly: true, anim_before: e.anim, full: 0, guarded: false, expect: 0 });
             "a bullet that waits its turn (one a frame)".to_string()
         } else {
             let (from, dir) = aim(&e, contact_er, coords::dir_kh_to_er(hit.direction), self.shape.back, memo.fraction());
@@ -1248,7 +1473,7 @@ impl ErTargets {
             match self.bullets.fire(owner, Some(e.handle), from, dir, attack, shape) {
                 Ok(row) => {
                     self.fired_frame = frame_no;
-                    self.pending.push(Pending { id: e.id.0, frame: frame_no, wanted, hp_before: before, fraction, npc_id: e.npc_id, from, dir, attack: Some(attack), tries: 0, friendly: true, anim_before: e.anim, full: 0 });
+                    self.pending.push(Pending { id: e.id.0, frame: frame_no, wanted, hp_before: before, fraction, npc_id: e.npc_id, from, dir, attack: Some(attack), tries: 0, friendly: true, anim_before: e.anim, full: 0, guarded: false, expect: 0 });
                     format!("a BULLET (row {row})")
                 }
                 Err(why) => {
@@ -1285,6 +1510,8 @@ impl ErTargets {
             return None;
         }
         let flags = flags_of(class, e.alive, e.active, e.lock_disabled)?;
+        // (COMBAT-FIX) what Elden Ring holds invulnerable is no target (shut) / passed through (its invincibility frames)
+        let flags = e.invuln.mask(flags);
         // (IMPL_ER13, the user: "Sora automatically goes into Aerials more often than not") THE POINT THE CORE AIMS AT: KH3's attack
         // choice compares the target's lock point with Sora's height (`dz > 160` = "the target is high": the rising attack,
         // and air combos from there); a KH3 enemy's lock point is about 90 cm above its feet, an Elden Ring capsule's
@@ -1298,6 +1525,16 @@ impl ErTargets {
         let mut v: Vec<(f32, &Enemy)> = self.list.iter().filter(|e| e.hostile && e.alive && e.active).map(|e| ((e.pos - self.sora).length(), e)).collect();
         v.sort_by(|a, b| a.0.total_cmp(&b.0));
         v
+    }
+
+    /// (THE IN-GAME TESTER 2026-11-03, guards.rs `blame`) The nearest living hostile within `reach` cm of `at` that plays an
+    /// attack animation now or played one in the last half second: the evidence that a hit the game names nobody for is
+    /// its (a bullet, a bite). An idle body is never named.
+    pub fn attacking_near(&self, at: Vec3, reach: f32) -> Option<&Enemy> {
+        let lately = |e: &Enemy| e.in_attack || self.memory.get(&e.id.0).is_some_and(|m| m.attack_seen_step > 0 && self.step.saturating_sub(m.attack_seen_step) <= 30);
+        let mut v: Vec<(f32, &Enemy)> = self.list.iter().filter(|e| e.hostile && e.alive && e.active && lately(e)).map(|e| ((e.pos - at).length(), e)).filter(|(d, _)| *d <= reach).collect();
+        v.sort_by(|a, b| a.0.total_cmp(&b.0));
+        v.first().map(|(_, e)| *e)
     }
 
     /// The bullet route's score by character id (`dbg.stats`, and when Sora stops).
@@ -1391,13 +1628,7 @@ fn aim(e: &Enemy, contact_er: Vec3, fallback: Vec3, back: f32, at_fraction: Opti
 /// 0x10]; [item + 0x68] = the FLVER data, node count at + 0x18; [[item + 0x640] + 0x70] = one 3 x 4 world matrix per node,
 /// 0x30 bytes, the translation in the 4th column. Tenths, not the extremes: models carry helper nodes at their origin.
 fn model_span(chr: &ChrIns, er_pos: Vec3) -> Option<(f32, f32)> {
-    let item = crate::probe::word(word!(chr.chr_model_ins) + 0x10).filter(|w| plausible(*w))?;
-    let flver = crate::probe::word(item + 0x68).filter(|w| plausible(*w))?;
-    let n = crate::probe::u32_at(flver + 0x18)? as usize;
-    if !(8..=2048).contains(&n) {
-        return None;
-    }
-    let pose = crate::probe::word(crate::probe::word(item + 0x640).filter(|w| plausible(*w))? + 0x70).filter(|w| plausible(*w))?;
+    let (pose, n) = model_nodes(chr)?;
     let mut bytes = vec![0u8; n * 0x30];
     if !crate::probe::read(pose, &mut bytes) {
         return None;
@@ -1409,6 +1640,57 @@ fn model_span(chr: &ChrIns, er_pos: Vec3) -> Option<(f32, f32)> {
     }
     heights.sort_by(f32::total_cmp);
     Some((heights[heights.len() / 10], heights[heights.len() * 9 / 10]))
+}
+
+/// (IMPL_ER23A; AUDIT-B W-FIN: shared with the hit-bone seam) The model's node matrices of a character: (the address of
+/// its first 3 x 4 world matrix, the node count), the layout `model_span` documents.
+fn model_nodes(chr: &ChrIns) -> Option<(usize, usize)> {
+    let item = crate::probe::word(word!(chr.chr_model_ins) + 0x10).filter(|w| plausible(*w))?;
+    let flver = crate::probe::word(item + 0x68).filter(|w| plausible(*w))?;
+    let n = crate::probe::u32_at(flver + 0x18)? as usize;
+    if !(8..=2048).contains(&n) {
+        return None;
+    }
+    let pose = crate::probe::word(crate::probe::word(item + 0x640).filter(|w| plausible(*w))? + 0x70).filter(|w| plausible(*w))?;
+    Some((pose, n))
+}
+
+/// (AUDIT-B W-FIN) One node's world matrix (Elden Ring physics space, m) of the 3 x 4 rows at `m`: its rotation (column
+/// vectors) and its place (the 4th column).
+pub(crate) fn node_of(m: &[u8]) -> Option<(glam::Mat3, Vec3)> {
+    let f = |r: usize, c: usize| m.get(r * 16 + c * 4..r * 16 + c * 4 + 4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    let row = |r: usize| Some(Vec3::new(f(r, 0)?, f(r, 1)?, f(r, 2)?));
+    let (r0, r1, r2) = (row(0)?, row(1)?, row(2)?);
+    let at = Vec3::new(f(0, 3)?, f(1, 3)?, f(2, 3)?);
+    let rot = glam::Mat3::from_cols(Vec3::new(r0.x, r1.x, r2.x), Vec3::new(r0.y, r1.y, r2.y), Vec3::new(r0.z, r1.z, r2.z));
+    (at.is_finite() && rot.is_finite() && rot.determinant().abs() > 1.0e-6).then_some((rot, at))
+}
+
+/// (AUDIT-B W-FIN) THE BONE A HIT TOUCHED on an Elden Ring body: the node of its model (FLVER bones and dummies, the matrices
+/// the game draws it with) nearest the contact `at_er`, within 40 m of its position (`model_span`'s rule). The SDK gives no
+/// per-part hurt shapes (the body is one capsule), so the touched part is the skeleton's node there. Generic: every model.
+pub(crate) fn nearest_node(chr: &ChrIns, er_pos: Vec3, at_er: Vec3) -> Option<u32> {
+    let (pose, n) = model_nodes(chr)?;
+    let mut bytes = vec![0u8; n * 0x30];
+    if !crate::probe::read(pose, &mut bytes) {
+        return None;
+    }
+    (0..n)
+        .filter_map(|k| node_of(&bytes[k * 0x30..k * 0x30 + 0x30]).map(|(_, p)| (k, p)))
+        .filter(|(_, p)| (*p - er_pos).length() < 40.0)
+        .min_by(|a, b| (a.1 - at_er).length().total_cmp(&(b.1 - at_er).length()))
+        .and_then(|(k, _)| u32::try_from(k).ok())
+}
+
+/// (AUDIT-B W-FIN) Node `k`'s world matrix now (Elden Ring space): its rotation and place.
+pub(crate) fn node_now(chr: &ChrIns, k: u32) -> Option<(glam::Mat3, Vec3)> {
+    let (pose, n) = model_nodes(chr)?;
+    let k = usize::try_from(k).ok().filter(|k| *k < n)?;
+    let mut bytes = [0u8; 0x30];
+    if !crate::probe::read(pose + k * 0x30, &mut bytes) {
+        return None;
+    }
+    node_of(&bytes)
 }
 
 /// The live, complete character of a handle, found by going through the game's character sets
@@ -1464,6 +1746,84 @@ where
 }
 
 impl ErTargets {
+    /// (GF-BREAK, R6, R7) WHY THIS CHARACTER MAY NOT BE FORCED NOW (None: it may): not hostile and alive, Zettaflare's presentation,
+    /// a cutscene, or the game's own no-death states (`zdefer::no_dead_of`). Generic: read from the running game.
+    pub(crate) fn stagger_barred(&self, id: TargetId) -> Option<&'static str> {
+        let Some(e) = self.get(id).filter(|e| e.hostile && e.alive && e.active && e.chr != 0) else { return Some("no living hostile body") };
+        // (COMBAT-FIX) Elden Ring holds it invulnerable (invuln.rs): no break, no defeat, no rebound, no delay
+        if e.invuln.refuses_damage() {
+            return Some("Elden Ring holds it invulnerable");
+        }
+        if self.zowned {
+            return Some("Zettaflare owns the presentation");
+        }
+        if crate::game::remo_state().is_some_and(|s| s >= 2) {
+            return Some("a cutscene plays");
+        }
+        // SAFETY: `e.chr` was read from the character sets in this frame phase and found complete.
+        crate::zdefer::no_dead_of(unsafe { &*(e.chr as *const ChrIns) })
+    }
+
+    /// (GF-POLISH) Pin Down: its next attack comes late (aipause.rs). False: nothing has happened to it.
+    /// (THE USER 2026-11-02: "make non-boss enemies bounce off of Goofy's shield if they're not doing a long combo string when
+    /// Goofy successfully performs a perfect deflect") Goofy's perfect deflect knocks its swing back: Elden Ring's own attack
+    /// rebound (rebound.rs). False: nothing has happened to it (barred, a boss on the game's boss bar, its stance break or a KH3
+    /// reaction in the air holds it, no swing running). UNTESTED IN GAME.
+    fn rebound(&mut self, id: TargetId, wait: f32) -> bool {
+        let why = if let Some(why) = self.stagger_barred(id) {
+            Some(why)
+        } else if self.size_class(id) == 4 {
+            Some("a boss (the game's boss bar)")
+        } else if crate::stance::state(id).is_some_and(crate::rebound::stance_holds) {
+            Some("its stance break runs")
+        } else if self.puppets.airborne(id) {
+            Some("a KH3 reaction holds it in the air")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            erlog!("rebound: target {}: no rebound: {why}", id.0);
+            return false;
+        }
+        self.get(id).is_some_and(|e| crate::rebound::begin(id, e.handle, wait))
+    }
+
+    fn delay_attack(&mut self, id: TargetId, seconds: f32, lost: f32) -> bool {
+        if let Some(why) = self.stagger_barred(id) {
+            erlog!("aipause: target {}: no delay: {why}", id.0);
+            return false;
+        }
+        self.get(id).is_some_and(|e| crate::aipause::begin(id, e.handle, seconds, lost))
+    }
+
+    /// (GF-BREAK, R7) A Breaker may defeat it: no boss, nothing barring it.
+    fn may_defeat(&self, id: TargetId) -> bool {
+        self.size_class(id) != 4 && self.stagger_barred(id).is_none()
+    }
+
+    /// (GF-BREAK, R6) A FULL STAGGER ON THE GAME'S CHARACTER. The break goes through one explicit event (`Puppets::stagger_break`: the
+    /// poise meter's limits, bossguard, the chain cap), then the ladder GF-SENSOR proved (stance.rs: `W_SABreak`, the kneel cut with
+    /// `W_Idle` at the window). False: it does not break, and nothing has happened to it.
+    fn stagger_break_now(&mut self, id: TargetId, window: f32) -> bool {
+        if let Some(why) = self.stagger_barred(id) {
+            erlog!("stagger: target {}: no break: {why}", id.0);
+            return false;
+        }
+        let params = self.params;
+        let Some(e) = self.get(id).cloned() else { return false };
+        match self.puppets.stagger_break(&params, &e, window) {
+            Ok(()) => {
+                erlog!("stagger: target {} (c{:04}, poise {:.0}/{:.0}, HP {}/{}): BROKEN for {window:.2} s", id.0, e.npc_id, e.poise, e.poise_max, e.hp, e.hp_max);
+                crate::stance::begin_grounded(self, id, window);
+                true
+            }
+            Err(why) => {
+                erlog!("stagger: target {} (c{:04}): the break is refused: {why}", id.0, e.npc_id);
+                false
+            }
+        }
+    }
+
     /// (ZETTA 2026-10-23) The game's own route of a hit (the trait's `apply_hit` before Zettaflare's owned hits).
     fn apply_hit_game(&mut self, hit: &HitRecord) -> HitResult {
         // (IMPL_ER61) a shotlock's hit: scaled and capped per target per shotlock (ermap.rs `shotlock_hit`)
@@ -1475,7 +1835,32 @@ impl ErTargets {
         if let Some(note) = note {
             erlog!("hit: {note}");
         }
+        // (GF-BREAK, R7) A BREAKER'S DEFEAT asked in the step the game went no-death: the slam leaves it 1 HP, no phase is skipped
+        if adjusted.flags & kh_core::host::HIT_FLAG_BREAKER != 0 && !self.may_defeat(adjusted.target) {
+            adjusted.flags &= !kh_core::host::HIT_FLAG_BREAKER;
+            let left = self.list.iter().find(|e| e.id == adjusted.target).map_or(1, |e| e.hp_game.max(e.hp));
+            adjusted.damage = adjusted.damage.min(self.params.damage_out_inverse(left - 1));
+            erlog!("hit: a Breaker's defeat on target {} refused at the hit: its damage is capped to leave it 1 HP", adjusted.target.0);
+        }
+        // (PARTY-AI, THE USER 2026-11-03: "Protect the slam") a Breaker winds up on it: every other party hit leaves it 1 HP
+        let held = crate::stance::slam_held(adjusted.target);
+        if !held && adjusted.flags & kh_core::host::HIT_FLAG_BREAKER == 0 && crate::stance::kneeling(adjusted.target) {
+            erlog!("hit: '{}' on target {}: it kneels, no Breaker winds up on it (Protect the slam off)", adjusted.attack_name, adjusted.target.0);
+        }
+        if held {
+            // (FINAL-FIX, FINAL-FIX launches 5 / 6: two Ball Lightning bullets in one wind-up, each capped to leave 1 of the
+            // game's 218 HP, killed it together) the HP left counts what the party's hits already asked and the game has not taken
+            // yet (`hp`, our side), not the game's own number alone
+            let (left, ours) = self.list.iter().find(|e| e.id == adjusted.target).map_or((1, 1), |e| (e.hp_game, e.hp));
+            let params = self.params;
+            let capped = protect_slam(adjusted.damage, adjusted.flags, left, ours, |hp| params.damage_out_inverse(hp));
+            if capped < adjusted.damage {
+                erlog!("hit: '{}' on target {} capped while a Breaker winds up on it (Protect the slam): {:.1} -> {:.1} KH, it keeps at least 1 of its {left} HP", adjusted.attack_name, adjusted.target.0, adjusted.damage, capped);
+                adjusted.damage = capped;
+            }
+        }
         let hit = &adjusted;
+        let defeat = hit.flags & kh_core::host::HIT_FLAG_BREAKER != 0;
         // (IMPL_ER32) a breakable map object: a bullet with object damage is queued for it (breakables.rs)
         if crate::breakables::is_prop(hit.target) {
             let wanted = self.params.damage_out(hit.damage);
@@ -1495,13 +1880,17 @@ impl ErTargets {
             if row.hostile && row.alive && hit.takes_hp() && row.lift == 0.0 {
                 let wanted = params.damage_out(hit.damage);
                 let ratio = self.memory.get(&row.id.0).map_or(1.0, |m| if m.ratio > 0.0 { m.ratio } else { 1.0 });
-                let lethal = route.mode == crate::damage::Mode::Hp && row.hp - wanted <= 0 || (wanted as f32 * ratio) as i32 >= row.hp + row.hp_max / 4;
+                let lethal = defeat || route.mode == crate::damage::Mode::Hp && row.hp - wanted <= 0 || (wanted as f32 * ratio) as i32 >= row.hp + row.hp_max / 4;
                 airborne_before = self.puppets.airborne(row.id);
                 outcome = Some(self.puppets.hit(&params, row, hit, wanted > 0, lethal));
             }
         }
         // (IMPL_ER51) a friendly NPC: the same bullet, the game's own reaction, no KH3 puppet
         if self.list.iter().any(|e| e.id == hit.target && e.friendly && e.alive) {
+            // (PARTY-AI, THE USER 2026-11-03: "the party leader can hit friendly NPCs, but not AI allies") an AI's hit passes through
+            if !kh_core::host::may_hit_friendly(hit.flags) {
+                return HitResult::default();
+            }
             return self.hit_friendly(hit, carrier, sp_attribute, obj);
         }
         let Some(e) = self.list.iter_mut().find(|e| e.id == hit.target) else { return HitResult::default() };
@@ -1510,7 +1899,11 @@ impl ErTargets {
         }
         let memory = self.memory.entry(e.id.0).or_default();
         memory.hit_step = step.max(1);
-        if !hit.takes_hp() {
+        // (THE USER 2026-11-02: "Shields don't count as guarding") A HIT KH3'S RULES GUARDED WITH THE BODY'S OWN RAISED GUARD
+        // (shieldguard.rs): no KH3 reaction (none was asked: `takes_hp` is false), but it still goes to the game as the
+        // player's bullet without dmgLevel or poise, so the game's guard takes its own cut, the stamina, and breaks itself
+        let shielded = crate::shieldguard::game_takes(hit.info.victim_result, e.shield.is_some(), params.shield.on);
+        if !hit.takes_hp() && !shielded {
             return HitResult { accepted: true, damage_dealt: 0.0, hp_after: e.hp as f32, killed: false, guarded: true };
         }
         memory.hit_frame = self.frame_no;
@@ -1519,13 +1912,14 @@ impl ErTargets {
         // ANYTHING"; the user's log: Malenia took 8217 of 9940): the bullet asks the number over the negation measured on this
         // target, and what the game still keeps is written to its HP directly once it has taken its share (`reconcile`)
         let forced = hit.flags & kh_core::host::HIT_FLAG_FORCE != 0;
-        let full = if forced { wanted } else { 0 };
-        let wanted = if forced { forced_ask(wanted, memory.ratio) } else { wanted };
-        let kind = hit.damage_kind.value() as i32;
+        // (GF-BREAK, R7) a Breaker's defeat: all the HP it has, by that same route (the game's death, credit and prizes follow)
+        let full = if defeat { e.hp_game.max(e.hp).max(1) } else if forced { wanted } else { 0 };
+        let wanted = if defeat { forced_ask(full, memory.ratio) } else if forced { forced_ask(wanted, memory.ratio) } else { wanted };
+        let kind = hit.damage_kind.value();
         // THE ELDEN RING ANIMATION: the damage level of the reaction KH3 started (a STRONG body may
         // have downgraded the kind or refused it: then the level of "no reaction", poise only).
         let started = match outcome {
-            Some(kh_react::HitOutcome::Started { kind, .. }) => kind.value() as i32,
+            Some(kh_react::HitOutcome::Started { kind, .. }) => kind.value(),
             _ => 0,
         };
         // (IMPL_ER6: the level is the one that plays the ROLE on this kind of character: a stagger for
@@ -1535,6 +1929,8 @@ impl ErTargets {
         let level = self.puppets.level_for(e.npc_id, role);
         // (ZETTA 2026-10-23) Zettaflare's beam hit on its posed target: the level it was given (zpose.rs), not the role's
         let (role, level) = match self.zlevel.take() { Some(l) => (crate::puppet::Role::None, l), None => (role, level) };
+        // (2026-11-02) into a raised guard: no stagger asked of the game (its guard reaction is its own)
+        let (role, level) = if shielded { (crate::puppet::Role::None, 0) } else { (role, level) };
         // POISE DAMAGE goes to ARMOURED bodies only (KH3's STRONG hurt shape: Elden Ring's stance
         // break is its broken window). On bodies we throw about, Elden Ring's stance break (a long
         // kneel) would play over KH3's reactions.
@@ -1543,10 +1939,34 @@ impl ErTargets {
         let poise = self.puppets.poise_for(&params, e, params.reaction(kind).poise * params.poise_scale, hit.info.reaction_power);
         // (XSI, 2026-10-16) BREAK BOOST (kh-core abilities/xs, XS 2.16): its hits ask more poise damage
         let poise = if hit.flags & kh_core::abilities::xs::FLAG_BREAK_BOOST != 0 { poise * (1.0 + kh_core::abilities::xs::X.break_boost_poise) } else { poise };
+        // (2026-11-02) into a raised guard: no poise (the guard's pressure is the bullet's stamina damage, the game's own rule)
+        let poise = if shielded { 0.0 } else { poise };
+        // (2026-11-02) the share of the HP the guard is expected to let through: its row's cut rate for the bullet's damage type
+        let guard_cut = if shielded { crate::shieldguard::cut_of(crate::bullet::Attack { phys: 1, carrier, ..crate::bullet::Attack::PLAIN }.split(self.shape.element).iter().position(|v| *v > 0).unwrap_or(0), &e.guard_cuts) } else { 0.0 };
+        let through = |expected: i32| if shielded { crate::shieldguard::chip(expected, guard_cut) } else { expected };
+        // (THE IN-GAME TESTER 2026-11-03: Goofy's Breaker asked 4224 of Margit, 2749 expected of his 3456, the game took them
+        // all and the boss died) THE HP THE KH SIDE COUNTS ON (the attack value x the share measured on this body) AND THE
+        // BULLET'S ASK BY hitcap.rs: a bullet that could kill a body expected to live asks only what leaves it 1 HP at the
+        // worst (the bullets in flight at it counted at their worst); the rest of the expected HP is written once the game has
+        // taken its share (`full`; into a raised guard: no write, the guard's rules), and what it takes over is given back
+        let ratio = if memory.ratio > 0.0 { memory.ratio } else { 1.0 };
+        let expected = if full > 0 { full } else { through(((wanted as f32 * ratio).round() as i32).max(1)) };
+        let ceiling = crate::hitcap::ceiling(memory.ratio_max);
+        let (flight_expected, flight_worst) = self.pending.iter().chain(self.waiting.iter()).filter(|p| p.id == e.id.0).fold((0, 0), |(a, b), p| (a + p.expect.max(p.full), b + crate::hitcap::worst_of(p.wanted, p.full, ceiling)));
+        let hp_now = e.hp_game.max(0);
+        let plan = crate::hitcap::plan(wanted, expected, hp_now, flight_expected, flight_worst, ceiling);
+        let lives = crate::hitcap::survives(expected, hp_now, flight_expected);
+        let ask = if plan.capped && shielded { plan.ask.max(1) } else { plan.ask };
+        let full = if plan.capped && !shielded { expected } else { full };
+        let expect = if lives && !shielded { expected } else { 0 };
+        let capped_note = if plan.capped { format!(" CAPPED to attack {ask} (hitcap.rs: at the worst x{ceiling:.2} it leaves {} of its {hp_now} HP{}; {expected} expected{})", hp_now - flight_worst - crate::hitcap::worst_of(ask, 0, ceiling), if flight_worst > 0 { format!(" with {flight_worst} at the worst in flight") } else { String::new() }, if shielded { ", the guard's rules" } else { ": the rest written once the game took its share" }) } else { String::new() };
+        if shielded {
+            erlog!("guard: target {} (c{:04}) '{}' {:.1} KH GUARDED by its raised guard (shield {:?}, guard cut {guard_cut:.0} %): no KH3 reaction, the attacker bounces off; the game's guard takes the bullet (stamina {}), its chip and its guard break are the game's", e.id.0, e.npc_id, hit.attack_name, hit.damage, e.shield, (wanted / 2).clamp(1, 60000));
+        }
         let frame = self.frame;
         let contact_er = frame.pos_kh_to_er(hit.position);
         let before = e.hp;
-        let mut event = HitEvent { step, target: e.id, handle: e.handle, attack: hit.attack, attack_name: hit.attack_name, kind, position: hit.position, position_er: contact_er, direction: hit.direction, normal: hit.info.impact_normal, damage: hit.damage, er_damage: wanted, level, reaction: started, airborne: airborne_before, guarded: false, route: "hp" };
+        let mut event = HitEvent { step, target: e.id, handle: e.handle, attack: hit.attack, attack_name: hit.attack_name, kind, position: hit.position, position_er: contact_er, direction: hit.direction, normal: hit.info.impact_normal, damage: hit.damage, er_damage: wanted, level, reaction: started, airborne: airborne_before, guarded: shielded, route: "hp" };
 
         // ---- THE GAME'S OWN PIPELINE: a bullet of the player's at the contact point
         let mut by_bullet = None;
@@ -1554,7 +1974,7 @@ impl ErTargets {
         let mut spawn = (Vec3::ZERO, Vec3::Z);
         let mut sent = None;
         let mut queued = false;
-        let usable = route.mode == crate::damage::Mode::Bullet && !route.off && wanted > 0 && self.bullets.available() && attacker.is_some();
+        let usable = route.mode == crate::damage::Mode::Bullet && !route.off && ask > 0 && self.bullets.available() && attacker.is_some();
         let mut wait = usable && self.fired_frame == self.frame_no;
         if usable && !wait {
             // (dry run of the slot rule: a row pair must be free, else the bullet waits its turn too)
@@ -1562,12 +1982,12 @@ impl ErTargets {
         }
         if wait {
             // (one bullet a frame: this one waits its turn)
-            let attack = crate::bullet::Attack { phys: wanted.clamp(1, 60000) as u16, poise, stamina: (wanted / 2).clamp(1, 60000) as u16, level, carrier, sp_attribute, obj };
+            let attack = crate::bullet::Attack { phys: ask.clamp(1, 60000) as u16, poise, stamina: (wanted / 2).clamp(1, 60000) as u16, level, carrier, sp_attribute, obj };
             let at =((contact_er.y - e.er_pos.y) / (e.half_height * 2.0 / CM_PER_M).max(0.01)).clamp(0.15, 0.85);
-            self.waiting.push_back(Pending { id: e.id.0, frame: self.frame_no, wanted, hp_before: e.hp, fraction: at, npc_id: e.npc_id, from: Vec3::ZERO, dir: Vec3::Z, attack: Some(attack), tries: 0, friendly: false, anim_before: e.anim, full });
+            self.waiting.push_back(Pending { id: e.id.0, frame: self.frame_no, wanted: ask, hp_before: e.hp, fraction: at, npc_id: e.npc_id, from: Vec3::ZERO, dir: Vec3::Z, attack: Some(attack), tries: 0, friendly: false, anim_before: e.anim, full, guarded: shielded, expect });
             self.puppets.asked(e.id, role, level);
             queued = true;
-        } else if route.mode == crate::damage::Mode::Bullet && !route.off && wanted > 0 && self.bullets.available() {
+        } else if route.mode == crate::damage::Mode::Bullet && !route.off && ask > 0 && self.bullets.available() {
             if let Some(owner) = attacker {
                 let memo = self.aim.get(&e.npc_id).copied().unwrap_or_default();
                 let lead = self.puppets.lead(e.id, 2);
@@ -1576,10 +1996,10 @@ impl ErTargets {
                 // (IMPL_ER54) an enemy still in its disguise (a bush demi-human): the bullet crosses the disguise asset
                 let (from, dir, shape) = if e.disguised { disguise_path(e, contact_er, coords::dir_kh_to_er(hit.direction), self.shape) } else { (from, dir, shape) };
                 fraction = (from.y - ahead.er_pos.y) / (e.half_height * 2.0 / CM_PER_M).max(0.01);
-                let attack = crate::bullet::Attack { phys: wanted.clamp(1, 60000) as u16, poise, stamina: (wanted / 2).clamp(1, 60000) as u16, level, carrier, sp_attribute, obj };
+                let attack = crate::bullet::Attack { phys: ask.clamp(1, 60000) as u16, poise, stamina: (wanted / 2).clamp(1, 60000) as u16, level, carrier, sp_attribute, obj };
                 // (ER party S3) stage 2 (U14, `party.bullet_owner`, off by default): a friend's hit fired by his own body
                 #[cfg(feature = "party")]
-                let fired = crate::allybody::fire_hit(&mut self.bullets, owner, hit, Some(e.handle), from, dir, attack, shape);
+                let fired = crate::allybody::fire_hit(&mut self.bullets, owner, hit, Some(e.handle), (from, dir), attack, shape);
                 #[cfg(not(feature = "party"))]
                 let fired = self.bullets.fire(owner, Some(e.handle), from, dir, attack, shape);
                 match fired {
@@ -1596,32 +2016,34 @@ impl ErTargets {
         }
         self.hits += 1;
         if queued {
-            let ratio = if memory.ratio > 0.0 { memory.ratio } else { 1.0 };
-            let expected = if full > 0 { full } else { ((wanted as f32 * ratio).round() as i32).max(1) };
             e.hp = (before - expected).max(1);
             event.route = "bullet";
             self.events.push(event);
-            erlog!("hit: Sora -> target {} (c{:04}) '{}' kind {:?} {:.1} KH = attack {} by a BULLET THAT WAITS ITS TURN (one a frame), dmgLevel {level}: hp {} (expected -> {})", e.id.0, e.npc_id, hit.attack_name, hit.damage_kind, hit.damage, wanted, before, e.hp);
-            return HitResult { accepted: true, damage_dealt: params.damage_out_inverse(expected.min(before)), hp_after: e.hp as f32, killed: false, guarded: false };
+            erlog!("hit: Sora -> target {} (c{:04}) '{}' kind {:?} {:.1} KH = attack {} by a BULLET THAT WAITS ITS TURN (one a frame), dmgLevel {level}: hp {} (expected -> {}){capped_note}", e.id.0, e.npc_id, hit.attack_name, hit.damage_kind, hit.damage, wanted, before, e.hp);
+            return HitResult { accepted: true, damage_dealt: params.damage_out_inverse(expected.min(before)), hp_after: e.hp as f32, killed: false, guarded: shielded };
         }
         if let Some(row) = by_bullet {
             // The game applies it after this phase: what it takes is read next frame (`reconcile`).
             // Until then the row carries the expected HP (the attack value x the ratio measured on this target).
-            let ratio = if memory.ratio > 0.0 { memory.ratio } else { 1.0 };
-            let expected = if full > 0 { full } else { ((wanted as f32 * ratio).round() as i32).max(1) };
-            self.pending.push(Pending { id: e.id.0, frame: self.frame_no, wanted, hp_before: before, fraction, npc_id: e.npc_id, from: spawn.0, dir: spawn.1, attack: sent, tries: 0, friendly: false, anim_before: e.anim, full });
+            self.pending.push(Pending { id: e.id.0, frame: self.frame_no, wanted: ask, hp_before: before, fraction, npc_id: e.npc_id, from: spawn.0, dir: spawn.1, attack: sent, tries: 0, friendly: false, anim_before: e.anim, full, guarded: shielded, expect });
             e.hp = (before - expected).max(1);
             event.route = "bullet";
             self.events.push(event);
             erlog!(
-                "hit: Sora -> target {} (c{:04} team {}) '{}' kind {:?} {:.1} KH x {} = attack {} by a BULLET (row {row}), dmgLevel {level} (KH3 reaction kind {}{}), poise damage {:.0}: hp {} (expected -> {})",
+                "hit: Sora -> target {} (c{:04} team {}) '{}' kind {:?} {:.1} KH x {} = attack {} by a BULLET (row {row}), dmgLevel {level} (KH3 reaction kind {}{}), poise damage {:.0}: hp {} (expected -> {}){capped_note}",
                 e.id.0, e.npc_id, e.team, hit.attack_name, hit.damage_kind, hit.damage, params.out_scale, wanted, started, if airborne_before { ", airborne" } else { "" }, poise, before, e.hp
             );
-            return HitResult { accepted: true, damage_dealt: params.damage_out_inverse(expected.min(before)), hp_after: e.hp as f32, killed: false, guarded: false };
+            return HitResult { accepted: true, damage_dealt: params.damage_out_inverse(expected.min(before)), hp_after: e.hp as f32, killed: false, guarded: shielded };
         }
         // ---- THE STOPGAP: the number straight off its HP
+        // (2026-11-02) into a raised guard: only its chip (no guard pressure without the game's own pipeline)
+        let amount = if full > 0 { full } else { through(wanted) };
+        if amount <= 0 {
+            self.events.push(event);
+            return HitResult { accepted: true, damage_dealt: 0.0, hp_after: e.hp as f32, killed: false, guarded: true };
+        }
         // SAFETY: `e.chr` was read from the character sets in this frame phase and found complete.
-        let outcome = unsafe { crate::damage::deal(route, &mut *(e.chr as *mut ChrIns), attacker, if full > 0 { full } else { wanted }, hit, frame) };
+        let outcome = unsafe { crate::damage::deal(route, &mut *(e.chr as *mut ChrIns), attacker, amount, hit, frame) };
         e.hp = outcome.hp_after;
         e.hp_game = e.hp; // (HUD2) written to the game's HP: real at once
         e.alive = e.hp > 0;
@@ -1629,7 +2051,7 @@ impl ErTargets {
         let killed = before > 0 && e.hp <= 0;
         self.events.push(event);
         erlog!(
-            "hit: Sora -> target {} (c{:04} team {}) '{}' kind {:?} {:.1} KH x {} = {} ER by {}: hp {} -> {}{}",
+            "hit: Sora -> target {} (c{:04} team {}) '{}' kind {:?} {:.1} KH x {} = {} ER (written {amount}) by {}: hp {} -> {}{}{capped_note}",
             e.id.0, e.npc_id, e.team, hit.attack_name, hit.damage_kind, hit.damage, params.out_scale, wanted, outcome.route, before, e.hp, if killed { " KILLED" } else { "" }
         );
         if killed && !memory.dead_logged {
@@ -1638,7 +2060,7 @@ impl ErTargets {
             self.kills.push((e.id, e.hp_max, e.pos + Vec3::Z * e.half_height));
             self.deaths.push((e.id, 0)); // (IMPL_ER22) the direct HP write: dead by our own hand, now
         }
-        HitResult { accepted: true, damage_dealt: params.damage_out_inverse(outcome.dealt), hp_after: e.hp.max(0) as f32, killed, guarded: false }
+        HitResult { accepted: true, damage_dealt: params.damage_out_inverse(outcome.dealt), hp_after: e.hp.max(0) as f32, killed, guarded: shielded }
     }
 
     /// (ZETTA 2026-10-23, zdefer.rs) ONCE A FRAME after the reconcile: while Zettaflare owns the presentation, KH3's side of
@@ -1779,7 +2201,7 @@ impl ErTargets {
                 }
             }
             if killed {
-                let boss = crate::erhud::boss_bar_handles().iter().any(|h| *h == e.handle);
+                let boss = crate::erhud::boss_bar_handles().contains(&e.handle);
                 // (a story-critical change's cutscene is the game's: no skip for it)
                 // (2026-10-24) a defeat that plays its own cutscene (an ending, a story beat) keeps it: no skip for it
                 let own_cut = crate::targets::find_chr(&e.handle).and_then(|chr| crate::zphase::defeat_cutscenes(&crate::zphase::map_of(chr), chr.event_entity_id)).unwrap_or_default();
@@ -1870,6 +2292,7 @@ impl ErTargets {
     }
 
     /// (ZETTA 2026-10-23) The heavy hurt of Zettaflare's target begins (zpose.rs): its heaviest level asked of the game.
+    #[cfg(feature = "party")]
     fn zpose_begin(&mut self, e: &Enemy, when: &str) {
         let before = crate::targets::find_chr(&e.handle).and_then(|c| crate::puppet::damage_anim(c));
         self.zpose = Some(ZPose { id: e.id.0, handle: e.handle, npc_id: e.npc_id, stage: crate::zpose::Stage::Asked { level: 0, waited: 0.0, before }, muted: 0, frame: self.frame_no, armour: None });
@@ -2039,6 +2462,21 @@ impl ErTargets {
 }
 
 impl Targets for ErTargets {
+    /// (AUDIT-B W-FIN) THE HIT'S BONE (KH3 0x141473E30: FHitResult.BoneName): the model node nearest the contact
+    /// (`nearest_node`), every Elden Ring body. UNTESTED IN GAME.
+    fn hit_bone(&self, id: TargetId, at: Vec3) -> Option<kh_core::host::TargetBone> {
+        let e = self.get(id).filter(|e| e.chr != 0)?;
+        let chr = find_chr(&e.handle)?;
+        nearest_node(chr, e.er_pos, self.frame.pos_kh_to_er(at)).map(kh_core::host::TargetBone)
+    }
+
+    /// (AUDIT-B W-FIN) That node's world transform now, in the core's space (coords.rs `rot_er_to_kh`). UNTESTED IN GAME.
+    fn bone_pose(&self, id: TargetId, bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        let e = self.get(id).filter(|e| e.chr != 0)?;
+        let (rot, at) = node_now(find_chr(&e.handle)?, bone.0)?;
+        Some(kh_core::host::BonePose { position: self.frame.pos_er_to_kh(at), rotation: coords::rot_er_to_kh(rot) })
+    }
+
     /// (ZETTA) Zettaflare's held target: the puppet holds it (puppet.rs `zetta_hold`), turning it to Donald; `None` gives
     /// it back. UNTESTED IN GAME.
     fn script_hold(&mut self, id: TargetId, hold: Option<kh_core::host::ScriptHold>) {
@@ -2048,6 +2486,11 @@ impl Targets for ErTargets {
                 let d = h.face - e.pos;
                 let face_yaw = if d.x.abs() + d.y.abs() > 1.0 { d.y.atan2(d.x).to_degrees() } else { e.yaw };
                 let _ = self.puppets.zetta_hold(&e, face_yaw, h.turn_rate * h.dt.max(0.0), h.hurt); // (ZETTA round 5c) hurt
+                // (F-POLISH) carried (FINISH_DR's drill): its origin where the core puts it, the KH3 offset turned into ER
+                // space from its own origin now. UNTESTED IN GAME.
+                if let Some(c) = h.carry {
+                    let _ = self.puppets.carry(&e.handle, e.er_pos + crate::coords::dir_kh_to_er(c - e.pos));
+                }
                 // (ZETTA 2026-10-23, the user: "could the fast forward happen while Donald is charging so it is never actually
                 // visible?") the pre-pose of its heavy hurt in the window kh-party opens (Donald's shot, the target out of frame)
                 #[cfg(feature = "party")]
@@ -2116,8 +2559,24 @@ impl Targets for ErTargets {
     }
 
     fn enumerate(&self, out: &mut Vec<TargetInfo>) {
+        // (NOCOMBAT) where Elden Ring forbids attacks no KH character sees anything to fight (the AI's picks, the lock-on,
+        // the shotlock's candidates): one rule for all of them
+        if !kh_core::nocombat::world_allows(kh_core::nocombat::Act::AiAttack) {
+            return;
+        }
         out.extend(self.list.iter().filter_map(|e| self.info_of(e)));
         self.props.enumerate(out); // (IMPL_ER32) breakable map objects: hit, never locked on to
+    }
+
+    /// (MIMIC-BOSS hotfix 2, the user: "make sure the proper resistences are applied to the mimic boss") a Mimic Tear boss's body
+    /// (and its summoned Mimic's): the COPY's own KH3 defence, the copied leader's Defense and resistances, in the party's damage
+    /// formula; every other character: none, as before (Elden Ring's own defences take the hit).
+    fn defense(&self, id: TargetId) -> Option<kh_core::host::TargetDefense> {
+        let _e = self.get(id)?;
+        #[cfg(feature = "party")]
+        return crate::mimic_boss::copy_defense_of(&_e.handle);
+        #[cfg(not(feature = "party"))]
+        None
     }
 
     fn info(&self, id: TargetId) -> Option<TargetInfo> {
@@ -2134,6 +2593,28 @@ impl Targets for ErTargets {
     fn element_affinity(&self, id: TargetId) -> Option<[i32; 8]> {
         let e = self.get(id)?;
         crate::insight::of_row(e.npc_param).map(|x| crate::insight::affinity(&x, &kh_party::donald::ability_info::prog()))
+    }
+
+    /// (GF-BREAK, R6, R7) THE STAGGER BOOK'S QUESTIONS, on the real character. UNTESTED IN GAME.
+    fn stagger_ask(&mut self, id: TargetId, ask: kh_core::host::StaggerAsk) -> bool {
+        use kh_core::host::StaggerAsk;
+        match ask {
+            StaggerAsk::Break { window } => self.stagger_break_now(id, window),
+            StaggerAsk::Hold { seconds } => {
+                self.puppets.stagger_hold(id, seconds);
+                crate::stance::hold(id, seconds);
+                true
+            }
+            StaggerAsk::Release { juggle } => {
+                let params = self.params;
+                self.puppets.stagger_release(&params, id, juggle);
+                crate::stance::release(id);
+                true
+            }
+            StaggerAsk::MayDefeat => self.may_defeat(id),
+            StaggerAsk::Delay { seconds, lost } => self.delay_attack(id, seconds, lost),
+            StaggerAsk::Rebound { wait } => self.rebound(id, wait), // (THE USER 2026-11-02) bounced off Goofy's shield
+        }
     }
 
     fn size_class(&self, id: TargetId) -> u8 {
@@ -2160,6 +2641,28 @@ impl Targets for ErTargets {
     }
 
     fn apply_hit(&mut self, hit: &HitRecord) -> HitResult {
+        // (NOCOMBAT) THE WORLD'S LAST WORD: where Elden Ring forbids attacks no KH hit reaches a body (Hewg, Roderika ...), by
+        // whatever route it was thrown
+        if !kh_core::nocombat::world_allows(kh_core::nocombat::Act::Hit) {
+            return HitResult::default();
+        }
+        // (COMBAT-FIX, THE USER 2026-11-06: "Rennala can currently be hit in her shield bubble during phase 1, this is not correct
+        // she should only be targetable when her shield has broken") A BODY ELDEN RING HOLDS INVULNERABLE TAKES NO KH HIT, by any
+        // route (melee, magic, shotlocks, situation commands, finishers, Zettaflare, a Breaker; HIT_FLAG_FORCE / _BREAKER do not
+        // override it): nothing goes to the game, no HP of ours, no KH3 reaction (invuln.rs)
+        if let Some(e) = self.get(hit.target).filter(|e| e.hostile && e.invuln.refuses_damage()) {
+            erlog!("hit: '{}' on target {} (c{:04}) refused: Elden Ring holds it invulnerable ({:?}): nothing lands", hit.attack_name, e.id.0, e.npc_id, e.invuln);
+            return HitResult { hp_after: e.hp.max(0) as f32, ..HitResult::default() };
+        }
+        // (MIMIC-BOSS) a Mimic Tear boss's body: its Goofy copy may parry the hit (nothing reaches the game); else the hit goes
+        // on to the game and becomes the copy's KH3 reaction
+        // (MIMIC-BOSS hotfix 3, MB3-COMBAT) the body's handle: a hit on the boss's summoned Mimic Tear becomes its reaction too
+        if let Some(r) = crate::mimic_boss::before_party_hit(hit, self.get(hit.target).map_or(0.0, |e| e.hp_game as f32), self.get(hit.target).map_or(0, |e| game::handle_bits(&e.handle))) {
+            return r;
+        }
+        // (AGGRO, wired by GF-THREAT) every party hit reaches the director's ledger: who hurt it, who touched it last
+        #[cfg(feature = "party")]
+        crate::party::aggro::note_hit(hit.target, hit.attacker.valid.then_some(hit.attacker.position), hit.flags, hit.damage);
         // (ZETTA 2026-10-23, zdefer.rs) ZETTAFLARE'S HITS WHILE IT OWNS THE PRESENTATION: their HP is owed (KH3's side sees
         // it taken: the kill, the finale), the game's own side gets one point (its hit animation, the throw's), never its death
         if self.zowned && crate::zdefer::owned_hit(hit.flags) && hit.takes_hp() && !crate::breakables::is_prop(hit.target) {
@@ -2197,7 +2700,7 @@ impl Targets for ErTargets {
                 }
                 let owed = self.zdefer.owed(hit.target.0);
                 if kh_before > 0 && game_hp > 2 {
-                    let mut token = hit.clone();
+                    let mut token = *hit;
                     token.damage = 1.0 / self.params.out_scale.max(1.0);
                     // (2026-10-23) its heavy hurt: already posed (the pre-pose, unseen): the token starts nothing new; else it is
                     // asked by this very hit (no unseen window: the cinematic camera off)
@@ -2240,18 +2743,18 @@ impl Targets for ErTargets {
 
     fn engaged_count(&self) -> u32 {
         // (BM) a passive kind within range engages only while it fights (`engages`)
-        self.list
-            .iter()
-            .filter(|e| e.hostile && e.alive && e.active)
-            .filter(|e| engages((e.pos - self.sora).length() <= self.params.engage_range, e.passive, self.fought_lately(e.id), self.attacked_lately(e.id)))
-            .count() as u32
+        // (HUD-REVIVE-COMBAT) THE WHOLE PARTY'S COUNT, whoever leads (`engages_the_party`): Sora's flag (kh-core pawn_tick), a
+        // friend leader's (ErPartyTargets -> kh-partyhost battle_step) and so every member's battle state read the same enemies
+        self.list.iter().filter(|e| e.hostile && e.alive && e.active).filter(|e| self.engages_the_party(e)).count() as u32
     }
 
     /// The hurt shape's reaction type: KH3's DEFAULT body, or for the armoured classes its STRONG
     /// body with a reaction endurance (kh-react keeps it).
+    /// (THE USER 2026-11-02: "Shields don't count as guarding") and while the game's own guard is up, guarding behind its
+    /// shield (`Enemy::shield`, shieldguard.rs): KH3's classification decides the hit from its arc (kh-core `seen_from`).
     fn body(&self, id: TargetId, _part: u32) -> TargetBody {
         match self.get(id) {
-            Some(e) if e.hostile => self.puppets.body(&self.params, e),
+            Some(e) if e.hostile => crate::shieldguard::guarded_body(self.puppets.body(&self.params, e), e.shield),
             _ => TargetBody::DEFAULT,
         }
     }
@@ -2369,6 +2872,36 @@ mod tests {
     const NPC: Facts = Facts { can_target: false, summon: false, npc_type: true, helper: false, hit_off: false, disguise_kind: false };
     const ENEMY: Facts = Facts { can_target: true, ..NPC };
 
+    /// (PARTY-AI, THE USER 2026-11-03: "Protect the slam") while a Breaker winds up, any other party hit (a leader's or an AI's,
+    /// a spell, a summon's) leaves the target 1 HP; the slam itself is untouched; a hit that leaves more passes as it is.
+    #[test]
+    fn protect_the_slam_leaves_one_hp_to_every_hit_but_the_breakers() {
+        let kh_of_er = |hp: i32| hp as f32 * 2.0; // 1 ER HP = 2 KH damage here
+        // Donald's Firaga asking 2006 of a soldier with 218 HP: capped well inside the 217 above 1 (FINAL-FIX: x0.9 = 195 ER = 390 KH)
+        assert_eq!(protect_slam(2006.0, 0, 218, 218, kh_of_er), 390.0);
+        // an AI's hit, the same rule
+        assert_eq!(protect_slam(2006.0, kh_core::host::HIT_FLAG_AI, 218, 218, kh_of_er), 390.0);
+        // a small hit that leaves more: as it is
+        assert_eq!(protect_slam(50.0, 0, 218, 218, kh_of_er), 50.0);
+        // at 1 HP already: nothing more
+        assert_eq!(protect_slam(50.0, 0, 1, 1, kh_of_er), 0.0);
+        // the slam: its own defeat rule decides
+        assert_eq!(protect_slam(2006.0, kh_core::host::HIT_FLAG_BREAKER, 218, 218, kh_of_er), 2006.0);
+        // no Breaker on it: the side bullets may fire
+        #[cfg(feature = "party")]
+        assert!(side_hit_allowed(TargetId(987_654)));
+    }
+
+    /// (PARTY-AI, THE USER 2026-11-03: "the party leader can hit friendly NPCs, but not AI allies") the shared rule the friendly
+    /// route reads: the player's leader's hit strikes, an AI's passes through, whoever the character is.
+    #[test]
+    fn a_friendly_npc_is_struck_by_the_players_leader_only() {
+        assert!(kh_core::host::may_hit_friendly(kh_core::host::ai_hit_flag(true)));
+        assert!(!kh_core::host::may_hit_friendly(kh_core::host::ai_hit_flag(false)));
+        assert!(!kh_core::host::may_hit_friendly(kh_core::host::HIT_FLAG_AI | kh_core::host::HIT_FLAG_FORCE));
+        assert!(kh_core::host::may_hit_friendly(kh_core::host::HIT_FLAG_BREAKER), "the leader's slam");
+    }
+
     #[test]
     fn hostile_is_lockable_and_hittable() {
         assert_eq!(classify(&ENEMY, true), Class::Hostile);
@@ -2454,7 +2987,7 @@ mod tests {
 
     #[test]
     fn the_disguise_bullet_starts_outside_the_bush_and_hits_the_map() {
-        let mut e = Enemy { id: TargetId(1), handle: unsafe { std::mem::zeroed::<FieldInsHandle>() }, chr: 0, er_pos: Vec3::ZERO, pos: Vec3::ZERO, velocity: Vec3::ZERO, yaw: 0.0, radius: 40.0, half_height: 45.0, hp: 683, hp_max: 683, hp_game: 683 /* (HUD2) */, team: 26, chr_type: 5, npc_id: 4110, npc_param: 41109010, think_param: 0, alive: true, hostile: false, friendly: true, disguised: true, can_target_raw: 0, summon: false, lock_disabled: false, weight: Weight::Small, active: true, anim: -1, poise_max: 0.0, poise: 0.0, hyper: None, in_attack: false, threat_lv: Some(0), passive: false /* (BM) */, poise_recover: 0.0, puppet_ok: false, airborne: false, grounded: true, lift: 0.0 };
+        let mut e = Enemy { id: TargetId(1), handle: unsafe { std::mem::zeroed::<FieldInsHandle>() }, chr: 0, er_pos: Vec3::ZERO, pos: Vec3::ZERO, velocity: Vec3::ZERO, yaw: 0.0, radius: 40.0, half_height: 45.0, hp: 683, hp_max: 683, hp_game: 683 /* (HUD2) */, team: 26, chr_type: 5, npc_id: 4110, npc_param: 41109010, think_param: 0, alive: true, hostile: false, friendly: true, disguised: true, can_target_raw: 0, summon: false, lock_disabled: false, weight: Weight::Small, active: true, anim: -1, poise_max: 0.0, poise: 0.0, hyper: None, in_attack: false, threat_lv: Some(0), passive: false /* (BM) */, poise_recover: 0.0, puppet_ok: false, airborne: false, grounded: true, lift: 0.0, shield: None, guard_cuts: [0.0; 5], invuln: crate::invuln::State::Open /* (COMBAT-FIX) */ };
         e.er_pos = Vec3::new(10.0, 2.0, 5.0);
         let (from, dir, shape) = disguise_path(&e, Vec3::new(12.0, 2.3, 5.0), Vec3::NEG_X, crate::bullet::Shape::default());
         assert!(!shape.penetrate);
@@ -2470,5 +3003,26 @@ mod tests {
         assert!(friendly_landed(500, 500, 0, 8000));
         assert!(!friendly_landed(500, 500, 0, 0));
         assert!(!friendly_landed(500, 500, 0, -1));
+    }
+
+    /// (AUDIT-B W-FIN) A node's 3 x 4 world matrix (rows, the place in the 4th column) reads back as its rotation and place,
+    /// and in the core's space a point on the node turns with it.
+    #[test]
+    fn a_node_matrix_reads_as_rotation_and_place() {
+        let rot = glam::Mat3::from_quat(glam::Quat::from_rotation_y(0.9));
+        let at = Vec3::new(3.0, 1.5, -2.0);
+        let mut bytes = [0u8; 0x30];
+        for r in 0..3 {
+            for c in 0..4 {
+                let v = if c == 3 { at[r] } else { rot.col(c)[r] };
+                bytes[r * 16 + c * 4..r * 16 + c * 4 + 4].copy_from_slice(&v.to_le_bytes());
+            }
+        }
+        let (m, p) = node_of(&bytes).expect("a node");
+        assert!((p - at).length() < 1e-6 && (m - rot).abs_diff_eq(glam::Mat3::ZERO, 1e-6), "{m} {p}");
+        assert!(node_of(&[0u8; 0x30]).is_none(), "a zero matrix is no node");
+        let q = coords::rot_er_to_kh(m);
+        let local_er = Vec3::new(0.0, 0.0, -1.0);
+        assert!((q * coords::unit_er_to_kh(local_er) - coords::unit_er_to_kh(m * local_er)).length() < 1e-5);
     }
 }

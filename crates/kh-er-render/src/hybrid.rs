@@ -136,6 +136,31 @@ pub struct Settings {
     /// own set (Quadratum, San Fransokyo: KH3 lights its CG characters with a studio key; the game's sun alone leaves a CG face
     /// flat when it is behind him). The KH outfits take `rig`.
     pub rig_own: f32,
+    /// (VIEWLIGHT, 2026-11-03, the user: "lighting on the KH characters still changes with the camera's movements. Like if there's
+    /// light behind them then the side of them facing the camera lights up too") r.hybrid_normal_probes (1): the light probes of
+    /// fit 6 are KEYED BY THE SURFACE NORMAL (er_char.wgsl hc_keyed, hc_probe_clusters: per block up to three clusters of the KH
+    /// texels facing the same way, read with cos^16 between their normal and the texel's): each KH texel takes the light Elden Ring
+    /// gave his surfaces that face its way, so a light behind him reaches only what faces it, from every camera. 0 = round 19's
+    /// six-direction cube (testing aid: it lit the side facing the camera with a light behind him). Block row 17.w; an older hycap
+    /// ignores it (the cube), an older DLL leaves it 0 (the cube). (round 2) 2, THE DEFAULT: the clusters read as a local-linear fit in
+    /// normal space around the texel's own normal (`hc_local_linear`); 1 = their weighted mean (round 1). (round 3) 3 (testing aid since the user's bleed report): + the
+    /// game's own light per pixel wherever it agrees with that reconstruction (`hc_px_trust`, the print discriminator).
+    pub normal_probes: f32,
+    /// (ER-NATIVE, the user 2026-11-03: "no estimating, it MUST be Elden Ring's lighting being applied to Sora"; "make sure all of
+    /// the shaders still work exactly like KH3"; "and not just Sora, all of KH objects") `r.hybrid_native` (1, THE DEFAULT again since 2026-11-06 (HAIR-BLEED, the user); the Style "Elden Ring"): every
+    /// KH texel takes ELDEN RING'S OWN LIGHT AT THAT TEXEL, raw: the diffuse light its light passes accumulated on the surface the
+    /// G-buffer pass wrote (every light, shadow, AO, GI, as for the Tarnished) and its specular light (the second target of the
+    /// same pair), straight into the translated KH3 material (its light buffer, then KHS, its rim, emissive, colour table as
+    /// ever). Nothing of ours decides a brightness: no fit, no probes, no clusters, no mask means, no own cascade lookup, no world
+    /// factor, no staircase, no rig SH, no level, no lift, no bleed fix, no fitted world point light, no stand-in reflection cube.
+    /// The units are ONE fixed mapping for every KH object (light.rs `native_k`): KH3's reference white where Elden Ring's tone
+    /// mapper gets 1.0 (the effects' rule, vfx.rs `effect_scale`), with the game's own SC_SceneExposure. Block row 3.y < 0 tells
+    /// the shaders (-1: native, -2: native with the game's specular captured). 0 = every earlier mode, as before (testing aid).
+    pub native: bool,
+    /// (ER-NATIVE) `r.hybrid_native_white` (1.0): the input of the game's tone mapper that KH3's reference white is handed over
+    /// at (the units' one constant: light.rs `native_k`). 1.0 = the effects' rule (vfx.rs effect_scale): KH3's white where the
+    /// tone mapper gets 1.0. A FIXED number, never measured: 0.5 hands KH3's shading twice the light for the same game light.
+    pub native_white: f32,
 }
 
 impl Default for Settings {
@@ -173,7 +198,7 @@ impl Default for Settings {
             debug: 0,
             rig_own: 0.35,
             mask: 1.0,
-            fit: 6.0, // (RSF round 19) the probes (5: hc_blur, round 16)
+            fit: 6.0, // (RSF round 19) the probes (5: hc_blur, round 16); (VIEWLIGHT) keyed by the normal: `normal_probes`
             gbclear: 1.0,
             sun: 1.0,
             sun_soft: 1.0,
@@ -181,6 +206,17 @@ impl Default for Settings {
             sun_fit: 1.0,
             shadow: 1.0,
             shade_ratio: 0.35,
+            // (VIEWLIGHT) 2: the clusters read local-linear (the default again since the user's "bleeding through them": mode 3 took the
+            // game's light per pixel, which carries what its screen-space terms gather from the bright background behind him)
+            normal_probes: 2.0,
+            // (ER-NATIVE) the game's light per texel, raw, through KH3's materials (the modes above stay behind r.hybrid_native 0)
+            // (CAMP-OPTIONS, THE USER 2026-11-05: "Kingdom Hearts 3 rendering should be the default in the settings menu") OFF BY
+            // DEFAULT now: the options screen's Style "Kingdom Hearts 3" = `r.hybrid_native = 0` (the route from before ER-NATIVE),
+            // "Elden Ring" = 1. HAIR-BLEED / PARTY-NATIVE: both routes must keep working (kh-host er_options.rs STYLE_KEY is this key).
+            // (HAIR-BLEED, THE USER 2026-11-06: "make Elden Ring's rendering for the KH characters as the default option") ON BY
+            // DEFAULT again: an unset key is the Elden Ring style; a saved Style is kept.
+            native: true,
+            native_white: 1.0,
         }
     }
 }
@@ -195,7 +231,7 @@ pub fn with_keys(d: Settings, get: &dyn Fn(&str) -> Option<f32>) -> Settings {
         lift: f("r.hybrid_lift", d.lift).clamp(0.0, 8.0),
         match_cos: f("r.hybrid_match", d.match_cos).clamp(-1.0, 1.0),
         search: f("r.hybrid_search", d.search).clamp(0.0, 2.0),
-        debug: f("r.hybrid_debug", d.debug as f32).clamp(0.0, 6.0) as u8,
+        debug: f("r.hybrid_debug", d.debug as f32).clamp(0.0, 7.0) as u8, // (ER-NATIVE) 7: the game's specular
         rig_own: f("r.hybrid_rig_own", d.rig_own).clamp(0.0, 1.0),
         mask: f("r.hybrid_mask", d.mask).clamp(0.0, 1.0),
         fit: f("r.hybrid_fit", d.fit).clamp(0.0, 6.0).round(), // (RSF round 19) 6: the probes
@@ -206,6 +242,9 @@ pub fn with_keys(d: Settings, get: &dyn Fn(&str) -> Option<f32>) -> Settings {
         sun_fit: f("r.hybrid_sun_fit", d.sun_fit).clamp(0.0, 1.0),
         shadow: f("r.hybrid_shadow", d.shadow).clamp(0.0, 1.0),
         shade_ratio: f("r.hybrid_shade", d.shade_ratio).clamp(0.03, 1.0),
+        normal_probes: f("r.hybrid_normal_probes", d.normal_probes).clamp(0.0, 3.0).round(), // (VIEWLIGHT) 0 cube, 1 keyed mean, 2 keyed local-linear, 3 + per-pixel trust
+        native: f("r.hybrid_native", if d.native { 1.0 } else { 0.0 }) > 0.5,
+        native_white: f("r.hybrid_native_white", d.native_white).clamp(0.05, 4.0),
         ..d
     }
 }
@@ -253,8 +292,20 @@ pub(crate) fn fell_back(why: &'static str) {
 /// The status line's part.
 pub fn status() -> String {
     let s = settings();
-    format!(
-        "(HY) hybrid {}: {} frame(s) lit by the game's own render pass, {} on today's light (latest reason: {}); shaders {}; capture {}; dumps {}{}; (RSF2 round 11) G-buffer targets 3 / 4 cleared under the KH characters in {} frame(s) (r.hybrid_gbclear {}); (RSF2 round 12) the sun from the game's cascades at each KH texel: {} frame(s), {} cascade read(s) (r.hybrid_sun {}, r.hybrid_sun_soft {}); cascade sets this second: {}; (RSF2 round 14) the KH characters in the game's half-size effect depth: {} pass(es) of {} split(s); (RSF2 round 15) KH caster maps drawn in {} frame(s), read by the capture in {}; (CAPPERF) capture at its level of detail in {} frame(s), full in {} (r.hybrid_lod_px {})",
+    // (HAIR-BLEED) the game's G-buffer-stage copies redone with the KH characters in them (gfx.rs redo_stage_copies)
+    let recopy = format!(
+        "(HAIR-BLEED) the G-buffer stage's depth / normal copies redone with the KH characters: {} ({} not redone: destination state unknown or source not found){}; (HAIR-BLEED) the safety net (KH pixels shaded without their own captured texel, native mode): {} frame(s) counted, {} with any, {} pixel(s) in all, at most {} in a frame; (HAIR-BLEED) KH3's eye adaptation (v161.y = out scale x the game's exposure) {:.4}; ",
+        crate::gfx::RECOPIED.swap(0, Ordering::Relaxed),
+        crate::gfx::RECOPY_MISSED.swap(0, Ordering::Relaxed),
+        if crate::gfx::RECOPY.load(Ordering::Relaxed) { "" } else { " (OFF: r.hybrid_recopy = 0)" },
+        crate::gfx::CENSUS_FRAMES.swap(0, Ordering::Relaxed),
+        crate::gfx::CENSUS_HIT_FRAMES.swap(0, Ordering::Relaxed),
+        crate::gfx::CENSUS_PIXELS.swap(0, Ordering::Relaxed),
+        crate::gfx::CENSUS_MAX.swap(0, Ordering::Relaxed),
+        f32::from_bits(crate::gfx::EYE_NOW.load(Ordering::Relaxed))
+    );
+    recopy + &format!(
+        "(ER-NATIVE) {{native}}; (HY) hybrid {}: {} frame(s) lit by the game's own render pass, {} on today's light (latest reason: {}); shaders {}; capture {}; dumps {}{}; (RSF2 round 11) G-buffer targets 3 / 4 cleared under the KH characters in {} frame(s) (r.hybrid_gbclear {}); (RSF2 round 12) the sun from the game's cascades at each KH texel: {} frame(s), {} cascade read(s) (r.hybrid_sun {}, r.hybrid_sun_soft {}); cascade sets this second: {}; (RSF2 round 14) the KH characters in the game's half-size effect depth: {} pass(es) of {} split(s); (RSF2 round 15) KH caster maps drawn in {} frame(s), read by the capture in {}; (CAPPERF) capture at its level of detail in {} frame(s), full in {} (r.hybrid_lod_px {})",
         if s.on { "on" } else { "OFF (r.hybrid = 0)" },
         FRAMES_ON.swap(0, Ordering::Relaxed),
         FRAMES_BACK.swap(0, Ordering::Relaxed),
@@ -282,7 +333,23 @@ pub fn status() -> String {
         FULL_FRAMES.swap(0, Ordering::Relaxed),
         f32::from_bits(LOD_PX.load(Ordering::Relaxed))
     )
+    .replacen("{native}", &native_status(&s), 1)
 }
+
+/// (ER-NATIVE) the status line's part: the mode, the game's specular captured in how many frames, the units in use
+fn native_status(s: &Settings) -> String {
+    if !s.native {
+        return "native OFF (r.hybrid_native 0: the earlier modes)".to_string();
+    }
+    format!(
+        "native ON: the game's light per texel, raw; its specular captured in {} frame(s); units {}",
+        SPEC_FRAMES.swap(0, Ordering::Relaxed),
+        crate::light::native_units_text()
+    )
+}
+
+/// (ER-NATIVE) frames whose capture also took the game's specular accumulation (gfx.rs)
+pub(crate) static SPEC_FRAMES: AtomicU32 = AtomicU32::new(0);
 
 /// (RSF2 round 11) frames whose G-buffer targets 3 / 4 were cleared under the KH characters (gfx.rs)
 pub(crate) static GB_CLEARED: AtomicU32 = AtomicU32::new(0);
@@ -311,7 +378,7 @@ pub fn set_lod_px(px: f32) {
 
 /// (CAPPERF) The next state of the level of detail: on from `lod_px` pixels, off below 0.8 x; `lod_px` <= 0 = always off.
 pub fn lod_next(was: bool, px: f64, lod_px: f32) -> bool {
-    if !(lod_px > 0.0) || !px.is_finite() {
+    if lod_px.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) || !px.is_finite() {
         return false;
     }
     let at = f64::from(lod_px);
@@ -483,6 +550,21 @@ pub fn band(l: f32, s: &Settings) -> f32 {
 
 /// What the colour shader does to the light (KH units: scene light x `k`, the rig's factor): ambient occlusion
 /// (`mask_ao` = min(mask.r, mask.g) at the pixel) to its strength, then the staircase on its brightness, its hue kept.
+/// (ER-NATIVE) THE LIGHT BUFFER IN THE NATIVE MODE (er_char.wgsl `kh_native_light`, the same formula; tested below against KH3's
+/// own light shader): `game_white` = what the game's light passes put on a WHITE surface at the texel (its units), `k` the native
+/// factor (light.rs `native_k`), `base` / `metallic` the material's. KH3's light buffer holds diffuse colour x the light a white
+/// surface gets (kh_light: base x (1 - metallic) / pi x N.L x the light colour).
+pub fn native_light_buffer(base: Vec3, metallic: f32, game_white: Vec3, k: f32) -> Vec3 {
+    let d = game_white.clamp(Vec3::ZERO, Vec3::splat(6.0e4)) * k;
+    d * (base - base * metallic)
+}
+
+/// (ER-NATIVE) KH3's light shader's DIFFUSE term for one directional light (char_common.wgsl `kh_light`, without the specular
+/// lobe: diffuse_color x 1/pi x N.L x shadow), x the light's colour x intensity: the reference the native mode must reproduce.
+pub fn kh3_diffuse(base: Vec3, metallic: f32, n_dot_l: f32, shadow: f32, light: Vec3) -> Vec3 {
+    (base - base * metallic) * std::f32::consts::FRAC_1_PI * n_dot_l.clamp(0.0, 1.0) * shadow * light
+}
+
 pub fn tone(light_kh: Vec3, mask_ao: f32, white: f32, s: &Settings) -> Vec3 {
     let ao = mask_ao.clamp(0.05, 1.0);
     let e = light_kh.max(Vec3::ZERO) * ao.powf(s.ao - 1.0);
@@ -518,6 +600,45 @@ pub struct FrameIn {
     /// the drawn outfit has its world's own set (cgfield.rs active): `rig_own` instead of `rig`; its look's lift
     pub own_set: bool,
     pub lift: f32,
+    /// (ER-NATIVE) the game's specular light accumulation is captured this frame (the capture's third target, er_char.wgsl
+    /// `hy_tspec`): the native rows say so (row 3.y = -2) and KH3's own sun specular stands down for it
+    pub er_spec: bool,
+}
+
+/// (ER-NATIVE) Row 3.y of the block in the native mode: < 0 (an older DLL writes the positive scene -> KH factor there, which
+/// the *_hy3 shaders never read): -1 native, -2 native with the game's specular captured.
+pub const NATIVE_ROW: usize = 3;
+pub const NATIVE_FLAG: f32 = -1.0;
+pub const NATIVE_FLAG_SPEC: f32 = -2.0;
+
+/// (ER-NATIVE) The native mode is drawn this frame's settings say: the hybrid on, `r.hybrid_native` on.
+pub fn native_now() -> bool {
+    let s = settings();
+    s.on && s.native
+}
+
+/// (ER-NATIVE) THE NATIVE ROWS: the game's light per texel through KH3's material, nothing of ours in between. Row by row what
+/// each earlier mode's value becomes, so that the *_hy3 shaders of ANY pack take the game's light raw: [0] the game's share 1,
+/// no rig share, KH3's sun specular only where the game's specular is not captured; [1] the staircase's mix 0 (the light as
+/// received); [2] the occlusion as the game gave it (strength 1), no rig SH (the game's light carries the ambient and GI);
+/// [3].y the flag; [4] no extra haze (the game's own fog reaches him later); [5] no ambient taken out; [6] no capsule shadow;
+/// [7] lift 1; [8] the KH-texel rule on (no world texel captured), fit 0 (the per-texel light, no fill, no probes); [16] no
+/// fitted sun, no world factor; [17].w no probes. Pure; tested below.
+fn native_rows(rows: &mut [[f32; 4]; 23], s: &Settings, f: &FrameIn) {
+    rows[0] = [1.0, 1.0, 0.0, if f.er_spec { 0.0 } else { s.spec }];
+    rows[1][3] = 0.0;
+    rows[2][2] = 1.0;
+    rows[2][3] = 0.0;
+    rows[NATIVE_ROW][1] = if f.er_spec { NATIVE_FLAG_SPEC } else { NATIVE_FLAG };
+    rows[NATIVE_ROW][2] = 0.0;
+    rows[4] = [0.0; 4];
+    rows[5][1] = 0.0;
+    rows[6][3] = 0.0;
+    rows[7][3] = 1.0;
+    rows[8][2] = 1.0;
+    rows[8][3] = 0.0;
+    rows[16] = [0.0, 1.0, 8.0, 0.0];
+    rows[17][3] = 0.0;
 }
 
 pub fn block(s: &Settings, on: bool, f: &FrameIn) -> [f32; BLOCK_FLOATS] {
@@ -531,13 +652,13 @@ pub fn block(s: &Settings, on: bool, f: &FrameIn) -> [f32; BLOCK_FLOATS] {
     };
     let rig = if f.own_set { s.rig_own } else { s.rig };
     let lift = (s.lift * if f.lift.is_finite() && f.lift > 0.0 { f.lift } else { 1.0 }).clamp(0.0, 8.0);
-    let rows: [[f32; 4]; 23] = [
+    let mut rows: [[f32; 4]; 23] = [
         [1.0, s.game, rig, s.spec],
         [s.band_lo, s.band_hi, s.band_soft, s.band_mix.clamp(0.0, 1.0)],
         [s.shade, s.high, s.ao, s.sh.max(0.0)],
         [f.white, f.k, s.wrap.clamp(0.0, 1.0), s.lightset.min(1) as f32 / 255.0],
         [f.fog.x * f.k, f.fog.y * f.k, f.fog.z * f.k, (s.fog / 100.0).max(0.0)],
-        [s.edge.clamp(0.0, 1.0), s.amb_sub, s.gloss.clamp(0.0, 1.0), s.debug.min(6) as f32],
+        [s.edge.clamp(0.0, 1.0), s.amb_sub, s.gloss.clamp(0.0, 1.0), s.debug.min(7) as f32],
         [sun_dir.x, sun_dir.y, sun_dir.z, self_shadow],
         [sun_light.x, sun_light.y, sun_light.z, lift],
         [s.match_cos, s.search.clamp(0.0, 2.0).round(), if s.mask > 0.5 { 1.0 } else { 0.0 }, s.fit.clamp(0.0, 7.0).round()], // (RSF round 19) 6 the probes (7 their weight: testing aid)
@@ -554,7 +675,8 @@ pub fn block(s: &Settings, on: bool, f: &FrameIn) -> [f32; BLOCK_FLOATS] {
         // (RSF2 round 12) [16] the sun's strength fitted on the KH texels (hycap `hc_wide`): on, its least and most (x the model)
         [if s.sun_fit > 0.5 { 1.0 } else { 0.0 }, 1.0, 8.0, s.shadow.clamp(0.0, 1.0)],
         // (RSF2 round 13) [17] fit 3: the shade ratio used where none can be measured around a texel (r.hybrid_shade)
-        [s.shade_ratio.clamp(0.03, 1.0), 0.65, 0.0, 0.0],
+        // (VIEWLIGHT) [17].w the probes keyed by the surface normal (r.hybrid_normal_probes)
+        [s.shade_ratio.clamp(0.03, 1.0), 0.65, 0.0, s.normal_probes.clamp(0.0, 3.0).round()],
         // (RSF2 round 15) [18] the KH caster maps' cascade viewport, [19] (on, map size, self tolerance, its row), [20..22] the
         // party's feet: gfx.rs writes them with the capture (`kh_rows`)
         [0.0; 4],
@@ -563,6 +685,9 @@ pub fn block(s: &Settings, on: bool, f: &FrameIn) -> [f32; BLOCK_FLOATS] {
         [0.0; 4],
         [0.0; 4],
     ];
+    if s.native {
+        native_rows(&mut rows, s, f);
+    }
     for (k, row) in rows.iter().enumerate() {
         out[k * 4..k * 4 + 4].copy_from_slice(row);
     }
@@ -822,8 +947,8 @@ pub fn picture(format: i32, texels: &[[f32; 4]]) -> (Vec<u8>, f32) {
     };
     let mut out = Vec::with_capacity(texels.len() * 4);
     for t in texels {
-        for c in 0..3 {
-            let v = if float { srgb(t[c] * scale) } else { t[c] };
+        for c in t.iter().take(3) {
+            let v = if float { srgb(c * scale) } else { *c };
             out.push((v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
         }
         out.push(255);
@@ -881,8 +1006,8 @@ mod tests {
         odd[2].state = 4;
         assert!(order(&odd, 2560, 1440).is_err());
         odd = t;
-        for k in 0..5 {
-            odd[k].state = 4;
+        for target in odd.iter_mut().take(5) {
+            target.state = 4;
         }
         assert!(order(&odd, 2560, 1440).is_ok());
         odd = t;
@@ -937,7 +1062,8 @@ mod tests {
 
     #[test]
     fn the_block_is_zero_when_off_and_carries_the_keys_when_on() {
-        let s = Settings::default();
+        // (ER-NATIVE) the earlier modes' rows (r.hybrid_native 0)
+        let s = Settings { native: false, ..Settings::default() };
         let f = FrameIn { white: 3000.0, k: 50.0, fog: Vec3::ONE, ..Default::default() };
         assert_eq!(block(&s, false, &f), [0.0; BLOCK_FLOATS]);
         let f = FrameIn { fog: Vec3::new(0.01, 0.02, 0.03), ..f };
@@ -1031,7 +1157,8 @@ mod tests {
         let cap = &text[text.find("#ifdef ER_HYCAP").unwrap()..];
         assert!(cap.contains("fn hc_sun_vis(") && cap.contains("vec2<i32>(24, r)") && cap.contains("vec2<i32>(3, r)") && cap.contains("er.hy[11 + best_r]"));
         assert!(cap.contains("abs(s.x) > 0.97") && cap.contains("hc_tap_kh(at, best_s.z, bias, owner, maps_on, pre)") && cap.contains("a <= z + bias"));
-        let d = Settings::default();
+        // (ER-NATIVE) the earlier modes' rows (r.hybrid_native 0)
+        let d = Settings { native: false, ..Settings::default() };
         assert_eq!((d.sun, d.sun_soft), (1.0, 1.0));
         assert_eq!(with_keys(d, &|k: &str| (k == "r.hybrid_sun").then_some(0.0)).sun, 0.0);
         let b = block(&d, true, &FrameIn { white: 1.0, k: 1.0, ..Default::default() });
@@ -1071,7 +1198,8 @@ mod tests {
     /// capture shader reads both rows (er_char.wgsl hycap), built with the hybrid block's layout (kh-shaderc --only hycap)
     #[test]
     fn rsf5_the_mask_rule_is_on_by_default_and_has_its_rows() {
-        let d = Settings::default();
+        // (ER-NATIVE) the earlier modes' rows (r.hybrid_native 0)
+        let d = Settings { native: false, ..Settings::default() };
         assert_eq!(d.mask, 1.0);
         let f = FrameIn { white: 1.0, k: 1.0, ..Default::default() };
         let b = block(&d, true, &f);
@@ -1091,6 +1219,17 @@ mod tests {
         // (round 10) the fit: on by default, row 8.w; the shader reads it
         assert_eq!(d.fit, 6.0); // (RSF round 19)
         assert_eq!(b[8 * 4 + 3], 6.0, "row 8.w: the fit (round 19: the probes; 5 = round 16 hc_blur)");
+        // (VIEWLIGHT) the probes keyed by the surface normal: on by default, row 17.w; the key switches only it; the shader reads it
+        assert_eq!(d.normal_probes, 2.0); // (the per-pixel trust (3) is a testing aid since the bleed report)
+        assert_eq!(b[17 * 4 + 3], 2.0, "row 17.w: the normal-keyed probes, read local-linear");
+        assert_eq!(block(&with_keys(d, &|k: &str| (k == "r.hybrid_normal_probes").then_some(3.0)), true, &f)[17 * 4 + 3], 3.0);
+        assert!(cap.contains("fn hc_px_trust()") && cap.contains("return er.hy[17].w > 2.5;"));
+        assert_eq!(block(&with_keys(d, &|k: &str| (k == "r.hybrid_normal_probes").then_some(1.0)), true, &f)[17 * 4 + 3], 1.0);
+        assert!(cap.contains("fn hc_local_linear()") && cap.contains("return er.hy[17].w > 1.5;"));
+        let cube = with_keys(d, &|k: &str| (k == "r.hybrid_normal_probes").then_some(0.0));
+        assert_eq!(block(&cube, true, &f)[17 * 4 + 3], 0.0);
+        assert_eq!(Settings { normal_probes: d.normal_probes, ..cube }, d, "the key changes nothing else");
+        assert!(cap.contains("fn hc_probe_clusters(") && cap.contains("fn hc_cluster_down(") && cap.contains("return er.hy[17].w > 0.5 && er.hy[8].w > 5.5;"));
         assert_eq!(block(&with_keys(d, &|k: &str| (k == "r.hybrid_fit").then_some(1.0)), true, &f)[8 * 4 + 3], 1.0);
         assert_eq!(block(&with_keys(d, &|k: &str| (k == "r.hybrid_fit").then_some(0.0)), true, &f)[8 * 4 + 3], 0.0);
         assert!(cap.contains("er.hy[8].w > 0.5") && cap.contains("fn hc_close("));
@@ -1165,5 +1304,133 @@ mod tests {
         assert!(dump_box(None, None, 2560, 1440, 768).is_none());
         let edge = dump_box(Some((5.0, 1435.0)), None, 2560, 1440, 768).unwrap();
         assert!(edge[0] == 0 && edge[3] == 1440 && edge[2] > edge[0] && edge[3] > edge[1]);
+    }
+
+    /// (ER-NATIVE) `r.hybrid_native 0` brings back the earlier modes and changes nothing else; (HAIR-BLEED, the user 2026-11-06)
+    /// the native mode (the Style "Elden Ring") is the default, `r.hybrid_native = 0` ("Kingdom Hearts 3") the earlier modes
+    #[test]
+    fn native_is_the_default_and_its_key_switches_only_it() {
+        let d = Settings::default();
+        assert!(d.native && d.on, "unset: the Elden Ring style");
+        assert!(with_keys(d, &|_: &str| None).native);
+        let off = with_keys(d, &|k: &str| (k == "r.hybrid_native").then_some(0.0));
+        assert!(!off.native);
+        assert_eq!(Settings { native: true, ..off }, d, "the key changes nothing else");
+        assert!(with_keys(off, &|k: &str| (k == "r.hybrid_native").then_some(1.0)).native);
+    }
+
+    /// (ER-NATIVE) NO ESTIMATION PATH RUNS IN THE DEFAULT MODE: whatever the earlier keys say (fit, probes, staircase, rig, SH,
+    /// ambient taken out, capsule shadow, lift, an own set's lift, fitted sun, world factor), the default block hands the shaders
+    /// the game's light raw: the flag, the staircase's mix 0, no rig, no rig SH, AO as given, no fog of ours, nothing taken out,
+    /// no capsule shadow, lift 1, the KH-texel rule, fit 0, no fitted sun, no world factor, no probes
+    #[test]
+    fn native_rows_turn_every_estimate_off() {
+        let busy = Settings { fit: 6.0, normal_probes: 3.0, band_mix: 0.9, rig: 0.7, sh: 1.0, amb_sub: 1.0, self_shadow: 1.0, lift: 3.0, sun_fit: 1.0, shadow: 1.0, fog: 5.0, native: true /* (CAMP-OPTIONS) the native mode is no longer the default */, ..Settings::default() };
+        assert!(busy.native);
+        let f = FrameIn { white: 3.27, k: 50.0, fog: Vec3::ONE, sun: Some((Vec3::Z, Vec3::ONE)), own_set: true, lift: 2.5, er_spec: false };
+        for (er_spec, flag, kh_spec) in [(false, NATIVE_FLAG, busy.spec), (true, NATIVE_FLAG_SPEC, 0.0)] {
+            let b = block(&busy, true, &FrameIn { er_spec, ..f });
+            let row = |r: usize| [b[r * 4], b[r * 4 + 1], b[r * 4 + 2], b[r * 4 + 3]];
+            assert_eq!(row(0), [1.0, 1.0, 0.0, kh_spec], "the game's share 1, no rig; KH3's sun specular only without the game's");
+            assert_eq!(row(1)[3], 0.0, "no staircase");
+            assert_eq!((row(2)[2], row(2)[3]), (1.0, 0.0), "the occlusion as given, no rig SH");
+            assert_eq!(row(NATIVE_ROW)[1], flag, "the flag");
+            assert_eq!(row(NATIVE_ROW)[2], 0.0, "no wrap of ours");
+            assert_eq!(row(4), [0.0; 4], "no haze of ours");
+            assert_eq!(row(5)[1], 0.0, "no ambient taken out");
+            assert_eq!(row(6)[3], 0.0, "no capsule shadow");
+            assert_eq!(row(7)[3], 1.0, "lift 1 (an own set's lift and the bleed fix are not applied)");
+            assert_eq!((row(8)[2], row(8)[3]), (1.0, 0.0), "the KH-texel rule, fit 0: the per-texel light");
+            assert_eq!(row(16), [0.0, 1.0, 8.0, 0.0], "no fitted sun, no world factor");
+            assert_eq!(row(17)[3], 0.0, "no probes");
+        }
+        // the earlier modes are untouched behind the key
+        let legacy = block(&Settings { native: false, ..busy }, true, &f);
+        assert_eq!(legacy[NATIVE_ROW * 4 + 1], 50.0, "the earlier block: scene -> KH factor, positive");
+        assert_eq!(legacy[8 * 4 + 3], 6.0);
+    }
+
+    /// (ER-NATIVE) the shaders read the native rows FIRST: the capture returns the raw texel before any fill, probe, mean or
+    /// cascade lookup; the colour shader takes the native light before the staircase, the rig, the lift and the world factor
+    #[test]
+    fn the_shaders_take_the_native_path_before_any_estimate() {
+        let text = include_str!("../shaders/er_char.wgsl");
+        let cap = &text[text.find("fn hycap_ps(").unwrap()..];
+        let native = cap.find("if (er.hy[0].x != 0.0 && er.hy[3].y < -0.5) {").expect("hycap's native branch");
+        for later in ["hc_wide(", "hc_probe_clusters(", "hc_close(", "hc_mean()", "hc_sun_vis(", "hc_blur("] {
+            assert!(cap.find(later).is_some_and(|at| at > native), "{later} comes after the native return");
+        }
+        let native_body = &cap[native..native + cap[native..].find("return o;\n    }").unwrap()];
+        assert!(native_body.contains("o.light = vec4<f32>(min(light, vec3<f32>(6.0e4)), ao);") && native_body.contains("textureLoad(hc_spec, t, 0)"));
+        let colour = &text[text.find("fn kh_hybrid_light(g: KhOut").unwrap()..];
+        let at = colour.find("if (hy_native()) {").expect("the colour shader's native branch");
+        for later in ["hy_band(", "hy_self_shadow(", "er.hy[7].w", "hy_world = vis;"] {
+            assert!(colour.find(later).is_some_and(|x| x > at), "{later} comes after the native return");
+        }
+        let body = &text[text.find("fn kh_native_light(").unwrap()..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        for banned in ["hy_band", "er.hy[7].w", "hy_world", "er.hy[5].y", "lit_ambient", "rig_lit"] {
+            assert!(!body.contains(banned), "the native light uses no {banned}");
+        }
+        assert!(body.contains("let d = min(max(tap.light.xyz, vec3<f32>(0.0)), vec3<f32>(6.0e4)) * k;") && body.contains("var out = d * diffuse;"));
+        // the KH3 harness adds the game's specular where it adds its reflection
+        let common = include_str!("../../kh-look/shaders/char_common.wgsl");
+        let refl = common.find("color += kh_reflection(g, normal, to_camera);").unwrap();
+        assert!(common[refl..].find("color += kh_hybrid_after(g, normal, to_camera);").is_some_and(|x| x < 400));
+    }
+
+    /// (EYES-SF round 2) KH3's subsurface colour stays in the native light for EVERY subsurface material (Verum Rex's irises carry their
+    /// colour there): kh_native_sss on the same light as the diffuse term (UE 4.17: indirect diffuse + subsurface), whole, into o0
+    #[test]
+    fn the_native_light_keeps_kh3s_scatter_term_for_every_subsurface_material() {
+        let text = include_str!("../shaders/er_char.wgsl");
+        let native = &text[text.find("fn kh_native_light(").unwrap()..];
+        let native = &native[..native.find("\n}\n").unwrap()];
+        assert!(native.contains("hy_ind_px = kh_native_sss(g, d);") && !native.contains("kh_real_sss("));
+        // in KH3's channel for it: the material's indirect term that KHS composes (char_common.wgsl)
+        let common = include_str!("../../kh-look/shaders/char_common.wgsl");
+        assert!(common.contains("let indirect = g.o0.xyz + kh_hybrid_indirect();") && common.contains("i.sind = vec4<f32>(indirect, 0.0);"));
+        let sss = &text[text.find("fn kh_native_sss(").unwrap()..];
+        let sss = &sss[..sss.find("\n}\n").unwrap()];
+        assert!(sss.contains("#ifdef KH_SUBSURFACE") && sss.contains("return g.o4.xyz * g.o4.xyz * d;"));
+        for banned in ["kh.look.w", "er.hy[7]", "er.hy[6]", "hy_band", "lit_ambient", "rig_lit"] {
+            assert!(!sss.contains(banned), "the native scatter term uses no {banned}");
+        }
+    }
+
+    /// (ER-NATIVE) THE KH3 SHADING REGRESSION: KH3's shading responds to the game's light exactly as it responds to KH3's own light
+    /// of the same intensity. Every input of KHS other than the light buffer is the material's own (unchanged); the light buffer of
+    /// the native mode equals what KH3's light shader writes for a directional light whose light on a white surface (x the units'
+    /// factor) is the game's, for any material, normal, shadow and colour: so KHS, the rims, the colour table and the emissive see
+    /// the same values and return the same pixel.
+    #[test]
+    fn kh3_shading_is_unchanged_under_identical_light() {
+        let mut seed = 0x2545_f491_u32;
+        let mut r = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed as f32) / (u32::MAX as f32)
+        };
+        let k = crate::light::native_k_of(18.894_775);
+        for _ in 0..2000 {
+            let base = Vec3::new(r(), r(), r());
+            let metallic = if r() < 0.3 { r() } else { 0.0 };
+            let n_dot_l = r() * 1.2 - 0.1;
+            let shadow = r();
+            // a light of the game (its units: a white Lambert surface facing it shows colour / pi), and the same light in KH3's
+            let colour_game = Vec3::new(r(), r(), r()) * 0.3;
+            let colour_kh3 = colour_game * k;
+            // what the game's light pass puts on a white surface: colour / pi x N.L x shadow (GXLightAcc, x SC_PreExposure 1)
+            let game_white = colour_game * std::f32::consts::FRAC_1_PI * n_dot_l.clamp(0.0, 1.0) * shadow;
+            let native = native_light_buffer(base, metallic, game_white, k);
+            let kh3 = kh3_diffuse(base, metallic, n_dot_l, shadow, colour_kh3);
+            assert!((native - kh3).length() <= 1.0e-5 * kh3.length().max(1.0), "{native} vs {kh3}");
+        }
+        // and the shader's formula is the mirrored one (the same lines)
+        let text = include_str!("../shaders/er_char.wgsl");
+        assert!(text.contains("let diffuse = g.o3.xyz - g.o3.xyz * g.o2.x;\n    var out = d * diffuse;"));
+        let common = include_str!("../../kh-look/shaders/char_common.wgsl");
+        assert!(common.contains("let surface = diffuse_color * 0.318310 + d * vis * f;") && common.contains("var result = surface * (n_l * shadow);"));
     }
 }

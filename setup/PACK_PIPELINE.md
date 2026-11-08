@@ -20,12 +20,12 @@ tools/packgen.js <phase>`.
 
 | Phase | What it makes | Reads |
 |---|---|---|
-| `extract` | the pak key (found in your `KINGDOM HEARTS III.exe`, never written), a check that the executable is the build the tools know (`tools/packgen_exe_check.js`), and the KH3 folders the build reads, extracted from your paks (`setup/pack_inputs.json`: 4,274 folders) | your KH3 install |
+| `extract` | the pak key (found in your `KINGDOM HEARTS III.exe`, never written), a check that the executable is the build the tools know (`tools/packgen_exe_check.js`), and the KH3 folders the build reads, extracted from your paks (`setup/pack_inputs.json`: 4,764 folders) | your KH3 install |
 | `convert` | the cooked files decoded and converted: packages to JSON, textures to DDS / PNG, meshes and animations to glTF, sounds to WAV (`assets_converted/`) | `assets/` |
 | `research` | the research data the pack tools read (see below), made by the research scripts | `assets_converted/`, your executable, `tools/research`, `tools/packgen/notes` |
-| `pack` | the pack tools, in the order the pack was built in development (Sora, weapon, materials, outfits, UI, effects, sounds, Donald and Goofy, the XS abilities, the form weapons, face) | everything above, `sheets/port`, your ELDEN RING install (item icons) |
-| `replay` | the pack files the development streams made with their own tools, made again from **recipes** (see below); the effect tables and their overlays; Elden Ring's title picture from your ELDEN RING install | the pack, `tools/packgen/replay` |
-| `shaders` | every Elden Ring shader of the pack (DXIL), by `kh-shaderc` and the DirectX shader compiler | the pack's translated materials, `tools/packgen/recipes/shaders.json` |
+| `pack` | the pack tools, in the order the pack was built in development (Sora, weapon, materials, outfits, UI, effects, sounds, Donald and Goofy, every keyblade with its form weapons and the Moogles, the XS abilities, the form weapons, the audio roots of the keyblades, shotlocks, title and Mimic music, face) | everything above, `sheets/port`, your ELDEN RING install (item icons) |
+| `replay` | the pack files the development streams made with their own tools, made again from **recipes** (see below); the keyblades' effect root made again once the other roots are in place, with its own late recipes; the effect tables and their overlays; Elden Ring's title picture from your ELDEN RING install | the pack, `tools/packgen/replay` |
+| `shaders` | every Elden Ring shader of the pack (DXIL), by `kh-shaderc` and the DirectX shader compiler: the characters' and keyblades' sets, the rebuild groups, KH1's Rage Form owners, the Mimic Tear's writers, the effect roots and their overlays | the pack's translated materials, `tools/packgen/recipes/shaders.json` |
 | `gen` | the generated Rust tables (`build/gen/rust`) and, for a prebuilt DLL, the tables made from KH3 data as the pack's data files (`build/sora_pack/gen/*.khg`, `tools/packgen_genruntime.js`) | the pack, `sheets/port`, the research data |
 
 The whole build took about 30 minutes on the developer's PC (longer on a slower one) and needs about 80 GB of free disk space (extracted and converted files
@@ -114,6 +114,23 @@ The release was built in an empty folder from a copy of the release files, again
 RING install, with every read of the development tree refused (`release-tools/cleanroom_guard.js`), and compared file by
 file with the development pack (`release-tools/pack_compare.js`). Every Node process of the run was guarded; none was
 refused. Two pack builds in a row gave the same files (the build is deterministic).
+
+Result (2026-11-08, the weapons round: `setup.js` end to end in a new clean room on Windows and `setup/setup.sh` on Linux,
+against the development pack of that day: 32,582 files):
+
+| | Files | Why |
+|---|---|---|
+| identical (Windows) | 31,945 | |
+| Linux against Windows | every file but the shaders identical (20,391) | the Linux run had no DirectX shader compiler for Linux |
+| shader variants the DLL does not read (`*_hy`, `*_gb`, `*_hy2`, `*_gb2`, their hair halves) and the character folders' kh-shaderc index files | 510 missing | not loaded by the current DLL |
+| the effect overlays' shaders (`*_xwb`, `*_xwd`, `*_vxl`) and one XS decal | 74 differing | the development pack's files are older builds (before the effect harness's lit kit); the release builds them from today's harness |
+| KH1 outfit voice | 36 missing | not part of the release |
+| the retired field Moogle's model files (`party/n_ex028`, its voices are identical) | 8 missing | the DLL draws the Twilight Town Moogle |
+| `keyblades/sora_forms_manifest.json` | 1 differing | the same content; the development file's `root_motion` keys are in the order it grew in |
+| `vfx/triggers.json`, `keyblades/vfx/triggers.json`, `ui/sheet_rows.json` | 3 differing | text quoted from the game is `…` in the release sheets; the UI tool's record (none is read by the mod) |
+| the main and party effect tables | 2 differing | TrigMath constants; the overlay records the DLL reads are the same |
+| sounds no manifest names, the data files of a prebuilt DLL (`gen/`) | 21 extra | |
+| development leftovers (a backup copy, a HUD face trial) | 3 missing | not read |
 
 Result (2026-10-24, Steam copies of both games, the development pack: 19,381 files):
 

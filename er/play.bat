@@ -65,8 +65,14 @@ if defined ALLFLAG goto allflag
 if defined STEAMADMIN goto steamadmin
 
 echo Starting Elden Ring with me3 %VER%: "%ME3%"
-"%ME3%" launch -g eldenring -p "%~dp0profiles\kh-sora.me3"
-if not errorlevel 1 exit /b 0
+rem me3 runs through setup\me3_watch.ps1: it ends me3 launchers left behind by earlier runs, and me3's launcher when it
+rem outlives the game (a leftover launcher keeps Steam showing Elden Ring as running). Exit 2: the game is already
+rem running; 3: a stuck launcher was ended (the script says why).
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\setup\me3_watch.ps1" -Me3 "%ME3%" -Profile "%~dp0profiles\kh-sora.me3"
+set "RC=%errorlevel%"
+if "%RC%"=="0" exit /b 0
+if "%RC%"=="2" (pause & exit /b 1)
+if "%RC%"=="3" (pause & exit /b 1)
 echo.
 echo me3 could not start the game (its own message is above).
 echo To pick a different me3.exe, delete er\me3_path.txt and run play.bat again.

@@ -74,8 +74,9 @@ pub fn init(dll_dir: &Path, root: &Path) {
     erlog!("control: {}", control.dump());
     kh_er_render::set_options(render_options(&control));
     crate::hud::set_root(root);
+    crate::titlemusic::configure(&control); // (TITLE-AUDIO) title.custom_loop, read before the audio side reads the pack
     crate::fx::prestart(&crate::sora::data_paths(root).0); // (IMPL_ER14) the audio pack and device from the start
-    crate::prize::set_root(root); // (prize)
+    crate::prize::set_held_file(); // (prize)
     *STATE.lock().unwrap() = Some(State {
         control,
         root: root.to_path_buf(),
@@ -346,7 +347,7 @@ fn sub_timed<R>(k: usize, f: impl FnOnce() -> R) -> R {
 fn sub_report(frames: u64, total: u64) -> String {
     let mut all: Vec<(u64, &str)> = SUB.iter().zip(SUB_NAMES).map(|(t, n)| (t.swap(0, std::sync::atomic::Ordering::Relaxed), n)).collect();
     let rest = total.saturating_sub(all.iter().map(|(ns, _)| ns).sum());
-    all.sort_by(|a, b| b.0.cmp(&a.0));
+    all.sort_by_key(|a| std::cmp::Reverse(a.0));
     let ms = |ns: u64| ns as f64 / 1e6 / frames.max(1) as f64;
     let top: Vec<String> = all.iter().take(3).map(|(ns, n)| format!("{n} {:.2}", ms(*ns))).collect();
     format!("{}, the rest {:.2}", top.join(", "), ms(rest))
@@ -382,9 +383,10 @@ fn run_phase(phase_id: u32, dt: f32) {
         }
         sub_timed(0, || crate::save::set_dir(&state.root, &state.control)); // (IMPL_ER13)
         sub_timed(1, || crate::savegate::frame(&state.control, dt)); // (savegate)
-        sub_timed(2, || crate::slots::frame()); // (IMPL_ER13) a save into a slot is followed to its end
+        sub_timed(2, crate::slots::frame); // (IMPL_ER13) a save into a slot is followed to its end
         sub_timed(3, || crate::gracelock::frame(&state.control)); // (SV) the game's grace actions switched off at their source
         sub_timed(3, || crate::telescope::frame(&state.control)); // (TELESCOPE) the game's Birdseye Telescopes switched off at their source
+        sub_timed(3, || crate::ertext::frame(&state.control)); // (MUNNY-TEXT) the currency runes say munny in Elden Ring's text (`munny.text = 0`: its own words)
         sub_timed(4, || crate::erkeyui::frame(&state.control)); // (HUD2, ERUI) Elden Ring's banners and item-get UI off (hud.er_banners / hud.er_item_ui = 1: shown)
         sub_timed(5, || crate::slots::aids(&state.control)); // (IMPL_ER13) dbg.slots / dbg.saveto
         sub_timed(6, || crate::pause::frame(&state.control, state.tick)); // (IMPL_ER11)
@@ -397,7 +399,16 @@ fn run_phase(phase_id: u32, dt: f32) {
         }
         sub_timed(9, || crate::probe::frame(&state.control)); // (IMPL_ER16) dbg.census / dbg.peek / dbg.poke / dbg.hold
         sub_timed(10, || crate::newgame::frame(&state.control, &state.root)); // (IMPL_ER11)
+        sub_timed(10, || crate::ngquiet::frame(&state.control)); // (CC-MUTE) the creation's silence and input hold, from newgame's flow of this frame
         sub_timed(11, || crate::titleload::frame(&state.control, &state.root)); // (IMPL_ER15)
+        sub_timed(11, || crate::eroptions::frame(&state.control, false)); // (CAMP-OPTIONS) the Style row's settings file, the walks to Elden Ring's own screens
+        sub_timed(11, || crate::eroptions::title_frame(&state.control)); // (CAMP-OPTIONS) the title's SYSTEM = our settings screen
+        crate::eroptions::title_cursor_frame(); // (CAMP-OPTIONS) the title's cursor back on SYSTEM after our screen
+        sub_timed(12, || crate::gosound::frame(&state.control)); // (GOS) the game over's silence given back when our HUD frames stop
+        sub_timed(12, || crate::ersound::frame(&state.control)); // (ER-TWEAKS) the Tarnished's voice muted (`tarnished.voice_mute`)
+        sub_timed(12, || crate::dragonmsg::frame(&state.control)); // (ER-TWEAKS) the draconic-power popup not shown (`er.dragon_popup = 1`: shown)
+        sub_timed(12, || crate::titlemusic::frame(&state.control, &state.root, dt)); // (TITLE-AUDIO) KH3's title music and menu sounds on Elden Ring's title (after every title-mode HUD frame)
+        sub_timed(12, || crate::mimic_music::frame(&state.control, dt)); // (MIMIC-MUSIC) KH3's Replicas in the Mimic Tear fights; Elden Ring's music silenced / given back
         sub_timed(12, || crate::fx::trace_frame(&state.control, &crate::log::dir())); // (IMPL_ER14) snd.trace / snd.capture
         let tick_started = std::time::Instant::now();
         if state.tick {
@@ -405,10 +416,20 @@ fn run_phase(phase_id: u32, dt: f32) {
             if let Some(n) = state.control.i64("r.shadow_bias") {
                 kh_er_render::debug_shadow_bias(n as i32);
             }
+            // (LIGHT-RT, testing aids) the KH casters' depth bias in the game's sun atlas (castbias.rs; read when the casters'
+            // pipelines are made)
+            kh_er_render::castbias::set_keys(state.control.i64("r.cast_bias").map(|v| v.clamp(-1000, 1000) as i32), state.control.f32("r.cast_slope"));
             kh_er_render::hybrid::KH_TEST.store(state.control.i64("r.hybrid_kh_test").map_or(0, |v| v.clamp(0, 1) as u32), std::sync::atomic::Ordering::Relaxed); // (RSF2 round 15, testing aid)
             kh_er_render::set_real_shadow(state.control.i64("r.shadow_real").is_none_or(|v| v != 0)); // (RSF2 round 15) ON by default
             // (IMPL_ER53) `r.early_depth = 0`: his depth only after the game's deferred stage (as before IMPL_ER53)
             kh_er_render::set_early_depth(state.control.i64("r.early_depth").is_none_or(|v| v != 0));
+            // (HAIR-BLEED) `r.hybrid_gb_first` (testing aid, default 0): where in the game's G-buffer stage the KH G-buffer pass goes;
+            // `r.hybrid_recopy` (default 1): the stage's depth / normal copies redone with the KH characters in them
+            kh_er_render::set_gb_first(state.control.i64("r.hybrid_gb_first").map_or(0, |v| v.clamp(0, 99) as u32));
+            kh_er_render::set_recopy(state.control.i64("r.hybrid_recopy").is_none_or(|v| v != 0));
+            // (HAIR-BLEED) `r.kh_eye_adapt = 1` (testing aid, default 0 since 2026-11-06): KH3's EyeAdaptation 1 / reference white
+            // in the KH shaders; unset / 0 = 1, KH3's own camera exposure (kh-er-render gfx.rs EYE_ADAPT)
+            kh_er_render::set_eye_adapt(state.control.i64("r.kh_eye_adapt").is_some_and(|v| v != 0));
             // (RSF2 round 14) `r.effects_depth` (default 1): the KH characters in the game's half-size effect depth
             kh_er_render::set_party_pin_test(state.control.f32("r.party_pin_test").unwrap_or(0.0)); // (RSF2 round 16, testing aid, off by default)
             // (ZFIN) Zettaflare's finale on an Elden Ring character: `r.finale` 0 off, 1 auto (default), 2 the white-out only, 3 the
@@ -555,6 +576,7 @@ fn run_phase(phase_id: u32, dt: f32) {
     crate::save::er_phase(); // (save)
     if phase_id == phase::POST_PHYSICS {
         world_time(state);
+        crate::gestureprompt::post_physics(); // (EMOTE-PROMPTS) a pressed gesture command's SpEffect on the body, after the characters' update
     }
     let mut mode = state.control.str("mode").unwrap_or("probe").to_string();
     // A dead or dying player is the game's. With Sora running he stays hidden and Sora goes on
@@ -597,6 +619,10 @@ fn run_phase(phase_id: u32, dt: f32) {
             erlog!("the player died: nothing more is written to him; Sora stays (no input) until the respawn{}", if holds { " (a scripted death: the body is held at the event's HP until the game's scene)" } else { "" });
             if !holds {
                 crate::sora::no_dead_release(); // (IMPL_ER23A)
+            }
+            // (THE USER 2026-11-02) the body's own sound switch, if our guard hold had it at 0: back at once (only ours)
+            if let Some(player) = game::player_mut() {
+                crate::guardblow::release_body_sounds(&mut player.chr_ins, "the player died");
             }
             state.dead_told = true;
             // (IMPL_ER15) ... nor after the game-over menu's Retry (Elden Ring's own respawn, the world kept)
@@ -855,7 +881,7 @@ fn report(state: &mut State, dt: f32) {
     let model = &player.chr_ins.chr_ctrl.model_matrix;
     let model_pos = Vec3::new(model.3 .0, model.3 .1, model.3 .2);
     if state.control.str("mode").unwrap_or("probe") != "passive" {
-        if origin_shift(state, pos, "PostPhysics").is_some() {}
+        origin_shift(state, pos, "PostPhysics");
         state.last_seen = Some(pos);
     }
 
@@ -993,6 +1019,7 @@ fn sora_phase(state: &mut State, dt: f32, pre: bool) {
     let Some(player) = game::player_mut() else {
         // Loading screen, respawn: Sora starts again where the game puts the player.
         crate::sora::no_dead_release(); // (IMPL_ER23A) the game's no-death switch is never left on without a Sora
+        crate::guardblow::forget_body("the player is gone"); // (THE USER 2026-11-02) no body to give its sound switch back to
         if state.sora.take().is_some() {
             erlog!("sora: the player is gone; stopped until he is back");
             state.original = None;
@@ -1035,7 +1062,7 @@ fn sora_phase(state: &mut State, dt: f32, pre: bool) {
         let ta = &player.chr_ins.modules.time_act;
         let anim = ta.anim_queue[(ta.read_idx as usize) % 10].anim_id;
         let bad = !cutscene && anim != 0 && state.sora.as_ref().is_some_and(|h| h.on_floor() && h.prompt_up());
-        let n = if bad { BAD.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1 } else { BAD.swap(0, std::sync::atomic::Ordering::Relaxed) * 0 };
+        let n = if bad { BAD.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1 } else { BAD.store(0, std::sync::atomic::Ordering::Relaxed); 0 };
         if n > 0 && n % 1200 == 240 {
             erlog!("!!! INTERACTION: Elden Ring's prompt is up and Sora stands on a floor, but the hidden body has been playing animation {anim} (not its idle) for {:.0} s: the game greys its prompts and refuses the action button in that state (gravity off {}, on solid ground {} / touching {})", n as f32 / 120.0, player.chr_ins.modules.physics.gravity_disabled, player.chr_ins.modules.physics.standing_on_solid_ground, player.chr_ins.modules.physics.touching_solid_ground);
         }

@@ -20,7 +20,7 @@
 //! UNTESTED IN GAME: proven offline only (examples/effects.rs, a real D3D12 device, Elden Ring's R11G11B10 scene format).
 
 use super::*;
-use kh_vfx::screen::{ScreenFx, ScreenKind, UE4_BLOOM_INTENSITY, UE4_BLOOM_LEVELS, UE4_BLOOM_SIZE_SCALE, UE4_BLOOM_THRESHOLD};
+use kh_vfx::screen::{ScreenFx, ScreenKind, UE4_BLOOM_INTENSITY, UE4_BLOOM_LEVELS};
 
 /// Tables of 12 descriptors per frame slot for the post passes (behind the frame slots' own two).
 pub(super) const POST_TABLES: usize = 48;
@@ -78,7 +78,14 @@ pub(super) fn screen_on() -> bool {
 
 /// For `vfx::status`.
 pub(super) fn status() -> String {
-    format!("post: bloom x{:.2} on {} frame(s), screen passes on {} frame(s), {} pass(es)", bloom_factor(), BLOOM_FRAMES.load(Ordering::Relaxed), SCREEN_FRAMES.load(Ordering::Relaxed), PASSES.load(Ordering::Relaxed))
+    format!(
+        "post: bloom x{:.2} on {} frame(s), screen passes on {} frame(s), {} pass(es); (AUDIT-B W-VFX2) GRAY edge kept to KH3's class 0 (off the characters) on {} frame(s)",
+        bloom_factor(),
+        BLOOM_FRAMES.load(Ordering::Relaxed),
+        SCREEN_FRAMES.load(Ordering::Relaxed),
+        PASSES.load(Ordering::Relaxed),
+        EDGE_TESTED_FRAMES.load(Ordering::Relaxed)
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -87,6 +94,34 @@ enum Mode {
     Add,
     Alpha,
 }
+
+// ------------------------------------------------------------------------------------------------ (AUDIT-B W-VFX2) object classes
+// KH3's TPostProcessSqexEffectFilterPS (build/sora_tmp/vfxr/gsc/TPostProcessSqexEffectFilterPS_bde0ff.asm) reads t0.w x 65536 as
+// a 16-bit word per pixel: the ALPHA of the G-buffer fork's seventh base-pass target, which every base pass writes as
+// (Primitive[17].y != 0 ? Primitive[17].y : the material's SQEXDiscernment) | 512 (KHS composes it: class 1 or
+// Primitive[17].z) | 2048 (Primitive[17].w) | 0x4000 (Primitive[18].x) | 4096 (Primitive[18].y), x 1/65536 (the KH base passes,
+// e.g. build/cache/char_shaders/00_p_ex001_hair_Inst.base.asm lines 806-819 and 896-897; the aura / diffusion / bloom radial
+// blur setup shaders test bits 2048 / 0x4000 / 8192 / 512 of the same word). Primitive[17].y is the component's
+// SQEXOverwriteDiscrenment (UPrimitiveComponent +0x447, ESQEX_OverwriteDiscrenment: 1 CHARA, 5 PLAYER, 6 ENEMY, 7 BOSS, 10
+// FRIEND ...; FPrimitiveSceneProxy's constructor 0x144447D20 copies it to the proxy +0x50); the material's is
+// ESQEXMaterialDiscernment (0 Default, 1 Charactor, 2 Sky, 3 Env0, 4 Env1, 5 LensFlare). The filter's low byte rules: NPR with
+// cb0[21].x != 0 spares class 7, GRAY with cb0[22].x != 0 spares class 5, and GRAY's EDGE is drawn only where the WHOLE word is
+// 0 (no character, no sky, no flag: the world's default materials).
+// WHO CARRIES 5 / 7 (every store to +0x447 in re/decomp, and every cooked asset naming the property): the char pawn base
+// 0x14059F950 makes its mesh CHARA (1), the enemy pawn 0x140DDE9B0 ENEMY (6), the party pawn 0x141254FF0 FRIEND (10), the boss
+// code 0x1409F5540 / 0x140A148B0 puts BOSS (7) on the effect it attaches at "kh_sh"; a weapon's mesh copies its owner mesh's
+// (0x14177E4E0), an effect's skeletal mesh its owner's (0x14427DF00 / 0x14427E290); no code and no asset writes PLAYER (5) (the
+// assets: two DEFAULT, one CHARA); Sora's and the weapons' materials are SQEX_MD_Charactor. So in the frames the port draws
+// class 5 is a lens-flare material only (none in the port's scene: Elden Ring draws its own flares after this pass) and class 7
+// only a boss effect: GRAY's and NPR's spare flags spare no pixel here, Sora and his weapons included (KH3 greys him too; the
+// Clock's own to_gray_scale drive is extra, VFX-2 / W-VFX). What the port must honour is the EDGE's class 0: the world =
+// Elden Ring's (class 0 unless the scene stencil says character: CHAR_STENCIL 0x50, which the KH characters' early depth
+// writes too), the sky = nothing drawn (depth 0, KH3's SQEX_MD_Sky).
+
+/// (AUDIT-B W-VFX2) The edge pass's stencil test against the scene depth: drawn where (stencil & 0xF0) != the characters' class.
+const NOT_CHARACTER: (u8, u32) = (0xF0, crate::gfx::CHAR_STENCIL as u32);
+/// For the log: GRAY edges drawn with the class test.
+static EDGE_TESTED_FRAMES: AtomicU32 = AtomicU32::new(0);
 
 struct Tex {
     res: ID3D12Resource,
@@ -115,6 +150,9 @@ pub(super) struct PostKit {
     pub(super) device: usize,
     pub(super) formats: (i32, i32),
     states: HashMap<(&'static str, Mode, i32), ID3D12PipelineState>,
+    /// (AUDIT-B W-VFX2) `fxp_filter` alpha-blended into the scene with the NOT_CHARACTER stencil test (KH3's object class 0),
+    /// by the depth-stencil format of the scene depth it is tested against.
+    tested: HashMap<i32, ID3D12PipelineState>,
     rtv: ID3D12DescriptorHeap,
     rtv_size: usize,
     targets: Option<Targets>,
@@ -177,9 +215,43 @@ impl PostKit {
             let state: ID3D12PipelineState = gpu.device.CreateGraphicsPipelineState(&desc).map_err(|e| format!("{name} ({mode:?}): {e}"))?;
             states.insert((name, mode, format.0), state);
         }
+        // (AUDIT-B W-VFX2) the GRAY filter's stencil-tested passes (a failure leaves them out: the filter is then drawn untested)
+        let mut tested = HashMap::new();
+        if let Some(pixel) = gpu.shader(dir, "fxp_filter.ps.dxil") {
+            let keep = |func| D3D12_DEPTH_STENCILOP_DESC { StencilFailOp: D3D12_STENCIL_OP_KEEP, StencilDepthFailOp: D3D12_STENCIL_OP_KEEP, StencilPassOp: D3D12_STENCIL_OP_KEEP, StencilFunc: func };
+            let rgb = (D3D12_COLOR_WRITE_ENABLE_RED.0 | D3D12_COLOR_WRITE_ENABLE_GREEN.0 | D3D12_COLOR_WRITE_ENABLE_BLUE.0) as u8;
+            for dsv in [DXGI_FORMAT_D32_FLOAT_S8X24_UINT, DXGI_FORMAT_D24_UNORM_S8_UINT] {
+                let (read_mask, _) = NOT_CHARACTER;
+                let mut blend = D3D12_BLEND_DESC::default();
+                blend.RenderTarget[0] = D3D12_RENDER_TARGET_BLEND_DESC { BlendEnable: true.into(), LogicOpEnable: false.into(), SrcBlend: D3D12_BLEND_SRC_ALPHA, DestBlend: D3D12_BLEND_INV_SRC_ALPHA, BlendOp: D3D12_BLEND_OP_ADD, SrcBlendAlpha: D3D12_BLEND_ZERO, DestBlendAlpha: D3D12_BLEND_ONE, BlendOpAlpha: D3D12_BLEND_OP_ADD, LogicOp: D3D12_LOGIC_OP_NOOP, RenderTargetWriteMask: rgb };
+                let mut formats = [DXGI_FORMAT_UNKNOWN; 8];
+                formats[0] = DXGI_FORMAT(gpu.formats.0);
+                let desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
+                    pRootSignature: std::mem::transmute_copy(&gpu.root),
+                    VS: D3D12_SHADER_BYTECODE { pShaderBytecode: vertex.as_ptr() as *const c_void, BytecodeLength: vertex.len() },
+                    PS: D3D12_SHADER_BYTECODE { pShaderBytecode: pixel.as_ptr() as *const c_void, BytecodeLength: pixel.len() },
+                    BlendState: blend,
+                    SampleMask: u32::MAX,
+                    RasterizerState: D3D12_RASTERIZER_DESC { FillMode: D3D12_FILL_MODE_SOLID, CullMode: D3D12_CULL_MODE_NONE, DepthClipEnable: true.into(), ..Default::default() },
+                    DepthStencilState: D3D12_DEPTH_STENCIL_DESC { DepthEnable: false.into(), DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ZERO, DepthFunc: D3D12_COMPARISON_FUNC_ALWAYS, StencilEnable: true.into(), StencilReadMask: read_mask, StencilWriteMask: 0, FrontFace: keep(D3D12_COMPARISON_FUNC_NOT_EQUAL), BackFace: keep(D3D12_COMPARISON_FUNC_NOT_EQUAL) },
+                    PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+                    NumRenderTargets: 1,
+                    RTVFormats: formats,
+                    DSVFormat: dsv,
+                    SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    ..Default::default()
+                };
+                match gpu.device.CreateGraphicsPipelineState::<ID3D12PipelineState>(&desc) {
+                    Ok(state) => {
+                        tested.insert(dsv.0, state);
+                    }
+                    Err(e) => rlog!("vfx: (AUDIT-B W-VFX2) the filter's class-tested pass for depth format {}: {e} (drawn untested)", dsv.0),
+                }
+            }
+        }
         let rtv: ID3D12DescriptorHeap = gpu.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| format!("rtv heap: {e}"))?;
         let rtv_size = gpu.device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) as usize;
-        Ok(PostKit { device: gpu.device.as_raw() as usize, formats: gpu.formats, states, rtv, rtv_size, targets: None, decal_frame: 0 })
+        Ok(PostKit { device: gpu.device.as_raw() as usize, formats: gpu.formats, states, tested, rtv, rtv_size, targets: None, decal_frame: 0 })
     }
 
     /// Our targets for a scene of this size and format (made again when it changes; the old ones kept until the GPU is past them).
@@ -242,6 +314,9 @@ pub(super) fn level_kernel(k: usize, width: u32) -> (f32, i32, f32) {
 enum Out<'a> {
     Ours(&'a Tex, Mode),
     Scene(Mode),
+    /// (AUDIT-B W-VFX2) the scene, alpha-blended (`fxp_filter`), where the stencil of this read-only view of the scene depth
+    /// (its format) is not a character's (NOT_CHARACTER).
+    Tested(D3D12_CPU_DESCRIPTOR_HANDLE, i32),
 }
 
 /// The recording context of one call of `vfx::draw`.
@@ -266,11 +341,17 @@ impl Rec<'_, '_> {
         if self.tables >= if self.tables >= DECAL_TABLES { POST_TABLES } else { DECAL_TABLES } {
             return false;
         }
+        // (AUDIT-B W-VFX2) Out::Tested: the scene, alpha-blended, with that stencil test (none made for the format: untested)
+        let mut tested = None;
         let (mode, format, rtv, size, ours) = match &out {
             Out::Ours(t, m) => (*m, HALF.0, t.rtv, (t.w, t.h), Some(*t)),
             Out::Scene(m) => (*m, gpu.formats.0, cx.target_view, (cx.width, cx.height), None),
+            Out::Tested(view, dsv) => {
+                tested = kit.tested.get(dsv).map(|state| (*view, state));
+                (Mode::Alpha, gpu.formats.0, cx.target_view, (cx.width, cx.height), None)
+            }
         };
-        let Some(state) = kit.states.get(&(name, mode, format)) else { return false };
+        let Some(state) = tested.map(|t| t.1).or_else(|| kit.states.get(&(name, mode, format))) else { return false };
         if self.samplers.is_none() {
             self.samplers = (self.put)(Self::bytes(&[CLAMP; 16]), 256);
         }
@@ -283,7 +364,7 @@ impl Rec<'_, '_> {
         }
         let Some(constants) = (self.put)(Self::bytes(&params), 256) else { return false };
         // the pass's table: its inputs, white behind them
-        let base = MAX_MATERIALS * MATERIAL_TEXTURES + FRAME_SLOTS * 2 + (cx.slot * POST_TABLES + self.tables) * MATERIAL_TEXTURES;
+        let base = MAX_MATERIALS * MATERIAL_TEXTURES + FRAME_SLOTS * FRAME_VIEWS /* (PARTY-NATIVE) */ + (cx.slot * POST_TABLES + self.tables) * MATERIAL_TEXTURES;
         self.tables += 1;
         let start = gpu.srv_heap.GetCPUDescriptorHandleForHeapStart();
         for k in 0..MATERIAL_TEXTURES {
@@ -294,7 +375,14 @@ impl Rec<'_, '_> {
         if let Some(t) = ours {
             list.ResourceBarrier(&[transition(&t.res, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET)]);
         }
-        list.OMSetRenderTargets(1, Some(&rtv), false, None);
+        // (AUDIT-B W-VFX2) a tested pass binds the view it tests against (read-only: nothing is written into it)
+        match tested {
+            Some((view, _)) => {
+                list.OMSetRenderTargets(1, Some(&rtv), false, Some(&view));
+                list.OMSetStencilRef(NOT_CHARACTER.1);
+            }
+            None => list.OMSetRenderTargets(1, Some(&rtv), false, None),
+        }
         list.RSSetViewports(&[D3D12_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: size.0 as f32, Height: size.1 as f32, MinDepth: 0.0, MaxDepth: 1.0 }]);
         list.RSSetScissorRects(&[windows::Win32::Foundation::RECT { left: 0, top: 0, right: size.0 as i32, bottom: size.1 as i32 }]);
         list.SetPipelineState(state);
@@ -302,6 +390,9 @@ impl Rec<'_, '_> {
         list.SetGraphicsRootDescriptorTable(2, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: gpu.srv_heap.GetGPUDescriptorHandleForHeapStart().ptr + (base * gpu.srv_size) as u64 });
         list.SetGraphicsRootShaderResourceView(5, samplers);
         list.DrawInstanced(3, 1, 0, 0);
+        if tested.is_some() {
+            list.OMSetStencilRef(0); // (AUDIT-B W-VFX2) as gfx.rs / bluehour.rs leave it
+        }
         if let Some(t) = ours {
             list.ResourceBarrier(&[transition(&t.res, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)]);
         }
@@ -438,7 +529,36 @@ pub(super) unsafe fn after_effects(rec: &mut Rec, kit: &mut PostKit, desc: &D3D1
             1 => drop(rec.pass(kit, "fxp_filter", Out::Scene(Mode::Alpha), &[], (t.w, t.h), &[[fx.color[0], fx.color[1], fx.color[2], fx.alpha], [1.0, w, 0.0, 0.0]])),
             _ => {
                 rec.copy_scene(&copy);
-                rec.pass(kit, "fxp_filter", Out::Scene(Mode::Alpha), &[&copy], (t.w, t.h), &[[fx.color[0], fx.color[1], fx.color[2], fx.alpha], [2.0, w, 0.0, 0.0]]);
+                // (VFX-XLATE) GRAY's third amount (FilterColor.z x alpha) is TPostProcessSqexEffectFilterPS's EDGE: where the scene
+                // depth (t12) steps between a pixel and its 8 neighbours 2 px away the picture goes toward the edge colour
+                // (black [A]); the depth is read in DEPTH_READ for this pass and put back
+                // (AUDIT-B W-VFX) KH3's GRAY (mode 4 of the shader): the grey by alpha, the EDGE by FilterColor.z toward the colour
+                // FilterColor.y (the shader's cb0[22]); NPR (mode 5): the negative by alpha (cb0[21]); kh-vfx screen.rs
+                let (shader_mode, edge) = if fx.mode == 3 { (5.0, false) } else { (4.0, fx.color[2] > 1.0e-4 && fx.alpha > 0.0) };
+                let list = rec.cx.list;
+                let read_state = D3D12_RESOURCE_STATE_DEPTH_READ | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+                if edge {
+                    list.ResourceBarrier(&[transition(rec.cx.depth, D3D12_RESOURCE_STATE_DEPTH_WRITE, read_state)]);
+                }
+                let row = [fx.color[0], fx.color[1], fx.color[2], fx.alpha];
+                // (AUDIT-B W-VFX2) KH3's object classes (see the head of the classes above): 1. the grey / the negative (mode 4
+                // without its edge / mode 5) on every pixel (the spare flags, FilterColor.x, spare classes 5 / 7, which no pixel
+                // of the port carries); 2. GRAY's EDGE alone (mode 6) where the scene stencil is not a character's (KH3: only
+                // where the word is 0), against the read-only view of the scene depth vfx.rs made for this frame
+                rec.pass(kit, "fxp_filter", Out::Scene(Mode::Alpha), &[&copy], (t.w, t.h), &[row, [shader_mode, w, 0.0, 0.0]]);
+                if edge {
+                    let has_stencil = matches!(rec.cx.depth_format, DXGI_FORMAT_D32_FLOAT_S8X24_UINT | DXGI_FORMAT_D24_UNORM_S8_UINT);
+                    let at = if has_stencil {
+                        EDGE_TESTED_FRAMES.fetch_add(1, Ordering::Relaxed);
+                        Out::Tested(D3D12_CPU_DESCRIPTOR_HANDLE { ptr: rec.gpu.dsv_heap.GetCPUDescriptorHandleForHeapStart().ptr + rec.cx.slot * rec.gpu.dsv_size }, rec.cx.depth_format.0)
+                    } else {
+                        Out::Scene(Mode::Alpha)
+                    };
+                    rec.pass(kit, "fxp_filter", at, &[], (t.w, t.h), &[row, [6.0, w, 0.0, 1.0]]);
+                }
+                if edge {
+                    list.ResourceBarrier(&[transition(rec.cx.depth, read_state, D3D12_RESOURCE_STATE_DEPTH_WRITE)]);
+                }
             }
         }
     }
@@ -446,6 +566,11 @@ pub(super) unsafe fn after_effects(rec: &mut Rec, kit: &mut PostKit, desc: &D3D1
         rec.copy_scene(&copy);
         rec.pass(kit, "fxp_fringe", Out::Scene(Mode::Write), &[&copy], (t.w, t.h), &[[fx.alpha, 0.0, 0.0, 0.0]]);
     }
+}
+
+/// (VFXR cinematic) UE 4.17's bloom threshold of the sequence's look (KH3's default -1; Zettaflare's beam 10 then 5).
+fn cine_threshold() -> f32 {
+    super::cine_look().2
 }
 
 #[cfg(test)]
@@ -465,6 +590,15 @@ mod tests {
         assert!(taps <= 64 && step > 1.0);
     }
 
+    // (AUDIT-B W-VFX2) GRAY's edge is kept to KH3's class 0: Elden Ring's measured stencil classes (gfx.rs CHAR_STENCIL notes)
+    #[test]
+    fn the_edge_test_keeps_off_the_characters_only() {
+        let (mask, reference) = NOT_CHARACTER;
+        let drawn = |stencil: u8| u32::from(stencil & mask) != reference;
+        assert!(!drawn(0x50) && !drawn(0x53), "characters (ER's and the KH characters' early depth) get no edge");
+        assert!([0x12u8, 0xd2, 0x90, 0x10, 0x00, 0x03].iter().all(|s| drawn(*s)), "terrain, map objects, the sky, the harness floor");
+    }
+
     #[test]
     fn a_point_in_front_projects_into_the_screen() {
         let proj = Mat4::perspective_rh(1.0, 16.0 / 9.0, 0.1, 1000.0) * Mat4::look_at_rh(Vec3::ZERO, Vec3::new(0.0, 0.0, -1.0), Vec3::Y);
@@ -473,9 +607,4 @@ mod tests {
         let r = project(&proj, Vec3::new(1.0, 1.0, -10.0));
         assert!(r[0] > 0.5 && r[1] < 0.5);
     }
-}
-
-/// (VFXR cinematic) UE 4.17's bloom threshold of the sequence's look (KH3's default -1; Zettaflare's beam 10 then 5).
-fn cine_threshold() -> f32 {
-    super::cine_look().2
 }

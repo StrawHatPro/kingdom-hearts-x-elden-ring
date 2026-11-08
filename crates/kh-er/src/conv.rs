@@ -361,6 +361,11 @@ pub fn party_talks_offered() -> usize {
     OFFERS.lock().unwrap_or_else(|e| e.into_inner()).len()
 }
 
+/// (INTERACT-MARK) The owners whose talk prompts are up, in order of offer (the first is the green bar's: reactmark.rs).
+pub fn talk_owners() -> Vec<&'static str> {
+    OFFERS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 /// (CV3) Some party member's talk prompt is up.
 pub fn party_talk_offered() -> bool {
     !OFFERS.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
@@ -397,7 +402,7 @@ pub fn begin(b: Begin) -> Result<ConvId, String> {
             end(id, "a held conversation began");
         }
         with(|s| {
-            let dropped: Vec<(ConvId, Begin, f32)> = s.queue.drain(..).collect();
+            let dropped: Vec<(ConvId, Begin, f32)> = std::mem::take(&mut s.queue);
             for (id, b, _) in dropped {
                 erlog!("conv: #{id} ({}) dropped from the queue: a held conversation began", b.owner);
                 keep_ended(s, id, vec![ConvEvent::Ended(EndReason::Host("dropped: a held conversation began".into()))]);
@@ -597,6 +602,11 @@ pub fn note_pad(stick: &mut Vec2, right_stick: &mut Vec2, held: &mut kh_core::Pa
     let grace = A_GRACE.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|until| std::time::Instant::now() < until);
     let rule = if HOLD_PAD.load(Ordering::Relaxed) { PadRule::of(PAD_RULE.load(Ordering::Relaxed)) } else if grace { PadRule::A } else { PadRule::Free };
     apply_pad(rule, stick, right_stick, held);
+}
+
+/// (CAMP-OPTIONS) A conversation takes the sticks too (its whole pad rule): the mouse, KH3 PC's second right stick, with them.
+pub fn holds_sticks() -> bool {
+    HOLD_PAD.load(Ordering::Relaxed) && matches!(PadRule::of(PAD_RULE.load(Ordering::Relaxed)), PadRule::All)
 }
 
 /// A conversation takes something of the pad (A at least).

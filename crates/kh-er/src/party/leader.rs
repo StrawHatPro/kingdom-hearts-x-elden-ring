@@ -38,14 +38,12 @@ pub fn sora_dodge_frames(reaction: u8) -> bool {
     matches!(reaction, 6 | 7 | 8 | 9 | 11)
 }
 
-/// (U5, the plan's default) WHO CARRIES THE HERO LIGHT (the Keyblade sparkle in the dark): Sora while he is in the party
-/// (AI Sora draws it when a friend leads), otherwise the leader's weapon tip (S4 draws it there).
-pub fn light_carrier(sora_in_party: bool, leader: PartyChara) -> PartyChara {
-    if sora_in_party {
-        PartyChara::Sora
-    } else {
-        leader
-    }
+/// WHO CARRIES THE HERO LIGHT (the weapon glow and sparkles in the dark). (HEROLIGHT-KB, the user 2026-11-05: "for the hero
+/// light, it should just be whoever is party leader, not dependent on Sora") ALWAYS THE PARTY LEADER, whoever he is (Sora,
+/// Donald, Goofy or any later leader): an AI Sora no longer draws his Keyblade for it (before, U5's default: Sora whenever he
+/// was in the party). His weapon is drawn for it, its own glow and sparkles on it (kh-er herolight.rs).
+pub fn light_carrier(leader: PartyChara) -> PartyChara {
+    leader
 }
 
 /// The body rules' view of a friend leader (None for Sora: the old paths).
@@ -53,7 +51,7 @@ pub fn friend_lead_of(view: &LeaderView, hp: (i32, i32)) -> Option<FriendLead> {
     if view.chara == PartyChara::Sora || view.member.is_none() {
         return None;
     }
-    Some(FriendLead { position: view.position, yaw: view.yaw, velocity: view.velocity, on_floor: view.on_floor, capsule: view.capsule, alive: !view.ko, hp: hp.0, max_hp: hp.1.max(1), share_max: hp.1.max(1) as f32 /* (GOOFY-BAL) set by friend_lead */, invulnerable: view.invulnerable })
+    Some(FriendLead { position: view.position, yaw: view.yaw, velocity: view.velocity, on_floor: view.on_floor, capsule: view.capsule, alive: !view.ko, hp: hp.0, max_hp: hp.1.max(1), share_max: hp.1.max(1) as f32 /* (GF-STATS) set by friend_lead */, invulnerable: view.invulnerable })
 }
 
 /// THE BODY'S POSE ON A PARTY MEMBER'S SKELETON: the body's (or the cutscene figure's) rows retargeted, his hands (and on
@@ -80,6 +78,9 @@ pub struct PoseOver {
     /// (ANIMS) The fit at his proportions (propfit.rs): the pelvis is its, the limbs go to its places, his posture is kept
     /// by its share. None: the rule before (`own.fit = 0`, no measures).
     pub plan: Option<crate::propfit::Plan>,
+    /// (CUTSCENE-ANIM) A real-time cutscene's figure: the figure's measures and his (cutfit.rs: on the scene's floor at his
+    /// proportions, hands and feet on what the figure's touch). None: the rule before.
+    pub cut: Option<(crate::cutfit::Body, crate::cutfit::Body)>,
 }
 
 impl PoseOver {
@@ -96,14 +97,14 @@ impl PoseOver {
         if let Some(plan) = self.plan.as_ref() {
             // (ANIMS) at his proportions: the plan's pelvis, his posture kept by its share, each planned limb to its place
             let own = posed.local.clone();
-            crate::propfit::apply(&self.retarget, skeleton, &rows, plan, &to_world, self.weight, self.reach, &mut posed.local);
+            crate::propfit::apply(&self.retarget, skeleton, &rows, plan, &to_world, (self.weight, self.reach), &mut posed.local);
             // (ANIMS) THE DRAWN POSE'S LIMITS (propfit.rs `limits`): a head tucked, a spine folded, a knee bent backwards or
             // shut, a hand over his head: his own pose is drawn instead
             {
                 let (before, after) = (kh_anim::pose::component_space(skeleton, &own), kh_anim::pose::component_space(skeleton, &posed.local));
                 if let Err(why) = crate::propfit::limits(skeleton, &before, &after) {
                     static TOLD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-                    if TOLD.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 600 == 0 {
+                    if TOLD.fetch_add(1, std::sync::atomic::Ordering::Relaxed).is_multiple_of(600) {
                         crate::erlog!("!!! own: the borrowed pose on {} breaks a limit ({why}): his own pose is drawn", self.chara.name());
                     }
                     posed.local = own;
@@ -111,6 +112,11 @@ impl PoseOver {
                     posed.component_to_world = to_world;
                     return false;
                 }
+            }
+        } else if let Some((s, t)) = self.cut.as_ref().filter(|_| self.place.is_some()) {
+            // (CUTSCENE-ANIM) the cutscene's figure at his proportions, on its floor (cutfit.rs); a part missing: as before
+            if crate::cutfit::apply_skeleton(&self.retarget, skeleton, &rows, &self.source, (s, t), &to_world, &mut posed.local).is_none() {
+                self.retarget.apply(skeleton, &rows, self.pelvis, &to_world, self.weight, &mut posed.local);
             }
         } else {
             self.retarget.apply(skeleton, &rows, self.pelvis, &to_world, self.weight, &mut posed.local);
@@ -210,7 +216,7 @@ pub struct LeaderBody {
     pub hidden: bool,
     /// The cutscene figure is shown on the friend leader (sora.rs `cut_frame`).
     pub cut_on: bool,
-    /// (U5) Who carries the hero light this step (`light_carrier`; None = not decided yet: Sora). For S4: the leader's
+    /// (U5, HEROLIGHT-KB) Who carries the hero light this step (`light_carrier`: the leader; None = not decided yet: Sora). For S4: the leader's
     /// weapon tip sparkles while `keyblade_wanted()` and this is not Sora.
     pub light: Option<PartyChara>,
     /// (ANIMS) The friend leader's fit of the borrowed actions (propfit.rs).
@@ -239,8 +245,8 @@ impl LeaderBody {
             self.friend_share = 0.0; // (GOOFY-BAL)
         } else if let Some(v) = view.member.and_then(|id| rt.party.view(id)) {
             self.friend_hp = (v.hp, v.hp_max);
-            // (GOOFY-BAL) balanced like Sora: a hit's share of SORA'S max HP x his defence factor (kh-party balance.rs)
-            self.friend_share = view.member.and_then(|id| rt.party.incoming_reference(id, status.max_hp())).unwrap_or(0.0);
+            // (GF-STATS) a hit's share of the sheet's reference x his Defense factor, leader or AI (kh-party balance.rs)
+            self.friend_share = view.member.and_then(|id| rt.party.incoming_reference(id)).unwrap_or(0.0);
         }
         self.view = Some(view);
     }
@@ -257,21 +263,23 @@ impl LeaderBody {
         self.over_weight = 0.0;
     }
 
-    /// (ER party I, X3G's request) A HIT ON THE FRIEND LEADER, AT ONCE (sora.rs `damage_in`): capped by his defender's
-    /// `damage_max` (S2's rule), handed to kh-party's `receive_hit` (his kit answers first: Goofy's shield guard / Perfect
+    /// (ER party I, X3G's request) A HIT ON THE FRIEND LEADER, AT ONCE (sora.rs `damage_in`), handed to kh-party's `receive_hit`
+    /// as an AI friend's is (GF-STATS, PLAN.md R8: no KH3 `damage_max` cap, which made every big hit 24 whatever his HP and
+    /// Defense) (his kit answers first: Goofy's shield guard / Perfect
     /// Guard, Donald's Magic Block, their invincible moves). The result tells the body code what became of it: `guarded`
     /// (0 HP, his guard reaction, not a hit reaction) or not `accepted` (it did not land). None = no friend leads.
-    pub fn hit_now(rt: &mut PartyRuntime, mut record: kh_core::HitRecord) -> Option<kh_core::host::HitResult> {
+    pub fn hit_now(rt: &mut PartyRuntime, record: kh_core::HitRecord) -> Option<kh_core::host::HitResult> {
         let id = rt.leader?;
-        let cap = rt.party.defender(id).map_or(0, |d| d.damage_max);
-        record.damage = crate::guards::capped(record.damage, cap);
         let result = rt.party.receive_hit(id, &record);
-        // (FINAL4) a hit his guard took (or that did not land) bleeds nothing
-        if result.guarded || !result.accepted {
+        // (FINAL4) a hit his guard took (or that did not land) bleeds nothing; (THE USER 2026-11-02) a GUARDED one also plays
+        // his guard sound and silences the hidden body (guardblow.rs, every character's one route)
+        if result.guarded {
+            crate::guardblow::guarded(rt.leader_chara(), record.position);
+        } else if !result.accepted {
             crate::blood::note_guarded(rt.leader_chara());
         }
         let what =if result.guarded { " GUARDED: 0 HP, his guard's reaction (no hit reaction)".to_string() } else if !result.accepted { " NOT TAKEN (invincible)".to_string() } else { format!(": {} HP left{}", result.hp_after, if result.killed { " (KO)" } else { "" }) };
-        crate::erlog!("party: the leader's body hit -> {} for {:.0} ({}){what}", rt.leader_chara().name(), record.damage, record.attack_name);
+        crate::erlog!("party: the leader's body hit -> {} for {:.0} ({}, {:?}){what}", rt.leader_chara().name(), record.damage, record.attack_name, record.attack_info);
         Some(result)
     }
 
@@ -286,7 +294,7 @@ impl LeaderBody {
             match order {
                 LeadOrder::Hit(record) => {
                     // (ER party I) the same rule as `hit_now` (one place)
-                    let _ = Self::hit_now(rt, record);
+                    let _ = Self::hit_now(rt, *record);
                 }
                 LeadOrder::Follow(at, yaw) => self.hold = Some((at, yaw)),
                 LeadOrder::Release => self.hold = None,
@@ -302,6 +310,12 @@ impl LeaderBody {
                         None => false,
                     };
                     crate::erlog!("ladder: {} LEAPS UP THE LADDER to ({:.0}, {:.0}, {:.0}) facing {:.0}{}", rt.leader_chara().name(), jump.to.x, jump.to.y, jump.to.z, jump.facing, if leaped { "" } else { ": NOT STARTED (no leader pawn)" });
+                }
+                LeadOrder::SpringLift(height) => {
+                    // (SPIRITSPRING) his pad jump's lift for the coming party step (kh-party pad.rs `spring_lift`)
+                    if let Some(m) = leader.and_then(|id| rt.party.member_mut(id)) {
+                        m.spring_lift = Some(height);
+                    }
                 }
                 LeadOrder::Nudge(by) => {
                     if let Some(id) = leader {
@@ -352,7 +366,7 @@ impl LeaderBody {
         let mut out = Vec::new();
         self.orders.retain(|o| match o {
             LeadOrder::Hit(record) => {
-                out.push(LeaderHit { sora: None, record: *record });
+                out.push(LeaderHit { sora: None, record: **record });
                 false
             }
             _ => true,
@@ -403,7 +417,7 @@ impl LeaderBody {
     pub fn friend_lead(&self) -> Option<FriendLead> {
         self.view.as_ref().and_then(|v| friend_lead_of(v, self.friend_hp)).map(|mut f| {
             if self.friend_share > 0.0 {
-                f.share_max = self.friend_share; // (GOOFY-BAL)
+                f.share_max = self.friend_share; // (GF-STATS)
             }
             f
         })
@@ -430,6 +444,28 @@ impl LeaderBody {
             self.orders.retain(|o| !matches!(o, LeadOrder::Follow(..)));
         }
         self.orders.push(order);
+    }
+
+    /// (LOADFALL, found by the in-game tester 2026-11-03: Goofy leading died in the middle of a hop, Continue, and the loaded
+    /// body was written to his place of BEFORE the load, 20 m up in the new host's frame: the leader fell for ever) THE SEAT
+    /// AT ONCE. A seat order (`LeadOrder::Follow`) is otherwise carried out at the party's next step, and no step runs while
+    /// a new host waits for the ground under the loading screen: the friend leader's place stayed the OLD host's (any place
+    /// at all in the new frame), and the moment the body was let go it was written there. Here the leader pawn is put on
+    /// the seat now (his motion stopped: no hop, no fall carried over) and the view the body code reads is his new place,
+    /// whoever leads (Sora: teleported, as `follow_body` does). False: no runtime leader to seat (Sora's own path).
+    pub fn seat_now(&mut self, rt: &mut PartyRuntime, sora: &mut Sora, out: &Output, at: Vec3, yaw: f32) -> bool {
+        let Some(id) = rt.leader.filter(|_| at.is_finite() && yaw.is_finite()) else { return false };
+        RuntimeLeaderSink { runtime: rt, sora }.follow_body(at, yaw);
+        // (the step's snapshot of the views is what the leader view is made of: his entry is made anew from his pawn)
+        if let Some(fresh) = rt.party.view(id) {
+            match rt.current.iter_mut().find(|v| v.id == id) {
+                Some(v) => *v = fresh,
+                None => rt.current.push(fresh),
+            }
+        }
+        self.update(rt, out, sora.status(), false);
+        self.hold = Some((at, yaw));
+        true
     }
 
     /// The body leads no more (sora.rs, every frame without a follow): the seat's hold is let go (once).
@@ -533,8 +569,10 @@ mod tests {
         for r in [0u8, 1, 2, 5, 10, 12] {
             assert!(!sora_dodge_frames(r));
         }
-        assert_eq!(light_carrier(true, PartyChara::Donald), PartyChara::Sora);
-        assert_eq!(light_carrier(false, PartyChara::Goofy), PartyChara::Goofy);
+        // (HEROLIGHT-KB) the leader carries it, whoever he is: never an AI Sora
+        for leader in [PartyChara::Sora, PartyChara::Donald, PartyChara::Goofy] {
+            assert_eq!(light_carrier(leader), leader);
+        }
     }
 
     /// A friend leading: his feet, yaw, capsule, HP; KO = not alive; his seat is held, the frame never counter-moved; a
@@ -552,7 +590,7 @@ mod tests {
         body.order(LeadOrder::Follow(Vec3::Y, 20.0));
         assert_eq!(body.hold, Some((Vec3::Y, 20.0)));
         assert_eq!(body.orders.iter().filter(|o| matches!(o, LeadOrder::Follow(..))).count(), 1);
-        body.order(LeadOrder::Hit(kh_core::HitRecord::empty(kh_core::TargetId::NONE)));
+        body.order(LeadOrder::Hit(Box::new(kh_core::HitRecord::empty(kh_core::TargetId::NONE))));
         assert_eq!(body.take_hits().len(), 1);
         body.order(LeadOrder::Release);
         assert!(body.orders.iter().all(|o| !matches!(o, LeadOrder::Follow(..))));
@@ -587,7 +625,7 @@ mod tests {
         body.update(&rt, &out, sora.status(), false);
         let f = body.friend_lead().expect("Donald leads");
         let hp = f.hp;
-        body.order(LeadOrder::Hit(crate::guards::friend_hit(&f, Some(kh_core::enums::ETresDamageKind::Small), 5.0, kh_core::TargetId::NONE, f.position - Vec3::X * 100.0, 0.0, 40.0)));
+        body.order(LeadOrder::Hit(Box::new(crate::guards::friend_hit(&f, Some(kh_core::enums::ETresDamageKind::Small), 5.0, kh_core::TargetId::NONE, f.position - Vec3::X * 100.0, 0.0, 40.0))));
         body.order(LeadOrder::Follow(Vec3::new(500.0, 0.0, 0.0), 90.0));
         body.apply(&mut rt, &mut sora);
         let v = rt.view(PartyChara::Donald).unwrap();
@@ -598,10 +636,40 @@ mod tests {
         body.release();
         body.apply(&mut rt, &mut sora);
         assert!(body.hold.is_none());
+        // (SPIRITSPRING) the spring lift reaches his pawn for its next step
+        body.order(LeadOrder::SpringLift(4200.0));
+        body.apply(&mut rt, &mut sora);
+        let id = rt.id(PartyChara::Donald).expect("Donald");
+        assert_eq!(rt.party.member(id).and_then(|m| m.spring_lift), Some(4200.0), "the lift is on the leader's pawn");
         body.order(LeadOrder::Die);
         body.apply(&mut rt, &mut sora);
         assert_eq!(rt.view(PartyChara::Donald).unwrap().hp, 0, "the body's death is his KO");
         assert_eq!(sora.status().hp, sora_out(0.0).0.status().hp, "Sora untouched");
+    }
+
+    /// (LOADFALL) A SEAT IS TAKEN AT ONCE: with no party step between (a new host waiting for the ground under the loading
+    /// screen) the friend leader is on the seat, still, and `friend_lead` (what the body is written to) says so; Sora
+    /// leading, nothing is seated by it.
+    #[test]
+    fn a_seat_is_taken_at_once_without_a_party_step() {
+        let mut rt = PartyRuntime::new(kh_partyhost::RuntimeConfig { wanted: true, test: kh_partyhost::PartyTest::from_rows(&[]), weapons: Vec::new(), ai_pack: None, ai_pack_source: None });
+        let (mut sora, out) = sora_out(0.0);
+        rt.spawn_one(PartyChara::Goofy, Vec3::new(3000.0, -2000.0, 2000.0), 0.0);
+        let mut body = LeaderBody::default();
+        assert!(!body.seat_now(&mut rt, &mut sora, &out, Vec3::X, 0.0), "Sora leads: not seated");
+        rt.leader = rt.id(PartyChara::Goofy);
+        if let Some(m) = rt.leader.and_then(|id| rt.party.member_mut(id)) {
+            m.cmc.velocity = Vec3::new(300.0, 0.0, 600.0); // the hop he died in
+        }
+        views(&mut rt);
+        body.update(&rt, &out, sora.status(), false);
+        assert!(body.friend_lead().unwrap().position.z > 1000.0, "his place of the host before");
+        let seat = Vec3::new(120.0, 40.0, 0.0);
+        assert!(body.seat_now(&mut rt, &mut sora, &out, seat, 33.0));
+        let f = body.friend_lead().unwrap();
+        assert!(f.position.distance(seat) < 1e-3 && f.velocity == Vec3::ZERO && (f.yaw - 33.0).abs() < 1e-3, "{:?}", f.position);
+        assert_eq!(body.hold, Some((seat, 33.0)), "and held at the next steps");
+        assert!(!body.seat_now(&mut rt, &mut sora, &out, Vec3::NAN, 0.0));
     }
 
     fn party_skeleton(npc: &str) -> Option<Skeleton> {

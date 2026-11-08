@@ -22,7 +22,7 @@ pub fn rtti_name(p: usize) -> Option<String> {
     // SAFETY: every address is checked to be inside the mapped executable (or readable) before it is read.
     unsafe {
         let vt = std::ptr::read_unaligned(p as *const usize);
-        if !inside(vt.wrapping_sub(8), 16) || vt % 8 != 0 {
+        if !inside(vt.wrapping_sub(8), 16) || !vt.is_multiple_of(8) {
             return None;
         }
         let col = std::ptr::read_unaligned((vt - 8) as *const usize);
@@ -281,45 +281,9 @@ pub fn model_name(model: usize) -> Option<String> {
         return None;
     }
     // SAFETY: checked readable.
-    let units = unsafe { std::slice::from_raw_parts(text as *const u8, len * 2) }.chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect::<Vec<_>>();
+    let units = unsafe { std::slice::from_raw_parts(text as *const u8, len * 2) }.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes([b[0], b[1]])).collect::<Vec<_>>();
     let name = String::from_utf16(&units).ok()?;
     name.chars().all(|c| c.is_ascii_graphic()).then_some(name)
-}
-
-/// The box of a model in the world (its item's location exporter at +0x658: min at +0x90, max at +0xA0).
-pub fn model_box(model: usize) -> Option<(Vec3, Vec3)> {
-    let item = word_at(model + 0x10)?;
-    let exporter = word_at(item + 0x658)?;
-    if crate::pause::readable(exporter + 0x90, 0x20) < 0x20 {
-        return None;
-    }
-    // SAFETY: checked readable.
-    let f = unsafe { std::ptr::read_unaligned((exporter + 0x90) as *const [f32; 8]) };
-    let (min, max) = (Vec3::new(f[0], f[1], f[2]), Vec3::new(f[4], f[5], f[6]));
-    (min.is_finite() && max.is_finite() && (max - min).min_element() >= 0.0 && (max - min).max_element() < 50.0).then_some((min, max))
-}
-
-/// (`dbg.remo`) more of each model: its name, its box, the first words of its bone matrix array.
-pub fn dump_models_more() {
-    for (model, _, _, _) in models() {
-        let item = word_at(model + 0x10).unwrap_or(0);
-        let mut line = format!("remo:   model {model:#x} name {:?} box {:?}", model_name(model), model_box(model).map(|(a, b)| format!("({:.2}, {:.2}, {:.2}) .. ({:.2}, {:.2}, {:.2})", a.x, a.y, a.z, b.x, b.y, b.z)));
-        // the raw string area, for the layout
-        if crate::pause::readable(item + 0x6C0, 0x30) >= 0x30 {
-            // SAFETY: checked readable.
-            let w = unsafe { std::ptr::read_unaligned((item + 0x6C0) as *const [usize; 6]) };
-            line += &format!(" | +6C0: {:x} {:x} {:x} {:x} {:x} {:x}", w[0], w[1], w[2], w[3], w[4], w[5]);
-        }
-        if let Some(m) = word_at(item + 0x640) {
-            line += &format!(" | bones {m:#x} {}", rtti_name(m).unwrap_or_default());
-            if crate::pause::readable(m, 0x40) >= 0x40 {
-                // SAFETY: checked readable.
-                let w = unsafe { std::ptr::read_unaligned(m as *const [usize; 8]) };
-                line += &format!(": {:x} {:x} {:x} {:x} {:x} {:x} {:x} {:x}", w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
-            }
-        }
-        erlog!("{line}");
-    }
 }
 
 /// One model of the running scene, looked at once (the expensive, checked reads) and then only compared.
@@ -347,7 +311,7 @@ pub fn refresh() {
     }
     // (the checked reads cost ~30 ms each on this machine (MEASURED: 95 ms for one new model): twice a second, not every frame)
     static EVERY: AtomicU32 = AtomicU32::new(0);
-    let check = EVERY.fetch_add(1, Relaxed) % 30 == 0;
+    let check = EVERY.fetch_add(1, Relaxed).is_multiple_of(30);
     actors.retain(|a| list.iter().any(|(m, _, _, _)| *m == a.model) && (!check || word_at(a.model) == Some(a.model_vt) && word_at(a.model + 0x18) == Some(a.disp) && word_at(a.disp) == Some(a.disp_vt) && crate::pause::readable(a.disp + 0x20, 8) >= 8));
     for (model, _, _, _) in list {
         if actors.iter().any(|a| a.model == model) || actors.len() >= MAX_MODELS {
@@ -407,8 +371,4 @@ pub fn hide_player_models(on: bool) -> usize {
         }
     }
     n
-}
-/// Where the scene's model of the player is (the middle of its box on the ground it lies / stands on).
-pub fn player_model_box() -> Option<(Vec3, Vec3)> {
-    models().into_iter().find(|(m, _, _, _)| model_name(*m).is_some_and(|n| n.starts_with("c0000"))).and_then(|(m, _, _, _)| model_box(m))
 }

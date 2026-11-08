@@ -58,6 +58,26 @@ pub mod camera_anim;
 pub mod conv;
 /// (boss finish) The three cuts of KH3's boss finish (docs/sora-bossfinish-spec.md).
 pub mod finish;
+/// (AUDIT-C) Sora's formchange / finisher cameras of the form_change, AltemaWep and Oath_keeper blueprints.
+pub mod form_bp;
+/// (F-HUD) The formchange cameras: ShooterMode, the multi-lock, Counter Shield's finish, the Mirage Staff distance scale.
+pub mod forms;
+/// (AUDIT-B F-NANO) Nano Gear's camera blueprint (BP_TresPlayerStateEvent_camera_bx_key): FINISH_GM's, the transformation's.
+pub mod forms_nano;
+/// (AUDIT-B F-CLAWS) Happy Gear's / Crystal Snow's camera blueprints (mi_key / fz_key), stepped by form_bp.
+pub mod forms_claws;
+/// (AUDIT-B F-HAMMER) Favorite Deputy's / Classic Tone's camera blueprints (camera_toy_key / Timlesskey): the hammer forms'.
+pub mod forms_hammer;
+/// (AUDIT-B F-SHIP) Wheel of Fate's camera blueprint (BP_TresPlayerStateEventCamera_ca_key): Highwind / Storm Flag, FINISH_FL.
+pub mod forms_ship;
+/// (AUDIT-A SECOND) Ancient Light's camera blueprint (BP_TresPlayerStateEventCamera_UnionDiscode), stepped by form_bp.
+pub mod forms_second;
+/// (AUDIT-A STAFF) Mirage Staff's camera blueprint (BP_TresPlayerStateEventCamera_Rapunzel_key): the transformation's, FINISH_WA's.
+pub mod forms_staff;
+/// (AUDIT-A CAMS) The gun forms' camera blueprints (2shotguns, Bazooka, po_key).
+pub mod forms_guns;
+/// (AUDIT-A CAMS) The shield / pan forms' camera blueprints (tate_finish, Lemylkey).
+pub mod forms_shield;
 pub mod lockon;
 pub mod rig;
 // (vfx implementer 3) camera shakes as an additive offset on the drawn view.
@@ -212,6 +232,15 @@ pub fn projection(p: &CameraParams) -> (f32, f32, f32) {
     (p.fov_horizontal, p.fov_aspect_ratio, p.clip_near)
 }
 
+/// What the wall-avoiding rotation works from: the camera and look points of this update, and the two conditions.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct AvoidProbe {
+    cam_pos: Vec3,
+    look_pt: Vec3,
+    do_avoid: bool,
+    away: bool,
+}
+
 /// `TresCameraNormal`'s state (spec 2.1).
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldCamera {
@@ -334,6 +363,22 @@ impl FieldCamera {
         }
     }
 
+    /// (AUDIT-C) TAKING OVER an ending event camera's view (bEndTakeover; ATresCameraBase 0x140625CA0): the camera's
+    /// location = the manager's view location, its rotation = the control rotation (the view's), `m_CurrentDistance` =
+    /// the manager's current distance (here: from the look point to the view), its FOV = the view's (the host's lens).
+    pub fn take_over(&mut self, location: Vec3, rotation: Rot) {
+        let r = Rot::new(rotation.pitch, rotation.yaw, 0.0).normalized();
+        self.rot_target = r;
+        self.rot_cur = r;
+        self.rot_prev = r;
+        let d = (location - self.look_position).length();
+        if d > 1.0 {
+            self.current_distance = d;
+            self.dist_smooth = d;
+        }
+        self.position = location;
+    }
+
     /// The base rotation (slot 299 0x1405EBDF0): `m_Rotation` (pitch -10) plus the actor's yaw.
     /// The source of `m_Rotation` (0x1406068F0, decompiled C) has two player-state branches: the
     /// wall run (pitch 0, yaw +40 / -40 by the run's class) and the rail slide (pitch 5).
@@ -440,7 +485,7 @@ impl FieldCamera {
         }
 
         // 13. Wall-avoiding rotation (FUN_140603FF0), spec 2.7. (14. water: no water.)
-        if self.wall_avoid(target, base, world, cam_pos, look_pt, do_avoid, away, dt) {
+        if self.wall_avoid(target, base, world, AvoidProbe { cam_pos, look_pt, do_avoid, away }, dt) {
             cam_pos = self.look_position - self.rot_cur.forward() * self.current_distance;
             look_pt = cam_pos + self.rot_cur.forward() * self.current_distance;
         }
@@ -661,12 +706,11 @@ impl FieldCamera {
     }
 
     /// Wall-avoiding rotation, `FUN_140603FF0`, spec 2.7. True when it turned the camera.
-    #[allow(clippy::too_many_arguments)]
-    fn wall_avoid(&mut self, target: &CameraTarget, base: Rot, world: &dyn World, cam_pos: Vec3, look_pt: Vec3, do_avoid: bool, away: bool, dt: f32) -> bool {
+    fn wall_avoid(&mut self, target: &CameraTarget, base: Rot, world: &dyn World, probe: AvoidProbe, dt: f32) -> bool {
+        let AvoidProbe { cam_pos, look_pt, mut do_avoid, away } = probe;
         let p = self.p;
         let v = Self::target_velocity(target);
         let speed2 = v.truncate().length();
-        let mut do_avoid = do_avoid;
         let mut along_axis = false;
         if speed2 < p.avoid_still_speed && v.z.abs() < 1.0 {
             self.still_wait = p.avoid_still_wait; // standing: re-arm the delay

@@ -286,7 +286,7 @@ fn look_beat() {
 }
 
 fn look_stale() -> bool {
-    LOOK_BEAT.lock().map_or(true, |b| b.map_or(true, |t| t.elapsed().as_secs_f32() > 0.5))
+    LOOK_BEAT.lock().map_or(true, |b| b.is_none_or(|t| t.elapsed().as_secs_f32() > 0.5))
 }
 
 /// (round 5) The run gives the look back (`kh_core::host::cinematic::reset` over `blend` s): its end, an interrupt, his KO, an
@@ -492,7 +492,7 @@ fn v3(a: &[f32]) -> Vec3 {
 /// after the last).
 pub fn path_at(row: &DonZettaFxRow, t: f32) -> Vec3 {
     let mut prev = (row.start, v3(row.offset));
-    for k in row.path.chunks_exact(4) {
+    for k in row.path.as_chunks::<4>().0 {
         let next = (k[0], Vec3::new(k[1], k[2], k[3]));
         if t <= next.0 {
             let span = (next.0 - prev.0).max(1e-4);
@@ -651,7 +651,7 @@ impl CamShot {
 pub fn cam_shots() -> Vec<CamShot> {
     let mut out: Vec<CamShot> = Vec::new();
     for r in DON_ZETTA_CAM {
-        if out.last().map_or(true, |s| s.name != r.shot) {
+        if out.last().is_none_or(|s| s.name != r.shot) {
             out.push(CamShot { name: r.shot, frame: r.frame, channel: r.part == "channel", keys: Vec::new() });
         }
         if let Some(s) = out.last_mut() {
@@ -820,6 +820,18 @@ pub struct CamSubject {
     pub radius: f32,
     /// (2026-10-23) its body's half height (cm; its feet under `at`); 0: the Sora case's scaled by `size`
     pub half: f32,
+}
+
+/// What the cinematic camera frames at a moment: the channel's length (s), Donald's frame, the target's, the beam's, the target
+/// as seen, and (round 5) the ending's frame ([`cam_pose`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CamScene {
+    pub channel: f32,
+    pub donald: Frame,
+    pub target: Frame,
+    pub beam: Basis,
+    pub subject: CamSubject,
+    pub end: Option<Frame>,
 }
 
 /// What the target plays at a moment of the sequence (the camera's rule: it is only shown playing something).
@@ -997,8 +1009,8 @@ pub fn safe_pose(donald_feet: Vec3, target: Vec3, z: &ZettaTune) -> CamPose {
 /// before it (the last one shows the beam hitting it).
 /// (round 5) `end`: the ending's frame (his feet at the ending, X along the beam's line; `None` before it: his feet now and
 /// the beam's line), for the ending's shots 960 / 970 (with the ending on only).
-#[allow(clippy::too_many_arguments)]
-pub fn cam_pose(shots: &[CamShot], s: f32, channel: f32, z: &ZettaTune, donald: Frame, target: Frame, beam: Basis, subject: CamSubject, end: Option<Frame>) -> Option<CamPose> {
+pub fn cam_pose(shots: &[CamShot], s: f32, z: &ZettaTune, scene: CamScene) -> Option<CamPose> {
+    let CamScene { channel, donald, target, beam, subject, end } = scene;
     // THE CHARGING CLOSE-UP (the user: "the panning closeup of Donald charging like the original cutscene ... frame it as
     // close as you can to the original cutscene"): the channel is the event's shot 860 alone, exactly as the event has it
     // (its position, rotation and FOV relative to Donald's feet and facing, its pan curve key by key), time-scaled onto the
@@ -1043,13 +1055,10 @@ pub fn cam_pose(shots: &[CamShot], s: f32, channel: f32, z: &ZettaTune, donald: 
     // by key (a wall only pulls them in toward him)
     if shot.frame == "end" {
         let fr = end.unwrap_or(Frame { origin: donald.origin, yaw: crate::pawn::yaw_of(crate::pawn::horizontal(beam.x)) });
-        // (2026-10-23, the user: "the beam should be bigger in the zoomed out shot as well, the size it was to cover the enemy")
-        // the wide shot (960) scaled about his feet by the beam's girth: the bigger beam framed as the event frames its own
-        let g = if shot.name == "shot960" { (subject.size * z.zetta_beam_girth_margin.max(0.1)).clamp(z.zetta_beam_scale_min.max(0.05), SIZE_MAX) } else { 1.0 };
         // (2026-10-23, the user: "the beam MUST start at Donald's wand, and NEVER show the end of it") the ending beam grows
         // across its line only (its length as the event's: [`end_beam_scale`]): the wide shot as the event frames it, so its far
         // end runs out of the frame as the event's does
-        let g = if g > 0.0 { 1.0 } else { 1.0 };
+        let g = 1.0;
         return Some(CamPose { position: fr.point(p * g), rotation: fr.rotation(r), fov, pivot: fr.origin + Vec3::Z * 60.0, shot: shot.name });
     }
     // THE TARGET'S SHOTS (920 / 930 / 940: it is blown back in the beam): the event's camera path relative to its subject
@@ -1244,6 +1253,12 @@ struct LiveFx {
 /// (round 5c) The cinematic camera's shot at matinee time `mt` (the shot that began last; the target's shots folded into its
 /// first, as [`cam_pose`] does; the ending's only with the ending), for [`shot_scale`] (known as the shot cuts in).
 pub fn shot_at(mt: f32, z: &ZettaTune) -> Option<&'static str> {
+    shot_at_in(mt, z, ending_on(z))
+}
+
+/// (MIMIC-BOSS, the test's isolation 2026-11-07) [`shot_at`] with the ending given (`ending`: the ending's shots count), not
+/// read from the module's global `set_ending` switch that other tests set while they run in parallel.
+pub fn shot_at_in(mt: f32, z: &ZettaTune, ending: bool) -> Option<&'static str> {
     // each shot's start (its first key), frame and part, once
     static STARTS: std::sync::OnceLock<Vec<(f32, &'static str, &'static str, &'static str)>> = std::sync::OnceLock::new();
     let starts = STARTS.get_or_init(|| {
@@ -1256,11 +1271,10 @@ pub fn shot_at(mt: f32, z: &ZettaTune) -> Option<&'static str> {
         }
         v
     });
-    let ending = ending_on(z);
     let live = starts.iter().filter(|x| x.3 != "channel" && (ending || x.2 != "end") && x.0 <= mt + 1e-4);
-    let (_, shot, frame, _) = *live.clone().fold(None, |b: Option<&(f32, &str, &str, &str)>, x| if b.map_or(true, |b| x.0 > b.0) { Some(x) } else { b })?;
+    let (_, shot, frame, _) = *live.clone().fold(None, |b: Option<&(f32, &str, &str, &str)>, x| if b.is_none_or(|b| x.0 > b.0) { Some(x) } else { b })?;
     if frame == "subject" && z.zetta_cam_target_one_shot >= 0.5 {
-        return live.filter(|x| x.2 == "subject").fold(None, |b: Option<&(f32, &'static str, &str, &str)>, x| if b.map_or(true, |b| x.0 < b.0) { Some(x) } else { b }).map(|x| x.1).or(Some(shot));
+        return live.filter(|x| x.2 == "subject").fold(None, |b: Option<&(f32, &'static str, &str, &str)>, x| if b.is_none_or(|b| x.0 < b.0) { Some(x) } else { b }).map(|x| x.1).or(Some(shot));
     }
     Some(shot)
 }
@@ -1328,6 +1342,19 @@ pub struct PawnZetta {
     /// lock-on and soft target as the cast began, kept through the sequence ([`hold`]: the pad's lock-on input frozen),
     /// given back to the pad's own rule at the hand-back.
     pub lock_keep: Option<(TargetId, TargetId)>,
+    /// (MIMIC-BOSS, THE USER 2026-11-05: "mimic tear boss Donald should be able to use Zettaflare if it manages to reach the
+    /// requirements during combat just like Donald") THIS MEMBER IS A MIMIC TEAR BOSS'S COPY (kh-partyhost mimicboss.rs
+    /// `FriendBoss`, a party of its own): a copied Donald may cast Zettaflare by AI under Donald's own requirements
+    /// ([`may_cast_zettaflare`]), never with the cinematic camera or the look, and a party holding a copy writes none of the
+    /// process-wide words (the presentation, the pre-pose, the look, the beam / impact / track for a host) and reads no fed
+    /// wand tip or staff (those are keyed by member id: the copy's Donald is MemberId(0) as the real one is). [`copy_party`].
+    pub copy: bool,
+}
+
+/// (MIMIC-BOSS) The party is a Mimic Tear boss's copy's (one of its members is a copy, [`PawnZetta::copy`]): its Zettaflare
+/// stays its own (no process-wide word written, no member-keyed feed read).
+pub fn copy_party(party: &Party) -> bool {
+    party.members().any(|id| party.member(id).is_some_and(|m| m.don_zetta.copy))
 }
 
 /// (2026-10-23, the user: "Donald's wand should stay where it falls, and then a similar effect to the keyblade for being
@@ -1487,8 +1514,11 @@ fn staff_of(member: MemberId) -> Option<(Vec3, glam::Quat)> {
     STAFF.lock().ok().and_then(|m| *m).filter(|(id, ..)| *id == member.0).map(|(_, a, r)| (a, r))
 }
 
+/// The member, the staff's two latest places, when the latest came, the seconds between them.
+type StaffFeeds = (u8, Vec3, Vec3, std::time::Instant, f32);
+
 /// (2026-10-23) The staff's place at the two latest feeds and the time between them (its speed as it leaves his hand).
-static STAFF_PREV: std::sync::Mutex<Option<(u8, Vec3, Vec3, std::time::Instant, f32)>> = std::sync::Mutex::new(None);
+static STAFF_PREV: std::sync::Mutex<Option<StaffFeeds>> = std::sync::Mutex::new(None);
 
 fn staff_vel(member: MemberId) -> Option<Vec3> {
     STAFF_PREV.lock().ok().and_then(|m| *m).filter(|(id, ..)| *id == member.0).and_then(|(_, a, b, _, dt)| (dt > 1e-3).then(|| (b - a) / dt))
@@ -1647,7 +1677,8 @@ pub fn down_begin(p: &mut NpcPawn, z: &ZettaTune) {
 /// never seen in that pose before the hit. Where Donald's last shot (910) shows the target up to the cut (its flight past it
 /// at the end: a target near Donald, its head at the frame's foot), the window is the last [`PREPOSE_CUT_S`] before the
 /// cut instead (the host's fast-forward takes about that). Pure.
-pub fn prepose_window(shots: &[CamShot], s: f32, channel: f32, z: &ZettaTune, donald: Frame, target: Frame, beam: Basis, subject: CamSubject, end: Option<Frame>) -> bool {
+pub fn prepose_window(shots: &[CamShot], s: f32, z: &ZettaTune, scene: CamScene) -> bool {
+    let CamScene { channel, subject, .. } = scene;
     let hit = seq_time(z.zetta_hit_at, z, channel);
     if s >= hit || hit - s > PREPOSE_LEAD_S {
         return false;
@@ -1659,7 +1690,7 @@ pub fn prepose_window(shots: &[CamShot], s: f32, channel: f32, z: &ZettaTune, do
     let body = [subject.at, subject.at + Vec3::Z * half, subject.at - Vec3::Z * half];
     let mut t = s;
     loop {
-        let Some(pose) = cam_pose(shots, t, channel, z, donald, target, beam, subject, end) else { return false };
+        let Some(pose) = cam_pose(shots, t, z, scene) else { return false };
         if !DONALD_SHOTS.contains(&pose.shot) || body.iter().any(|b| frames_both(pose.position, pose.rotation, pose.fov, *b, *b, 1.0)) {
             return false;
         }
@@ -1739,8 +1770,10 @@ fn down_step(party: &mut Party, host: &mut PartyHost, dt: f32, z: &ZettaTune) {
         // (the staff leaves his hand at the cutscene's weapon key: its fall is its own from then)
         let release = z.zetta_down_fall_a.max(0.0) + z.zetta_staff_release.clamp(0.0, z.zetta_down_fall_b.max(0.0));
         if d.t >= release && d.t < down_up_at(z) && p.don_zetta.staff.is_none() {
-            let (pos, rot) = staff_of(id).unwrap_or((p.position() + crate::pawn::forward(p.yaw) * 30.0 + Vec3::Z * 90.0, glam::Quat::from_rotation_z(p.yaw.to_radians())));
-            let hand_vel = staff_vel(id).unwrap_or(crate::pawn::forward(p.yaw) * -150.0);
+            // (MIMIC-BOSS) a copy's staff is never the fed one (the host feeds the real Donald's, keyed by the same member id)
+            let fed = !p.don_zetta.copy;
+            let (pos, rot) = staff_of(id).filter(|_| fed).unwrap_or((p.position() + crate::pawn::forward(p.yaw) * 30.0 + Vec3::Z * 90.0, glam::Quat::from_rotation_z(p.yaw.to_radians())));
+            let hand_vel = staff_vel(id).filter(|_| fed).unwrap_or(crate::pawn::forward(p.yaw) * -150.0);
             let fall = StaffFall::from_hand(pos, rot, hand_vel);
             p.don_zetta.staff = Some(StaffAway { ground: Some((fall.pos, fall.rot)), back: 0.0, fall });
         }
@@ -1884,13 +1917,8 @@ struct CamFeed {
     caster: MemberId,
     begun: u32,
     t: f32,
-    channel: f32,
-    donald: Frame,
-    target: Frame,
-    beam: Basis,
-    subject: CamSubject,
-    /// (round 5) the ending's frame once it began
-    end: Option<Frame>,
+    /// (round 5) its `end`: the ending's frame once it began
+    scene: CamScene,
 }
 
 /// The cinematic camera's state (`ZettaWorld::cam`).
@@ -2045,14 +2073,14 @@ pub fn begin(p: &mut NpcPawn, plan: &CastPlan, target: CastTarget, host: &mut Pa
     if !p.on_ground() {
         return false;
     }
-    if plan.mp > 0 && (p.status.mp < plan.mp || p.status.mp_charge_left > 0.0) {
+    // (THE USER 2026-11-02: "make sure Donald and his spells (including Zettaflare) have this as well. Zettaflare should
+    // instantly put Donald into MP reserve") the party's MP rule (crate::mp_rule): any MP above 0, never in MP Charge
+    if !crate::mp_rule::can_spend(&p.status) {
         return false;
     }
     let channel = RunKind::Zetta.channel(&z);
     let air = root(p);
-    if plan.mp > 0 {
-        spend_all_mp(&mut p.status, plan.mp);
-    }
+    spend_all_mp(&mut p.status);
     if let Some(st) = p.status.donald.as_mut() {
         let mods = st.abilities.mods();
         st.core.commit_cast(plan, &mods, &d);
@@ -2065,13 +2093,12 @@ pub fn begin(p: &mut NpcPawn, plan: &CastPlan, target: CastTarget, host: &mut Pa
 }
 
 /// (2026-10-23, the user: "it just needs 100% of your current MP to fire, and it makes your MP regen slower by 30%") Zettaflare
-/// spends `mp` (all of it): his MP is 0 and its MP Charge starts (the spend rule only starts it below 0), which then runs
-/// at `zetta.regen_mult` (DonCore::zetta_slow) until his MP has recharged.
-pub(crate) fn spend_all_mp(s: &mut crate::FriendStatus, mp: i32) {
-    crate::leader_magic::use_mp(s, mp);
-    if s.mp <= 0 && s.mp_charge_left <= 0.0 {
-        s.mp = 0;
-        s.mp_charge_left = crate::tables::cparam(s.chara, "mp_charge_time");
+/// spends all of his MP: his MP is 0 and its MP Charge starts, which then runs at `zetta.regen_mult` (DonCore::zetta_slow)
+/// until his MP has recharged. (THE USER 2026-11-02: "Zettaflare should instantly put Donald into MP reserve") whatever he had
+/// left, the charge starts at once, of his own length (crate::mp_rule::spend_all).
+pub(crate) fn spend_all_mp(s: &mut crate::FriendStatus) {
+    if crate::mp_rule::spend_all(s).is_none() && s.mp <= 0 {
+        crate::mp_rule::start_charge(s); // 0 MP and no charge yet (a test, a host): the charge all the same
     }
 }
 
@@ -2085,7 +2112,9 @@ pub fn invincible(party: &Party, id: MemberId) -> bool {
 /// ZETTAFLARE IS THE PLAYER'S (the user: "make sure AI donald cannot use Zettaflare"): only a Donald the pad drives (the
 /// party leader) may cast it; an AI Donald (Sora or Goofy leading) never can.
 pub fn may_cast_zettaflare(p: &NpcPawn) -> bool {
-    p.pad.is_some() && p.status.donald.is_some()
+    // (MIMIC-BOSS) ... and a Mimic Tear boss's copy of the leader Donald (the user: "should be able to use Zettaflare if it
+    // manages to reach the requirements during combat just like Donald"): the party's AI Donald still never can
+    (p.pad.is_some() || p.don_zetta.copy) && p.status.donald.is_some()
 }
 
 /// The cast's root at its start: no movement from here (the user: "Donald cannot move while casting Zettaflare"), out of
@@ -2306,12 +2335,16 @@ fn debug_ults(party: &mut Party, host: &mut PartyHost) {
 pub fn party_step(party: &mut Party, dt: f32, host: &mut PartyHost) {
     let z = zetta();
     debug_ults(party, host);
+    // (MIMIC-BOSS) a Mimic Tear boss's copy's party (stepped beside the real one) never writes the process-wide words below
+    let copy = copy_party(party);
     // (2026-10-23) the host's word: Zettaflare owns the presentation (zettaflare::presentation)
-    PRESENTING.store(party.don_zetta.runs.iter().any(|r| r.kind == RunKind::Zetta && !r.done), Ordering::Relaxed);
-    if !PRESENTING.load(Ordering::Relaxed) {
-        PREPOSE.store(false, Ordering::Relaxed); // (ZETTA 2026-10-23)
+    if !copy {
+        PRESENTING.store(party.don_zetta.runs.iter().any(|r| r.kind == RunKind::Zetta && !r.done), Ordering::Relaxed);
+        if !PRESENTING.load(Ordering::Relaxed) {
+            PREPOSE.store(false, Ordering::Relaxed); // (ZETTA 2026-10-23)
+        }
+        PRESENT_STEP.fetch_add(1, Ordering::Relaxed);
     }
-    PRESENT_STEP.fetch_add(1, Ordering::Relaxed);
     // (2026-10-23) the lock-on kept from a Zettaflare's cast to its hand-back
     let ids: Vec<MemberId> = party.members().collect();
     for id in ids {
@@ -2361,7 +2394,8 @@ pub fn party_step(party: &mut Party, dt: f32, host: &mut PartyHost) {
         // (round 5) his eyes shut through the channel (Zettaflare and the ultimates: the same casting)
         p.face.play(CHANNEL_FACE, z.zetta_face_blend, CHANNEL_FACE_LENGTH, true);
         let pad = p.pad.is_some();
-        let cinematic = kind == RunKind::Zetta && cinematic_on(&z) && (pad || z.zetta_cinematic_ai >= 0.5);
+        // (MIMIC-BOSS) a copy's Zettaflare never takes the camera (its party's camera is not the player's): no cinematic
+        let cinematic = kind == RunKind::Zetta && cinematic_on(&z) && (pad || z.zetta_cinematic_ai >= 0.5) && !copy;
         let new = ZettaRun { caster: id, begun, spell, kind, t: run.map_or(0.0, |r| r.t), channel, given, fired: 0, live: Vec::new(), sounds: Vec::new(), released: false, hit: false, cast_clip: false, face: Some(CHANNEL_FACE), done: false, last_point: None, cinematic, held: None, beam_at_hit: None, zone: None, killed: false, finale: None, hit_target: None, thrown_at: None, end_frame: None, end_beam: None, ending: false, look: false, rooted: false, spikes: Vec::new(), spikes_laid: false, rocks: Vec::new(), dust: Vec::new(), dust_laid: false, dust_at: Vec::new(), dust_near: false, dust_from: None, dust_waves: 0, zone_donald: None, reserved: None, handed: false, asked: None, girth: 1.0, end_lift: 0.0, subject_last: None, body_r: 0.0, locked: None, swept: Vec::new(), swept_killed: Vec::new() };
         let aim = aim_now(party, host, id, given);
         if taken {
@@ -2414,7 +2448,8 @@ pub fn party_step(party: &mut Party, dt: f32, host: &mut PartyHost) {
     }
     runs.retain(|r| !r.done);
     // (round 5) the look of a Zettaflare no run of this party plays any more (a load, a party rebuilt): back at once
-    if LOOK_OWNED.load(Ordering::Relaxed) && !runs.iter().any(|r| r.look) && !party.don_zetta.runs.iter().any(|r| r.look) && look_stale() {
+    // (MIMIC-BOSS) never a copy's party: the look is the real party's
+    if !copy && LOOK_OWNED.load(Ordering::Relaxed) && !runs.iter().any(|r| r.look) && !party.don_zetta.runs.iter().any(|r| r.look) && look_stale() {
         kh_core::host::cinematic::reset(0.0);
         LOOK_OWNED.store(false, Ordering::Relaxed);
     }
@@ -2451,7 +2486,7 @@ fn stop_all_now(run: &mut ZettaRun, party: &mut Party, host: &mut PartyHost, why
         }
     }
     if run.cinematic {
-        party.don_zetta.cam.end(run.caster, run.begun, why_interrupted || party.member(run.caster).map_or(true, |p| p.status.ko()));
+        party.don_zetta.cam.end(run.caster, run.begun, why_interrupted || party.member(run.caster).is_none_or(|p| p.status.ko()));
     }
     if why_interrupted {
         party.don_zetta.push(ZettaLog::Interrupted { t: run.t });
@@ -2465,7 +2500,7 @@ fn step_run(run: &mut ZettaRun, party: &mut Party, host: &mut PartyHost, dt: f32
     }
     let pm = PartyMember(run.caster.0);
     // the caster gone / KO: everything stops
-    if party.member(run.caster).map_or(true, |p| p.status.ko()) {
+    if party.member(run.caster).is_none_or(|p| p.status.ko()) {
         release_hold(run, host);
         let interrupted = !run.released;
         stop_all(run, party, host, interrupted);
@@ -2477,7 +2512,7 @@ fn step_run(run: &mut ZettaRun, party: &mut Party, host: &mut PartyHost, dt: f32
     if run.kind.is_ult() {
         // an ultimate's own clock; its caller's cancel (its interrupt) cuts it at once
         let state = party.member(run.caster).and_then(|p| p.don_zetta.ult).filter(|u| u.serial == run.begun);
-        if state.map_or(true, |u| u.cancel) {
+        if state.is_none_or(|u| u.cancel) {
             stop_all_now(run, party, host, true, true);
             return;
         }
@@ -2517,7 +2552,7 @@ fn step_run(run: &mut ZettaRun, party: &mut Party, host: &mut PartyHost, dt: f32
     // driving him, or the camera stick held (the camera hands back): he is free at once, the target let go; the effects
     // play on to their ends
     if run.ending {
-        let hurt = party.member(run.caster).map_or(true, |p| !may_cast_zettaflare(p) || matches!(p.state, NpcStateId::Damage | NpcStateId::Reflect | NpcStateId::BadStatStun | NpcStateId::BadStatBurn | NpcStateId::BadStatFreeze | NpcStateId::BadStatSneeze | NpcStateId::Die));
+        let hurt = party.member(run.caster).is_none_or(|p| !may_cast_zettaflare(p) || matches!(p.state, NpcStateId::Damage | NpcStateId::Reflect | NpcStateId::BadStatStun | NpcStateId::BadStatBurn | NpcStateId::BadStatFreeze | NpcStateId::BadStatSneeze | NpcStateId::Die));
         let skipped = run.cinematic && !party.don_zetta.cam.live_for(run.caster, run.begun);
         if hurt || skipped {
             spikes_stop(run, party, host, true); // (round 5c)
@@ -2576,7 +2611,9 @@ fn step_run(run: &mut ZettaRun, party: &mut Party, host: &mut PartyHost, dt: f32
     let staff = donald.point(staff_at(z, matinee_time(t / run.kind.scale(z), z, channel)));
     // (round 5c, the user: "the beam has to look like it comes from Donald's wand tip", in the shot where it first appears) up
     // to the hit the beam starts at his wand's tip as the host draws it (`feed_tip`), else at the event's release track
-    let staff = if !run.hit && matinee_time(t / run.kind.scale(z), z, channel) + 1e-4 < z.zetta_hit_at { tip_of(run.caster).unwrap_or(staff) } else { staff };
+    // (MIMIC-BOSS) a copy's beam never starts at the fed tip (the real Donald's, keyed by the same member id): the event's track
+    let fed_tip = if copy_party(party) { None } else { tip_of(run.caster) };
+    let staff = if !run.hit && matinee_time(t / run.kind.scale(z), z, channel) + 1e-4 < z.zetta_hit_at { fed_tip.unwrap_or(staff) } else { staff };
     let beam = run.beam_at_hit.unwrap_or_else(|| Basis::beam(staff, goal));
     // (round 5) the beam engulfs the enemy: its girth from the target's size, until the hit
     if run.kind == RunKind::Zetta && !run.hit {
@@ -2667,7 +2704,7 @@ fn step_run(run: &mut ZettaRun, party: &mut Party, host: &mut PartyHost, dt: f32
                 (Some(b), Some(i)) => i.position - crate::pawn::horizontal(b.x).normalize_or(Vec3::X) * 500.0,
                 _ => p.position(),
             };
-            host.targets.script_hold(tg, Some(kh_core::host::ScriptHold { face, turn_rate: z.zetta_hold_turn_rate.max(0.0), dt, hurt: run.hit }));
+            host.targets.script_hold(tg, Some(kh_core::host::ScriptHold { face, turn_rate: z.zetta_hold_turn_rate.max(0.0), dt, hurt: run.hit, carry: None /* (F-POLISH) */ }));
             run.held = Some(tg);
         }
     }
@@ -2709,7 +2746,7 @@ fn step_run(run: &mut ZettaRun, party: &mut Party, host: &mut PartyHost, dt: f32
             None => (goal, last.0, true, last.1, last.2),
         };
         run.subject_last = Some((size, radius, half));
-        party.don_zetta.cam.feed(CamFeed { caster: run.caster, begun: run.begun, t, channel, donald, target, beam, subject: CamSubject { at, size, animated, radius, half }, end: run.end_frame });
+        party.don_zetta.cam.feed(CamFeed { caster: run.caster, begun: run.begun, t, scene: CamScene { channel, donald, target, beam, subject: CamSubject { at, size, animated, radius, half }, end: run.end_frame } });
     }
     let tint = match run.kind {
         RunKind::Ult { tint } => Some(tint),
@@ -2779,7 +2816,7 @@ fn step_run(run: &mut ZettaRun, party: &mut Party, host: &mut PartyHost, dt: f32
                 }
             }
             "fx" => {
-                let Some((at, rotation, frame)) = place(row, run, party, host, aim, goal, donald, beam) else { continue };
+                let Some((at, rotation, frame)) = place(row, run, party, host, Stage { aim, goal, donald, beam }) else { continue };
                 // (round 5c) AN ULTIMATE'S RELEASE FLASH IS BRIEF (DON-SPELLB / the coordinator: a long whiteout after the
                 // ultimates' release): the event's flash and its light, made for a cut away, are removed `ult.flash_time` after
                 // they start, so the payload reads; Zettaflare's own cinematic keeps the event's
@@ -2809,7 +2846,7 @@ fn step_run(run: &mut ZettaRun, party: &mut Party, host: &mut PartyHost, dt: f32
                     let eye = party.don_zetta.cam.last.map(|p| p.position); // (round 5c) turned to the camera
                     // (2026-10-23) in the target's shots the beam drawn to fill the frame, in front of the body
                     let _ = eye;
-                    let (o, r, sc) = stream_drawn(row, staff, beam, matinee_time(t / run.kind.scale(z), z, channel), z, shot_girth(party, run.girth), party.don_zetta.cam.last, run.hit && run.cinematic && subject_shot_now(party, z), run.body_r, feet_z_of(run, beam));
+                    let (o, r, sc) = stream_drawn(row, staff, beam, matinee_time(t / run.kind.scale(z), z, channel), z, StreamShot { girth: shot_girth(party, run.girth), cam: party.don_zetta.cam.last, subject_shot: run.hit && run.cinematic && subject_shot_now(party, z), body_r: run.body_r, feet_z: feet_z_of(run, beam) });
                     host.effects.transform(h, o, r, sc);
                 }
                 if row.frame == "beam_head" {
@@ -2858,7 +2895,7 @@ fn step_run(run: &mut ZettaRun, party: &mut Party, host: &mut PartyHost, dt: f32
         match row.frame {
             "beam_stream" => {
                 // (2026-10-23) in the target's shots the beam drawn to fill the frame, in front of the body
-                let (o, r, sc) = stream_drawn(row, staff, beam, mt, z, shot_girth(party, run.girth), party.don_zetta.cam.last, run.hit && run.cinematic && subject_shot_now(party, z), run.body_r, feet_z_of(run, beam));
+                let (o, r, sc) = stream_drawn(row, staff, beam, mt, z, StreamShot { girth: shot_girth(party, run.girth), cam: party.don_zetta.cam.last, subject_shot: run.hit && run.cinematic && subject_shot_now(party, z), body_r: run.body_r, feet_z: feet_z_of(run, beam) });
                 host.effects.transform(l.handle, o, r, Vec3::new(sc.x * ovr, sc.y * ovr, sc.z));
             }
             "beam" if run.beam_at_hit.is_none() => {
@@ -2898,7 +2935,7 @@ fn step_run(run: &mut ZettaRun, party: &mut Party, host: &mut PartyHost, dt: f32
     for (k, ovr) in rescale {
         let l = run.live[k];
         let row = &DON_ZETTA_FX[l.row];
-        if let Some((Attach::World(at), rot, _)) = place(row, run, party, host, aim, goal, donald, beam) {
+        if let Some((Attach::World(at), rot, _)) = place(row, run, party, host, Stage { aim, goal, donald, beam }) {
             let base = (if row.scale > 0.0 { row.scale } else { 1.0 }) * if matches!(row.frame, "beam" | "beam_socket" | "target_socket" | "world_target" | "end_beam") { run.girth } else { 1.0 };
             host.effects.transform(l.handle, at, rot, Vec3::splat(base * ovr));
         }
@@ -2955,11 +2992,14 @@ fn step_run(run: &mut ZettaRun, party: &mut Party, host: &mut PartyHost, dt: f32
         });
         // (round 3) the target stays held through the beam (the user); the beam stays where it hit
         run.beam_at_hit = Some(beam);
-        if let Ok(mut m) = BEAM.lock() {
-            *m = Some((beam.origin, beam.x, run.girth)); // (round 5c) for a host's finale look
-        }
-        if let Ok(mut m) = IMPACT.lock() {
-            *m = Some(beam.origin); // (round 5c) for a host's debug overlay
+        // (MIMIC-BOSS) a copy's beam is not the host's finale look / overlay (the real party's)
+        if !copy_party(party) {
+            if let Ok(mut m) = BEAM.lock() {
+                *m = Some((beam.origin, beam.x, run.girth)); // (round 5c) for a host's finale look
+            }
+            if let Ok(mut m) = IMPACT.lock() {
+                *m = Some(beam.origin); // (round 5c) for a host's debug overlay
+            }
         }
         let d = data();
         if let Some(row) = run.spell.row(&d).copied() {
@@ -3016,7 +3056,7 @@ fn step_run(run: &mut ZettaRun, party: &mut Party, host: &mut PartyHost, dt: f32
     }
     // (2026-10-23) THE BEAM SWEEPS ITS PATH: every enemy the head reaches, pushed away with the beam's full damage
     if run.kind == RunKind::Zetta && t + 1e-4 >= release {
-        beam_sweep(run, party, host, z, staff, beam, matinee_time(t / run.kind.scale(z), z, channel), aim, t);
+        beam_sweep(run, party, host, z, BeamAt { staff, beam, mt: matinee_time(t / run.kind.scale(z), z, channel), aim, t });
     }
     // (round 4) THE FINALE (the user: "the enemy to get immersed in the white light, with a black silhouette that crumbles
     // leaving only the white light", the silhouette only when Zettaflare kills it): every target is engulfed in white from
@@ -3024,7 +3064,7 @@ fn step_run(run: &mut ZettaRun, party: &mut Party, host: &mut PartyHost, dt: f32
     // `zetta.finale_crumble_at` (no throw); its death and rewards stay the game's
     if run.kind == RunKind::Zetta && run.hit {
         if let Some(tg) = run.hit_target {
-            if !run.killed && host.targets.info(tg).map_or(true, |i| !i.flags.has(TargetFlags::ALIVE) || i.hp <= 0.0) {
+            if !run.killed && host.targets.info(tg).is_none_or(|i| !i.flags.has(TargetFlags::ALIVE) || i.hp <= 0.0) {
                 run.killed = true;
                 party.don_zetta.push(ZettaLog::Killed { target: tg, t });
             }
@@ -3051,7 +3091,7 @@ fn step_run(run: &mut ZettaRun, party: &mut Party, host: &mut PartyHost, dt: f32
                 // (2026-10-23) the enemies the sweep killed: the target's own kill look (white, silhouette, cracks, break-apart)
                 for k in 0..run.swept.len() {
                     let id = run.swept[k];
-                    if !run.swept_killed.contains(&id) && host.targets.info(id).map_or(false, |i| !i.flags.has(TargetFlags::ALIVE) || i.hp <= 0.0) {
+                    if !run.swept_killed.contains(&id) && host.targets.info(id).is_some_and(|i| !i.flags.has(TargetFlags::ALIVE) || i.hp <= 0.0) {
                         run.swept_killed.push(id);
                     }
                 }
@@ -3232,6 +3272,16 @@ fn end_finale(run: &mut ZettaRun, host: &mut PartyHost) {
     }
 }
 
+/// The beam at a moment: the wand's tip, the beam's frame, the matinee time, the aim, the sequence time.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct BeamAt {
+    staff: Vec3,
+    beam: Basis,
+    mt: f32,
+    aim: ZettaAim,
+    t: f32,
+}
+
 /// (2026-10-23, the user: "any enemies that in the beam get pushed away with immense damage") THE BEAM'S SWEEP: from the
 /// release, every enemy the beam's head has reached (its drawn length along the line from the wand: the launch, then on past
 /// the target, `zetta.beam_beyond`) within the beam's width (`zetta.sweep_radius` x its girth, from its axis to the body's
@@ -3239,8 +3289,8 @@ fn end_finale(run: &mut ZettaRun, host: &mut PartyHost) {
 /// past armour as the target's, a Blow that carries it away (`zetta.sweep_push`, scaled with its size as the target's
 /// throw): along the beam, away from Donald, and out off its axis (`zetta.sweep_out` of it), landing on the ground (the
 /// hosts' Blow: their ground and collision). Never the cast's target (its own hit), never an ally; it never takes the camera.
-#[allow(clippy::too_many_arguments)]
-fn beam_sweep(run: &mut ZettaRun, party: &mut Party, host: &mut PartyHost, z: &ZettaTune, staff: Vec3, beam: Basis, mt: f32, aim: ZettaAim, t: f32) {
+fn beam_sweep(run: &mut ZettaRun, party: &mut Party, host: &mut PartyHost, z: &ZettaTune, at: BeamAt) {
+    let BeamAt { staff, beam, mt, aim, t } = at;
     let dist = (beam.origin - staff).length().max(1.0);
     let reach = launch_reach(mt, z);
     let len = dist * reach + z.zetta_beam_beyond.max(0.0) * reach.powi(4);
@@ -3308,7 +3358,7 @@ pub const DONALD_SHOTS: [&str; 3] = ["shot860", "shot890", "shot910"];
 fn shot_girth(party: &Party, girth: f32) -> f32 {
     let c = &party.don_zetta.cam;
     if c.active() && c.last.is_some_and(|p| DONALD_SHOTS.contains(&p.shot)) {
-        1.0f32.min(girth.max(1.0))
+        1.0
     } else {
         girth
     }
@@ -3345,14 +3395,21 @@ pub fn stream_place_girth(row: &DonZettaFxRow, staff: Vec3, beam: Basis, mt: f32
 /// the camera at `eye`, each card is turned about the beam's line to face it: the row's first copy squarely, its crossed
 /// copy (the row's roll 90) at 60 deg to it, so both read as a full glowing band and never as a line. `None`: the rows'
 /// own rolls about the beam's horizontal side ([`stream_place_girth`]).
-#[allow(clippy::too_many_arguments)]
 pub fn stream_place_facing(row: &DonZettaFxRow, staff: Vec3, beam: Basis, mt: f32, z: &ZettaTune, girth: f32, eye: Option<Vec3>) -> (Vec3, Vec3, Vec3) {
-    stream_place_beyond(row, staff, beam, mt, z, girth, eye, z.zetta_beam_beyond.max(0.0))
+    stream_place_beyond(row, staff, beam, mt, z, StreamCard { girth, eye, beyond: z.zetta_beam_beyond.max(0.0) })
 }
 
-/// (2026-10-23) [`stream_place_facing`] with the beam running `beyond` past the aim point.
-#[allow(clippy::too_many_arguments)]
-pub fn stream_place_beyond(row: &DonZettaFxRow, staff: Vec3, beam: Basis, mt: f32, z: &ZettaTune, girth: f32, eye: Option<Vec3>, beyond: f32) -> (Vec3, Vec3, Vec3) {
+/// How a beam card is laid: its girth, the camera it turns to, how far it runs past the aim point.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StreamCard {
+    pub girth: f32,
+    pub eye: Option<Vec3>,
+    pub beyond: f32,
+}
+
+/// (2026-10-23) [`stream_place_facing`] with the beam running `card.beyond` past the aim point.
+pub fn stream_place_beyond(row: &DonZettaFxRow, staff: Vec3, beam: Basis, mt: f32, z: &ZettaTune, card: StreamCard) -> (Vec3, Vec3, Vec3) {
+    let StreamCard { girth, eye, beyond } = card;
     let dist = (beam.origin - staff).length().max(1.0);
     let full = dist + beyond.max(0.0);
     // (round 5c) fired: the beam reaches as far as its head (`launch_reach`), its part past the aim point last
@@ -3417,16 +3474,26 @@ pub fn card_pull(eye: Vec3, rotation: Vec3, fov: f32, card: Vec3, feet_z: f32, z
     (z.zetta_beam_card_floor.clamp(0.05, 1.0) * ground / d).clamp((25.0 / d).min(1.0), 1.0)
 }
 
+/// What the shot asks of a beam card: its girth, the camera, whether a target shot plays, the body's radius, the feet's height.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StreamShot {
+    pub girth: f32,
+    pub cam: Option<CamPose>,
+    pub subject_shot: bool,
+    pub body_r: f32,
+    pub feet_z: f32,
+}
+
 /// (2026-10-23) [`stream_place_beyond`] in the target's shots: the beam as [`beam_drawn`] lays it, its card brought to the
 /// camera ([`card_pull`]); elsewhere as laid.
-#[allow(clippy::too_many_arguments)]
-pub fn stream_drawn(row: &DonZettaFxRow, staff: Vec3, beam: Basis, mt: f32, z: &ZettaTune, girth: f32, cam: Option<CamPose>, subject_shot: bool, body_r: f32, feet_z: f32) -> (Vec3, Vec3, Vec3) {
+pub fn stream_drawn(row: &DonZettaFxRow, staff: Vec3, beam: Basis, mt: f32, z: &ZettaTune, shot: StreamShot) -> (Vec3, Vec3, Vec3) {
+    let StreamShot { girth, cam, subject_shot, body_r, feet_z } = shot;
     let eye = cam.map(|c| c.position);
     let (st, bm, by) = beam_drawn(staff, beam, eye, subject_shot, body_r, z);
     // (2026-10-23, the coordinator: "the beam fills the ENTIRE frame") in the target's shots its cards are
     // `zetta.beam_fill_width` times as wide: the band covers the frame top to bottom (and the floor in front of it)
     let girth = if subject_shot && cam.is_some() { girth * z.zetta_beam_fill_width.max(1.0) } else { girth };
-    let (o, r, sc) = stream_place_beyond(row, st, bm, mt, z, girth, eye, by);
+    let (o, r, sc) = stream_place_beyond(row, st, bm, mt, z, StreamCard { girth, eye, beyond: by });
     // (only the first copy of each of the beam's own streams, the ones turned square to the camera: one layer brought forward
     // over the floor and across the body, the rest on the line through it as the reference shows it)
     match cam.filter(|_| subject_shot && row.id.starts_with("fx.beam.stream_") && v3(row.rotation).z.abs() < 45.0) {
@@ -3611,9 +3678,18 @@ pub fn aura_place(row: &DonZettaFxRow, run: &ZettaRun, party: &Party, mt: f32, z
     Some((mid + toward * z.zetta_aura_front.max(0.0) * run.girth.max(1.0), z.zetta_aura_size.max(0.0) / 100.0 * share * run.girth.max(1.0)))
 }
 
+/// The frames a row's effect is placed in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Stage {
+    aim: ZettaAim,
+    goal: Vec3,
+    donald: Frame,
+    beam: Basis,
+}
+
 /// Where a row's effect goes now: (attach, rotation, its frame).
-#[allow(clippy::too_many_arguments)]
-fn place(row: &DonZettaFxRow, run: &ZettaRun, party: &Party, host: &PartyHost, aim: ZettaAim, goal: Vec3, donald: Frame, beam: Basis) -> Option<(Attach, Vec3, Frame)> {
+fn place(row: &DonZettaFxRow, run: &ZettaRun, party: &Party, host: &PartyHost, stage: Stage) -> Option<(Attach, Vec3, Frame)> {
+    let Stage { aim, goal, donald, beam } = stage;
     let p = party.member(run.caster)?;
     let pm = PartyMember(run.caster.0);
     let off = v3(row.offset);
@@ -3811,9 +3887,15 @@ fn hash01(seed: u32, k: u32) -> f32 {
 /// impact, off a ledge or on ground far above or below the impact's is skipped; so is one whose spike would come within
 /// `zetta.spikes_clear` of Donald, an ally or Donald's zone (`keep_off`: centre, radius), or of a camera of the ending's
 /// shots (`cams`). Deterministic (`seed`). Empty: no spikes.
-#[allow(clippy::too_many_arguments)]
 pub fn spike_layout(impact: Vec3, girth: f32, world: &dyn kh_core::World, keep_off: &[(Vec3, f32)], cams: &[Vec3], z: &ZettaTune, seed: u32) -> Vec<Spike> {
-    spike_layout_from(impact, None, girth, world, keep_off, cams, z, seed)
+    spike_layout_from(impact, None, girth, world, SpikeClear { keep_off, cams }, z, seed)
+}
+
+/// What the spikes keep clear of: Donald, the allies and his zone (centre, radius), and the ending's cameras.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpikeClear<'a> {
+    pub keep_off: &'a [(Vec3, f32)],
+    pub cams: &'a [Vec3],
 }
 
 /// (round 5c, the user: "The rock spikes from the zettaflare being close to the ground have to travel all the way down the
@@ -3822,8 +3904,8 @@ pub fn spike_layout(impact: Vec3, girth: f32, world: &dyn kh_core::World, keep_o
 /// `zetta.spikes_trail_lane` (x the girth, plus or minus a third) from it, leaning away from the line, growing taller toward
 /// the impact; at most `zetta.spikes_trail_max`. Each on its own ground (slopes followed), none through a wall from the
 /// track, off a ledge, or near Donald, an ally, his zone or the ending's cameras.
-#[allow(clippy::too_many_arguments)]
-pub fn spike_layout_from(impact: Vec3, from: Option<Vec3>, girth: f32, world: &dyn kh_core::World, keep_off: &[(Vec3, f32)], cams: &[Vec3], z: &ZettaTune, seed: u32) -> Vec<Spike> {
+pub fn spike_layout_from(impact: Vec3, from: Option<Vec3>, girth: f32, world: &dyn kh_core::World, clear: SpikeClear, z: &ZettaTune, seed: u32) -> Vec<Spike> {
+    let SpikeClear { keep_off, cams } = clear;
     if z.zetta_spikes < 0.5 {
         return Vec::new();
     }
@@ -3960,9 +4042,10 @@ fn spikes_step(run: &mut ZettaRun, party: &mut Party, host: &mut PartyHost, t: f
             }
             let cams: Vec<Vec3> = cam_shots().iter().filter(|s| s.frame == "end").flat_map(|s| s.keys.iter().map(|k| fr.point(k.1)).collect::<Vec<_>>()).collect();
             let from = run.end_beam.map(|e| e.origin).or(Some(staff));
-            run.spikes = spike_layout_from(b.origin, from, run.girth, host.world, &keep, &cams, z, run.begun.wrapping_mul(7919) ^ run.caster.0 as u32);
+            run.spikes = spike_layout_from(b.origin, from, run.girth, host.world, SpikeClear { keep_off: &keep, cams: &cams }, z, run.begun.wrapping_mul(7919) ^ run.caster.0 as u32);
             // (debug overlay) the beam's ground track
-            if let (Some(src), Some(g)) = (from, host.world.line_trace(b.origin + Vec3::Z * 50.0, b.origin - Vec3::Z * 2000.0)) {
+            // (MIMIC-BOSS) not a copy's (the overlay is the real party's)
+            if let (Some(src), Some(g), false) = (from, host.world.line_trace(b.origin + Vec3::Z * 50.0, b.origin - Vec3::Z * 2000.0), copy_party(party)) {
                 if let Ok(mut m) = TRACK.lock() {
                     *m = Some((Vec3::new(src.x, src.y, g.position.z), g.position));
                 }
@@ -4401,10 +4484,12 @@ fn spikes_stop(run: &mut ZettaRun, party: &mut Party, host: &mut PartyHost, dust
 
 // ============================================================================================== (round 5c) the allies' hands off
 
+/// What the allies keep off: the zones, the reserved targets, the reach (`zetta.ally_target_clear`).
+type HandsOff = (Vec<AvoidZone>, Vec<TargetId>, f32);
+
 thread_local! {
-    /// The party step's snapshot of what the allies keep off ([`hands_off_begin`]): the zones, the reserved targets, the
-    /// reach (`zetta.ally_target_clear`).
-    static HANDS_OFF: std::cell::RefCell<Option<(Vec<AvoidZone>, Vec<TargetId>, f32)>> = const { std::cell::RefCell::new(None) };
+    /// The party step's snapshot of what the allies keep off ([`hands_off_begin`]).
+    static HANDS_OFF: std::cell::RefCell<Option<HandsOff>> = const { std::cell::RefCell::new(None) };
 }
 
 /// (round 5c) Party::step, before its members act: the span's zones and reserved targets for [`hands_off_refuses`].
@@ -4468,7 +4553,7 @@ impl ZettaCam {
             *self = ZettaCam { shots: std::mem::take(&mut self.shots), key: self.key, retired: true, ..ZettaCam::default() };
             return None;
         }
-        let Some(f) = self.feed else { return None };
+        let f = self.feed?;
         if self.shots.is_empty() {
             self.shots = cam_shots();
         }
@@ -4485,17 +4570,17 @@ impl ZettaCam {
         }
         let live = !self.ended && !self.skipped;
         // (ZETTA 2026-10-23) the host's pre-pose window of the target's heavy hurt ([`prepose_window`])
-        PREPOSE.store(live && prepose_window(&self.shots, f.t, f.channel, z, f.donald, f.target, f.beam, f.subject, f.end), Ordering::Relaxed);
+        PREPOSE.store(live && prepose_window(&self.shots, f.t, z, f.scene), Ordering::Relaxed);
         if live {
             // (ZETTA 2026-10-23, the user: "Can the first shot of Donald charging up just be a cut from gameplay instead of a spin
             // around?") A HARD CUT IN: the first cinematic frame is the first shot's own (no blend from the gameplay camera;
             // `zetta.cam_blend_in` is no longer read); the hand-back's blend out stays
             let _ = z.zetta_cam_blend_in;
             self.weight = 1.0;
-            self.last = cam_pose(&self.shots, f.t, f.channel, z, f.donald, f.target, f.beam, f.subject, f.end).or(self.last);
-            self.last_safe = Some(safe_pose(f.donald.origin, f.beam.origin, z));
+            self.last = cam_pose(&self.shots, f.t, z, f.scene).or(self.last);
+            self.last_safe = Some(safe_pose(f.scene.donald.origin, f.scene.beam.origin, z));
             // (round 5) the event's white at this point of the sequence
-            let mt = matinee_time(f.t, z, f.channel);
+            let mt = matinee_time(f.t, z, f.scene.channel);
             self.last_white = white_at(mt, z);
         } else {
             self.weight = if z.zetta_cam_blend_out > 1e-3 { (self.weight - dt / z.zetta_cam_blend_out).max(0.0) } else { 0.0 };
@@ -4513,8 +4598,8 @@ impl ZettaCam {
         let exact = pose.shot == PAN_SHOT || pose.shot == CAST_SHOT || END_SHOTS.contains(&pose.shot);
         // (round 5c) the target's shot shakes while it is in the beam
         let target_shot = self.shots.iter().any(|s| s.name == pose.shot && s.frame == "subject");
-        let (shake_rot, shake_loc) = if live && target_shot { shake_at(matinee_time(f.t, z, f.channel), z) } else { (Vec3::ZERO, Vec3::ZERO) };
-        Some(ZettaView { position: pose.position, rotation: pose.rotation, fov: pose.fov, pivot: pose.pivot, weight: eased, shot: pose.shot, safe_position: safe.position, safe_rotation: safe.rotation, safe_fov: safe.fov, safe_pivot: safe.pivot, block_share: z.zetta_cam_block_share.clamp(0.0, 1.0), exact, white: self.last_white * eased, handing_back: !live, shake_rot: shake_rot * eased, shake_loc: shake_loc * eased, beam_dir: f.beam.x })
+        let (shake_rot, shake_loc) = if live && target_shot { shake_at(matinee_time(f.t, z, f.scene.channel), z) } else { (Vec3::ZERO, Vec3::ZERO) };
+        Some(ZettaView { position: pose.position, rotation: pose.rotation, fov: pose.fov, pivot: pose.pivot, weight: eased, shot: pose.shot, safe_position: safe.position, safe_rotation: safe.rotation, safe_fov: safe.fov, safe_pivot: safe.pivot, block_share: z.zetta_cam_block_share.clamp(0.0, 1.0), exact, white: self.last_white * eased, handing_back: !live, shake_rot: shake_rot * eased, shake_loc: shake_loc * eased, beam_dir: f.scene.beam.x })
     }
 
     /// The camera has the view (any share).
@@ -4662,13 +4747,13 @@ mod zetta_prepose_tests {
             let mut opened = None;
             let mut t = hit - 3.0;
             while t < hit + 1.0 {
-                if prepose_window(&shots, t, channel, &z, donald, target, beam, subject, None) {
+                if prepose_window(&shots, t, &z, CamScene { channel, donald, target, beam, subject, end: None }) {
                     opened.get_or_insert(t);
                     assert!(t < hit && hit - t <= PREPOSE_LEAD_S + 1e-4);
                     if hit - t > PREPOSE_CUT_S {
                         let mut u = t;
                         while u < hit {
-                            let pose = cam_pose(&shots, u, channel, &z, donald, target, beam, subject, None).unwrap();
+                            let pose = cam_pose(&shots, u, &z, CamScene { channel, donald, target, beam, subject, end: None }).unwrap();
                             assert!(DONALD_SHOTS.contains(&pose.shot), "{u}: in Donald's shot ({})", pose.shot);
                             assert!(body.iter().all(|b| !frames_both(pose.position, pose.rotation, pose.fov, *b, *b, 1.0)), "{u}: never seen before the hit");
                             u += 1.0 / 60.0;
@@ -4683,12 +4768,12 @@ mod zetta_prepose_tests {
         let far = CamSubject { at: Vec3::new(2000.0, 0.0, 90.0), ..subject };
         let opened = check(far).expect("opens");
         assert!(hit - opened > 0.5, "early in the window ({} s before the hit)", hit - opened);
-        let pose = cam_pose(&shots, opened, channel, &z, donald, target, beam, far, None).unwrap();
+        let pose = cam_pose(&shots, opened, &z, CamScene { channel, donald, target, beam, subject: far, end: None }).unwrap();
         assert!(DONALD_SHOTS.contains(&pose.shot) && !frames_both(pose.position, pose.rotation, pose.fov, far.at, far.at, 1.0), "inside a shot without the target");
         // 7 m: 910's end flies past it (its head at the frame's foot): only the last frames before the cut
         let opened = check(subject).expect("opens");
         assert!(hit - opened <= PREPOSE_CUT_S + 1e-4, "{} s before the hit", hit - opened);
-        assert!(!prepose_window(&shots, hit + 0.01, channel, &z, donald, target, beam, subject, None), "never after the hit");
+        assert!(!prepose_window(&shots, hit + 0.01, &z, CamScene { channel, donald, target, beam, subject, end: None }), "never after the hit");
     }
 }
 
@@ -4823,7 +4908,7 @@ mod tests {
 
     /// The event's frames (make_zetta_sheets.js FR): Donald's feet and facing, Terra-Xehanort's centre, the staff.
     fn event_frames() -> (Frame, Vec3, Basis) {
-        let don = Frame { origin: Vec3::new(1279.0072, -37333.105, -16.567169), yaw: -57.22063 };
+        let don = Frame { origin: Vec3::new(1279.0072, -37333.105, -16.567_17), yaw: -57.22063 };
         let xeh = Vec3::new(1749.5466, -38011.043, 126.27189 + 90.0);
         let staff = don.point(staff_local(&z()));
         (don, xeh, Basis::beam(staff, xeh))
@@ -4987,7 +5072,7 @@ mod tests {
             let mut seen = Vec::new();
             let mut s = 0.0;
             while s < 14.9 {
-                let p = cam_pose(&shots, s, 5.0, &z, donald, target, beam, CamSubject { at: goal, size: 1.0, animated: true , radius: 50.0, half: 0.0 }, None).unwrap();
+                let p = cam_pose(&shots, s, &z, CamScene { channel: 5.0, donald, target, beam, subject: CamSubject { at: goal, size: 1.0, animated: true , radius: 50.0, half: 0.0 }, end: None }).unwrap();
                 if s < 5.0 {
                     // the channel: the event's charging close-up exactly (time-scaled), on Donald
                     assert_eq!(p.shot, PAN_SHOT);
@@ -5018,13 +5103,13 @@ mod tests {
                 s += 0.1;
             }
             assert!(seen.contains(&"shot920") && !seen.contains(&"shot930") && !seen.contains(&"shot940"), "{name}: one continuous target shot (round 5): {seen:?}");
-            let last = cam_pose(&shots, 14.8, 5.0, &z, donald, target, beam, CamSubject { at: goal, size: 1.0, animated: true , radius: 50.0, half: 0.0 }, None).unwrap();
+            let last = cam_pose(&shots, 14.8, &z, CamScene { channel: 5.0, donald, target, beam, subject: CamSubject { at: goal, size: 1.0, animated: true , radius: 50.0, half: 0.0 }, end: None }).unwrap();
             assert!(frames_both(last.position, last.rotation, last.fov, goal, goal, 1.0), "{name}: the last shot shows the target in the beam");
         }
         // in the event's own layout the close-up is the event's camera itself (the GIF's frames)
         let (don, xeh, b) = event_frames();
         let tf = Frame { origin: xeh, yaw: don.yaw - EVENT_DONALD_YAW_OFF };
-        let p = cam_pose(&shots, 2.5, 5.0, &z, don, tf, b, CamSubject { at: xeh, size: 1.0, animated: true , radius: 50.0, half: 0.0 }, None).unwrap();
+        let p = cam_pose(&shots, 2.5, &z, CamScene { channel: 5.0, donald: don, target: tf, beam: b, subject: CamSubject { at: xeh, size: 1.0, animated: true , radius: 50.0, half: 0.0 }, end: None }).unwrap();
         let raw = shots.iter().find(|x| x.name == PAN_SHOT).unwrap().at(58.767 + 1.5);
         assert!((p.position - don.point(raw.0)).length() < 0.1 && (p.fov - raw.2).abs() < 1e-3, "the close-up as the event, time-scaled 3 s -> 5 s");
     }
@@ -5073,7 +5158,7 @@ mod tests {
         /// (2026-10-23) the default target draws as the test level's Sora does in his hurt pose (the reference's body: the fit
         /// 1); a sized one (`half` / `radius` set) as its capsule
         fn drawn_extent(&self, _id: TargetId) -> Option<(f32, f32)> {
-            (self.half <= 0.0 && self.radius <= 0.0).then(|| sora_case())
+            (self.half <= 0.0 && self.radius <= 0.0).then(sora_case)
         }
 
         fn enumerate(&self, out: &mut Vec<TargetInfo>) {
@@ -5105,6 +5190,13 @@ mod tests {
         }
         fn script_hold(&mut self, id: TargetId, hold: Option<kh_core::host::ScriptHold>) {
             self.holds.push((id, hold));
+        }
+        // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+        fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+            None
+        }
+        fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+            None
         }
     }
 
@@ -5180,10 +5272,7 @@ mod tests {
             let don = party.spawn(Chara::Donald, Vec3::ZERO, 0.0);
             party.set_pad(don, Some(kh_core::Tuning::USER));
             party.member_mut(don).unwrap().in_battle = true;
-            let mut sora = SoraView::default();
-            sora.position = Vec3::new(-3000.0, 0.0, 0.0);
-            sora.hp_max = 100;
-            sora.hp = 100;
+            let sora = SoraView { position: Vec3::new(-3000.0, 0.0, 0.0), hp_max: 100, hp: 100, ..SoraView::default() };
             let g = GLOBALS.lock().unwrap_or_else(|e| e.into_inner());
             set_voice_ja(false);
             set_cinematic(None);
@@ -5695,7 +5784,7 @@ mod tests {
         rig.party.don_zetta.take_log();
         rig.run_for(2.0);
         assert!(rig.party.don_zetta.runs.is_empty() && rig.party.don_zetta.log.iter().all(|e| !matches!(e, ZettaLog::Begun { .. })), "refused");
-        assert!(rig.party.member(rig.don).unwrap().don_cast.run.map_or(true, |r| !takes(r.spell)));
+        assert!(rig.party.member(rig.don).unwrap().don_cast.run.is_none_or(|r| !takes(r.spell)));
         assert_eq!(rig.party.status(rig.don).unwrap().mp, mp, "nothing paid");
         assert!(rig.dummies.holds.is_empty() && rig.party.don_zetta_view(1.0 / 60.0, 0.0).is_none());
         // begin itself refuses it
@@ -5741,7 +5830,7 @@ mod tests {
             let n = 1 + (rnd() * 4.0) as usize;
             let enemies: Vec<AiEnemy> = (0..n).map(|i| AiEnemy { id: i as u32 + 1, pos: Vec3::new(rnd() * 3000.0 - 1500.0, rnd() * 3000.0 - 1500.0, 0.0), weak: Default::default(), resist: Default::default(), wet: rnd() < 0.3, chilled: rnd() < 0.3, frozen: rnd() < 0.1, burned: rnd() < 0.3, big: rnd() < 0.2 }).collect();
             let hp_max = 500;
-            let input = AiInput { me: &me, id: don, pos: Vec3::ZERO, hp: (rnd() * 500.0) as i32 + 1, hp_max, mp: (rnd() * 400.0) as i32, mp_max: 400, mp_charging: rnd() < 0.1, in_battle: rnd() < 0.9, barrier_left: 0.0, orbs: 0, enemies: &enemies, allies: &[], refused: &[] };
+            let input = AiInput { me: &me, id: don, pos: Vec3::ZERO, hp: (rnd() * 500.0) as i32 + 1, hp_max, mp: (rnd() * 400.0) as i32, mp_max: 400, mp_charging: rnd() < 0.1, in_battle: rnd() < 0.9, barrier_left: 0.0, orbs: 0, orbs_left: 0.0, orbs_since: f32::MAX, enemies: &enemies, allies: &[], refused: &[] };
             let ask = if rnd() < 0.2 { AiAsk::Cure(don) } else { AiAsk::Attack(None) };
             if let Some(AiChoice::Cast { plan, .. }) = decide(&input, ask) {
                 assert!(!takes(plan.spell), "the AI chose Zettaflare");
@@ -5766,7 +5855,7 @@ mod tests {
                 let beam = Basis::beam(donald.point(staff_local(&z)), goal);
                 let mut s = 0.0;
                 while s < 14.9 {
-                    let p = cam_pose(&shots, s, 5.0, &z, donald, target, beam, CamSubject { at: goal, size: 1.0, animated , radius: 50.0, half: 0.0 }, None).unwrap();
+                    let p = cam_pose(&shots, s, &z, CamScene { channel: 5.0, donald, target, beam, subject: CamSubject { at: goal, size: 1.0, animated , radius: 50.0, half: 0.0 }, end: None }).unwrap();
                     let state = target_anim(s, &z, 5.0, animated);
                     if frames_both(p.position, p.rotation, p.fov, goal, goal, 1.0) {
                         assert_ne!(state, TargetAnim::Static, "animated {animated} s {s:.1} {}: the target shown standing dead still", p.shot);
@@ -5795,9 +5884,9 @@ mod tests {
         let target = Frame { origin: goal, yaw: 0.0 };
         let beam = Basis::beam(donald.point(staff_local(&z)), goal);
         for s in [8.5, 10.0, 11.5, 13.0] {
-            let one = cam_pose(&shots, s, 5.0, &z, donald, target, beam, CamSubject { at: goal, size: 1.0, animated: true , radius: 0.0, half: 0.0 }, None).unwrap();
-            let two = cam_pose(&shots, s, 5.0, &z, donald, target, beam, CamSubject { at: goal, size: 2.0, animated: true , radius: 0.0, half: 0.0 }, None).unwrap();
-            let half = cam_pose(&shots, s, 5.0, &z, donald, target, beam, CamSubject { at: goal, size: 0.5, animated: true , radius: 0.0, half: 0.0 }, None).unwrap();
+            let one = cam_pose(&shots, s, &z, CamScene { channel: 5.0, donald, target, beam, subject: CamSubject { at: goal, size: 1.0, animated: true , radius: 0.0, half: 0.0 }, end: None }).unwrap();
+            let two = cam_pose(&shots, s, &z, CamScene { channel: 5.0, donald, target, beam, subject: CamSubject { at: goal, size: 2.0, animated: true , radius: 0.0, half: 0.0 }, end: None }).unwrap();
+            let half = cam_pose(&shots, s, &z, CamScene { channel: 5.0, donald, target, beam, subject: CamSubject { at: goal, size: 0.5, animated: true , radius: 0.0, half: 0.0 }, end: None }).unwrap();
             let d1 = (one.position - goal).length();
             assert!(((two.position - goal).length() - 2.0 * d1).abs() < 1.0, "{s}");
             assert!(((half.position - goal).length() - 0.5 * d1).abs() < 1.0, "{s}");
@@ -5835,7 +5924,7 @@ mod tests {
         rig.run_for(16.5);
         let z = z();
         let hold_end = seq_time(z.zetta_hold_until, &z, 5.0);
-        let last = rig.dummies.hits.iter().filter(|h| h.target == TargetId(1)).last().copied().expect("the throw");
+        let last = rig.dummies.hits.iter().rfind(|h| h.target == TargetId(1)).copied().expect("the throw");
         assert_eq!(last.damage_kind, Kind::Blow, "a big knock-back");
         assert!((last.info.move_length - z.zetta_react_push).abs() < 1e-3);
         let p = rig.party.member(rig.don).unwrap().position();
@@ -5944,11 +6033,13 @@ mod tests {
         let l99 = crate::FriendStatus::test_level99(crate::Chara::Donald);
         // (2026-10-27) his balanced Magic leading or not (ONESTAT: 84 at level 99, KH3's AI row gave 71) and the host's x12
         // (damage.out.scale; the user: "allow Zettaflare to be scaled up"); (DONLINE2, the user 2026-10-27: "make Donald's
-        // starting magic 18 at level 1": magic_ratio 1.2, Magic 80 at level 99: 3220 KH = 38640, was 40572 at 84; its power kept)
+        // starting magic 18 at level 1")
         assert_eq!(l99.magic(), crate::balance::base_stats(crate::Chara::Donald, 99).1 + 4);
-        // (2026-10-28) the host's conversion x8 (the user: "lower the scale to 8"): 3220 KH = 25760
+        // (2026-11-01, the user: "Donald Level 99 magic should be 86"; its power kept): 3461.5 KH; (2026-10-28) the host's
+        // conversion x8 (the user: "lower the scale to 8"): 27692 Elden Ring HP
+        assert_eq!(l99.magic(), 86);
         let er = (kh(&l99) * 8.0).round();
-        assert!((er - 25760.0).abs() <= 8.0, "level 99: {} KH = {er} Elden Ring HP", kh(&l99));
+        assert!((er - 27692.0).abs() <= 8.0, "level 99: {} KH = {er} Elden Ring HP", kh(&l99));
         let l1 = crate::FriendStatus::new(crate::Chara::Donald, 0);
         assert!(kh(&l1) < kh(&l99) * 0.5, "level 1 scales down by Magic ({} KH)", kh(&l1));
         // the beam's own hit through the party route, on the rig's level-99 Donald: that number, on a plain and a guarded target
@@ -6006,7 +6097,7 @@ mod tests {
                 assert!((run.girth - g).abs() < 0.05, "girth {} for {g}", run.girth);
                 let b = run.end_beam.expect("the ending beam");
                 let fr = run.end_frame.expect("the ending's frame");
-                let cam = cam_pose(&cam_shots(), run.t, run.channel, &z, fr, fr, b, CamSubject { at: b.origin, size: run.girth, animated: true, radius: 10.0, half: 0.0 }, Some(fr)).expect("the camera");
+                let cam = cam_pose(&cam_shots(), run.t, &z, CamScene { channel: run.channel, donald: fr, target: fr, beam: b, subject: CamSubject { at: b.origin, size: run.girth, animated: true, radius: 10.0, half: 0.0 }, end: Some(fr) }).expect("the camera");
                 assert_eq!(cam.shot, "shot960", "{g} at {mt}: the long shot");
                 let row = DON_ZETTA_FX.iter().find(|r| r.id == "end.beam.96_zfr_00").unwrap();
                 let tip_far = b.origin + b.x * (end_len_scale(g) * end_card_len(row.asset, mt - row.start) * 0.97);
@@ -6099,7 +6190,11 @@ mod tests {
         assert!(gp.z < 20.0, "on the floor, not hanging at his hand ({gp})");
         // (the user: "Donald's wand should stay where it falls") his staff lies where it fell, drawn there, not in his hand
         assert!(rig.party.weapon_ground(rig.don).is_some() && !rig.party.weapon_hidden(rig.don), "the staff on the ground");
-        let lights = |rig: &Rig| rig.effects.spawned.iter().filter(|e| e.1 == STAFF_LIGHT).count();
+        // (PARTY-WEAPONS) the battle start drew his staff with its own appear effect (kh-party weapon_draw, KH3's rule): that one
+        // is not the down's; the down's own lights are counted from here
+        let drawn = rig.party.member(rig.don).unwrap().weapon.effects as usize;
+        assert!(drawn <= 1, "one battle-start draw at most ({drawn})");
+        let lights = |rig: &Rig| rig.effects.spawned.iter().filter(|e| e.1 == STAFF_LIGHT).count() - drawn;
         assert_eq!(lights(&rig), 0);
         // he gets up (his staff back in his hand over the blend), says his line, then is the player's again
         rig.run_for(0.3);
@@ -6160,7 +6255,7 @@ mod tests {
             rig.step();
             t += rig.dt;
             if let Some(f) = rig.party.don_zetta.cam.feed {
-                subjects.push(f.subject.at);
+                subjects.push(f.scene.subject.at);
             }
             let run = &rig.party.don_zetta.runs[0];
             assert_eq!(run.locked, Some(ZettaAim::Target(TargetId(1))), "the cast's target, fixed");
@@ -6181,7 +6276,7 @@ mod tests {
         rig.dummies.list.retain(|d| d.0 != TargetId(1));
         rig.run_for(seq_time(z.zetta_hit_at, &z, 5.0) + 1.0 - 2.0);
         let f = rig.party.don_zetta.cam.feed.expect("the camera");
-        assert!(crate::pawn::horizontal(f.subject.at - Vec3::new(900.0, 0.0, 0.0)).length() < 5.0, "its last place ({})", f.subject.at);
+        assert!(crate::pawn::horizontal(f.scene.subject.at - Vec3::new(900.0, 0.0, 0.0)).length() < 5.0, "its last place ({})", f.scene.subject.at);
         assert!(rig.dummies.hits.iter().all(|h| h.target != TargetId(2)), "never another enemy");
     }
 
@@ -6225,7 +6320,7 @@ mod tests {
                 Some(Basis::beam(p, enemy))
             }).unwrap();
             let axis = crate::pawn::horizontal(b.x).normalize();
-            let last = rig.dummies.hits.iter().filter(|h| h.target == TargetId(1)).last().copied().expect("the throw");
+            let last = rig.dummies.hits.iter().rfind(|h| h.target == TargetId(1)).copied().expect("the throw");
             let dir = crate::pawn::horizontal(last.direction).normalize();
             assert!(dir.dot(axis) > (3.0f32).to_radians().cos(), "{enemy}: thrown along the beam ({dir} vs {axis})");
             // it faced back up the beam while held after the hit
@@ -6269,7 +6364,7 @@ mod tests {
             s.mp = 1;
             s.mp_charge_left = 0.0;
             s.donald.as_mut().unwrap().core.zetta_slow = slow;
-            spend_all_mp(s, 1);
+            spend_all_mp(s);
             let mut t = 0.0f32;
             while party.status(id).unwrap().mp_charge_left > 0.0 && t < 200.0 {
                 party.status_mut(id).unwrap().tick(1.0 / 60.0);
@@ -6820,7 +6915,7 @@ mod tests {
             let donald = Frame { origin: feet, yaw: yaw + EVENT_DONALD_YAW_OFF };
             let target = Frame { origin: goal, yaw };
             let beam = Basis::beam(donald.point(staff_local(&z)), goal);
-            let p = cam_pose(&shots, s, 5.0, &z, donald, target, beam, CamSubject { at: goal, size: target_size(half, radius, &z), animated: true, radius, half: 0.0 }, None).unwrap();
+            let p = cam_pose(&shots, s, &z, CamScene { channel: 5.0, donald, target, beam, subject: CamSubject { at: goal, size: target_size(half, radius, &z), animated: true, radius, half: 0.0 }, end: None }).unwrap();
             (p, goal)
         };
         let malenia = (130.0 * 1.25, 57.0 * 2.2); // (her capsule with the reach kh-er adds: targets.rs drawn_extent)
@@ -7258,7 +7353,7 @@ mod tests {
             last = v.shake_rot;
         }
         assert!(shook > 60, "it shook ({shook} steps)");
-        let mut off = z.clone();
+        let mut off = z;
         off.zetta_shake = 0.0;
         assert_eq!(shake_at(z.zetta_hit_at + 1.0, &off), (Vec3::ZERO, Vec3::ZERO), "off with zetta.shake 0");
     }
@@ -7327,12 +7422,17 @@ mod tests {
         assert_eq!(shot_scale("end.donald.src_glow", Some("shot970")), 1.0);
         assert_eq!(shot_scale("fx.beam.stream_93_a", Some("shot960")), 1.0);
         assert_eq!(shot_scale("end.donald.src_glow", None), 1.0);
-        // the shot by time: the cast's, the target's (one shot), the wide, the one behind him
-        assert_eq!(shot_at(z.zetta_cast_start + 0.1, &z), Some(CAST_SHOT));
-        assert_eq!(shot_at(z.zetta_hit_at + 0.5, &z), Some("shot920"));
-        assert_eq!(shot_at(z.zetta_white_in_at - 0.1, &z), Some("shot920"));
-        assert_eq!(shot_at(z.zetta_end_start + 1.0, &z), Some("shot960"));
-        assert_eq!(shot_at(z.zetta_end_start + 8.0, &z), Some("shot970"));
+        // the shot by time: the cast's, the target's (one shot), the wide, the one behind him. The ending is the sheet's row
+        // (on), given here: the module's `set_ending` switch is shared with other tests running in parallel
+        let ending = z.zetta_ending >= 0.5;
+        assert!(ending, "the sheet plays the ending");
+        assert_eq!(shot_at_in(z.zetta_cast_start + 0.1, &z, ending), Some(CAST_SHOT));
+        assert_eq!(shot_at_in(z.zetta_hit_at + 0.5, &z, ending), Some("shot920"));
+        assert_eq!(shot_at_in(z.zetta_white_in_at - 0.1, &z, ending), Some("shot920"));
+        assert_eq!(shot_at_in(z.zetta_end_start + 1.0, &z, ending), Some("shot960"));
+        assert_eq!(shot_at_in(z.zetta_end_start + 8.0, &z, ending), Some("shot970"));
+        // without the ending its shots never come (the switch's other side)
+        assert_ne!(shot_at_in(z.zetta_end_start + 1.0, &z, false), Some("shot960"));
     }
 
     #[test]

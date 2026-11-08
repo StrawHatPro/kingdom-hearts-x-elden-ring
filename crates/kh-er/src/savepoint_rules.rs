@@ -74,7 +74,7 @@ pub struct YIn {
     /// He stands in the Save-command capsule of a save point that exists (the game presents its grace) ...
     pub at_point: bool,
     /// ... or the game's own prompt is up within the guard radius of one (the game offers its action farther out
-    /// than the capsule reaches).
+    /// than the capsule reaches). (INTERACT-MARK) No longer offers the Save: only `at_point` does (inside the save point).
     pub prompt_near: bool,
     /// A save point that exists is within the guard radius (`savepoint.guard`, m).
     /// (SV) ANY site of grace in reach counts: one hidden in combat, an undiscovered one, one the game hides.
@@ -103,7 +103,11 @@ pub fn y_rule(i: YIn) -> YRule {
         let offered = i.menu_key && i.at_point && i.discovered && i.prompt && free && i.on_floor && i.alive;
         return YRule { offered, ours: offered };
     }
-    let offered = i.menu_key && (i.at_point || i.prompt_near) && i.discovered && i.allowed && free && i.on_floor && i.alive;
+    // (INTERACT-MARK, the user 2026-11-05: "you need to be INSIDE a save point to access it") ONLY INSIDE: KH3 offers the Save
+    // command while his capsule overlaps the save point's reactor capsule (g_ex_SavePoint TresReactor0: radius 110, height
+    // 180, 40 cm under the root; kh_host::savepoint `in_reactor`); Elden Ring's wider prompt radius (`prompt_near`) no longer
+    // offers it (Y near it stays kept from the game: `guard` below)
+    let offered = i.menu_key && i.at_point && i.discovered && i.allowed && free && i.on_floor && i.alive;
     // (`savepoint.menu = 0` gives Y back to the game altogether: its own rest and grace menu)
     // (without a prompt of the game's Y would not reach the game anyway: it stays Sora's, e.g. a situation command in a
     // fight beside a save point)
@@ -524,8 +528,9 @@ mod tests {
         // discovered, in the capsule, the game's "Rest" prompt NOT up: our menu all the same
         assert_eq!(y_rule(at_discovered()), YRule { offered: true, ours: true });
         assert_eq!(y_rule(YIn { prompt: true, ..at_discovered() }), YRule { offered: true, ours: true });
-        // outside the capsule but inside the game's prompt: our menu, not the game's rest
-        assert_eq!(y_rule(YIn { at_point: false, prompt_near: true, prompt: true, ..at_discovered() }), YRule { offered: true, ours: true });
+        // (INTERACT-MARK) outside the capsule but inside the game's prompt radius: NO menu (only inside the save point), and
+        // never the game's rest (Y is kept from it)
+        assert_eq!(y_rule(YIn { at_point: false, prompt_near: true, prompt: true, ..at_discovered() }), YRule { offered: false, ours: true });
         // near it without a prompt and outside the capsule: no menu; Y is Sora's (the game would not get it anyway)
         assert_eq!(y_rule(YIn { at_point: false, ..at_discovered() }), YRule { offered: false, ours: false });
         // ... and with a prompt of the game's that is not a discovered grace's to answer: kept from the game

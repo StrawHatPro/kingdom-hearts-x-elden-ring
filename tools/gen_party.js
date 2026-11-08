@@ -28,7 +28,7 @@ const RESERVED = new Set(['as', 'break', 'const', 'continue', 'crate', 'else', '
 const fail = (msg) => { console.log(`gen_party: FAILED  ${msg}`); process.exit(1); };
 const banner = (from) => `${BANNER_MARK}${from} by tools/gen_party.js (emitter ${VERSION}) - DO NOT EDIT: change the input and run node tools/gen_party.js\n`;
 const lit = (s) => JSON.stringify(String(s));
-const f32 = (n) => { n = Number(n); const s = String(Math.fround(n) === n ? n : Number(n.toPrecision(9))); return /[.eE]/.test(s) || /inf|nan/i.test(s) ? s : s + '.0'; };
+const { f32 } = require('./lib/f32lit'); // (2026-11-01) Clippy-clean literals, the same f32 values
 function camel(name) {
   let c = String(name).split(/[^A-Za-z0-9]+/).filter(Boolean).map((p) => (/[a-z]/.test(p) ? p[0].toUpperCase() + p.slice(1) : p[0] + p.slice(1).toLowerCase())).join('');
   if (!c) c = 'Value'; if (/^[0-9]/.test(c)) c = '_' + c; if (c === 'Self' || RESERVED.has(c)) c += '_';
@@ -54,7 +54,9 @@ const label = (v) => String(v).replace(/^.*::/, '');
 const num = (v, d) => f32(typeof v === 'number' ? v : d);
 const bool = (v, d) => String(typeof v === 'boolean' ? v : d);
 const classVariant = (c) => camel(String(c).replace(/_/g, ' ')).replace(/^Sqexsead/, 'SqexSead');
-function makeDecoders(assetNames) {
+// `own`: the character's bone and socket names (an OWNER row on a socket his mesh lacks is placed on the mesh itself);
+// `meshMoves` collects those rows for the summary line.
+function makeDecoders(assetNames, own, meshMoves) {
   const asset = (v) => { assetNames.add(String(v)); return rstr(v); };
   const face = (p, used, slot) => { ['m_bIsLoop', 'm_AnimType', 'm_AnimName', 'm_bSameCheck', 'm_BlendInTime'].forEach((k) => used.add(k));
     return `NotifyData::Face { slot: ${slot}, anim_type: ${opt(p.m_AnimType, (v) => rstr(label(v)))}, anim_name: ${opt(p.m_AnimName, rstr)}, blend_in: ${num(p.m_BlendInTime, -1)}, looped: ${bool(p.m_bIsLoop, false)}, same_check: ${bool(p.m_bSameCheck, true)}, battle_face_end: false }`; };
@@ -65,10 +67,33 @@ function makeDecoders(assetNames) {
     return `NotifyData::Sound { sound: ${p.Sound ? asset(p.Sound) : '""'}, attach_point: ${opt(p.AttachPointName, rstr)}, volume: ${num(p.VolumeMultiplier, 1)}, pitch: ${num(p.PitchMultiplier, 1)}, fade_in: ${num(p.FadeInDuration, 0)}, fade_out: ${num(p.FadeOutDuration, 0)}, loop_end_sound: ${opt(p.LoopEndSound, asset)}, loop_end_pitch: ${num(p.LoopEndSoundPitchMultiplier, 1)}, follow_owner_visible: ${bool(p.bFollowOwnerVisible, false)} }`; };
   const autoSe = (p, used) => { used.add('FadeOutDuration'); const s = plain(p.PlaySettings) || {};
     return `NotifyData::AutoSe { motion: ${opt(s.MotionSoundType, (v) => rstr(label(v)))}, source: ${opt(s.SourceType, (v) => rstr(label(v)))}, fade_out: ${num(p.FadeOutDuration, 0)} }`; };
+  // (2026-11-02, THE USER: "this effect is not aligned properly") the entry's own place on its socket: LocationOffset (cm),
+  // RotationOffset (pitch, yaw, roll deg), ScaleOffset, in the socket's frame. Goofy's shield bash puts VN_slg_bsh0 on
+  // vfx_root at (100, 0, 80): a metre ahead at shield height, not at his feet.
+  const xyz = (v, d) => `[${['x', 'y', 'z'].map((k) => num(v && v[k], d)).join(', ')}]`;
+  const pyr = (v) => `[${['pitch', 'yaw', 'roll'].map((k) => num(v && v[k], 0)).join(', ')}]`;
+  const placed = (m) => `offset: ${xyz(m.LocationOffset, 0)}, rotation: ${pyr(m.RotationOffset)}, scale: ${xyz(m.ScaleOffset, 1)}`;
+  // An OWNER row on a socket his mesh lacks (Goofy's SGuardShieldBash2 VN_slg_hvy00 on "vfx_top", a socket of the SHIELD
+  // only): the engine attaches it to the mesh component itself (a missing socket's transform is the component's), whose
+  // frame faces +Y (the -90 deg mesh yaw). Its (0, 180, 80) and yaw 90 are 1.8 m ahead, 80 cm up, facing ahead: written
+  // here on no socket (the actor: facing +X), the offset and the yaw turned into his frame. The host would otherwise find
+  // the shield's own vfx_top by that name and put the offset 1.8 m off the shield.
+  const onMesh = (m) => {
+    const l = m.LocationOffset || {}, r = m.RotationOffset || {}, s = m.ScaleOffset || {};
+    return `offset: [${num(l.y, 0)}, ${num(-(l.x || 0), 0)}, ${num(l.z, 0)}], rotation: [${num(r.pitch, 0)}, ${num((r.yaw || 0) - 90, 0)}, ${num(r.roll, 0)}], scale: ${xyz(s, 1)}`;
+  };
   const effect = (p) => {
     const entries = [];
-    for (const g of plain(p.MetaAttachDataList) || []) for (const m of g.MetaAttachData || []) for (const e of m.EffectDataList || []) entries.push(`EffectAttach { effect: ${opt(e.AttachEffect, asset)}, attach_type: ${rstr(label(g.AttachType ?? 'None'))}, socket: ${rstr(m.SocketName && m.SocketName !== 'None' ? m.SocketName : (g.SocketName ?? 'None'))}, group_id: ${Number.isInteger(e.GroupID) ? e.GroupID : 0}, common: ${bool(m.bUseCommonEffect, false)} }`);
-    for (const g of plain(p.AttachDataList) || []) { const datas = (g.AttachDatas || []).filter((x) => typeof x === 'string'); for (const d of datas.length ? datas : [null]) entries.push(`EffectAttach { effect: ${opt(d, asset)}, attach_type: ${rstr(label(g.AttachType ?? 'None'))}, socket: ${rstr(g.SocketName ?? 'None')}, group_id: ${Number.isInteger(g.GroupID) ? g.GroupID : 0}, common: ${bool(g.bUseCommonAttachData, false)} }`); }
+    for (const g of plain(p.MetaAttachDataList) || []) for (const m of g.MetaAttachData || []) for (const e of m.EffectDataList || []) {
+      let socket = m.SocketName && m.SocketName !== 'None' ? m.SocketName : (g.SocketName ?? 'None');
+      let place = placed(m);
+      if (own && label(g.AttachType ?? 'None') === 'SQEX_ATTACH_OBJECT_OWNER' && socket !== 'None' && !own.has(socket)) {
+        meshMoves.push(`${String(e.AttachEffect).split('.').pop()} on ${socket}`);
+        socket = 'None'; place = onMesh(m);
+      }
+      entries.push(`EffectAttach { effect: ${opt(e.AttachEffect, asset)}, attach_type: ${rstr(label(g.AttachType ?? 'None'))}, socket: ${rstr(socket)}, group_id: ${Number.isInteger(e.GroupID) ? e.GroupID : 0}, common: ${bool(m.bUseCommonEffect, false)}, ${place} }`);
+    }
+    for (const g of plain(p.AttachDataList) || []) { const datas = (g.AttachDatas || []).filter((x) => typeof x === 'string'); for (const d of datas.length ? datas : [null]) entries.push(`EffectAttach { effect: ${opt(d, asset)}, attach_type: ${rstr(label(g.AttachType ?? 'None'))}, socket: ${rstr(g.SocketName ?? 'None')}, group_id: ${Number.isInteger(g.GroupID) ? g.GroupID : 0}, common: ${bool(g.bUseCommonAttachData, false)}, ${placed(g)} }`); }
     return `NotifyData::Effect { entries: &[${entries.join(', ')}] }`;
   };
   const D = {
@@ -121,7 +146,7 @@ for (const [game, c] of classList) types += `    /// \`${game}\`: ${c.count} ins
 types += `}\n\nimpl NotifyClass {\n    pub const ALL: &'static [NotifyClass] = &[${classList.map(([, c]) => `NotifyClass::${c.variant}`).join(', ')}];\n\n    /// The class name in the game's assets.\n    pub const fn game_name(self) -> &'static str {\n        match self {\n`;
 for (const [game, c] of classList) types += `            NotifyClass::${c.variant} => ${lit(game)},\n`;
 types += '        }\n    }\n}\n\n';
-types += `/// One effect of a \`TresAnimNotify(State)_AttachEffect\` (as kh_core::anim::EffectAttach).\n#[derive(Clone, Copy, Debug, PartialEq)]\npub struct EffectAttach {\n    pub effect: Option<&'static str>,\n    pub attach_type: &'static str,\n    pub socket: &'static str,\n    pub group_id: i32,\n    pub common: bool,\n}\n\n`;
+types += `/// One effect of a \`TresAnimNotify(State)_AttachEffect\` (as kh_core::anim::EffectAttach).\n#[derive(Clone, Copy, Debug, PartialEq)]\npub struct EffectAttach {\n    pub effect: Option<&'static str>,\n    pub attach_type: &'static str,\n    pub socket: &'static str,\n    pub group_id: i32,\n    pub common: bool,\n    /// Its place on the socket, in the socket's frame: LocationOffset (cm), RotationOffset (pitch, yaw, roll deg), ScaleOffset.\n    pub offset: [f32; 3],\n    pub rotation: [f32; 3],\n    pub scale: [f32; 3],\n}\n\n`;
 types += `/// The decoded properties of a notify (the variants and defaults of kh_core::anim::NotifyData, tools/gen_port.js).\n#[derive(Clone, Copy, Debug, PartialEq)]\npub enum NotifyData {\n    None,\n    Attack { group: &'static str, row: &'static str, hit_se: Option<&'static str>, interval: Option<f32>, hit_se_asset: Option<&'static str>, override_hit_effect: bool, hit_effect_group: Option<&'static str> },\n    Ik { start_interpolation_time: f32, end_interpolation_time: f32, target_alpha: f32 },\n    Param { param: Option<i32> },\n    Shot { location_index: Option<i32>, attach_fire_effect: bool },\n    LandAnimPose { pose: Option<&'static str> },\n    LastAnimPose { pose: Option<&'static str> },\n    WeaponSe { hit: bool, alias: &'static str, unit: &'static str, socket: Option<&'static str>, follow: bool, volume: f32, pitch: f32, fade_out: f32 },\n    Sound { sound: &'static str, attach_point: Option<&'static str>, volume: f32, pitch: f32, fade_in: f32, fade_out: f32, loop_end_sound: Option<&'static str>, loop_end_pitch: f32, follow_owner_visible: bool },\n    AutoSe { motion: Option<&'static str>, source: Option<&'static str>, fade_out: f32 },\n    Voice { group: Option<&'static str>, asset: Option<&'static str>, random: &'static [(&'static str, i32)], fade_out: f32 },\n    Face { slot: u8, anim_type: Option<&'static str>, anim_name: Option<&'static str>, blend_in: f32, looped: bool, same_check: bool, battle_face_end: bool },\n    Effect { entries: &'static [EffectAttach] },\n}\n\n`;
 types += `/// One notify of a sequence: \`time\` the trigger time, \`end\` the end trigger of a notify state (= \`time\` for an instant one), seconds.\n#[derive(Clone, Copy, Debug, PartialEq)]\npub struct NotifyDef {\n    pub class: NotifyClass,\n    pub state: bool,\n    pub time: f32,\n    pub end: f32,\n    pub data: NotifyData,\n    /// The serialized properties the decoder did not read: (name, value as JSON text).\n    pub props: &'static [(&'static str, &'static str)],\n}\n\n`;
 types += `/// One animation sequence of a pack (as kh_core::anim::SequenceData). The legacy notify times are seconds; -1.0 = none.\n#[derive(Clone, Copy, Debug, PartialEq)]\npub struct SequenceData {\n    /// Asset name = the pack file \`anims/<name>.glb\` (or \`face/<name>.glb\`).\n    pub name: &'static str,\n    pub length: f32,\n    pub frames: u32,\n    pub root_motion_enabled: bool,\n    pub interpolation_time: f32,\n    pub jump_start: f32,\n    pub enable_change: f32,\n    pub reverse_leg: (f32, f32),\n    /// Per-frame root track where \`bEnableRootMotion\`; empty otherwise.\n    pub root: &'static [RootKey],\n    pub notifies: &'static [NotifyDef],\n    /// Clips with a hit window or a Shot notify: the default weapon's ATK_00 / ATK_01 per frame, ACTOR space, cm.\n    pub sockets: &'static [[f32; 6]],\n}\n\n`;
@@ -144,14 +169,16 @@ for (const { npc, man } of packs) {
     const lengths = samples.map((s) => items.get(seqNames[s[1]]).duration_s);
     const differ = Math.max(...lengths) - Math.min(...lengths) > 1e-4;
     const enabled = samples.some((s) => items.get(seqNames[s[1]]).root_motion_enabled === true);
-    let variant = String(a.name).replace(/[^A-Za-z0-9_]/g, '_'); if (/^[0-9]/.test(variant)) variant = 'A' + variant; if (RESERVED.has(variant) || variant === 'Self') variant += '_';
+    let variant = String(a.name).replace(/[^A-Za-z0-9_]/g, '_').replace(/(?<=[A-Za-z])_+|_+(?=[A-Za-z])/g, ''); if (/^[0-9]/.test(variant)) variant = 'A' + variant; if (RESERVED.has(variant) || variant === 'Self') variant += '_';
     if (variantNames.has(variant)) fail(`${npc}: rows ${a.name} and ${variantNames.get(variant)} both become ${variant}`); variantNames.set(variant, a.name);
     anims.push({ name: a.name, variant, rootEnabled: enabled, blendIn: p.asset_m_InterpolationTime || 0, length: differ ? Math.max(...lengths) : lengths[0], differ, blendSpace: !!a.samples, two,
       axisMin: a.axis ? a.axis.min : 0, axisMax: a.axis ? a.axis.max : 0, axisSmoothing: (a.input_filter && a.input_filter.window_s) || 0, samples, axisY: a.axis_y || null, axisGrid: a.axis ? a.axis.grid_num : 0, ySmoothing: (a.input_filter && a.input_filter.window_y_s) || 0, grid: a.grid_samples || [], allAnimation: /SQEX_AllAnimation/.test(a.notify_trigger_mode || '') });
   }
   // every other packed sequence (face, camp, gummi) gets an index too, so that its notifies are tables as well
   for (const name of items.keys()) seqIndex(name);
-  const assetNames = new Set(); const DECODE = makeDecoders(assetNames);
+  const own = new Set([...((man.skeleton && man.skeleton.bones) || []), ...(man.sockets || [])].map((b) => b.name));
+  const meshMoves = [];
+  const assetNames = new Set(); const DECODE = makeDecoders(assetNames, own, meshMoves);
   let notifyCount = 0;
   let out = banner(`port/party-assets (build/sora_pack/party/${npc}/manifest.json: logical_animations, items[].notifies, root_motion.tracks, attack_sockets)`);
   out += `\n/// The pack generator the tables were read from.\npub const ANIM_SOURCE: &str = ${lit(man.generator)};\npub const NPC: &str = ${lit(npc)};\n\n`;
@@ -184,7 +211,7 @@ for (const { npc, man } of packs) {
   out += '\n/// Every row of the body anim set, in the order of `NpcAnimId`.\npub static ANIMS: &[AnimData] = &[\n';
   for (const a of anims) out += `    AnimData { name: ${lit(a.name)}, stage1_mode: None, looping: false, root_motion_bit: false, root_motion: false, root_motion_enabled: ${a.rootEnabled}, blend_in: ${f32(a.blendIn)}, length: ${f32(a.length)}, sample_lengths_differ: ${a.differ}, blend_space: ${a.blendSpace}, axis_min: ${f32(a.axisMin)}, axis_max: ${f32(a.axisMax)}, axis_smoothing: ${f32(a.axisSmoothing)}, all_animation: ${a.allAnimation}, samples: &[${a.samples.map((s) => `(${f32(s[0])}, ${s[1]})`).join(', ')}], space2d: ${a.two ? `Some(&SPACE2D_${a.space})` : 'None'} },\n`;
   out += '];\n\n';
-  out += `/// The rows of ${npc}_AnimSet by the game's names (a name that starts with a digit has the prefix \`A\`), in the set's order.\n#[allow(non_camel_case_types)]\n#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]\n#[repr(u16)]\npub enum NpcAnimId {\n`;
+  out += `/// The rows of ${npc}_AnimSet by the game's names (a name that starts with a digit has the prefix \`A\`, an underscore beside a letter is dropped: "M_1301" is \`M1301\`), in the set's order.\n#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]\n#[repr(u16)]\npub enum NpcAnimId {\n`;
   anims.forEach((a, i) => { out += `    ${a.variant} = ${i},\n`; });
   out += `}\n\nimpl NpcAnimId {\n    pub const ALL: [NpcAnimId; ${anims.length}] = [${anims.map((a) => `NpcAnimId::${a.variant}`).join(', ')}];\n\n    /// By the game's row name ("IdleN", "M_1301").\n    pub fn from_name(name: &str) -> Option<NpcAnimId> {\n        ANIMS.iter().position(|a| a.name == name).map(|i| NpcAnimId::ALL[i])\n    }\n\n    pub fn data(self) -> &'static AnimData {\n        &ANIMS[self as usize]\n    }\n\n    pub fn name(self) -> &'static str {\n        ANIMS[self as usize].name\n    }\n}\n\n`;
   const stem = (f) => path.basename(String(f), '.glb');
@@ -216,7 +243,7 @@ for (const { npc, man } of packs) {
       const tr = tracks[seq] && tracks[seq].bEnableRootMotion ? tracks[seq].frames_data : [];
       const root = tr.map((k, i) => `RootKey { time: ${f32(i === tr.length - 1 ? it.duration_s : k.time)}, x: ${f32(k.translation_ue_actor_cm[0])}, y: ${f32(k.translation_ue_actor_cm[1])}, z: ${f32(k.translation_ue_actor_cm[2])}, yaw: ${f32(k.yaw_ue_deg)} }`).join(', ');
       const sk = ((man.attack_sockets || {}).clips || {})[seq];
-      const socket = sk ? sk.sockets.map((r, i) => `SocketKey { time: ${f32(sk.frames > 1 ? i * sk.duration_s / (sk.frames - 1) : 0)}, x: ${f32(r[atk * 3])}, y: ${f32(r[atk * 3 + 1])}, z: ${f32(r[atk * 3 + 2])} }`).join(', ') : '';
+      const socket = sk ? sk.sockets.map((r, i) => `SocketKey { time: ${f32(sk.frames > 1 ? i * sk.duration_s / (sk.frames - 1) : 0)}, x: ${f32(r[atk * 3])}, y: ${f32(r[atk * 3 + 1])}, z: ${f32(r[atk * 3 + 2])}, q: [${(sk.rotations ? sk.rotations[i].slice(atk * 4, atk * 4 + 4) : [0, 0, 0, 1]).map(f32).join(', ')}] }`).join(', ') : ''; // (COMBAT-FIX) q: the socket's rotation (manifest attack_sockets rotations; identity where the pack has none yet)
       const looping = /Loop|Idle|^Swim|Dive|Walk|RunLoop/.test(a.name) && !/End|Start/.test(a.name);
       const rate = (it.sequence_properties && it.sequence_properties.RateScale) ?? 1;
       clips += `    ClipDef { name: ${lit(a.name)}, sequence: ${lit(seq)}, length: ${f32(a.length)}, rate: ${f32(rate)}, blend_in: ${f32(a.blendIn)}, looping: ${looping}, root_motion: ${it.root_motion_enabled === true}, notifies: &[${ns.join(', ')}], root: &[${root}], socket: &[${socket}] },\n`;
@@ -224,7 +251,7 @@ for (const { npc, man } of packs) {
     clips += `];\n\npub static ${UP}_ANIMS: AnimSetTable = AnimSetTable { chara: Chara::${npc === 'n_ex001' ? 'Donald' : 'Goofy'}, clips: ${UP}_CLIPS };\n`;
     outputs.push([`party_clips_${npc}.rs`, clips, `${anims.length} ClipDefs (kh-party B.7 types), socket ${atk ? 'ATK_01' : 'ATK_00'}`]);
   }
-  outputs.push([`party_anim_${npc}.rs`, out, `${anims.length} rows (${anims.filter((a) => a.blendSpace && !a.two).length} 1D, ${spaces.length} 2D blend spaces), ${seqNames.length} sequences, ${seqNames.filter((n) => tracks[n] && tracks[n].bEnableRootMotion).length} root tracks, ${notifyCount} notifies, ${Object.keys(((man.attack_sockets || {}).clips) || {}).length} socket tracks, ${assetList.length} notify assets`]);
+  outputs.push([`party_anim_${npc}.rs`, out, `${anims.length} rows (${anims.filter((a) => a.blendSpace && !a.two).length} 1D, ${spaces.length} 2D blend spaces), ${seqNames.length} sequences, ${seqNames.filter((n) => tracks[n] && tracks[n].bEnableRootMotion).length} root tracks, ${notifyCount} notifies, ${Object.keys(((man.attack_sockets || {}).clips) || {}).length} socket tracks, ${assetList.length} notify assets${meshMoves.length ? `, on the mesh (socket not his): ${[...new Set(meshMoves)].join(', ')}` : ''}`]);
 }
 
 // ================================================================ write

@@ -67,8 +67,7 @@ impl Rig {
         if leader {
             party.set_pad(id, Some(kh_core::Tuning::USER));
         }
-        let mut sora = SoraView::default();
-        sora.position = Vec3::new(-3000.0, 0.0, 0.0);
+        let sora = SoraView { position: Vec3::new(-3000.0, 0.0, 0.0), ..SoraView::default() };
         let mut rig = Rig { world, targets: Default::default(), audio: Default::default(), effects: Default::default(), party, sora, id, held: PadButtons::NONE, trace: Vec::new() };
         rig.step(Vec2::ZERO, &[], 20);
         rig.trace.clear();

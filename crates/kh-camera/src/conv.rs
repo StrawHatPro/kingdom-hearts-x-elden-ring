@@ -80,7 +80,7 @@ impl ShotDirector {
         } else if changed {
             self.changes += 1;
             self.same = 0;
-            let kind = if self.changes % 3 == 0 { ShotKind::CloseUp } else if chars > 110 { ShotKind::PushIn } else { ShotKind::OverShoulder };
+            let kind = if self.changes.is_multiple_of(3) { ShotKind::CloseUp } else if chars > 110 { ShotKind::PushIn } else { ShotKind::OverShoulder };
             ShotCue { kind, subject: speaker, other: listener, cut: true }
         } else {
             self.same += 1;

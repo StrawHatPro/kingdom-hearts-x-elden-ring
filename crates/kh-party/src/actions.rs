@@ -160,10 +160,7 @@ pub fn viable_swim(def: ActionDef) -> bool {
 /// never set; RequestAction 0x140547B40). P's pad states (`Pad`) take their own actions (port design).
 pub fn viable_in(_def: ActionDef, state: crate::NpcStateId) -> bool {
     use crate::NpcStateId as S;
-    match state {
-        S::Idle | S::Move | S::Pad(_) => true,
-        _ => false,
-    }
+    matches!(state, S::Idle | S::Move | S::Pad(_))
 }
 
 /// The clip a melee definition names (`m_AttackAnimData`) [A].
@@ -190,7 +187,7 @@ pub fn begin(p: &mut NpcPawn, cx: &StepCtx, host: &mut PartyHost) -> bool {
     }
     // the ability gate FUN_1405A4EA0(pawn, kind, 1): equipped and payable, then MP is spent
     if let Some(key) = ability(def) {
-        if !crate::pad::goofy::pays_nothing(p) /* (party X3G) Discus Barrage: the focus paid */ && !p.status.pay(key) {
+        if !p.status.pay(key) {
             return false;
         }
     }
@@ -289,12 +286,21 @@ fn jump_target(p: &NpcPawn, t: TargetRef, aim: bool, cx: &StepCtx, host: &PartyH
     }
 }
 
+/// The jump's gravity: `g` is GetGravityZ (negative); s_up / t_dur / s_dur are m_JumpUpGravityScale / m_MaxJumpDurationTime /
+/// m_JumpDurationGravityScale of the movement component (+0xBE8 / +0xBEC / +0xBF0).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct JumpGravity {
+    pub g: f32,
+    pub s_up: f32,
+    pub s_dur: f32,
+    pub t_dur: f32,
+}
+
 /// `FUN_1405431C0` via the movement's FUN_140578330 (the jump velocity to `target` from `start`):
 /// apex = max(dz (if the target is above) + h0, h_min); vz = sqrt(-2 g s_up apex); the fall time with
 /// the jump-duration phase (t_dur at s_dur, then 1); horizontal = distance / (rise + fall time).
-/// `g` is GetGravityZ (negative); s_up / t_dur / s_dur are m_JumpUpGravityScale / m_MaxJumpDurationTime /
-/// m_JumpDurationGravityScale of the movement component (+0xBE8 / +0xBEC / +0xBF0).
-pub fn jump_velocity(start: Vec3, target: Vec3, h0: f32, h_min: f32, g: f32, s_up: f32, s_dur: f32, t_dur: f32) -> Vec3 {
+pub fn jump_velocity(start: Vec3, target: Vec3, h0: f32, h_min: f32, gravity: JumpGravity) -> Vec3 {
+    let JumpGravity { g, s_up, s_dur, t_dur } = gravity;
     let dz = target.z - start.z;
     let mut apex = if dz > 0.0 { dz + h0 } else { h0 };
     if h_min > 0.0 && apex < h_min {
@@ -380,7 +386,7 @@ pub fn on_jump_start(p: &mut NpcPawn, cx: &StepCtx, host: &mut PartyHost) {
             j.down_far = true;
         }
         let g = p.cmc.gravity_z(&p.params);
-        let v = jump_velocity(me, target, 0.0, jump_height, g, p.params.gravity_jump_up_scale, p.params.gravity_jump_duration_scale, p.params.gravity_jump_duration_time);
+        let v = jump_velocity(me, target, 0.0, jump_height, JumpGravity { g, s_up: p.params.gravity_jump_up_scale, s_dur: p.params.gravity_jump_duration_scale, t_dur: p.params.gravity_jump_duration_time });
         // vt+0x1A28 JumpZVelocity, vt+0x1570 MaxWalkSpeed = |v.xy|
         p.cmc.jump_z_velocity = v.z;
         let vxy = Vec3::new(v.x, v.y, 0.0).length();
@@ -574,7 +580,7 @@ pub fn on_shot(p: &mut NpcPawn, cx: &StepCtx, host: &mut PartyHost) {
             TargetRef::Point(q) => Some(q),
             _ => None,
         };
-        let mut pr = Projectile::spawn_at(kind, p.id, p.chara, origin, p.yaw, enemy, target_pos, ground);
+        let mut pr = Projectile::spawn_at(kind, p.id, p.chara, origin, p.yaw, crate::projectile::ProjectileAim { target: enemy, point: target_pos, ground });
         spell_actor_effects(p, &mut pr, origin, host);
         p.events.push(PartyEventKind::ProjectileSpawned { kind: kind.name(), at: pr.position });
         p.requests.push(Request::Projectile(pr));
@@ -589,7 +595,7 @@ pub fn on_shot(p: &mut NpcPawn, cx: &StepCtx, host: &mut PartyHost) {
 /// `FIRE_EFFECTS_ID` at the cast point, turned along the flight (one-shot: its MyFireEffects). Thunder / Aero are put at
 /// the target (m_bIsDirectPos): their fire effect stays at Donald's cast point. The body stops when the actor ends
 /// (`Party::step_projectiles`).
-fn spell_actor_effects(p: &mut NpcPawn, pr: &mut Projectile, origin: Vec3, host: &mut PartyHost) {
+pub(crate) fn spell_actor_effects(p: &mut NpcPawn, pr: &mut Projectile, origin: Vec3, host: &mut PartyHost) {
     use kh_core::host::{Attach, EffectId, EffectSpawn};
     let Some(class) = pr.kind.class() else { return };
     let h = p.seam.spawn(host.effects, &EffectSpawn { id: EffectId(kh_core::notify::notify_asset_id(class)), name: class, at: Attach::World(pr.position), rotation: Vec3::ZERO, scale: 1.0, persistent: true });
@@ -856,7 +862,7 @@ fn discus_tick(p: &mut NpcPawn, run: &mut ActionRun, dt: f32) -> bool {
     };
     // (+0x20E / +0x218 are set by the hit handler 0x1411CC550: `Party::discus_hit`.)
     match run.sub {
-        0 | 1 | 2 => {
+        0..=2 => {
             if run.sub == 0 && run.shot {
                 run.sub = 2;
             }
@@ -1041,7 +1047,7 @@ fn tornado_tick(p: &mut NpcPawn, run: &mut ActionRun, cx: &StepCtx, host: &mut P
             None => run.timer = 0.0,
         }
     }
-    if run.sub == 1 && !crate::pad::goofy::tornado_steer(p, run, dt) /* (party X3G) tier 2+: the stick steers */ {
+    if run.sub == 1 {
         // chase: velocity = MovemSpeed toward the target (3D direction, horizontal part applied;
         // yaw set to face it); >2 hits on one target -> retarget (exclusion, FUN_1411CF330).
         let alive = match run.target {
@@ -1317,17 +1323,22 @@ impl Prism {
 
 /// The attack-collision group a window opens (`TresAnimNotifyState_Attack.m_AttackCollisionGrpName`),
 /// from the weapon blueprints' `TresAtkColl0.CollisionShapesSrc` (w_do_WepBase / w_gu_WepBase):
-/// - Donald "None": SPHERE 40 at ATK_01 (+(-19,0,0) in socket space); "StickM": SPHERE 50 at ATK_01.
-/// - Goofy "None" / "Attack_Discus": SPHERE 50 at ATK_00 (+(0,0,-10)); "Attack_Rush": CAPSULE1 50 x 100
-///   at ATK_00 (+(0,0,60)) [inf: drawn as a sphere 50 at the socket, the capsule's axis needs the socket
-///   rotation]; "Attack_Body" (Turbo): CAPSULE1 radius 80, length 92 at the owner mesh's "Center" socket
-///   +(0,-12,0); "Attack_Tornado": CONVEX `Collision/tres_colltest01` (the 20-gon prism r 100, z +-50) at
+/// - Donald "None": SPHERE 40 at ATK_01 +(-19,0,0) in the socket's frame; "StickM": SPHERE 50 at ATK_01 +(-19,0,0)
+///   (w_do_WepBase TresAtkColl0; COMBAT-FIX: placed with the socket's rotation, `DONALD_STAFF_OFFSET`).
+/// - Goofy "None" / "Attack_Discus": SPHERE 50 at ATK_00 +(0,0,-10) in the socket's frame; "Attack_Rush": CAPSULE1
+///   m_Size (50, -, 100) at ATK_00 +(0,0,60), roll 0: radius 50, the segment 100 either side of its centre along the
+///   socket's z. (COMBAT-FIX) The socket's rotation per frame is the pack's `attack_sockets.rotations` (SocketKey::q), so
+///   the offsets and the capsule's axis are placed as KH3 does (the offset turns with the socket: 0x140647950); "Attack_Body" (Turbo): CAPSULE1 m_Size (80, -, 92) at the owner mesh's "Center" (the bone
+///   center) +(0,-12,0), roll 90. (COMBAT-FIX) KH3 builds a CAPSULE as a SphylElem of Radius m_Size.x and
+///   Length 2 x m_Size.z (0x140648A80 case 1): radius 80, the segment 92 either side of its centre; center's
+///   frame is kh_sk's, so (0,-12,0) is 12 up and roll 90 stands the axis up; center stays upright in M_1325
+///   (the one clip that opens the group), and its sway is the sheet's `art.turbo.body_track`
+///   (party-kit-goofy, FK of M_1325: from 5 behind to 19 ahead of him); "Attack_Tornado": CONVEX `Collision/tres_colltest01` (the 20-gon prism r 100, z +-50) at
 ///   the owner mesh's "kh_sk" with m_RelativeLocation1 (0,-65,0), m_RelativeRocation roll 90, m_Scale
 ///   (1.3, 1.3, 2.6) (m_Size is not used by CONVEX). kh_sk's ref pose (n_ex002_0) is Rx(-90) at the mesh
 ///   origin and the mesh is yawed 270 at the actor origin (n_ex002_PawnBase TresCharMesh0): the offset
 ///   becomes +65 up and the two rolls cancel: an upright prism, circumradius 130, half height 130, centre 65
 ///   above the actor origin, vertices at actor yaw + 270 + k x 18 deg [inf: kh_sk taken at its ref pose].
-/// The socket-space offsets of the others are not applied (A's tracks carry the socket position only).
 pub fn attack_shape(p: &NpcPawn, group: &str) -> AtkShape {
     let f = forward(p.yaw);
     let right = Vec3::new(-f.y, f.x, 0.0);
@@ -1337,8 +1348,10 @@ pub fn attack_shape(p: &NpcPawn, group: &str) -> AtkShape {
     let fallback = |r: f32| p.capsule_centre() + f * (p.params.capsule_radius + r);
     match (p.chara, group) {
         (Chara::Goofy, "Attack_Body") => {
-            let c = p.capsule_centre() + right * -12.0;
-            AtkShape { a: c - Vec3::Z * 46.0, b: c + Vec3::Z * 46.0, radius: 80.0, prism: None }
+            // (COMBAT-FIX) KH3's capsule (THE USER 2026-11-06: "Goofy's ground combo hit box also extends out way too far";
+            // the coordinator: KH3 1:1): radius 80, upright, 92 either side of the center bone + 12 up
+            let c = local(track_at(&crate::goofy::K.art_turbo_body_track, p.anim.time));
+            AtkShape { a: c - Vec3::Z * 92.0, b: c + Vec3::Z * 92.0, radius: 80.0, prism: None }
         }
         (Chara::Goofy, "Attack_Tornado") => {
             let (r, hh, up) = TORNADO_HULL;
@@ -1346,13 +1359,44 @@ pub fn attack_shape(p: &NpcPawn, group: &str) -> AtkShape {
             let prism = Prism { centre, radius: r, half_height: hh, yaw: p.yaw + 270.0, sides: 20 };
             AtkShape { a: centre - Vec3::Z * hh, b: centre + Vec3::Z * hh, radius: r, prism: Some(prism) }
         }
-        (Chara::Donald, "StickM") => sphere(socket.unwrap_or_else(|| fallback(50.0)), 50.0),
+        // (COMBAT-FIX) the shield's shapes with their socket-space offsets, turned by the socket
+        (Chara::Goofy, "None" | "Attack_Discus") => {
+            let keys = p.anim.clip.socket;
+            let at = (!keys.is_empty()).then(|| local(socket_point_at(keys, p.anim.time, GOOFY_SHIELD_OFFSET)));
+            sphere(at.unwrap_or_else(|| fallback(50.0)), 50.0)
+        }
+        (Chara::Goofy, "Attack_Rush") => {
+            let keys = p.anim.clip.socket;
+            if keys.is_empty() {
+                return sphere(fallback(50.0), 50.0);
+            }
+            let dir = |v: Vec3| f * v.x + right * v.y + Vec3::Z * v.z;
+            let c = local(socket_point_at(keys, p.anim.time, Vec3::new(0.0, 0.0, 60.0)));
+            let axis = dir(socket_rot_at(keys, p.anim.time) * Vec3::Z);
+            AtkShape { a: c - axis * 100.0, b: c + axis * 100.0, radius: 50.0, prism: None }
+        }
+        // (COMBAT-FIX) the staff's shapes 19 cm down the staff from its ATK_01, turned by the socket
+        (Chara::Donald, "None" | "StickM") => {
+            let r = if group == "StickM" { 50.0 } else { weapon_radius(p.chara) };
+            let keys = p.anim.clip.socket;
+            let at = (!keys.is_empty()).then(|| local(socket_point_at(keys, p.anim.time, DONALD_STAFF_OFFSET)));
+            sphere(at.unwrap_or_else(|| fallback(r)), r)
+        }
         _ => {
             let r = weapon_radius(p.chara);
             sphere(socket.unwrap_or_else(|| fallback(r)), r)
         }
     }
 }
+
+/// (COMBAT-FIX) w_gu_WepBase TresAtkColl0 groups "None" / "Attack_Discus": the sphere's m_RelativeLocation1 on ATK_00, in the
+/// socket's frame (ATK_00 is roll 180 on wep, so this is 10 cm from ATK_00 toward ATK_01, the shield's face).
+pub const GOOFY_SHIELD_OFFSET: Vec3 = Vec3::new(0.0, 0.0, -10.0);
+
+/// (COMBAT-FIX) w_do_WepBase TresAtkColl0 groups "None" / "StickM": the sphere's m_RelativeLocation1 on ATK_01, in the
+/// socket's frame (ATK_01 is roll 180 at 55.4 cm along wep's x, ATK_00 at its origin, so this is 19 cm from the tip toward
+/// the handle).
+pub const DONALD_STAFF_OFFSET: Vec3 = Vec3::new(-19.0, 0.0, 0.0);
 
 /// Goofy's Attack_Tornado hull: (circumradius 100 x 1.3, half height 50 x 2.6, centre height 65), see
 /// `attack_shape`.
@@ -1403,6 +1447,20 @@ fn socket_at(p: &NpcPawn) -> Option<Vec3> {
     Some(socket_track_at(keys, p.anim.time))
 }
 
+/// (COMBAT-FIX) A point track a sheet carries for a clip the pack has none for: flat [x, y, z] per frame of KH3's 30 fps
+/// grid (frame i at i / 30 s), his frame (x forward, y right, z up from his feet), linear between frames, held at the ends.
+pub fn track_at(flat: &[f32], t: f32) -> Vec3 {
+    let n = flat.len() / 3;
+    if n == 0 {
+        return Vec3::ZERO;
+    }
+    let key = |i: usize| Vec3::new(flat[i * 3], flat[i * 3 + 1], flat[i * 3 + 2]);
+    let u = (t.max(0.0) * 30.0).min((n - 1) as f32);
+    let i = (u.floor() as usize).min(n - 1);
+    let j = (i + 1).min(n - 1);
+    key(i).lerp(key(j), u - i as f32)
+}
+
 /// The attack socket (A's `ClipDef::socket`: ATK_01 Donald's staff / ATK_00 Goofy's shield, actor
 /// frame, per sampled frame) at `t`, linear between keys.
 pub fn socket_track_at(keys: &[crate::anim::SocketKey], t: f32) -> Vec3 {
@@ -1419,6 +1477,31 @@ pub fn socket_track_at(keys: &[crate::anim::SocketKey], t: f32) -> Vec3 {
     v(keys.last().unwrap())
 }
 
+/// (COMBAT-FIX) The socket's rotation at `t` in the actor frame (normalised lerp between keys; identity where the pack has
+/// none).
+pub fn socket_rot_at(keys: &[crate::anim::SocketKey], t: f32) -> glam::Quat {
+    let q = |k: &crate::anim::SocketKey| glam::Quat::from_xyzw(k.q[0], k.q[1], k.q[2], k.q[3]);
+    let (Some(first), Some(last)) = (keys.first(), keys.last()) else { return glam::Quat::IDENTITY };
+    if t <= first.time {
+        return q(first).normalize();
+    }
+    for w in keys.windows(2) {
+        if t <= w[1].time {
+            let f = if w[1].time > w[0].time { (t - w[0].time) / (w[1].time - w[0].time) } else { 1.0 };
+            let (a, b) = (q(&w[0]), q(&w[1]));
+            let b = if a.dot(b) < 0.0 { -b } else { b };
+            return a.lerp(b, f).normalize();
+        }
+    }
+    q(last).normalize()
+}
+
+/// (COMBAT-FIX) The point `off` of the socket's own frame at `t`, in the actor frame: the socket + its rotation x `off` (how
+/// KH3 places a shape's m_RelativeLocation1 on its socket).
+pub fn socket_point_at(keys: &[crate::anim::SocketKey], t: f32, off: Vec3) -> Vec3 {
+    socket_track_at(keys, t) + socket_rot_at(keys, t) * off
+}
+
 /// Builds the hit record of a friend's attack row and hands it to the host.
 /// True when the host accepted it.
 pub fn deliver(p: &mut NpcPawn, row: &tables::AttackRow, target: TargetId, part: u32, at: Vec3, _cx: &StepCtx, host: &mut PartyHost) -> bool {
@@ -1430,10 +1513,6 @@ pub fn deliver(p: &mut NpcPawn, row: &tables::AttackRow, target: TargetId, part:
     hit.position = at;
     let dir = horizontal(at - p.position()).normalize_or_zero();
     hit.direction = if dir == Vec3::ZERO { forward(p.yaw) } else { dir };
-    // (party X3G) a tier-2+ Goofy Tornado pulls: its hits knock inward
-    if let Some(d) = crate::pad::goofy::hit_direction(p, row, host.targets.info(target).map(|i| i.position)) {
-        hit.direction = d;
-    }
     hit.damage = damage;
     hit.damage_kind = ETresDamageKind::from_game_name(row.damage_kind).unwrap_or(ETresDamageKind::Small);
     hit.attribute = ETresDamageAttribute::from_game_name(row.attribute).unwrap_or(ETresDamageAttribute::Physical);
@@ -1445,11 +1524,13 @@ pub fn deliver(p: &mut NpcPawn, row: &tables::AttackRow, target: TargetId, part:
     // (B4) Classify (0x14061FE20, the shared attack collision, as kh-core ports it) with the victim's body
     // (`Targets::body`): the victim / attacker results go into the record. no_clash (C 8.2.1): set unless the
     // row's m_ReflectLevel > 0 [inf: the "every later swing of a combo" rule is not applied to the friends].
-    let body = host.targets.body(target, part);
+    // (THE USER 2026-11-02: "Shields don't count as guarding") the body as he meets it: a host's shield guards only from
+    // inside its arc (kh-core `TargetBody::seen_from`, Sora's rule)
+    let body = host.targets.body(target, part).seen_from(p.position(), host.targets.info(target).map_or(at, |i| i.position));
     let shape = kh_core::combat::classify::Shape { no_clash: row.reflect_level <= 0, ..Default::default() };
     let (mut armor, mut endurance) = (None, None);
     let mut info = hit.info;
-    let c = kh_core::combat::classify::classify(&body, kh_core::combat::classify::MapResponse::Other, &shape, hit.damage_kind, hit.attribute, &mut info, &mut |pw, weak| {
+    let c = kh_core::combat::classify::classify(&body, kh_core::combat::classify::MapResponse::Other, &shape, kh_core::combat::classify::DamageClass { kind: hit.damage_kind, attribute: hit.attribute }, &mut info, &mut |pw, weak| {
         armor = Some((pw, weak));
         i32::MIN
     }, &mut |pw| {
@@ -1460,20 +1541,23 @@ pub fn deliver(p: &mut NpcPawn, row: &tables::AttackRow, target: TargetId, part:
         let armor_left = armor.map(|(pw, weak)| host.targets.take_armor(target, pw, weak));
         let endurance_left = endurance.map(|pw| host.targets.take_reaction_power(target, pw));
         info = hit.info;
-        kh_core::combat::classify::classify(&body, kh_core::combat::classify::MapResponse::Other, &shape, hit.damage_kind, hit.attribute, &mut info, &mut |_, _| armor_left.unwrap_or(0), &mut |_| endurance_left.unwrap_or(0))
+        kh_core::combat::classify::classify(&body, kh_core::combat::classify::MapResponse::Other, &shape, kh_core::combat::classify::DamageClass { kind: hit.damage_kind, attribute: hit.attribute }, &mut info, &mut |_, _| armor_left.unwrap_or(0), &mut |_| endurance_left.unwrap_or(0))
     } else {
         c
     };
     hit.info = info;
+    hit.flags |= p.hit_flag(); // (PARTY-AI) an AI's blow passes through friendly NPCs
     let res = host.targets.apply_hit(&hit);
-    crate::hitfx::on_contact(p, row, at, &res, host); // (AUD) the hit's sound and effect (Sora's HitEffects rule; none before)
+    // (AUD) the hit's sound and effect (Sora's HitEffects rule; none before); (2026-11-02) a hit KH3's rules guarded shows
+    // the guard spark whatever the host answered (Sora's rule: the victim result decides, kh-core combat/hit.rs)
+    let shown = kh_core::host::HitResult { guarded: res.guarded || matches!(c.victim, kh_core::host::ReactionResult::Guard | kh_core::host::ReactionResult::GuardReflect), ..res };
+    crate::hitfx::on_contact(p, row, at, &shown, host);
     // The friend's own contact (ATresNpcPawnBase notify slot 15 = 0x141271720, after the base 0x140549A80): an
     // attacker result REFLECT (3) or GUARD_REFLECT (4) -> RequestReflect (iface vt+0x448 = 0x141270B20: the state
     // registered (vt+0x440), not already in it; +0x88 = the result, +0x8C = the hit actor) and pawn vt+0x25A8
-    // (the AI controller's message, not modelled). GUARD (5) does not repel.
-    if matches!(c.attacker, kh_core::host::ReactionResult::Reflect | kh_core::host::ReactionResult::GuardReflect) {
-        p.reflect_from = Some(host.targets.info(target).map_or(at, |i| i.position));
-    }
+    // (the AI controller's message, not modelled). GUARD (5) does not repel. (THE USER 2026-11-02) one path for every
+    // member: repel.rs `after_swing` (a raised shield repels every swing it guards: the bounce with his own KH3 clip)
+    let _ = crate::repel::after_swing(p, c.attacker, host.targets.info(target).map_or(at, |i| i.position));
     if res.accepted {
         p.hits_this_action += 1;
         if let Some(mut run) = p.action {
@@ -1481,7 +1565,6 @@ pub fn deliver(p: &mut NpcPawn, row: &tables::AttackRow, target: TargetId, part:
             p.action = Some(run);
         }
         p.events.push(PartyEventKind::Hit { target, damage: res.damage_dealt, killed: res.killed, attack: row.name });
-        crate::pad::goofy::on_hit_landed(p, res.damage_dealt); // (party X3G) the melee cancel clock, the Shield Guardian gauge
     }
     res.accepted
 }

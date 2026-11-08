@@ -43,6 +43,9 @@
 //! | `magic.known` | map name -> tier | `magic` |
 //! | `shotlocks`, `armour`, `accessories` | list of text | the same |
 //! | `weapon` | text | `weapon` |
+//! | `keyblades` | list of up to 3 Keyblade keys, "" = an empty slot | (weapons P2, optional) the Keyblade slots; without it `weapon` alone is in slot 0 |
+//! | `keyblade.current` | number 0..2 | (weapons P2, optional) the active slot; `weapon` / `weapon.upgrade` then follow it |
+//! | `keyblade.levels` | map Keyblade key -> level | (weapons P2, optional) Forge levels (clamped to each Keyblade's init ..= max); `weapon.upgrade` is the level of `weapon` |
 //! | `item_slots` | number | `item_slots` |
 //! | `items` | list of item names; a name listed n times is n of it | `items` |
 //!
@@ -104,6 +107,10 @@ pub struct Loadout {
     /// slots empty and only the Customize menu writes them (magic spec J 3.1).
     pub shortcuts: [Vec<String>; 3],
     pub weapon: String,
+    /// (weapons P2) OPTIONAL rows: the Keyblade slots (keys, "" = empty), the active slot and Forge levels by key.
+    pub keyblades: Vec<String>,
+    pub keyblade_current: u32,
+    pub keyblade_levels: Vec<(String, f64)>,
     pub armour: Vec<String>,
     pub accessories: Vec<String>,
     pub item_slots: u32,
@@ -216,6 +223,18 @@ impl Loadout {
             "shortcuts.b" => self.shortcuts[1] = list()?,
             "shortcuts.c" => self.shortcuts[2] = list()?,
             "weapon" => self.weapon = text()?,
+            "keyblades" => {
+                let slots = list()?;
+                if slots.len() > super::keyblade::SLOTS {
+                    return Err(format!("{key}: at most {} Keyblade slots, got {}", super::keyblade::SLOTS, slots.len()));
+                }
+                self.keyblades = slots;
+            }
+            "keyblade.current" => self.keyblade_current = whole()?.min(super::keyblade::SLOTS as f64 - 1.0) as u32,
+            "keyblade.levels" => match value {
+                LoadoutValue::Map(map) => self.keyblade_levels = map.clone(),
+                other => return Err(format!("{key}: expected a map of Keyblade key -> level, got {other:?}")),
+            },
             "armour" => self.armour = list()?,
             "accessories" => self.accessories = list()?,
             "item_slots" => self.item_slots = whole()? as u32,
@@ -264,6 +283,26 @@ impl Loadout {
             self.bonuses = Some(BonusCounts::STORY_AND_REMIND);
         }
         Ok(())
+    }
+
+    /// (weapons P2) The Keyblade state this loadout starts with, and what was wrong with its rows. With a `keyblades`
+    /// row: those slots, `keyblade.current`, `keyblade.levels`. Without it: `weapon` alone in slot 0 when it is a
+    /// Keyblade (the Kingdom Key of every loadout so far), at `weapon.upgrade`, and the `keyblade.levels` of the others.
+    pub fn keyblades(&self) -> (super::Keyblades, Vec<String>) {
+        let levels: Vec<(&str, u8)> = self.keyblade_levels.iter().map(|(k, l)| (k.as_str(), l.clamp(0.0, 255.0) as u8)).collect();
+        let (mut keyblades, notes) = if self.keyblades.is_empty() {
+            let weapon = super::KeybladeId::from_key(&self.weapon).map(|_| self.weapon.as_str());
+            super::Keyblades::from_keys(&[weapon], 0, &levels)
+        } else {
+            let slots: Vec<Option<&str>> = self.keyblades.iter().map(|k| Some(k.as_str())).collect();
+            super::Keyblades::from_keys(&slots, self.keyblade_current as usize, &levels)
+        };
+        if self.keyblades.is_empty() {
+            if let Some(id) = super::KeybladeId::from_key(&self.weapon) {
+                keyblades.set_level(id, self.weapon_upgrade);
+            }
+        }
+        (keyblades, notes)
     }
 
     /// The first choice of the opening (`choice.default`'s first word); `None` when not given.

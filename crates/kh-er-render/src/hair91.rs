@@ -12,9 +12,9 @@
 //!    what lay behind), the background is the nearest hair-free scene around it;
 //! 4. where the hair covers at least half of a pixel the core did not take: his motion vector, depth and TAA class
 //!    (`h91velo`, the game's velocity target and the scene depth / stencil), so the TAA keeps the strands with him.
-//! The result does not depend on the game's TAA: the same picture every frame (the jitter only moves it as the game's).
-//! `r.hair_msaa = 0`: off (ER91's fringe at the split as ER87's); `r.hair_msaa_far` (m, default 8): only nearer than this.
-//! Any failure in a frame: that frame's fringe as before (counted, with the latest reason, in the status line).
+//!    The result does not depend on the game's TAA: the same picture every frame (the jitter only moves it as the game's).
+//!    `r.hair_msaa = 0`: off (ER91's fringe at the split as ER87's); `r.hair_msaa_far` (m, default 8): only nearer than this.
+//!    Any failure in a frame: that frame's fringe as before (counted, with the latest reason, in the status line).
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -165,7 +165,7 @@ fn transition(resource: &ID3D12Resource, subresource: u32, before: D3D12_RESOURC
     }
 }
 
-unsafe fn texture(device: &ID3D12Device, w: u32, h: u32, format: DXGI_FORMAT, samples: u32, flags: D3D12_RESOURCE_FLAGS, state: D3D12_RESOURCE_STATES, clear: Option<D3D12_CLEAR_VALUE>) -> windows::core::Result<ID3D12Resource> {
+unsafe fn texture(device: &ID3D12Device, (w, h): (u32, u32), format: DXGI_FORMAT, samples: u32, flags: D3D12_RESOURCE_FLAGS, state: D3D12_RESOURCE_STATES, clear: Option<D3D12_CLEAR_VALUE>) -> windows::core::Result<ID3D12Resource> {
     let desc = D3D12_RESOURCE_DESC { Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D, Width: w as u64, Height: h, DepthOrArraySize: 1, MipLevels: 1, Format: format, SampleDesc: DXGI_SAMPLE_DESC { Count: samples, Quality: 0 }, Flags: flags, ..Default::default() };
     let props = D3D12_HEAP_PROPERTIES { Type: D3D12_HEAP_TYPE_DEFAULT, ..Default::default() };
     let mut out: Option<ID3D12Resource> = None;
@@ -246,12 +246,13 @@ pub(crate) const MARK: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
 /// The 4x hair states, one set per slot (None: not a hair slot with 4x shaders): solid (depth GREATER_EQUAL, written) and
 /// thin (depth GREATER, not written), both premultiplied over (ONE, INV_SRC_ALPHA) into the 4x pair; and the mark (`core`:
-/// the slot's colour core shader; `dsv`: the scene depth's format).
+/// the slot's colour core shader; `key.depth`: the scene depth's format).
 ///
 /// # Safety
 /// Direct3D object creation with a live device and root signature.
-#[allow(clippy::too_many_arguments)]
-pub(crate) unsafe fn msaa_pipelines(device: &ID3D12Device, root: &ID3D12RootSignature, front_ccw: bool, cull: bool, dsv: DXGI_FORMAT, slots: &[(String, bool, bool, bool)], vertex: &[u8], msaa: &HashMap<String, (Vec<u8>, Vec<u8>)>, core: &HashMap<String, Vec<u8>>, elements: &[D3D12_INPUT_ELEMENT_DESC]) -> Result<Vec<Option<HairStates>>, String> {
+pub(crate) unsafe fn msaa_pipelines(device: &ID3D12Device, root: &ID3D12RootSignature, key: crate::hair::Target, inputs: crate::hair::Inputs, msaa: &HashMap<String, (Vec<u8>, Vec<u8>)>, core: &HashMap<String, Vec<u8>>) -> Result<Vec<Option<HairStates>>, String> {
+    let crate::hair::Inputs { slots, vertex, elements } = inputs;
+    let (front_ccw, cull, dsv) = (key.front_ccw, key.cull, DXGI_FORMAT(key.depth));
     let mut out = Vec::with_capacity(slots.len());
     for (variant, two_sided, translucent, masked) in slots {
         let Some((solid, thin)) = msaa.get(variant).filter(|_| *masked && !*translucent) else {
@@ -457,13 +458,13 @@ impl State {
             let (w, h) = kit_size(bw, bh, need.filter(|n| n.2 == scene_format.0).map(|n| (n.0, n.1)), (f.width, f.height));
             let made = (|| -> windows::core::Result<Kit> {
                 let zero = |format: DXGI_FORMAT| D3D12_CLEAR_VALUE { Format: format, Anonymous: D3D12_CLEAR_VALUE_0 { Color: [0.0; 4] } };
-                let col = texture(f.device, w, h, COLOR, SAMPLES, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_RENDER_TARGET, Some(zero(COLOR)))?;
-                let aux = texture(f.device, w, h, COLOR, SAMPLES, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_RENDER_TARGET, Some(zero(COLOR)))?;
+                let col = texture(f.device, (w, h), COLOR, SAMPLES, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_RENDER_TARGET, Some(zero(COLOR)))?;
+                let aux = texture(f.device, (w, h), COLOR, SAMPLES, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_RENDER_TARGET, Some(zero(COLOR)))?;
                 let dclear = D3D12_CLEAR_VALUE { Format: DEPTH, Anonymous: D3D12_CLEAR_VALUE_0 { DepthStencil: D3D12_DEPTH_STENCIL_VALUE { Depth: 0.0, Stencil: 0 } } };
-                let dep = texture(f.device, w, h, DEPTH_TYPELESS, SAMPLES, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, D3D12_RESOURCE_STATE_DEPTH_WRITE, Some(dclear))?;
-                let init = texture(f.device, w, h, INIT, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_RENDER_TARGET, Some(zero(INIT)))?;
-                let copy = texture(f.device, w, h, scene_format, 1, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, None)?;
-                let mark = texture(f.device, f.width, f.height, MARK, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_RENDER_TARGET, Some(zero(MARK)))?;
+                let dep = texture(f.device, (w, h), DEPTH_TYPELESS, SAMPLES, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, D3D12_RESOURCE_STATE_DEPTH_WRITE, Some(dclear))?;
+                let init = texture(f.device, (w, h), INIT, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_RENDER_TARGET, Some(zero(INIT)))?;
+                let copy = texture(f.device, (w, h), scene_format, 1, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, None)?;
+                let mark = texture(f.device, (f.width, f.height), MARK, 1, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_RENDER_TARGET, Some(zero(MARK)))?;
                 let slots = 23u32;
                 let srv: ID3D12DescriptorHeap = f.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, NumDescriptors: slots, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, NodeMask: 0 })?;
                 let rtv: ID3D12DescriptorHeap = f.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 5, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 })?;

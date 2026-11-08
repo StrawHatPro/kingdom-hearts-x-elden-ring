@@ -562,6 +562,9 @@ impl PlayerState for AthleticFlow {
         pawn.cmc.set_flying();
         pawn.cmc.gravity_off = true;
         pawn.status.damage_invalid = true;
+        // (AUDIT-B W-DATA) FUN_1405B8B30(pawn+0x460, 8) (asm/text/141330000.s line 3163, `mov dl,8`): his body push power level
+        // PPL_90 for the flow (W-CORE's open list: the push solver weighs it against every body, combat/push.rs)
+        pawn.actions.push_level = Some(super::attack::PUSH_LEVEL_PPL_90);
         self.start_location = pawn.cmc.location;
         self.start_ref = Self::reference(cx);
         self.count = cx.pawn.magic.aim.airstep_targets.len() as i32;
@@ -604,6 +607,8 @@ impl PlayerState for AthleticFlow {
         pawn.cmc.gravity_scale = p.gravity_scale;
         pawn.cmc.world_collision_off = false;
         pawn.status.damage_invalid = false;
+        // (AUDIT-B W-DATA) FUN_1405B6100(pawn+0x460) (0x141334B60 line 190): the base parameter's push level again
+        pawn.actions.push_level = None;
         // Controller vt+0x1948: the aim clean-up follows (all types back to 1.0).
         pawn.magic.aim.airstep_targets.clear();
         shotlock::release_done(cx);

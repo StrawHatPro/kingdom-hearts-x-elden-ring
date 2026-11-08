@@ -129,11 +129,28 @@ pub fn set_speed(chr: &mut ChrIns, speed: f32) {
     }
 }
 
+/// (GF-SENSOR) A copy of game memory that cannot fault: the system does the read and answers false for anything not
+/// readable. No walk of the address space (`VirtualQuery` costs about 7 ms a call in the running game, MEASURED), and any thread may call it.
+pub(crate) fn read_bytes(at: usize, out: &mut [u8]) -> bool {
+    use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    let mut done = 0usize;
+    // SAFETY: the system checks the source; `out` is ours.
+    let ok = unsafe { ReadProcessMemory(GetCurrentProcess(), at as *const _, out.as_mut_ptr().cast(), out.len(), &mut done) };
+    ok != 0 && done == out.len()
+}
+
+/// One word by [`read_bytes`].
+pub(crate) fn read_word(at: usize) -> Option<usize> {
+    let mut b = [0u8; 8];
+    read_bytes(at, &mut b).then(|| usize::from_le_bytes(b))
+}
+
 /// Checked reads of game memory: a region the system reported committed and readable is
 /// remembered, so that walking a table costs a handful of queries (asking for every word made the
 /// game stand still for minutes: IMPL_ER6_STATE.md).
 #[derive(Default)]
-struct Reader {
+pub(crate) struct Reader {
     regions: Vec<(usize, usize)>,
     queries: u32,
 }
@@ -169,9 +186,8 @@ impl Reader {
         }
     }
 
-    fn peek(&mut self, at: usize) -> Option<usize> {
-        // SAFETY: checked readable.
-        self.readable(at, 8).then(|| unsafe { std::ptr::read_unaligned(at as *const usize) })
+    pub(crate) fn peek(&mut self, at: usize) -> Option<usize> {
+        read_word(at)
     }
 }
 

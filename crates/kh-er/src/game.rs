@@ -10,13 +10,8 @@ use glam::{Quat, Vec3};
 pub mod phase {
     use super::CSTaskGroupIndex as G;
     pub const FRAME_BEGIN: u32 = G::FrameBegin as u32;
-    pub const END_SHIFT_WORLD: u32 = G::EndShiftWorldPosition as u32;
     pub const PRE_PHYSICS: u32 = G::ChrIns_PrePhysics as u32;
-    pub const PRE_PHYSICS_END: u32 = G::ChrIns_PrePhysics_End as u32;
-    pub const HAVOK_POST: u32 = G::HavokWorldUpdate_Post as u32;
-    pub const CAMERA: u32 = G::CameraStep as u32;
     pub const POST_PHYSICS: u32 = G::ChrIns_PostPhysics as u32;
-    pub const BEGIN_SHIFT_WORLD: u32 = G::BeginShiftWorldPosition as u32;
 }
 
 pub fn hp(v: Vec3) -> HavokPosition {
@@ -37,7 +32,13 @@ pub fn quaternion(q: Quat) -> Quaternion {
 
 /// A pointer word that can be a live heap object: not null, canonical user space, aligned.
 pub(crate) fn plausible(word: usize) -> bool {
-    (0x10000..0x7FFF_FFFF_0000).contains(&word) && word % 8 == 0
+    (0x10000..0x7FFF_FFFF_0000).contains(&word) && word.is_multiple_of(8)
+}
+
+/// The one read of `word!`: `place` is the address of a pointer-sized field of a live object.
+pub(crate) fn read_word(place: *const usize) -> usize {
+    // SAFETY: the field is pointer-sized (`OwnedPtr` / `NonNull` / `Option<NonNull>`), inside a live object.
+    unsafe { std::ptr::read_unaligned(place) }
 }
 
 /// Reads the pointer word stored in a pointer-sized field without forming a reference to what it
@@ -45,12 +46,7 @@ pub(crate) fn plausible(word: usize) -> bool {
 #[macro_export]
 macro_rules! word {
     ($place:expr) => {
-        // SAFETY: the field is pointer-sized (`OwnedPtr` / `NonNull` / `Option<NonNull>`), inside a live object.
-        {
-            #[allow(unused_unsafe)]
-            let word = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!($place) as *const usize) };
-            word
-        }
+        $crate::game::read_word(std::ptr::addr_of!($place) as *const usize)
     };
 }
 
@@ -115,6 +111,20 @@ pub fn track_player() {
     } else {
         seen.1 = seen.1.saturating_add(1);
     }
+}
+
+/// (FINAL-FIX, FINAL "Shutdown panic (both launches)") THE PARAM `P` IS LOADED: its holder in the SoloParamRepository has its
+/// res cap. The SDK's `get` / `get_mut` / `rows` / `rows_mut` panic (`solo_param_repository.rs:487`, "Expected param holder
+/// to have exactly one res cap") on a holder without one: before the params are loaded, and while the game tears them down
+/// at its exit (the frame tasks still run there, `perf (NO WORLD)`). Every reader of a param that may run then asks this
+/// first.
+pub fn param_loaded<P: eldenring::cs::SoloParam>(repo: &eldenring::cs::SoloParamRepository) -> bool {
+    holder_ready(repo.solo_param_holders.get(P::INDEX as usize))
+}
+
+/// (FINAL-FIX) [`param_loaded`]'s check of one holder (None: no holder at that index).
+fn holder_ready(holder: Option<&eldenring::cs::SoloParamHolder>) -> bool {
+    holder.is_some_and(|h| h.get_res_cap(0).is_some())
 }
 
 /// Frames the current player object has been complete for (0 = none).
@@ -302,6 +312,7 @@ pub fn dump_cutscene_facts() {
 /// is the 2.7.1.0 place; in 2.7.2.0 it sits 0x10 further, so `wcm.debug_chr_creator` read 0 there and no ally body
 /// could ever be made). Used only when the object's first word is CSDebugChrCreator's own vtable (RTTI, per version):
 /// a wrong place gives `None`, never a write into another object.
+#[cfg(feature = "party")]
 pub(crate) fn debug_chr_creator() -> Option<&'static mut eldenring::cs::CSDebugChrCreator> {
     use crate::gamever::{pick, wcm};
     // SAFETY: game thread; the singleton lives as long as the game.
@@ -317,6 +328,7 @@ pub(crate) fn debug_chr_creator() -> Option<&'static mut eldenring::cs::CSDebugC
 
 /// (AGGRO) The SDK's `WorldChrMan::spawn_debug_character` on [`debug_chr_creator`] (the SDK's method writes through
 /// the 2.7.1.0 field place). `Err` when there is no creator.
+#[cfg(feature = "party")]
 pub(crate) fn spawn_debug_character(request: &eldenring::cs::ChrDebugSpawnRequest) -> Result<(), &'static str> {
     let c = debug_chr_creator().ok_or("the game has no debug character creator object")?;
     let mut name: Vec<u16> = format!("c{:0>4}", request.chr_id).encode_utf16().collect();
@@ -339,4 +351,18 @@ pub(crate) fn chr_cam(wcm: &WorldChrMan) -> Option<std::ptr::NonNull<eldenring::
     let at = pick(f::CHR_CAM.0, f::CHR_CAM.1)?;
     let p = crate::probe::word(wcm as *const WorldChrMan as usize + at).filter(|p| plausible(*p))?;
     std::ptr::NonNull::new(p as *mut eldenring::cs::ChrCam)
+}
+
+#[cfg(test)]
+mod tests {
+    /// (FINAL-FIX) The shutdown panic's check: a holder the game has emptied (its res caps gone, as at the exit) or none at all
+    /// is not loaded, so no reader reaches the SDK's `expect`. (A loaded holder needs the game's own ParamResCap: in game.)
+    #[test]
+    fn an_emptied_param_holder_is_not_loaded() {
+        // SAFETY: SoloParamHolder is a u32 and eight Option<OwnedPtr> (NonNull inside): all zeros is a valid value, None x8.
+        let emptied: eldenring::cs::SoloParamHolder = unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
+        assert!(emptied.get_res_cap(0).is_none(), "zeros are an emptied holder");
+        assert!(!super::holder_ready(Some(&emptied)), "a holder without its res cap is not loaded");
+        assert!(!super::holder_ready(None), "no holder: not loaded");
+    }
 }

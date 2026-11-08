@@ -129,11 +129,13 @@ pub struct BadStatus {
     /// Statuses applied / cured so far (for tests and the debug text).
     pub applied: u32,
     pub cured: u32,
+    /// (MIMIC-STANCE) A stance break (combat/stance.rs): the STUN state runs while it lasts, with no status on him.
+    pub stance: super::stance::StanceBreak,
 }
 
 impl Default for BadStatus {
     fn default() -> BadStatus {
-        BadStatus { kind: 0, time: 0.0, hp_cap: 0, frozen: false, dilation: 1.0, effect: None, hud_locked: false, no_reaction: false, applied: 0, cured: 0 }
+        BadStatus { kind: 0, time: 0.0, hp_cap: 0, frozen: false, dilation: 1.0, effect: None, hud_locked: false, no_reaction: false, applied: 0, cured: 0, stance: Default::default() }
     }
 }
 
@@ -373,9 +375,12 @@ pub(crate) fn tick(state: &StateData, cx: &mut Ctx, dt: f32, real_dt: f32) {
             }
         }
     }
+    // (MIMIC-STANCE) a stance break's own clock (real seconds, as the Stagger book's window that opened it)
+    cx.pawn.combat.bad.stance.tick(real_dt);
     // The stun trigger (0x1405B2A50 [C]; its caller was not found: taken as every pawn tick):
     // stunned, standing on the ground, not already in the state -> SetState(BADSTAT_STUN).
-    if cx.pawn.combat.bad.kind == kind::STUN && cx.pawn.cmc.on_ground() && !matches!(state, StateData::BadstatStun(_) | StateData::Die(_)) && cx.pawn.queue.queued_id() != Some(StateId::BadstatStun) {
+    // (MIMIC-STANCE) a stance break takes the same trigger.
+    if (cx.pawn.combat.bad.kind == kind::STUN || cx.pawn.combat.bad.stance.broken()) && cx.pawn.cmc.on_ground() && !matches!(state, StateData::BadstatStun(_) | StateData::Die(_)) && cx.pawn.queue.queued_id() != Some(StateId::BadstatStun) {
         cx.pawn.queue.set_state(crate::states::badstat_stun::BadstatStun::new());
     }
     // HP_BREAK: MaxHP() answers the cap while the status lasts.

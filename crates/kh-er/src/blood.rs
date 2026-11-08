@@ -14,7 +14,13 @@
 //!   (FINAL4) only a LOSS OF HIS SHARE of HP counts: a maximum that changes with his share kept (a friend made the
 //!   leader or AI again, BAL's leader maximum, a level or boost) adds none, and a frame whose hit his guard took
 //!   (guarded, absorbed by Goofy's GUARD, a Magic Block, a dodge: `note_guarded`) adds none, for every character;
-//! - new blood is fresh (wet red); it dries over `blood.dry_s` (dark brown, dull) and fades by itself over `blood.decay_s`;
+//!   (THE USER 2026-11-02) a GUARDED blow reaches `note_guarded` through guardblow.rs, every character's one route (it
+//!   also plays his guard sound); and blood builds up SLOWLY: at the sheet's rates (2026-11-02, a quarter of before) a
+//!   full coat on the Keyblade takes about 67 landed hits, on him about 200 landed hits or 50 blows of a tenth of his HP
+//!   (20 of a quarter); one fight of 20 landed hits and 3 such blows leaves the blade at 0.30 and him at 0.16;
+//! - new blood is fresh (wet, glossy); it dries over `blood.dry_s` (dull: BLOOD-RED 2026-11-07, its colour stays Elden Ring's
+//!   blood paint, rows `blood.look.*` read by the renderer: kh_er_render::blood::ER_BLOOD_COLOR_SRGB) and fades by itself
+//!   over `blood.decay_s`;
 //! - WASHING, the game's own wetness: while the hidden Elden Ring body carries one of the game's WET effects (the
 //!   SpEffect ids of HitMtrlParam `spEffectIdForWet00..04`, read from the game's params: the effects Elden Ring puts on a
 //!   character that is wet from rain or water, by level 0..4), the blood washes off, a full coat in `blood.wash_s` at
@@ -39,8 +45,8 @@ use crate::targets::ErTargets;
 /// `hit_now`, the AI members' hits in the party glue): their next step adds no blood from HP.
 static GUARDED: Mutex<Vec<kh_host::party::PartyChara>> = Mutex::new(Vec::new());
 
-/// (FINAL4) A hit on `who` was guarded / absorbed / dodged (it cost him nothing): no blood from it.
-#[allow(dead_code)] // (called by the party code only)
+/// (FINAL4) A hit on `who` was guarded / absorbed / dodged (it cost him nothing): no blood from it. (THE USER 2026-11-02:
+/// a GUARDED blow comes here through guardblow.rs `guarded`, every character's one route, with his guard sound.)
 pub fn note_guarded(who: kh_host::party::PartyChara) {
     if let Ok(mut g) = GUARDED.lock() {
         if !g.contains(&who) {
@@ -72,7 +78,10 @@ pub struct BloodRules {
 }
 
 impl BloodRules {
-    pub const DEFAULT: BloodRules = BloodRules { hit_blade: 0.06, hit_body: 0.02, hurt_body: 0.8, hurt_min: 0.01, dry_s: 90.0, decay_s: 900.0, wash_s: 20.0, save_fade_s: 1.0, immune_resist: 999 };
+    /// (THE USER 2026-11-02: "reduce how fast they get bloody, blood should slowly build up on the models") the three
+    /// build-up rates a quarter of 2026-10-14's (0.06 / 0.02 / 0.8), the fade by itself as much slower (900 -> 3600 s) so
+    /// that what builds up stays in the same proportion; drying, washing and the save point as before.
+    pub const DEFAULT: BloodRules = BloodRules { hit_blade: 0.015, hit_body: 0.005, hurt_body: 0.2, hurt_min: 0.01, dry_s: 90.0, decay_s: 3600.0, wash_s: 20.0, save_fade_s: 1.0, immune_resist: 999 };
 
     /// The rows of the sheet text (missing or malformed rows keep the defaults); the names of rows not understood.
     pub fn from_sheet(text: &str) -> (BloodRules, Vec<String>) {
@@ -103,6 +112,8 @@ impl BloodRules {
             "blood.wash_s" => self.wash_s = v,
             "blood.save_fade_s" => self.save_fade_s = v,
             "blood.immune_resist" => self.immune_resist = v.min(u16::MAX as f32) as u16,
+            // (BLOOD-RED) the colour of the blood: the renderer's (baked into its shaders; kh-er-render's test keeps them equal)
+            look if look.starts_with("blood.look.") => {}
             _ => return false,
         }
         true
@@ -308,7 +319,7 @@ fn wide_at(addr: usize) -> Option<String> {
     if !crate::probe::read(addr, &mut b) {
         return None;
     }
-    let units: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|u| *u != 0).collect();
+    let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|u| *u != 0).collect();
     (units.len() < 64).then(|| String::from_utf16_lossy(&units))
 }
 
@@ -549,7 +560,6 @@ pub mod party {
 
     /// (for S4) THE BLOOD ON A FRIEND AND HIS WEAPON this frame (body = him, blade = his staff / shield), as Sora's
     /// `kh_er_render::blood::BloodLook`; None: none yet.
-    #[allow(dead_code)] // (S4 reads it when it draws the friends)
     pub fn party_look(c: PartyChara) -> Option<BloodLook> {
         LOOKS.lock().ok()?.iter().find(|l| l.0 == c).map(|l| l.1)
     }
@@ -583,13 +593,14 @@ pub mod party {
     mod tests {
         use super::*;
 
-        const R: BloodRules = BloodRules::DEFAULT;
+        /// (the rates of 2026-10-14, as the outer tests: these numbers are worked out for them)
+        const R: BloodRules = BloodRules { hit_blade: 0.06, hit_body: 0.02, hurt_body: 0.8, decay_s: 900.0, ..BloodRules::DEFAULT };
 
         /// (ERT4) A new Sora host (its clock back at 0: a load, a KH3 Continue, a respawn) starts the friends clean, as
         /// Sora; time going on keeps their blood.
         #[test]
         fn ert4_a_new_host_clock_starts_the_friends_clean() {
-            let r = BloodRules::DEFAULT;
+            let r = R;
             let mut p = PartyBlood::default();
             assert_eq!(p.advance(10.0), 0.0);
             let hurt = BloodInputs { hp: 30, max_hp: 100, ..BloodInputs::default() };
@@ -656,7 +667,40 @@ pub mod party {
 mod tests {
     use super::*;
 
-    const R: BloodRules = BloodRules::DEFAULT;
+    /// The mechanics' tests run at the rates of 2026-10-14 (their numbers are worked out for them); the sheet's own rates
+    /// are `the_sheet_rows_are_the_defaults` and `blood_builds_up_slowly_at_the_sheets_rates`.
+    const R: BloodRules = BloodRules { hit_blade: 0.06, hit_body: 0.02, hurt_body: 0.8, decay_s: 900.0, ..BloodRules::DEFAULT };
+
+    /// (THE USER 2026-11-02: "reduce how fast they get bloody, blood should slowly build up on the models") At the sheet's
+    /// rates: one fight (20 landed hits, 3 blows of a tenth of his HP) leaves a light coat; a full Keyblade takes about 67
+    /// landed hits, a full coat on him about 200 landed hits or 50 such blows; a guarded blow adds nothing.
+    #[test]
+    fn blood_builds_up_slowly_at_the_sheets_rates() {
+        let d = BloodRules::DEFAULT;
+        let mut b = Blood::default();
+        let full = BloodInputs { hp: 200, max_hp: 200, ..BloodInputs::default() };
+        b.step(&d, &full, 0.0);
+        for _ in 0..20 {
+            b.step(&d, &BloodInputs { bleeding_hits: 1, ..full }, 1.0 / 60.0);
+        }
+        let mut hp = 200;
+        for _ in 0..3 {
+            hp -= 20;
+            b.step(&d, &BloodInputs { hp, ..full }, 1.0 / 60.0);
+        }
+        assert!((b.blade - 0.30).abs() < 0.01 && (b.body - 0.16).abs() < 0.01, "one fight: a light coat: {b:?}");
+        // a guarded blow (whatever the HP did in its frame): nothing
+        let before = b.body;
+        b.step(&d, &BloodInputs { hp: hp - 40, guarded: true, ..full }, 1.0 / 60.0);
+        assert!(b.body <= before, "{b:?}");
+        // hits to full: the blade 67, his body 200 landed hits or 50 blows of a tenth of his HP
+        let hits_to_full = |rate: f32| (1.0 / rate - 1.0e-3).ceil() as u32;
+        assert_eq!((hits_to_full(d.hit_blade), hits_to_full(d.hit_body), hits_to_full(d.hurt_body * 0.1)), (67, 200, 50));
+        // four times slower than 2026-10-14's rates, the fade by itself as much slower
+        for k in [R.hit_blade / d.hit_blade, R.hit_body / d.hit_body, R.hurt_body / d.hurt_body, d.decay_s / R.decay_s] {
+            assert!((k - 4.0).abs() < 1.0e-4, "{k}");
+        }
+    }
 
     fn run(b: &mut Blood, i: BloodInputs, seconds: f32) -> Vec<BloodEvent> {
         let mut out = Vec::new();
@@ -817,7 +861,7 @@ mod tests {
         let (rules, problems) = BloodRules::from_sheet(text);
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(rules, BloodRules::DEFAULT);
-        let n = serde_json::from_str::<serde_json::Value>(text).unwrap()["rows"].as_array().unwrap().iter().filter(|r| r[0].as_str().is_some_and(|id| id.starts_with("blood."))).count();
+        let n = serde_json::from_str::<serde_json::Value>(text).unwrap()["rows"].as_array().unwrap().iter().filter(|r| r[0].as_str().is_some_and(|id| id.starts_with("blood.") && !id.starts_with("blood.look."))).count();
         assert_eq!(n, 9, "every rule has its row");
     }
 }

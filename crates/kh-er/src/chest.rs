@@ -23,11 +23,47 @@
 /// the chest"): under "Search treasure chest" the body takes the item out of a chest already open (the item is given at
 /// the press): one opening per chest. "Open" (3100) is also the doors' text (60370 after it at 357.3 s), so no
 /// unlisted animation counts. `chest.anims` replaces the list.
-pub const DEFAULT_LIST: [(i32, i32); 2] = [(60080, 60080), (60110, 60110)];
+/// (ER-TWEAKS follow-up 2026-11-07) + 60120: THE GAME'S OWN OBJECT-ACTION TABLE (ObjActParam, both regulations 2.7.1.0 /
+/// 2.7.2.0 identical; build/sora_tmp/weapons/ER-TWEAKS/tools/objact_detail.js) names THREE chest animations, its rows that
+/// give a treasure (`enableTreasureDelaySec` > 0): 60080 (5 of its 7 rows), 60110 (1 of 1) and 60120 (3 of 3: rows 99631,
+/// 99632, 199632, prompt "Open"). 60120 was in no list: the leader was not seated at the chest, played no KH3 opening and
+/// the item gate did not count its item as a chest's. Run time: the table itself is read once the params are loaded
+/// ([`learn_from_game`]), so any treasure row's animation counts, whatever the list below says.
+pub const DEFAULT_LIST: [(i32, i32); 3] = [(60080, 60080), (60110, 60110), (60120, 60120)];
 
-/// (CHESTFIX) One of the default chest animations.
+/// (ER-TWEAKS follow-up) The chest animations of the game's own ObjActParam (its treasure rows), read once at run time.
+static TABLE: std::sync::OnceLock<Vec<i32>> = std::sync::OnceLock::new();
+
+/// (CHESTFIX) One of the default chest animations (the list, and (ER-TWEAKS follow-up) every treasure row of the game's
+/// object-action table once read).
 pub fn default_anim(anim: i32) -> bool {
-    DEFAULT_LIST.iter().any(|(a, b)| (*a..=*b).contains(&anim))
+    DEFAULT_LIST.iter().any(|(a, b)| (*a..=*b).contains(&anim)) || TABLE.get().is_some_and(|t| t.contains(&anim))
+}
+
+/// (ER-TWEAKS follow-up, pure) The chest animations of an object-action table: the player animation of every row that
+/// gives a treasure (`enableTreasureDelaySec` > 0), sorted, once each (0 = no animation: left out).
+pub fn treasure_anims(rows: impl IntoIterator<Item = (u32, f32)>) -> Vec<i32> {
+    let mut out: Vec<i32> = rows.into_iter().filter(|(anim, delay)| *delay > 0.0 && *anim > 0).filter_map(|(anim, _)| i32::try_from(anim).ok()).collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// (ER-TWEAKS follow-up) ONCE A FRAME until done (sora.rs): the game's ObjActParam read once its params are loaded; its
+/// treasure rows' animations are chests from then on (logged with what the list did not have).
+#[cfg(windows)]
+pub fn learn_from_game() {
+    use eldenring::cs::{ObjActParam, SoloParamRepository};
+    use fromsoftware_shared::FromStatic;
+    if TABLE.get().is_some() {
+        return;
+    }
+    // SAFETY: game thread; the singleton lives as long as the game; rows are read only after the params are loaded.
+    let Some(repo) = (unsafe { SoloParamRepository::instance() }).ok().filter(|r| crate::game::param_loaded::<ObjActParam>(r)) else { return };
+    let anims = treasure_anims(repo.rows::<ObjActParam>().map(|(_, row)| (row.player_anim_id(), row.enable_treasure_delay_sec())));
+    let new: Vec<i32> = anims.iter().copied().filter(|a| !DEFAULT_LIST.iter().any(|(lo, hi)| (*lo..=*hi).contains(a))).collect();
+    crate::erlog!("chest: (ER-TWEAKS) the game's object-action table: chest animations {anims:?} (its treasure rows){}", if new.is_empty() { String::new() } else { format!("; NOT IN THE LIST, now chests too: {new:?}") });
+    let _ = TABLE.set(anims);
 }
 
 /// The size of KH3's box to open: `chest.size` = s (default) | l | auto (by the length of the body's animation).
@@ -162,6 +198,22 @@ mod tests {
     fn chestfix_one_opening_per_chest() {
         assert!(default_anim(60110) && default_anim(60080));
         assert!(!default_anim(60090) && !default_anim(60370) && !default_anim(60071) && !default_anim(60030));
+    }
+
+    /// (ER-TWEAKS follow-up) Every chest animation of the game's object-action table is a chest: 60120 (three treasure rows)
+    /// was in no list. The table's rule: only rows that give a treasure count (60080's two plain rows do not make it one;
+    /// a door's 60000 never is).
+    #[test]
+    fn the_object_action_tables_chests_are_chests() {
+        assert!(default_anim(60120), "60120: ObjActParam 99631 / 99632 / 199632 give a treasure");
+        // the table's own rows (ObjActParam 2.7.2.0: animation, enableTreasureDelaySec), as objact_detail.js read them
+        let rows = [(60080, 1.0), (60080, 0.0), (60110, 2.0), (60120, 1.5), (60120, 1.5), (60000, 0.0), (60030, 0.0), (60200, 0.0), (0, 1.0)];
+        assert_eq!(treasure_anims(rows), vec![60080, 60110, 60120]);
+        for anim in treasure_anims(rows) {
+            assert!(default_anim(anim), "{anim}");
+            assert!(!crate::doorfree::free_anim(anim, None), "a chest is no door: {anim}");
+        }
+        assert!(treasure_anims([(60000u32, 0.0f32)]).is_empty());
     }
 
     #[test]

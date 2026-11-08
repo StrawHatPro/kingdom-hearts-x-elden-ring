@@ -106,7 +106,7 @@ pub(crate) fn part_name(geom: usize) -> Option<String> {
     if !read(name, &mut b) {
         return None;
     }
-    Some(b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|u| *u != 0).map(|u| if u < 128 { u as u8 as char } else { '?' }).collect())
+    Some(b.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|u| *u != 0).map(|u| if u < 128 { u as u8 as char } else { '?' }).collect())
 }
 
 /// The object's MSB part name contains the grace's asset.
@@ -377,7 +377,7 @@ pub fn frame(control: &Control, tick: bool) {
         }
         let mut raw = vec![0u8; take * 8];
         if read(begin + state.at.1 * 8, &mut raw) {
-            for c in raw.chunks_exact(8) {
+            for c in raw.as_chunks::<8>().0 {
                 let geom = usize::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]);
                 // (IMPL_ER21) every object is looked at by name once (a hidden grace's object has no effect slot)
                 if geom == 0 || state.other.contains(&geom) || state.graces.contains(&geom) {

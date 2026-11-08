@@ -25,7 +25,7 @@ fn the_image_code_round_trips() {
         let code = sub_image_code(image, h, v, blend);
         assert!(code < -0.5, "{code}");
         let (i, hh, vv, lerp) = decode(code);
-        let want = (image as f32).clamp(0.0, (h * v - 1) as f32);
+        let want = image.clamp(0.0, (h * v - 1) as f32);
         assert_eq!((i, hh, vv), (want.floor() as u32, h, v), "{image} {h}x{v}");
         let want_lerp = if blend { want - want.floor() } else { 0.0 };
         assert!((lerp - want_lerp).abs() < 0.01, "{lerp} vs {want_lerp}");

@@ -9,6 +9,13 @@
 //   node tools/sora_vfx_pack.js --dir Effects/wep/w_so010/par     every ParticleSystem package of a Content folder
 //   node tools/sora_vfx_pack.js --no-seed               do not add the seed set to the list
 //   node tools/sora_vfx_pack.js --out <dir>             write somewhere else than build/sora_pack/vfx
+//   node tools/sora_vfx_pack.js --reserve <dir>[;<dir>] (KBFX, with --out) another effect root (its manifest.json and its
+//                                                       materials / meshes folders): a material or mesh of this pack whose
+//                                                       file name that root has for ANOTHER asset (or without a record)
+//                                                       gets the clash suffix (name__<folders>), so that no name of this
+//                                                       pack means a different asset there (the Elden Ring host gives a
+//                                                       keyblade effect's names the main pack lacks the kbfx: namespace and
+//                                                       takes the main pack's record for the others)
 //   node tools/sora_vfx_pack.js --check                 validate the pack on disk (hashes, PNG read-back, gltf-validator)
 //   node tools/sora_vfx_pack.js --defaults              regenerate audit/sora_port/vfx_class_defaults.json (class
 //                                                       default values from the class constructors in the executable)
@@ -698,6 +705,17 @@ function exportTexture(ref) { // -> { file, png, ... } or { error }
     return { ...base, content, class: sc.class, raw: Buffer.from(buf.subarray(hd.dataOffset, hd.dataOffset + n)), raw_encoding: 'top mip, row-major from the top-left, 4 x IEEE half float (R, G, B, A) little-endian per texel', width: pf0.sizeX, height: pf0.sizeY, pixel_format: 'PF_FloatRGBA', srgb: false,
       compression_settings: sp.CompressionSettings || 'TC_Default', lod_group: sp.LODGroup || null, address_x: sp.AddressX || 'TA_Wrap', address_y: sp.AddressY || 'TA_Wrap', filter: sp.Filter || 'TF_Default', decoder_mip_check: null, channels: 'RGBA half float', mip_count: pf0.mips ? pf0.mips.length : 1 };
   }
+  if (pf0 && pf0.pixelFormatName === 'PF_BC6H' && (pf0.numSlices || 1) === 1) {
+    // (AUDIT-C TF) an HDR 2D texture (Double Form's Blue Hour sky SKY_bluehour_018_8K_EXR, sampled by the unlit dome
+    // vw_so220_fin_fsg0): decoded (bcdec decodeBc6h2d) and written LINEAR (sRGB off, as its LinearColor sampler reads it),
+    // each channel clamped to 1 (the sky: mean (0.056, 0.097, 0.191); 0.2 % of the texels, the sun's disc, are brighter).
+    // Before, it failed to decode and the material's texture was `file: null` (the dome drew white).
+    const h = bc.decodeBc6h2d(buf, 0); const n = h.width * h.height; const rgba = Buffer.alloc(n * 4); let lmax = 0;
+    for (let i = 0; i < n; i++) { for (let c = 0; c < 3; c++) { const v = h.rgb[i * 3 + c]; lmax = Math.max(lmax, v); rgba[i * 4 + c] = Math.min(255, Math.round(Math.min(1, Math.max(0, v)) * 255)); } rgba[i * 4 + 3] = 255; }
+    const png = bc.encodePng(h.width, h.height, rgba, { alpha: true, srgb: false });
+    return { ...base, content, class: sc.class, png, width: h.width, height: h.height, pixel_format: 'PF_BC6H', mip_count: h.mipCount, srgb: false, channels: 'RGB linear HDR, clamped to 1 (alpha 255)', alpha_range: [255, 255], max_rgb: +lmax.toFixed(3),
+      compression_settings: sp.CompressionSettings || 'TC_Default', lod_group: sp.LODGroup || null, address_x: sp.AddressX || 'TA_Wrap', address_y: sp.AddressY || 'TA_Wrap', filter: sp.Filter || 'TF_Default', decoder_mip_check: null };
+  }
   try { t = bc.decodeDds(buf, 0); } catch (e) { return { ...base, content, class: sc.class, error: 'decode failed: ' + e.message, pixel_format: sc.platforms && sc.platforms[0] ? sc.platforms[0].pixelFormatName : null }; }
   let mipCheck = null;
   if (t.mipCount > 1 && t.width >= 8 && t.height >= 8) {
@@ -837,13 +855,29 @@ function effectSet(opts) { // -> { effects: [{content, used_by}], skipped: [...]
   const effects = [...set.values()].sort((a, b) => (a.content.toLowerCase() < b.content.toLowerCase() ? -1 : 1));
   return { effects, skipped, list_file: listFile ? rel(listFile) : null, list_entries: listEntries };
 }
-function uniqueNames(contents) { // content path -> output base name (the package name; a clash gets the folder appended)
+function uniqueNames(contents, reserved) { // content path -> output base name (the package name; a clash gets the folder appended)
+  // (KBFX) reserved: lower-case name -> lower-case content path of another root's file of that name ('' = asset unknown)
   const taken = new Map(), out = new Map();
+  const clash = (n, c) => (taken.has(n.toLowerCase()) && taken.get(n.toLowerCase()) !== c) || (!!reserved && reserved.has(n.toLowerCase()) && reserved.get(n.toLowerCase()) !== c.toLowerCase());
   for (const c of contents) {
     let n = path.basename(c);
-    if (taken.has(n.toLowerCase()) && taken.get(n.toLowerCase()) !== c) n = n + '__' + path.dirname(c).split('/').slice(-3).join('_');
-    let k = 2; const n0 = n; while (taken.has(n.toLowerCase()) && taken.get(n.toLowerCase()) !== c) n = n0 + '_' + k++;
+    if (clash(n, c)) n = n + '__' + path.dirname(c).split('/').slice(-3).join('_');
+    let k = 2; const n0 = n; while (clash(n, c)) n = n0 + '_' + k++;
     taken.set(n.toLowerCase(), c); out.set(c, n);
+  }
+  return out;
+}
+// (KBFX) `--reserve` roots: lower-case file name (without extension) of their `kind` (materials | meshes) -> lower-case
+// content path of its asset (from the root's manifest.json; a file of the folder without a record: '' = another asset)
+function reservedNames(dirs, kind, ext) {
+  if (!dirs || !dirs.length) return null;
+  const out = new Map();
+  for (const dir of dirs) {
+    const mf = path.join(dir, 'manifest.json');
+    const man = fs.existsSync(mf) ? JSON.parse(fs.readFileSync(mf, 'utf8')) : {};
+    for (const r of man[kind] || []) if (r.file && r.asset) { const k = path.basename(r.file, ext).toLowerCase(); if (!out.has(k)) out.set(k, String(r.asset).replace(/^\/Game\//, '').split('.')[0].toLowerCase()); }
+    const folder = path.join(dir, kind);
+    if (fs.existsSync(folder)) for (const f of fs.readdirSync(folder)) if (f.endsWith(ext)) { const k = path.basename(f, ext).toLowerCase(); if (!out.has(k)) out.set(k, ''); }
   }
   return out;
 }
@@ -948,7 +982,7 @@ async function build(opts) {
   }
   // ---- meshes (their own materials join the material set)
   const meshRecs = [];
-  const meshNames = uniqueNames([...meshUse.keys()].sort().map((m) => gamePathToContent(m) || m.replace(/^\/Game\//, '').replace(/\.[^./]+$/, '')));
+  const meshNames = uniqueNames([...meshUse.keys()].sort().map((m) => gamePathToContent(m) || m.replace(/^\/Game\//, '').replace(/\.[^./]+$/, '')), reservedNames(opts.reserve, 'meshes', '.glb'));
   const meshFileOf = new Map();
   for (const m of [...meshUse.keys()].sort()) {
     const r = exportMesh(m);
@@ -960,7 +994,7 @@ async function build(opts) {
   }
   // ---- materials
   const matList = [...matUse.keys()].sort();
-  const matNames = uniqueNames(matList.map((m) => gamePathToContent(m) || m.replace(/^\/Game\//, '').replace(/\.[^./]+$/, '')));
+  const matNames = uniqueNames(matList.map((m) => gamePathToContent(m) || m.replace(/^\/Game\//, '').replace(/\.[^./]+$/, '')), reservedNames(opts.reserve, 'materials', '.json'));
   const matRecs = [], texUse = new Map(), matFileOf = new Map();
   for (const m of matList) {
     const s = materialSummary(m, false);
@@ -1020,7 +1054,7 @@ async function build(opts) {
     format: 'kh3-sora-vfx/1', generator: { tool: 'tools/sora_vfx_pack.js', version: VERSION },
     legal: 'local build output made from the user\'s own copy of the game; never distributed',
     spec: 'docs/sora-vfx-spec.md (effect system, trigger inventory, Cascade subset: module semantics, schema, approximations; detail in build/sora_tmp/vfx/cascade/spec.md)',
-    inputs: { effect_list: set.list_file, effect_list_entries: set.list_entries, seed_set: opts.effects.length || opts.dirs.length || opts.noSeed ? null : { folder: '/Game/' + SEED_DIR, blueprints: SEED_BLUEPRINTS.map((b) => '/Game/' + b) }, command_line: { effects: opts.effects, dirs: opts.dirs },
+    inputs: { effect_list: set.list_file, effect_list_entries: set.list_entries, seed_set: opts.effects.length || opts.dirs.length || opts.noSeed ? null : { folder: '/Game/' + SEED_DIR, blueprints: SEED_BLUEPRINTS.map((b) => '/Game/' + b) }, command_line: { effects: opts.effects, dirs: opts.dirs, ...(opts.reserve.length ? { reserve: opts.reserve.map(rel) } : {}) },
       class_defaults: { file: rel(DEFAULTS_FILE), generated_by: D.generated_by, method: D.method, classes: Object.keys(D.classes).length, failed: Object.entries(D.classes).filter(([, v]) => v.fail).map(([k, v]) => k + ': ' + v.fail) },
       sqex_semantics: fs.existsSync(SQEX_FILE) ? rel(SQEX_FILE) : null },
     conventions: CONVENTIONS(packConv),
@@ -1084,10 +1118,11 @@ async function check(opts) {
 }
 
 function parseArgs(argv) {
-  const o = { effects: [], dirs: [], list: null, out: path.join(ROOT, 'build', 'sora_pack', 'vfx'), noSeed: false, check: false, defaults: false, census: false, rest: [] };
+  const o = { effects: [], dirs: [], list: null, out: path.join(ROOT, 'build', 'sora_pack', 'vfx'), noSeed: false, check: false, defaults: false, census: false, reserve: [], rest: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--effect') o.effects.push(argv[++i]); else if (a === '--dir') o.dirs.push(argv[++i]); else if (a === '--list') o.list = path.resolve(argv[++i]); else if (a === '--out') o.out = path.resolve(argv[++i]);
+    if (a === '--reserve') o.reserve.push(...argv[++i].split(';').filter(Boolean).map((d) => path.resolve(d))); // (KBFX)
+    else if (a === '--effect') o.effects.push(argv[++i]); else if (a === '--dir') o.dirs.push(argv[++i]); else if (a === '--list') o.list = path.resolve(argv[++i]); else if (a === '--out') o.out = path.resolve(argv[++i]);
     else if (a === '--no-seed') o.noSeed = true; else if (a === '--check') o.check = true; else if (a === '--defaults') o.defaults = true; else if (a === '--census') o.census = true; else o.rest.push(a);
   }
   return o;

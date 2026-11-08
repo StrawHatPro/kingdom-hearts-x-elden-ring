@@ -95,7 +95,7 @@ fn goal(g: AiGoal) -> MoveGoal {
 impl AiBody for PartyBody<'_> {
     fn view(&self) -> BodyView {
         let Some(v) = self.party.view(self.member) else { return BodyView::default() };
-        let mut items = [None; 4];
+        let mut items = [None; crate::status::MAX_SLOTS];
         for (i, s) in v.items.iter().enumerate() {
             if s.present {
                 items[i] = s.item.map(item_row);

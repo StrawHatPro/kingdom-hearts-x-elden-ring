@@ -25,9 +25,9 @@
 //! - THE ROWS GET THEIR REGION BACK ONLY WHILE OUR OWN FLOWS NEED THE GAME'S REST (the story's driven rest of IMPL_ER33 /
 //!   IMPL_ER36 under its black cover, the debugging keys `savepoint.sit = 1` / `savepoint.rest_chord`): `allow`.
 //! - `grace.lock = 0`: as before (the rows untouched; the Y guard alone).
-//! The Y guard stays as the second line (savepoint_rules.rs: near EVERY grace now, also hidden / undiscovered ones).
-//! Discovery is ours (running into the save point writes the discovery flag, IMPL_ER26) and the map / fast travel read
-//! that flag, so nothing of those needs the game's "Touch grace".
+//!   The Y guard stays as the second line (savepoint_rules.rs: near EVERY grace now, also hidden / undiscovered ones).
+//!   Discovery is ours (running into the save point writes the discovery flag, IMPL_ER26) and the map / fast travel read
+//!   that flag, so nothing of those needs the game's "Touch grace".
 
 use std::sync::Mutex;
 use std::time::Instant;
@@ -40,9 +40,12 @@ use crate::erlog;
 
 /// The prompt texts of the game's grace actions (English; `grace.lock.texts` replaces them, `|` between).
 /// (SV) The grace action rows MEASURED in the game (ActionButtonParam 6100 "Touch grace", 6101 "Rest at site of grace").
-pub const MEASURED_IDS: &str = "6100,6101";
+/// (INTERACT-MARK, in the game 2026-11-05: Elden Ring's own "Rest" came up on the floor beside the Roundtable Hold's
+/// table: text 1830 "Rest at table of lost grace", ActionButtonParam rows 6102 / 6103, radius 5.25 m, height 0.6 m, READ in the
+/// 2.7.2.0 regulation and ActionButtonText) the Table of Lost Grace's own rest rows too.
+pub const MEASURED_IDS: &str = "6100,6101,6102,6103";
 
-pub const TEXTS: &str = "Touch grace|Rest at site of grace|Rest at grace|Touch Grace|Rest at Site of Grace";
+pub const TEXTS: &str = "Touch grace|Rest at site of grace|Rest at grace|Touch Grace|Rest at Site of Grace|Rest at table of lost grace|Rest at Table of Lost Grace"; // (INTERACT-MARK) + the Table of Lost Grace's
 
 /// (pure) Does a message say one of the wanted prompts (trimmed; case and inner spaces as written)?
 pub fn is_grace_text(text: &str, wanted: &[&str]) -> bool {
@@ -124,7 +127,7 @@ fn grace_texts(wanted: &[&str]) -> Vec<(u32, u32, String)> {
 fn find_rows(wanted: &[&str], extra: &[u32]) -> Option<Vec<Row>> {
     let texts = grace_texts(wanted);
     // SAFETY: game thread; the singleton lives as long as the game.
-    let repo = unsafe { SoloParamRepository::instance() }.ok()?;
+    let repo = unsafe { SoloParamRepository::instance() }.ok().filter(|r| crate::game::param_loaded::<ActionButtonParam>(r))?; // (FINAL-FIX) not before the params are loaded
     let mut rows = Vec::new();
     for (id, row) in repo.rows::<ActionButtonParam>() {
         let text_id = row.text_id();
@@ -146,7 +149,9 @@ fn find_rows(wanted: &[&str], extra: &[u32]) -> Option<Vec<Row>> {
 /// Writes the rows: no region (`lock`) or their own; how many differed from what was wanted.
 fn write_rows(rows: &[Row], lock: bool) -> u32 {
     // SAFETY: game thread; the singleton lives as long as the game; rows by id, each written as the SDK's setters do.
-    let Ok(repo) = (unsafe { SoloParamRepository::instance_mut() }) else { return 0 };
+    // (FINAL-FIX, the shutdown panic) the game tears its params down at its exit while this frame task still runs: no row
+    // is written into a holder without its res cap (the SDK would panic, solo_param_repository.rs:487)
+    let Some(repo) = (unsafe { SoloParamRepository::instance_mut() }).ok().filter(|r| crate::game::param_loaded::<ActionButtonParam>(r)) else { return 0 };
     let mut changed = 0;
     for r in rows {
         let Some(row) = repo.get_mut::<ActionButtonParam>(r.id) else { continue };
@@ -233,6 +238,9 @@ mod tests {
         assert!(is_grace_text(" Rest at site of grace ", &wanted));
         assert!(!is_grace_text("Open", &wanted));
         assert!(!is_grace_text("Touch grace to rest", &wanted));
+        // (INTERACT-MARK) the Table of Lost Grace's own rest (text 1830, rows 6102 / 6103): switched off as well
+        assert!(is_grace_text("Rest at table of lost grace", &wanted));
+        assert_eq!(parse_ids(Some(MEASURED_IDS)), vec![6100, 6101, 6102, 6103]);
         assert_eq!(parse_ids(Some("4000, 4001,x")), vec![4000, 4001]);
         assert!(parse_ids(None).is_empty());
     }

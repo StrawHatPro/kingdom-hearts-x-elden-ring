@@ -1408,7 +1408,7 @@ pub fn set_situation(pw: &mut NpcPawn, kind: u8, value: f32) -> bool {
                 pw.to_idle();
             }
         }
-        6 | 8 | 7 => {
+        6..=8 => {
             if pw.state == NpcStateId::Die {
                 return true;
             }

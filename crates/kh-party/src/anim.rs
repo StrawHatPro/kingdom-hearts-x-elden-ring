@@ -74,13 +74,15 @@ pub struct ClipDef {
     pub socket: &'static [SocketKey],
 }
 
-/// One key of an attack-socket track: seconds; position in the actor frame (cm).
+/// One key of an attack-socket track: seconds; position in the actor frame (cm); `q` the socket's own rotation in the
+/// actor frame (x, y, z, w; identity where the pack has none), which places a shape's socket-space offset (COMBAT-FIX).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SocketKey {
     pub time: f32,
     pub x: f32,
     pub y: f32,
     pub z: f32,
+    pub q: [f32; 4],
 }
 
 impl ClipDef {

@@ -10,9 +10,11 @@
 //! NOT implemented: Cuisine and the Gummiphone (their unlock flags are never set here), the
 //! Abilities screen's "Show Next List" pages (Keyblade form actions and shotlocks: the
 //! `TresKeybladeAbilityData` rows are not in the port's data), party members, character models.
+//! (GOOFY, THE USER 2026-11-02) Goofy's "Show Next List" IS there: his Parry Techniques page (`camp_parry.rs`).
 
 use crate::camp_custom::{CustomLayer, CustomizeScreen, HelpLayer, HelpScreen};
 use crate::camp_equip::{EquipLayer, EquipScreen, ItemsScreen};
+use crate::camp_parry::{ParryPage, ParryScreen};
 use crate::frames::gauge_frame;
 use crate::menu::{SE_MENU_CLOSE, SE_MENU_CURSOR, SE_MENU_DECIDE, SE_MENU_OPEN, SE_MENU_REFUSED};
 use crate::list::ListView;
@@ -60,7 +62,8 @@ pub enum TopEntry {
     /// (`CampMenu::entries`). Deciding it asks KH3's own question (`kh3_menu.savepoint.dialog_0004`, cursor on No).
     TitleScreen = 9,
     /// (er-host, IMPL_ER59) NOT AN ENTRY OF KH3'S CAMP MENU: Sora's outfits (the user: "Boc is able to change Sora's
-    /// appearance"); a host appends it when the outfits are open to the player ([`CampMenu::set_outfits`]).
+    /// appearance"). (THE USER 2026-11-02: "Move the Outfits selection to Boc") not in the camp menu any more: only the
+    /// menu opened for Boc's "Alter garments" holds it ([`CampMenu::open_outfits`]).
     Outfits = 10,
     /// (party P) NOT AN ENTRY OF KH3'S CAMP MENU: the save point's "Party Formation" (the user's request 2026-10-15),
     /// shown as the camp menu's character step ([`CampMenu::open_formation`]).
@@ -429,6 +432,8 @@ pub enum CampAction {
     SetAbility { id: i32, copy: u8, on: bool },
     /// The Config screen was left with changes: write the rows' values back, apply, save.
     ApplyConfig(Vec<u8>),
+    /// (CAMP-OPTIONS) An event of the tabbed Config screen (camp_options.rs): the host answers through [`CampMenu::options_reply`].
+    Options(crate::camp_options::OptEvent),
     /// Triangle + Yes on the Config screen: restore the defaults (the host answers with new rows).
     RestoreConfigDefaults,
     /// A sub screen opens: the host supplies its data.
@@ -446,6 +451,8 @@ pub enum CampAction {
     SetMagicSlot { slot: usize, kind: u8 },
     SwapMagicSlots(usize, usize),
     SetShortcut { page: usize, slot: usize, kind: u8 },
+    /// (GF-UI) The same on Goofy's panel while he does not lead (`camp_custom::ArtsPage`).
+    SetArtsShortcut { page: usize, slot: usize, kind: u8 },
     /// (XSI, 2026-10-16) Customize: the Shotlock choice (`ETresShootFlowKind`: 0 the Keyblade's own, 11 Spectral Rays).
     SetShotlock(u8),
     /// The whole menu closes (root `out`, static SE 3): unpause when the animation ends.
@@ -483,6 +490,12 @@ pub enum Pending {
     TitleScreen,
     /// (party) Restore the focused friend's AI settings (Customize, `0x1415E16B0`).
     FriendDefaults,
+    /// (CAMP-OPTIONS) the tabbed Config screen's Y: the shown page's defaults.
+    OptionDefaults(u32),
+    /// (CAMP-OPTIONS) a question of the options host's (its key): Yes and No are both answered.
+    OptionAsk(u32),
+    /// (OUTFIT-UNLOCK) Change into the Outfits screen's row (its index) for its price (the host charges the munny).
+    Outfit(usize),
 }
 
 /// A confirmation on top of the menu (`00_system/Dialog`).
@@ -526,6 +539,9 @@ pub struct CampMenu {
     pub dialog: Option<Dialog>,
     /// (er-host, IMPL_ER59) Sora's outfits.
     pub outfits: OutfitScreen,
+    /// (THE USER 2026-11-02, "only accessible by speaking with Boc") the menu was opened for Boc's "Alter garments"
+    /// ([`CampMenu::open_outfits`]): the Outfits screen is all of it, B / Menu close it.
+    pub outfits_only: bool,
     /// (party) THE PARTY TABLE (`m_PartyParams[5]`, 0x14154C710): slot 0 Sora, then the friends; `stats` is the
     /// chosen member's copy. Set by [`CampMenu::set_party`]; Sora alone = one entry.
     pub party: Vec<StatsIn>,
@@ -536,6 +552,15 @@ pub struct CampMenu {
     pub member_flash: Option<bool>,
     /// (party P) Party Formation's texts while the menu is that step (`None` otherwise).
     pub formation: Option<FormationRows>,
+    /// (GOOFY, THE USER 2026-11-02) The shown member's Parry Techniques page, KH3's "Show Next List" of the Abilities screen
+    /// (camp_parry.rs): the host's [`CampMenu::set_parry`] with the abilities; only Goofy has one.
+    pub parry: ParryScreen,
+    /// (CAMP-OPTIONS) THE TABBED CONFIG SCREEN (camp_options.rs), when the host has one (Elden Ring's options); `None` = KH3's
+    /// own rows (`options`).
+    pub tabbed: Option<crate::camp_options::OptionsScreen>,
+    /// (CAMP-OPTIONS) the menu was opened for the Config screen alone (Elden Ring's title menu / its System entry): leaving the
+    /// screen closes the whole menu.
+    pub config_only: bool,
 }
 
 impl CampMenu {
@@ -596,6 +621,7 @@ impl CampMenu {
             CampScreen::Abilities => self.abilities = AbilityScreen::default(),
             _ => {}
         }
+        self.parry.set(None); // (GOOFY) the new member's page (if any) comes with his abilities
         actions.push(CampAction::Opened(self.screen));
         true
     }
@@ -614,6 +640,12 @@ impl CampMenu {
             self.abilities.list.scroll = scroll.min(self.abilities.list.scroll_max());
             self.abilities.list.adjust_display();
         }
+    }
+
+    /// (GOOFY) The host's Parry Techniques page of the member the Abilities screen shows, with its abilities (None: he has
+    /// none, no "Show Next List"). Supplied again after every change; the page's cursor stays.
+    pub fn set_parry(&mut self, page: Option<ParryPage>) {
+        self.parry.set(page);
     }
 
     /// The host's answer to `Opened(Config)` and to `RestoreConfigDefaults`.
@@ -655,6 +687,7 @@ impl CampMenu {
             CampScreen::Outfits => self.outfits.opened(),
             _ => {}
         }
+        self.parry.set(None); // (GOOFY) a member's Parry Techniques page comes with his abilities (the host's answer)
         sounds.push(UiSound::Play(SE_MENU_OPEN));
         actions.push(CampAction::Opened(self.screen));
     }
@@ -671,6 +704,9 @@ impl CampMenu {
             CampKey::Decide => {
                 let dialog = self.dialog.take().unwrap();
                 let yes = dialog.kind == DialogKind::YesNo && dialog.cursor == 0;
+                if let Pending::OptionAsk(ask) = dialog.pending {
+                    actions.push(CampAction::Options(crate::camp_options::OptEvent::Answer { ask, yes })); // (CAMP-OPTIONS)
+                }
                 sounds.push(UiSound::Play(if yes || dialog.kind == DialogKind::Ok { SE_MENU_DECIDE } else { SE_MENU_CLOSE }));
                 if yes {
                     match dialog.pending {
@@ -687,12 +723,24 @@ impl CampMenu {
                             actions.push(CampAction::Close);
                         }
                         Pending::FriendDefaults => self.customize.restore_friend_defaults(&mut actions),
-                        Pending::None => {}
+                        Pending::OptionDefaults(page) => actions.push(CampAction::Options(crate::camp_options::OptEvent::Defaults { page })), // (CAMP-OPTIONS)
+                        // (OUTFIT-UNLOCK) the outfit bought: worn on the screen, the price off the shown wallet; the host charges
+                        Pending::Outfit(i) => {
+                            if let Some((id, _)) = self.outfits.outfits.get(i) {
+                                self.outfits.worn = i;
+                                self.stats.munny = self.stats.munny.saturating_sub(self.outfits.price);
+                                actions.push(CampAction::SetOutfit(id.clone()));
+                            }
+                        }
+                        Pending::OptionAsk(_) | Pending::None => {}
                     }
                 }
             }
             CampKey::Cancel => {
-                self.dialog = None;
+                // (CAMP-OPTIONS) the host's question is answered No by B as well
+                if let Some(Dialog { pending: Pending::OptionAsk(ask), .. }) = self.dialog.take() {
+                    actions.push(CampAction::Options(crate::camp_options::OptEvent::Answer { ask, yes: false }));
+                }
                 sounds.push(UiSound::Play(SE_MENU_CLOSE));
             }
             _ => {}
@@ -708,11 +756,17 @@ impl CampMenu {
             CampScreen::Items => !self.items.target,
             CampScreen::Customize => self.customize.layer == CustomLayer::Top,
             CampScreen::GameHelp => self.help.layer == HelpLayer::Categories,
+            CampScreen::Abilities => !self.parry.on, // (GOOFY) the Parry Techniques page is one level in
             _ => true,
         }
     }
 
     fn leave_config(&mut self, actions: &mut Vec<CampAction>) {
+        // (CAMP-OPTIONS) the tabbed screen applied every change at once: leaving is the host's to know (its settings save)
+        if self.tabbed.is_some() {
+            actions.push(CampAction::Options(crate::camp_options::OptEvent::Left));
+            return;
+        }
         // Leaving applies: the copy is written back when it differs.
         let now: Vec<u8> = self.options.iter().map(|r| r.value).collect();
         if now != self.options_before {
@@ -722,6 +776,10 @@ impl CampMenu {
 
     /// One menu event. `repeat` = the key is held (auto-repeat).
     pub fn key(&mut self, key: CampKey, repeat: bool, sounds: &mut Vec<UiSound>) -> Vec<CampAction> {
+        // (CAMP-OPTIONS) a button is being captured for a row of the tabbed screen: every press is the capture's
+        if self.tabbed.as_ref().is_some_and(|t| t.capturing) && self.screen == CampScreen::Config {
+            return Vec::new();
+        }
         if self.dialog.is_some() {
             return self.dialog_key(key, sounds);
         }
@@ -821,7 +879,15 @@ impl CampMenu {
                 }
                 _ => {}
             },
+            // (GOOFY, THE USER 2026-11-02) Goofy's Parry Techniques page (KH3's "Show Next List"): rows, Y / B back, L2 / R2
+            // still select a friend (his abilities list then shows)
+            CampScreen::Abilities if self.parry.on => match key {
+                CampKey::L2 | CampKey::R2 => drop(self.switch_member(key == CampKey::R2, sounds, &mut actions)),
+                _ => self.parry.key(key, repeat, sounds),
+            },
             CampScreen::Abilities => match key {
+                // (GOOFY) "Show Next List": the member's Parry Techniques page, when he has one
+                CampKey::Triangle => drop(self.parry.open(sounds)),
                 CampKey::Up | CampKey::Down => {
                     if self.abilities.list.move_anchor(key == CampKey::Down, repeat) {
                         sounds.push(UiSound::Play(SE_MENU_CURSOR));
@@ -886,9 +952,36 @@ impl CampMenu {
                 }
             }
             CampScreen::Outfits => {
-                if self.outfits.key(key, repeat, sounds, &mut actions) {
-                    self.back(sounds);
+                if self.outfits.key(key, repeat, self.stats.munny, &mut self.dialog, sounds, &mut actions) {
+                    if self.outfits_only {
+                        // (THE USER 2026-11-02) Boc's screen: B leaves the menu, back to his talk
+                        sounds.push(UiSound::Play(SE_MENU_CLOSE));
+                        actions.push(CampAction::Close);
+                    } else {
+                        self.back(sounds);
+                    }
                 }
+            }
+            // (CAMP-OPTIONS) THE TABBED SCREEN: its own keys (camp_options.rs); Y asks KH3's restore question for the shown page
+            CampScreen::Config if self.tabbed.is_some() => {
+                let Some(tabbed) = self.tabbed.as_mut() else { return actions };
+                if key == CampKey::Triangle {
+                    if let Some(page) = tabbed.page_key() {
+                        self.dialog = Some(Dialog { text_key: "kh3_camp.config.dialog_0010", argument: String::new(), kind: DialogKind::YesNo, cursor: 1, pending: Pending::OptionDefaults(page) });
+                    }
+                    return actions;
+                }
+                for event in tabbed.key(key, repeat, sounds) {
+                    let left = event == crate::camp_options::OptEvent::Left;
+                    actions.push(CampAction::Options(event));
+                    if left && self.config_only {
+                        actions.push(CampAction::Close);
+                    } else if left {
+                        // (the close sound was the screen's)
+                        self.back(&mut Vec::new());
+                    }
+                }
+                self.sync_tabbed();
             }
             CampScreen::Config => match key {
                 CampKey::Up | CampKey::Down => {
@@ -950,6 +1043,7 @@ impl CampMenu {
 
     fn back(&mut self, sounds: &mut Vec<UiSound>) {
         sounds.push(UiSound::Play(SE_MENU_CLOSE));
+        self.parry.on = false; // (GOOFY) the Parry Techniques page goes with its screen
         // (DON-UI) B goes back exactly one level (the user, 2026-10-22, for ALL menus: "when you press B it should bring
         // you back to the previous menu, not to the origin menu"): a screen reached through the character list returns
         // to that list (the movie's own `backChara`, the cursor on the member), the others to the top
@@ -966,14 +1060,73 @@ impl CampMenu {
         };
     }
 
-    /// (er-host, IMPL_ER59) The outfits the host offers (id, shown name) and the one worn; the entry is appended
-    /// after the others (before "Title Screen" when that one is there) when it is not there yet.
-    pub fn set_outfits(&mut self, outfits: Vec<(String, String)>, worn: &str) {
-        self.outfits.set(outfits, worn);
-        if !self.entries.contains(&TopEntry::Outfits) {
-            let at = self.entries.iter().position(|e| *e == TopEntry::TitleScreen).unwrap_or(self.entries.len());
-            self.entries.insert(at, TopEntry::Outfits);
+    /// (THE USER 2026-11-02: "Move the Outfits selection to Boc, replacing his armor alteration menu with it completely
+    /// (this means it is only accessible by speaking with Boc)") THE OUTFITS SCREEN ON ITS OWN, FOR BOC'S "ALTER
+    /// GARMENTS": the camp menu opened with Outfits as its only entry (`outfits` = (id, shown name) as the host offers
+    /// them, `worn` = the id worn); the host shows the top for the camp's own opening, then puts the menu on
+    /// [`CampScreen::Outfits`] ([`OutfitScreen::opened`]), as the save point's Party Formation does. B / Menu there
+    /// close the whole menu (`outfits_only`): the host goes back to Boc's talk. Static SE 2 as the camp's open. The
+    /// camp menu itself has NO Outfits entry any more ([`CampMenu::open`]'s entries never hold it).
+    pub fn open_outfits(outfits: Vec<(String, String)>, worn: &str, stats: StatsIn, sounds: &mut Vec<UiSound>) -> CampMenu {
+        sounds.push(UiSound::Play(SE_MENU_OPEN));
+        let mut menu = CampMenu { entries: vec![TopEntry::Outfits], party: vec![stats.clone()], stats, outfits_only: true, equipment: EquipScreen::new(), items: ItemsScreen::new(), customize: CustomizeScreen::new(), help: HelpScreen::new(), ..CampMenu::default() };
+        menu.outfits.set(outfits, worn);
+        menu
+    }
+
+    /// (CAMP-OPTIONS) THE CONFIG SCREEN ON ITS OWN (Elden Ring's title menu SYSTEM, its in-game System entry): the camp menu with
+    /// Config as its only entry and the host's tabbed pages; the host puts it on the screen once the opening has played
+    /// ([`CampMenu::show_config`]); B on the screen's top closes the whole menu.
+    pub fn open_config(tabs: Vec<crate::camp_options::OptPage>, stats: StatsIn, sounds: &mut Vec<UiSound>) -> CampMenu {
+        sounds.push(UiSound::Play(SE_MENU_OPEN));
+        let mut menu = CampMenu { entries: vec![TopEntry::Config], party: vec![stats.clone()], stats, config_only: true, equipment: EquipScreen::new(), items: ItemsScreen::new(), customize: CustomizeScreen::new(), help: HelpScreen::new(), ..CampMenu::default() };
+        menu.set_tabbed(tabs);
+        menu
+    }
+
+    /// (CAMP-OPTIONS) The Config screen comes up (a config-only menu).
+    pub fn show_config(&mut self) {
+        self.screen = CampScreen::Config;
+    }
+
+    /// (CAMP-OPTIONS) The host's tabbed pages (its answer to `Opened(Config)`): the screen starts on the first tab.
+    pub fn set_tabbed(&mut self, tabs: Vec<crate::camp_options::OptPage>) {
+        self.tabbed = Some(crate::camp_options::OptionsScreen::new(tabs));
+        self.sync_tabbed();
+    }
+
+    /// (CAMP-OPTIONS) The host's answer to an [`CampAction::Options`] event: the pages again, a sub page to show, a question.
+    pub fn options_reply(&mut self, tabs: Option<Vec<crate::camp_options::OptPage>>, subs: &[crate::camp_options::OptPage], push: Option<crate::camp_options::OptPage>, ask: Option<crate::camp_options::OptAsk>, capture: Option<bool>) {
+        let Some(tabbed) = self.tabbed.as_mut() else { return };
+        if let Some(on) = capture {
+            tabbed.capturing = on;
         }
+        if let Some(tabs) = tabs {
+            tabbed.update(tabs, subs);
+        }
+        if let Some(page) = push {
+            tabbed.push(page);
+        }
+        if let Some(ask) = ask {
+            self.dialog = Some(Dialog { text_key: "", argument: ask.text, kind: DialogKind::YesNo, cursor: ask.cursor, pending: Pending::OptionAsk(ask.key) });
+        }
+        self.sync_tabbed();
+    }
+
+    /// (CAMP-OPTIONS) The shown page's rows into the Config screen's drawing (`options`, its cursor and window).
+    fn sync_tabbed(&mut self) {
+        if let Some(tabbed) = self.tabbed.as_ref() {
+            self.options = tabbed.rows();
+            self.option_cursor = tabbed.cursor;
+            self.option_scroll = tabbed.scroll;
+        }
+    }
+
+    /// (THE USER 2026-11-02) The Outfits screen comes up (the host, once the camp's opening has played): the cursor on
+    /// the one worn.
+    pub fn show_outfits(&mut self) {
+        self.screen = CampScreen::Outfits;
+        self.outfits.opened();
     }
 }
 
@@ -991,6 +1144,21 @@ pub struct OutfitScreen {
     pub worn: usize,
     /// Drawn in the Game Help screen's category list.
     pub list: ListView,
+    /// (OUTFIT-UNLOCK, the user 2026-11-05: "it costs 50,000 munny") the munny a change costs (0 = free); the one worn costs nothing.
+    pub price: i32,
+}
+
+/// (OUTFIT-UNLOCK) 50000 -> "50,000".
+pub fn group_thousands(n: i32) -> String {
+    let digits = n.unsigned_abs().to_string();
+    let mut out = String::new();
+    for (k, c) in digits.chars().enumerate() {
+        if k > 0 && (digits.len() - k).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if n < 0 { format!("-{out}") } else { out }
 }
 
 impl OutfitScreen {
@@ -1020,8 +1188,10 @@ impl OutfitScreen {
         usize::try_from(self.list.focus).ok().filter(|i| *i < self.outfits.len())
     }
 
-    /// One event; true = leave the screen.
-    pub fn key(&mut self, key: CampKey, repeat: bool, sounds: &mut Vec<UiSound>, actions: &mut Vec<CampAction>) -> bool {
+    /// One event; true = leave the screen. (OUTFIT-UNLOCK) `munny`: the wallet; with a price, A on another outfit asks KH3's
+    /// Yes / No question (the outfit and the price; No first) or, short of munny, KH3's shop refusal "You don't have enough munny."
+    /// (`kh3_menu.shop.dialog_0020`, the refused sound).
+    pub fn key(&mut self, key: CampKey, repeat: bool, munny: i32, dialog: &mut Option<Dialog>, sounds: &mut Vec<UiSound>, actions: &mut Vec<CampAction>) -> bool {
         match key {
             CampKey::Up | CampKey::Down => {
                 if self.list.move_anchor(key == CampKey::Down, repeat) {
@@ -1029,6 +1199,15 @@ impl OutfitScreen {
                 }
             }
             CampKey::Decide => match self.cursor() {
+                Some(i) if i != self.worn && self.price > 0 && munny < self.price => {
+                    sounds.push(UiSound::Play(SE_MENU_REFUSED));
+                    *dialog = Some(Dialog::message("kh3_menu.shop.dialog_0020"));
+                }
+                Some(i) if i != self.worn && self.price > 0 => {
+                    sounds.push(UiSound::Play(SE_MENU_DECIDE));
+                    let text = format!("Change into {}?\n{} munny", self.outfits[i].1, group_thousands(self.price));
+                    *dialog = Some(Dialog { text_key: "", argument: text, kind: DialogKind::YesNo, cursor: 1, pending: Pending::Outfit(i) });
+                }
                 Some(i) => {
                     sounds.push(UiSound::Play(SE_MENU_DECIDE));
                     if i != self.worn {
@@ -1323,5 +1502,76 @@ mod party_formation_tests {
         sounds.clear();
         assert_eq!(menu.key(CampKey::Cancel, false, &mut sounds), vec![CampAction::Close]);
         assert_eq!(sounds, vec![UiSound::Play(SE_MENU_CLOSE)]);
+    }
+
+    /// (THE USER 2026-11-02: "Move the Outfits selection to Boc ... only accessible by speaking with Boc") the camp
+    /// menu has no Outfits entry; Boc's menu is the Outfits screen alone: the cursor on the one worn, A wears another
+    /// (decide SE, the choice once), B and Menu close the whole menu (close SE), never the top level.
+    #[test]
+    fn outfits_are_boc_s_screen_alone_and_b_closes_it() {
+        let mut sounds = Vec::new();
+        for (cuisine, phone) in [(false, false), (true, true)] {
+            assert!(!CampMenu::open(cuisine, phone, StatsIn::default(), &mut sounds).entries.contains(&TopEntry::Outfits), "the camp menu has no Outfits entry");
+        }
+        let list = vec![("kh3".to_string(), "KINGDOM HEARTS III".to_string()), ("kh1".to_string(), "KINGDOM HEARTS".to_string()), ("kh2".to_string(), "KINGDOM HEARTS II".to_string())];
+        sounds.clear();
+        let mut menu = CampMenu::open_outfits(list.clone(), "kh1", StatsIn::default(), &mut sounds);
+        assert_eq!(sounds, vec![UiSound::Play(SE_MENU_OPEN)]);
+        assert_eq!((menu.entries.clone(), menu.screen, menu.outfits_only), (vec![TopEntry::Outfits], CampScreen::Top, true), "the top while the camp's opening plays");
+        menu.show_outfits();
+        assert_eq!((menu.screen, menu.outfits.cursor()), (CampScreen::Outfits, Some(1)), "the cursor on the one worn");
+        sounds.clear();
+        menu.key(CampKey::Down, false, &mut sounds);
+        assert_eq!(menu.key(CampKey::Decide, false, &mut sounds), vec![CampAction::SetOutfit("kh2".into())]);
+        assert_eq!(sounds, vec![UiSound::Play(SE_MENU_CURSOR), UiSound::Play(SE_MENU_DECIDE)]);
+        sounds.clear();
+        assert_eq!(menu.key(CampKey::Cancel, false, &mut sounds), vec![CampAction::Close], "B leaves Boc's menu");
+        assert_eq!((menu.screen, sounds.clone()), (CampScreen::Outfits, vec![UiSound::Play(SE_MENU_CLOSE)]), "not back to a top level");
+        let mut again = CampMenu::open_outfits(list, "kh3", StatsIn::default(), &mut sounds);
+        again.show_outfits();
+        assert_eq!(again.key(CampKey::Menu, false, &mut sounds), vec![CampAction::Close], "Menu closes it too");
+    }
+
+    /// (OUTFIT-UNLOCK, the user 2026-11-05: "it costs 50,000 munny") a change asks KH3's Yes / No with the outfit and the price
+    /// (No first), Yes changes and takes the price off the shown wallet (the host charges the real one), No changes nothing;
+    /// short of munny KH3's shop refusal; the outfit worn is free (nothing asked, nothing charged).
+    #[test]
+    fn a_paid_change_asks_charges_refuses_and_the_worn_one_is_free() {
+        let list = vec![("kh3".to_string(), "KINGDOM HEARTS III".to_string()), ("kh1".to_string(), "KINGDOM HEARTS".to_string()), ("kh2".to_string(), "KINGDOM HEARTS II".to_string())];
+        let mut sounds = Vec::new();
+        let stats = StatsIn { munny: 60_000, ..StatsIn::default() };
+        let mut menu = CampMenu::open_outfits(list.clone(), "kh3", stats.clone(), &mut sounds);
+        menu.outfits.price = 50_000;
+        menu.show_outfits();
+        // the worn one: free, nothing asked
+        assert!(menu.key(CampKey::Decide, false, &mut sounds).is_empty());
+        assert!(menu.dialog.is_none(), "re-selecting the worn outfit asks nothing");
+        // another: the question, No first
+        menu.key(CampKey::Down, false, &mut sounds);
+        assert!(menu.key(CampKey::Decide, false, &mut sounds).is_empty(), "nothing before the Yes");
+        let d = menu.dialog.clone().unwrap();
+        assert_eq!((d.text_key, d.argument.as_str(), d.kind, d.cursor, d.pending), ("", "Change into KINGDOM HEARTS?\n50,000 munny", DialogKind::YesNo, 1, Pending::Outfit(1)));
+        assert!(menu.key(CampKey::Decide, false, &mut sounds).is_empty(), "No: nothing changes");
+        assert_eq!((menu.outfits.worn, menu.stats.munny), (0, 60_000));
+        // Yes: changed, charged on the shown wallet
+        menu.key(CampKey::Decide, false, &mut sounds);
+        menu.key(CampKey::Left, false, &mut sounds);
+        assert_eq!(menu.key(CampKey::Decide, false, &mut sounds), vec![CampAction::SetOutfit("kh1".into())]);
+        assert_eq!((menu.outfits.worn, menu.stats.munny), (1, 10_000));
+        // too little left: KH3's refusal, nothing changes
+        sounds.clear();
+        menu.key(CampKey::Down, false, &mut sounds);
+        assert!(menu.key(CampKey::Decide, false, &mut sounds).is_empty());
+        let d = menu.dialog.clone().unwrap();
+        assert_eq!((d.text_key, d.kind, d.pending), ("kh3_menu.shop.dialog_0020", DialogKind::Ok, Pending::None));
+        assert_eq!(sounds.last(), Some(&UiSound::Play(SE_MENU_REFUSED)));
+        assert!(menu.key(CampKey::Decide, false, &mut sounds).is_empty(), "OK closes it");
+        assert_eq!((menu.outfits.worn, menu.stats.munny, menu.dialog.is_none()), (1, 10_000, true));
+        // free (price 0): the old rule
+        let mut free = CampMenu::open_outfits(list, "kh3", stats, &mut sounds);
+        free.show_outfits();
+        free.key(CampKey::Down, false, &mut sounds);
+        assert_eq!(free.key(CampKey::Decide, false, &mut sounds), vec![CampAction::SetOutfit("kh1".into())]);
+        assert_eq!(group_thousands(1_234_567), "1,234,567");
     }
 }

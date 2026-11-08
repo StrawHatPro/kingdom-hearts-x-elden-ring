@@ -33,7 +33,6 @@ pub(crate) struct WallKick {
     pub(super) slide_latch: bool,
     pub(super) jump_latch: bool,
     /// For the combat side's attack request (slot 45 0x1414385DD): no caller yet.
-    #[allow(dead_code)]
     pub(crate) chain_latch: bool,
     stick: bool,
     stick_yaw: f32,

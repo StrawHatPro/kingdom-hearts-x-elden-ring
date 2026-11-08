@@ -175,7 +175,7 @@ mod game_side {
                 camera: kh_er_render::Camera { right: camera.right, up: camera.up, forward: camera.forward, position: camera.position, fov: camera.fov, aspect: 16.0 / 9.0, near: 0.3, far: 60.0 },
                 origin: Vec3::ZERO,
                 clock: scene.seconds,
-                body: (!friend_drawn).then(|| kh_er_render::Body { component_to_world, local: pose.local, component: pose.component }),
+                body: (!friend_drawn).then_some(kh_er_render::Body { component_to_world, local: pose.local, component: pose.component }),
                 weapon: None,
                 forms: Vec::new(),
             },

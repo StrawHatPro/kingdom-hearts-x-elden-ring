@@ -79,7 +79,6 @@ pub const BODY_REACH: f32 = 20.0;
 /// (ER83b) No weight ramp: the contact weight is his pose's, so it fades in and out WITH the clip's own blend (a ramp lagged
 /// behind a new clip: the first attack frame got a 22 cm wrist jump where the clip has 14). The drawn frame's TRAVEL LIMIT
 /// (`apply_at`) keeps the wrist from ever moving further in a frame than the retargeted wrist does.
-
 const FINGERS: [char; 5] = ['A', 'B', 'C', 'D', 'E'];
 /// The grip correction only closes a fist that is already within this of his (cm, last joint to the grip's axis).
 const GRIP_FIX_CM: f32 = 1.6;
@@ -289,6 +288,13 @@ pub struct HandIk {
     smooth: std::sync::Arc<std::sync::Mutex<Smooth>>,
 }
 
+/// One figure at the moment of a hand's body test (`HandIk::body_target`): his component pose and its surface points.
+#[derive(Clone, Copy)]
+struct Posed<'a> {
+    pose: &'a [Trs],
+    pts: &'a [(Vec3, u8)],
+}
+
 /// (per drawn frame) The weights in use and the body / Keyblade mix of each hand.
 #[derive(Clone, Copy, Debug)]
 struct Smooth {
@@ -328,8 +334,7 @@ impl HandIk {
         let mut its_pts: Option<Vec<(Vec3, u8)>> = None;
         let grip_his = Frame::of(&his[self.his.buki]);
         let grip_its = Frame::of(&its[self.its.buki]);
-        for side in 0..2 {
-            let c = &mut out[side];
+        for (side, c) in out.iter_mut().enumerate() {
             let p3 = palm(his, &self.his.arms[side]);
             let mut targets: Vec<(f32, Frame)> = Vec::new();
             // the off-hand on the Keyblade's grip
@@ -353,7 +358,7 @@ impl HandIk {
                 let w = smooth_off(B_ON, B_OFF, d);
                 if d < BODY_REACH {
                     let pts = its_pts.get_or_insert_with(|| self.its_cloud.posed(its));
-                    if let Some(t) = self.body_target(his, its, &his_pts, pts, g, &p3, c) {
+                    if let Some(t) = self.body_target(Posed { pose: his, pts: &his_pts }, Posed { pose: its, pts }, g, &p3, c) {
                         c.body_target = Some(t);
                         if w > 0.0 {
                             c.body = w;
@@ -379,8 +384,9 @@ impl HandIk {
     }
 
     /// His palm `p3` on his body part `g` mapped onto the outfit's surface.
-    #[allow(clippy::too_many_arguments)]
-    fn body_target(&self, his: &[Trs], its: &[Trs], his_pts: &[(Vec3, u8)], its_pts: &[(Vec3, u8)], g: u8, p3: &Frame, c: &mut HandContact) -> Option<Frame> {
+    fn body_target(&self, his: Posed, its: Posed, g: u8, p3: &Frame, c: &mut HandContact) -> Option<Frame> {
+        let (his_pts, its_pts) = (his.pts, its.pts);
+        let (his, its) = (his.pose, its.pose);
         let (f3, a3, b3) = self.his.parts[g as usize];
         let (f1, a1, b1) = self.its.parts[g as usize];
         let (sa, sb) = (his[a3].translation, his[b3].translation);
@@ -422,9 +428,9 @@ impl HandIk {
         let fresh = clock.is_some() && s.clock != clock;
         let stepped = s.clock.is_some();
         // the main hand first: the Keyblade (and so the off-hand's target) follows it
-        for side in 0..2 {
+        for (side, contact) in contacts.iter_mut().enumerate() {
             let found = self.contacts(his, comps)[side];
-            contacts[side] = found;
+            *contact = found;
             let share = kh3_share();
             let raw = found.weight() * share;
             if raw > 0.0 && (fresh || !stepped) {

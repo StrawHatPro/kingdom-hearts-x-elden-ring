@@ -43,6 +43,14 @@ impl Chara {
         }
     }
 
+    /// (NOCOMBAT) Who this is to the no-combat rule (kh_core::nocombat): a new character is placed here before it compiles.
+    pub const fn fighter(self) -> kh_core::nocombat::Fighter {
+        match self {
+            Chara::Donald => kh_core::nocombat::Fighter::Donald,
+            Chara::Goofy => kh_core::nocombat::Fighter::Goofy,
+        }
+    }
+
     /// Index of the row in `FriendRelationDataTable` (HUD slot = index + 1) [A].
     pub const fn party_index(self) -> usize {
         match self {

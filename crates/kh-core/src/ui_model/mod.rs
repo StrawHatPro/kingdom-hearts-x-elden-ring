@@ -16,7 +16,7 @@ pub mod popups;
 pub mod prompts;
 pub mod situation;
 
-pub use prompts::{AimHud, AimMark, ButtonPrompt, PromptKind};
+pub use prompts::{AimHud, AimMark, ButtonPrompt, PromptKind, YPrompts};
 pub use gauges::{gauge_frame, Gauges, RedLag};
 pub use situation::{FormHud, SituationEntry, SituationHud};
 pub use popups::{ExpPoint, PopupBoard, PopupDetail, TimedPopup, UiPopup};
@@ -85,7 +85,7 @@ pub(crate) fn fill(snapshot: &mut UiSnapshot, pawn: &crate::pawn::Pawn, state: &
     snapshot.prompt = if pawn.actions.risk_prompt {
         Some(ButtonPrompt { kind: PromptKind::RiskDodge, target: pawn.actions.risk_chosen.map_or(TargetId::NONE, |c| c.0) })
     } else {
-        crate::states::athletic_flow::view(state, pawn).filter(|a| a.flags & 0x01 != 0).map(|a| ButtonPrompt { kind: PromptKind::AirstepAttack, target: a.target })
+        crate::states::athletic_flow::view(state, pawn).filter(|a| a.flags & 0x01 != 0).map(|a| ButtonPrompt { kind: PromptKind::AirstepAttack, target: a.target }).or_else(|| prompts::attack_notice(pawn)) // (PROMPT-UI)
     };
     let aim = &pawn.magic.aim;
     let point = |id: u32| pawn.magic.airstep_points.iter().find(|p| p.id == id).map_or(glam::Vec3::ZERO, |p| p.position);

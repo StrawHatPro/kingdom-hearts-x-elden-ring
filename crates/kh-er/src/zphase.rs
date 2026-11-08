@@ -372,20 +372,17 @@ pub fn frame(dt: f32) {
         let mut all_dead = true;
         for fin in finals.iter() {
             let other = *fin != w.plan.entity;
-            match chr_of_entity(*fin) {
-                Some(chr) => {
-                    if other {
-                        // never drawn: its render switch off every frame; its HP written 0 (its death is the game's)
-                        chr.chr_flags1c5.set_enable_render(false);
-                        crate::zdefer::clear_no_death(chr);
-                        if chr.modules.data.hp > 0 && w.since > 0.2 {
-                            chr.modules.data.as_mut().hp = 0;
-                            erlog!("zphase: {fin}: its HP WRITTEN 0, hidden (its death is the game's)");
-                        }
+            if let Some(chr) = chr_of_entity(*fin) {
+                if other {
+                    // never drawn: its render switch off every frame; its HP written 0 (its death is the game's)
+                    chr.chr_flags1c5.set_enable_render(false);
+                    crate::zdefer::clear_no_death(chr);
+                    if chr.modules.data.hp > 0 && w.since > 0.2 {
+                        chr.modules.data.as_mut().hp = 0;
+                        erlog!("zphase: {fin}: its HP WRITTEN 0, hidden (its death is the game's)");
                     }
-                    all_dead &= chr.modules.data.hp <= 0 || chr.chr_flags1c5.death_flag();
                 }
-                None => {}
+                all_dead &= chr.modules.data.hp <= 0 || chr.chr_flags1c5.death_flag();
             }
         }
         if w.final_dead_at.is_none() && all_dead && w.since > 0.2 {

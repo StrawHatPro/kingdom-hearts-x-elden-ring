@@ -102,7 +102,7 @@ fn search(system: usize, ids: &[u32]) -> Found {
             while p < next {
                 let len = (next - p).min(buf.len());
                 if read(p, &mut buf[..len]) {
-                    for (k, c) in buf[..len].chunks_exact(8).enumerate() {
+                    for (k, c) in buf[..len].as_chunks::<8>().0.iter().enumerate() {
                         if usize::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) == system && p + k * 8 >= 0x38 {
                             let rec = p + k * 8 - 0x38;
                             if let Some(id) = fx_record(rec, system) {

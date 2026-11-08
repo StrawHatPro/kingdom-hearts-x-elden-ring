@@ -5,6 +5,12 @@
 //   node tools/sora_weapon_pack.js            build build/sora_pack/weapon/, validate it, write weapon/sheet_rows.json and
 //                                             replace the rows `weapon/...` of sheets/port/sora-assets.json in place
 //   node tools/sora_weapon_pack.js --check    build in memory and validate the pack on disk only (nothing is written)
+//   node tools/sora_weapon_pack.js --keyblades [DIR]
+//                                             (P5 WEAPON DRAW) for every model of PACK/keyblades/manifest.json (DIR:
+//                                             default build/sora_pack/keyblades): <DIR>/<model>/bonamik.json (its keychain's
+//                                             SQEX_BonamikAsset, the schema of data/bonamik.json; none without one) and
+//                                             <DIR>/<model>/sockets.json (its skeleton's sockets: vfx_top, vfx_bottom ...,
+//                                             as vfx/host.json `weapon_sockets`). Only these two files are written.
 //
 // Outputs (build/sora_pack/weapon/):
 //   kingdom_key.glb           skeletal mesh /Game/Character/wep/w_so010/mdl/w_so010_0, LOD 0, all 9 bones (kh_sk, wep, chain1..7)
@@ -105,7 +111,7 @@ const ueT = (x) => ({ translation_cm: x.t.map(r6), rotation_xyzw: x.q.map(r6) })
 function socketsOf(skeletonContent, bones) { // SkeletalMeshSocket exports of a Skeleton package
   const d = loadPkg(skeletonContent);
   const sk = d.exports.find((e) => e.class === 'Skeleton');
-  const order = propsOf(sk).Sockets.value;
+  const order = (propsOf(sk).Sockets || { value: [] }).value; // (P5) a skeleton without sockets: none
   return order.map((ei) => {
     const e = d.exports[ei - 1], p = plainProps(d, e.data.props);
     const loc = p.RelativeLocation || { x: 0, y: 0, z: 0 }, rot = p.RelativeRotation || { pitch: 0, yaw: 0, roll: 0 }, scl = p.RelativeScale || { x: 1, y: 1, z: 1 };
@@ -614,6 +620,53 @@ async function main() {
   console.log(`  failed checks: ${bad}`);
   if (bad) process.exitCode = 1;
 }
+// (P5 WEAPON DRAW) `--keyblades [DIR]`: every keyblade model's keychain (its own SQEX_BonamikAsset, through bonamikExport as
+// the Kingdom Key's and the friends' weapons') and its skeleton's sockets (the trail / effect points vfx_top, vfx_bottom ...:
+// the format of vfx/host.json `weapon_sockets`, tools/sora_vfx_host.js), beside the model in PACK/keyblades (kh-er
+// sora/kbdraw.rs reads them for the keyblade in his hand). The bones come from the packed skeleton.json (the mesh's order).
+function keybladesExtras(dir) {
+  const manifest = readJson(P(dir, 'manifest.json'));
+  const soraBonamik = (() => { const p = P(ROOT, 'audit', 'sora_port', 'bonamik.json'); return fs.existsSync(p) ? readJson(p) : null; })();
+  let bnm = 0, sock = 0;
+  const rows = [];
+  for (const [model, m] of Object.entries(manifest.models || {})) {
+    const mdir = P(dir, m.dir || model);
+    if (!fs.existsSync(P(mdir, 'skeleton.json'))) continue;
+    const sk = readJson(P(mdir, 'skeleton.json')).skeleton;
+    const bones = sk.bones.map((b) => ({ name: b.name, parent: b.parent }));
+    const meshContent = gamePathToContent(m.source_mesh || `/Game/Character/wep/${model}/mdl/${model}_0`);
+    const meshPkg = loadPkg(meshContent);
+    const imp = (cn) => meshPkg.imports.map((im, i) => ({ im, i })).filter((x) => x.im.className === cn).map((x) => importPath(meshPkg, -(x.i + 1)));
+    const bonamikPath = imp('SQEX_BonamikAsset')[0], skeletonPath = imp('Skeleton')[0];
+    const row = { model, bonamik: null, sockets: 0 };
+    if (bonamikPath) {
+      const x = bonamikExport(gamePathToContent(bonamikPath), meshContent, bones, soraBonamik);
+      x._schema.about = `${model} Bonamik data (its keychain). Source: ${bonamikPath}. Same schema as build/sora_pack/weapon/data/bonamik.json; written by tools/sora_weapon_pack.js --keyblades (P5).`;
+      const out = P(mdir, 'bonamik.json');
+      if (fs.existsSync(out)) fs.unlinkSync(out); // (a new file: never written through a hard link into another pack)
+      fs.writeFileSync(out, JSON.stringify(x, null, 1) + '\n');
+      row.bonamik = `${x.bodies.length} bodies, ${x.bones.filter((b) => b.bonamik === 'simulated_node').length} simulated`;
+      bnm++;
+    }
+    if (skeletonPath) {
+      const weapon_sockets = {};
+      for (const s of socketsOf(gamePathToContent(skeletonPath), bones)) weapon_sockets[s.name] = { bone: s.bone, local_location: s.relative_location_ue_cm, local_rotation: [s.relative_rotation_ue_deg.pitch, s.relative_rotation_ue_deg.yaw, s.relative_rotation_ue_deg.roll], component: null };
+      const out = P(mdir, 'sockets.json');
+      if (fs.existsSync(out)) fs.unlinkSync(out);
+      fs.writeFileSync(out, JSON.stringify({ format: 'kh3-keyblade-sockets/1', generator: `tools/sora_weapon_pack.js ${VERSION} --keyblades`, model, skeleton: skeletonPath, weapon_sockets }, null, 1) + '\n');
+      row.sockets = Object.keys(weapon_sockets).length;
+      sock++;
+    }
+    rows.push(row);
+  }
+  for (const r of rows) console.log(`  ${r.model}: keychain ${r.bonamik || 'none'}, ${r.sockets} socket(s)`);
+  console.log(`keyblades: ${bnm} keychain(s), ${sock} socket table(s) written into ${dir}`);
+}
+
 // (IMPL_ER59) required as a module (tools/sora_outfit_pack.js: an outfit's Bonamik asset): the export only, nothing runs
-if (require.main === module) main().catch((e) => { console.error(e); process.exit(1); });
+if (require.main === module && process.argv.includes('--keyblades')) {
+  const at = process.argv.indexOf('--keyblades');
+  const dir = process.argv[at + 1] && !process.argv[at + 1].startsWith('--') ? path.resolve(process.argv[at + 1]) : P(sp.OUT, 'keyblades');
+  try { keybladesExtras(dir); } catch (e) { console.error(e); process.exit(1); }
+} else if (require.main === module) main().catch((e) => { console.error(e); process.exit(1); });
 else module.exports = { bonamikExport };

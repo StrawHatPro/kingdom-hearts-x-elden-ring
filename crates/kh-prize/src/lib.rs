@@ -483,7 +483,7 @@ impl Prizes {
         }
         // Item rates: x (1 + 0.3 x LUCK_UP), rounded, for heal items, materials and foodstuff.
         let lucky = |id: u8, rate: u8| -> u32 {
-            let item = matches!(id, 10..=22 | 23..=82 | 83..=141);
+            let item = matches!(id, 10..=141);
             if mods.luck_up > 0 && item {
                 (rate as f32 * (1.0 + P.table_luck_up * mods.luck_up as f32)).round() as u32
             } else {

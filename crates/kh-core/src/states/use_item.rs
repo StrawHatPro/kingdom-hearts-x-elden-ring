@@ -63,7 +63,6 @@ pub(crate) fn can_use_item(state: &StateData, cx: &mut Ctx, cmd: u8, check_stock
         StateData::FireMagic(m) => m.can_use_item(s),
         // DAMAGE: +0x84 bit 0, +0x90 == 0, sub-step in {1, 2, 9}.
         StateData::Damage(d) => s.queue.flags.enable_change && matches!(d.kind.value(), 1 | 2 | 9),
-        #[allow(unreachable_patterns)]
         _ => false,
     }
 }

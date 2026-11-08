@@ -97,7 +97,7 @@ impl Default for ArcaneLayout {
 
 const CMD: &str = "cmdMenu";
 const CMD_CLASS: &str = "CmdName";
-const TARGET_CLASS: &str = "CoPushBtnText";
+pub(crate) const TARGET_CLASS: &str = "CoPushBtnText";
 /// The target art's parent: the lock-on plane (its cursors' parent).
 pub const TARGET_PLANE: &str = "planeParent.lockonMarkPlane";
 

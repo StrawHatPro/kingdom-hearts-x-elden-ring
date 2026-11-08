@@ -67,7 +67,6 @@ pub struct Report {
     pub speed_osc: f32,
     pub height_pop: f32,
     pub height_pops: u32,
-    pub frames: usize,
     pub secs: f32,
 }
 
@@ -128,7 +127,7 @@ fn at(ts: &[f64], p: &[Vec3], t: f64) -> Vec3 {
 
 /// One member's report. `step` = the fixed step (s); `skip` = seconds left out at the start (settling).
 pub fn report(drawn: &[DrawnSample], sim: &[SimSample], step: f32) -> Report {
-    let mut r = Report { frames: drawn.len(), ..Report::default() };
+    let mut r = Report::default();
     if drawn.len() < 4 || sim.len() < 8 {
         return r;
     }

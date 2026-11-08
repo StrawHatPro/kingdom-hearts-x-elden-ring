@@ -21,7 +21,22 @@
 //!    confirm answers "Starting with selected profile" (OK is its first choice: MEASURED), the title step leaves
 //!    MenuJobWait; from there plain black (the overlay's plate) until the loaded character has the picture: the game's
 //!    own loading screen is not shown.
-//! If anything does not come within its time the black goes and the game's own screen is the player's.
+//!    If anything does not come within its time the black goes and the game's own screen is the player's.
+//! 4. (SAVE-DELETE, THE USER 2026-11-07: "allow deleting save games from the load game screen from the title, same as
+//!    save point menu") Triangle / Y on a used row: the save point's Delete, unchanged (kh_ui's question "Delete the
+//!    save data in this slot?", Yes / No with the cursor on No; Yes = slots.rs `delete_slot` through
+//!    [`delete_on_title`], shared with the NG delete list); the row shows NO DATA and the screen stays up. The switch is
+//!    the save point's own (`saveload.delete`, default on). No world is loaded at the title, so no row is "the running
+//!    game's own slot".
+//!
+//! (NG delete, the user 2026-11-02: "When prompted to delete a save file, it should use the KH3 save menu to delete and
+//! not the elden ring one") NEW GAME WITH EVERY SLOT IN USE: the game makes `ProfileDeleteDialog` ("Delete selected
+//! profile and begin a new game?"; title.rs detours its factory, `saveload.title.delete`, default on). Inside that call
+//! our black goes up and KH3's Load screen runs as a DELETE LIST (kh_ui `delete_only`: A or Y asks "Delete the save data
+//! in this slot?"). Yes: KH3's Delete (slots.rs `delete_slot`: Sora's files moved aside, the slot's "in use" byte cleared
+//! in memory, its tombstone), the row shows NO DATA; then Back is pressed for the game's list and, with the title menu
+//! back (its cursor still on New Game), confirm: the game finds the free slot and its new game begins (newgame.rs takes
+//! the creation under its own cover). B: Back for the game's list, the black goes with the title menu back.
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -33,8 +48,9 @@ use crate::erlog;
 use crate::inputs;
 use crate::title;
 
-/// The black under the screen's two layers (12, 13): the cutscene pause menu's layer (not in use at the title).
-const BACKDROP_LAYER: usize = 11;
+/// The black under the screen's two layers ("NewGameText", "NewGameDialog"): the cutscene pause menu's layer (not in use
+/// at the title; by name since INT-F).
+const BACKDROP_LAYER: usize = kh_host::hud_layers::layer_index("CutscenePause");
 /// The interface element that is visible while the title's own menu is up (MEASURED in IMPL_ER11).
 const EL_TITLE_MENU: usize = 0;
 
@@ -55,6 +71,14 @@ enum Step {
     Tail,
     /// Gave up / done: nothing more until the title menu is back.
     Done,
+    /// (NG delete) KH3's delete list has the picture and the pad (the game's delete list waits under the black).
+    DelScreen,
+    /// (NG delete) A slot was deleted: the screen shows NO DATA for a moment.
+    DelShown,
+    /// (NG delete) Back was pressed for the game's list: `true` = a slot was freed (New Game is confirmed again next).
+    DelBack(bool),
+    /// (NG delete) New Game was confirmed again: the black stays until the game's creation begins.
+    DelNew,
 }
 
 struct State {
@@ -71,6 +95,9 @@ static STATE: Mutex<State> = Mutex::new(State { step: Step::Idle, started: 0, ne
 static ENABLED: AtomicBool = AtomicBool::new(false);
 /// The player's own Load Game: the list was made (the hook), the frame takes it from here.
 static MADE: AtomicBool = AtomicBool::new(false);
+/// (NG delete) The delete list's take-over is on as of the latest frame; the game's delete list was made (the hook).
+static DEL_ENABLED: AtomicBool = AtomicBool::new(false);
+static DEL_MADE: AtomicBool = AtomicBool::new(false);
 /// The next list is ours: it is to list this slot only (-1: none asked).
 static ONLY: AtomicI32 = AtomicI32::new(-1);
 /// The list we asked for was made (tick).
@@ -152,6 +179,19 @@ pub fn before_dialog() {
     }
 }
 
+/// (NG delete; title.rs, inside the game's call that makes its new game's delete list) our black goes up at once.
+pub fn before_delete_dialog() {
+    if !DEL_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    DEL_MADE.store(true, Ordering::SeqCst);
+    if let Ok(mut st) = STATE.try_lock() {
+        if matches!(st.step, Step::Idle | Step::Done | Step::DelNew) {
+            cover(&mut st, true);
+        }
+    }
+}
+
 /// (title.rs, right after the game's own code made the list) the masked bytes go back (at once, or
 /// `saveload.title.unmask` ms later when the list reads them after its construction).
 pub fn after_dialog() {
@@ -172,7 +212,7 @@ fn cover(st: &mut State, on: bool) {
         let Some(size) = hud::output_size().filter(|(w, h)| *w >= 64 && *h >= 64) else { return };
         if !st.cover || st.cover_size != size {
             let mut rgba = vec![0u8; size.0 as usize * size.1 as usize * 4];
-            for px in rgba.chunks_exact_mut(4) {
+            for px in rgba.as_chunks_mut::<4>().0 {
                 px[3] = 255;
             }
             hud::set_options(hud::HudOptions { on: true, opacity: 1.0, ..hud::HudOptions::default() });
@@ -187,12 +227,46 @@ fn cover(st: &mut State, on: bool) {
 }
 
 fn press(buttons: u16, scan: u16, attempt: u8) -> &'static str {
+    // (TITLE-AUDIO) our own press is for the game's list: the keyboard mask of our screen (`keys_ours`) is lifted first
+    crate::remap_er::set_swallow(0);
     inputs::press_for_er_try(buttons, scan, attempt).unwrap_or("NO WAY: neither a pad the game reads nor its window in front")
+}
+
+/// (TITLE-AUDIO) KH3's Load screen / delete list has the input: the game's own KEYBOARD is masked too, as its pad is
+/// (`inputs::set_mask`). Since KH3 PC's keyboard defaults (CAMP-OPTIONS: Enter Confirm, the arrows the cursor) are also the
+/// game's menu keys, the presses on our list also drove the game's list waiting under it: SEEN in TITLE-AUDIO run 4, KH3's
+/// delete list's downs moved the game's cursor (its sound f000000000 under our screen) and its Enter opened the game's own
+/// "Delete selected profile and begin a new game?" question (f000001010 in the same frame), which our Back presses cannot
+/// close: "the title menu did not come back in 6 s". The level our settings screen uses (dinput_mask.rs level 2).
+fn keys_ours() {
+    crate::remap_er::set_swallow(2);
+}
+
+/// (SV; NG delete; SAVE-DELETE) KH3's Delete confirmed on a title list (`list`: which one, for the log): THE SAVE POINT'S
+/// OWN DELETE (slots.rs `delete_slot`: Sora's `slot<N>_*` files moved aside, the tombstone, the slot's "in use" byte
+/// cleared in memory; nothing saved), carried out here outside the HUD's lock as the in-game screens do it in their next
+/// frame; the screen is told how it went (done: the rows anew, the slot shows NO DATA; not done: KH3's failure message).
+/// True: the slot was deleted.
+fn delete_on_title(slot: usize, list: &str) -> bool {
+    let done = match crate::slots::delete_slot(slot) {
+        Ok(line) => {
+            erlog!("titleload: ({list}) {line}");
+            crate::slots::apply_title_continue("a slot was deleted on the title"); // (SAVE-DELETE) the next most recent
+            true
+        }
+        Err(why) => {
+            erlog!("titleload: ({list}) THE DELETE OF SLOT {slot} WAS NOT MADE ({why}); nothing was changed");
+            false
+        }
+    };
+    crate::hud::title_delete_done(done);
+    done
 }
 
 fn give_up(st: &mut State, why: &str) {
     erlog!("titleload: {why}: the black goes, the game's own screen is the player's");
     ONLY.store(-1, Ordering::SeqCst);
+    crate::remap_er::set_swallow(0); // (TITLE-AUDIO)
     unmask("giving up");
     crate::hud::title_end();
     cover(st, false);
@@ -313,6 +387,8 @@ fn frame_steps(control: &Control) {
     PERF[1].fetch_add(waited.elapsed().as_nanos() as u64, Ordering::Relaxed);
     let on = control.on("saveload.kh") && control.on("hud.kh") && control.flag("saveload.title") != Some(false) && title::load_hooked();
     ENABLED.store(on, Ordering::Relaxed);
+    let del_on = control.on("saveload.kh") && control.on("hud.kh") && control.flag("saveload.title.delete") != Some(false) && title::delete_hooked(); // (NG delete)
+    DEL_ENABLED.store(del_on, Ordering::Relaxed);
     let t = now();
     if st.step == Step::Tail {
         // THE GAME IS LOADING: plain black (the overlay's plate: the HUD's own "loading screen" rule cannot take it off)
@@ -344,19 +420,38 @@ fn frame_steps(control: &Control) {
             st.step = Step::Idle;
         }
         MADE.store(false, Ordering::Relaxed);
+        DEL_MADE.store(false, Ordering::Relaxed);
         ONLY.store(-1, Ordering::Relaxed);
         return;
+    }
+    // (SAVE-DELETE) THE TITLE'S CONTINUE follows the user's rule while the title's menus run (slots.rs; twice a second;
+    // never once the game has begun a load: TitleStep has left MenuJobWait then)
+    crate::slots::set_title_continue(control.flag("title.continue") != Some(false));
+    {
+        static NEXT_AT: AtomicU64 = AtomicU64::new(0);
+        if t >= NEXT_AT.load(Ordering::Relaxed) && title::state() == title::ST_MENU_JOB_WAIT {
+            NEXT_AT.store(t + 500, Ordering::Relaxed);
+            crate::slots::apply_title_continue("the title's menus");
+        }
     }
     let title_menu = inputs::ui_states().is_some_and(|s| s[EL_TITLE_MENU] & 2 != 0);
     let no_cover = control.flag("saveload.title.cover") == Some(false); // (testing aid: the game's screens stay visible)
     match st.step {
         Step::Idle => {
-            if on {
+            if on || del_on {
                 let prepared = std::time::Instant::now();
                 crate::hud::title_prepare(control);
                 PERF[2].fetch_add(prepared.elapsed().as_nanos() as u64, Ordering::Relaxed);
             }
-            if MADE.swap(false, Ordering::SeqCst) && on {
+            if DEL_MADE.swap(false, Ordering::SeqCst) && del_on {
+                st.step = Step::DelScreen;
+                st.started = t;
+                st.next_at = t + 15_000;
+                if !no_cover {
+                    cover(&mut st, true);
+                }
+                erlog!("titleload: (NG delete) NEW GAME WITH EVERY SLOT IN USE: the game's delete list was made: KH3'S DELETE LIST takes its place over black (the game's list waits under it; the pad is hidden from the game)");
+            } else if MADE.swap(false, Ordering::SeqCst) && on {
                 st.step = Step::Screen;
                 st.started = t;
                 st.next_at = t + 15_000;
@@ -371,8 +466,16 @@ fn frame_steps(control: &Control) {
                 cover(&mut st, true);
             }
             inputs::set_mask(u32::MAX);
-            match crate::hud::title_load_frame(control, true) {
+            keys_ours(); // (TITLE-AUDIO)
+            match crate::hud::title_load_frame(control, true, false) {
                 crate::hud::TitleLoad::Open => st.next_at = t + 15_000,
+                // (SAVE-DELETE) KH3's Delete confirmed (Triangle / Y, "Delete the save data in this slot?", Yes): the save
+                // point's own delete; the rows come anew and the list keeps the pad (the game's list under the black is
+                // left as it is: a later load makes it again with the chosen slot alone)
+                crate::hud::TitleLoad::Delete(slot) => {
+                    delete_on_title(slot, "the Load screen");
+                    st.next_at = t + 15_000;
+                }
                 crate::hud::TitleLoad::Loading => {
                     if t >= st.next_at {
                         give_up(&mut st, "the UI pack was not read in 15 s");
@@ -413,7 +516,7 @@ fn frame_steps(control: &Control) {
         }
         Step::Back(slot) => {
             inputs::set_mask(u32::MAX);
-            let _ = crate::hud::title_load_frame(control, false);
+            let _ = crate::hud::title_load_frame(control, false, false);
             if title_menu {
                 ONLY.store(slot as i32, Ordering::SeqCst);
                 OURS_MADE_AT.store(0, Ordering::SeqCst);
@@ -431,7 +534,7 @@ fn frame_steps(control: &Control) {
         }
         Step::Open(slot) => {
             inputs::set_mask(u32::MAX);
-            let _ = crate::hud::title_load_frame(control, false);
+            let _ = crate::hud::title_load_frame(control, false, false);
             if OURS_MADE_AT.load(Ordering::SeqCst) != 0 {
                 erlog!("titleload: the game's list is made with slot {slot} alone");
                 st.step = Step::Confirm(slot);
@@ -450,7 +553,7 @@ fn frame_steps(control: &Control) {
         }
         Step::Confirm(slot) => {
             inputs::set_mask(u32::MAX);
-            let _ = crate::hud::title_load_frame(control, false);
+            let _ = crate::hud::title_load_frame(control, false, false);
             let state = title::state();
             if state != title::ST_MENU_JOB_WAIT && title::state_for() < 5000 {
                 erlog!("titleload: THE GAME BEGINS ITS LOAD OF SLOT {slot} (title step {}; {:.1} s after the choice, {} confirm(s)): the black stays until its loading screen has the picture", title::STATE_NAMES.get(state as usize).copied().unwrap_or("?"), t.saturating_sub(st.started) as f32 / 1000.0, st.tries);
@@ -473,6 +576,92 @@ fn frame_steps(control: &Control) {
             if title_menu {
                 st.step = Step::Idle;
                 MADE.store(false, Ordering::Relaxed);
+                DEL_MADE.store(false, Ordering::Relaxed);
+            }
+        }
+        Step::DelScreen => {
+            if !no_cover {
+                cover(&mut st, true);
+            }
+            inputs::set_mask(u32::MAX);
+            keys_ours(); // (TITLE-AUDIO)
+            match crate::hud::title_load_frame(control, true, true) {
+                crate::hud::TitleLoad::Open | crate::hud::TitleLoad::Load(_) => st.next_at = t + 15_000,
+                crate::hud::TitleLoad::Loading => {
+                    if t >= st.next_at {
+                        give_up(&mut st, "(NG delete) the UI pack was not read in 15 s");
+                    }
+                }
+                crate::hud::TitleLoad::Unavailable => give_up(&mut st, "(NG delete) KH3's Load screen is not available"),
+                crate::hud::TitleLoad::Cancel => {
+                    erlog!("titleload: (NG delete) B on the delete list: nothing deleted; Back is pressed for the game's list ({})", press(inputs::XI_B, inputs::SCAN_Q, 0));
+                    st.step = Step::DelBack(false);
+                    st.started = t;
+                    st.next_at = t + 900;
+                    st.tries = 1;
+                }
+                crate::hud::TitleLoad::Delete(slot) => {
+                    if delete_on_title(slot, "NG delete") {
+                        st.step = Step::DelShown;
+                        st.next_at = t + 1500;
+                    }
+                }
+            }
+        }
+        Step::DelShown => {
+            cover(&mut st, true);
+            inputs::set_mask(u32::MAX);
+            keys_ours(); // (TITLE-AUDIO)
+            let _ = crate::hud::title_load_frame(control, false, true);
+            if t >= st.next_at {
+                crate::hud::title_end();
+                erlog!("titleload: (NG delete) a slot is free: Back is pressed for the game's list ({}); New Game is confirmed again when the title menu is back", press(inputs::XI_B, inputs::SCAN_Q, 0));
+                st.step = Step::DelBack(true);
+                st.started = t;
+                st.next_at = t + 900;
+                st.tries = 1;
+            }
+        }
+        Step::DelBack(freed) => {
+            inputs::set_mask(u32::MAX);
+            if title_menu {
+                if freed {
+                    erlog!("titleload: (NG delete) the title menu is back: New Game is confirmed again ({})", press(inputs::XI_A, inputs::SCAN_E, 0));
+                    st.step = Step::DelNew;
+                    st.started = t;
+                    st.next_at = t + 1500;
+                    st.tries = 1;
+                } else {
+                    erlog!("titleload: (NG delete) the title menu is back: the black goes");
+                    crate::hud::title_end();
+                    cover(&mut st, false);
+                    st.step = Step::Idle;
+                }
+            } else if t >= st.next_at && st.tries < 4 {
+                erlog!("titleload: (NG delete) Back pressed again ({})", press(inputs::XI_B, inputs::SCAN_Q, st.tries));
+                st.tries += 1;
+                st.next_at = t + 900;
+            } else if t.saturating_sub(st.started) > 6000 {
+                give_up(&mut st, "(NG delete) the title menu did not come back in 6 s");
+            }
+        }
+        Step::DelNew => {
+            inputs::set_mask(u32::MAX);
+            let since = t.saturating_sub(st.started);
+            let creation = title::base_made_ago().is_some_and(|ago| ago <= since) || title::begin_new_game_for().is_some_and(|ago| ago <= since);
+            if creation {
+                erlog!("titleload: (NG delete) THE NEW GAME BEGINS in the freed slot ({:.1} s after New Game): the black goes (the creation has its own cover)", since as f32 / 1000.0);
+                cover(&mut st, false);
+                st.step = Step::Idle;
+            } else if DEL_MADE.swap(false, Ordering::SeqCst) {
+                // (the game still lists every slot in use: its own list is the player's rather than a loop of ours)
+                give_up(&mut st, "(NG delete) the game made its delete list again (it still finds no free slot)");
+            } else if t >= st.next_at && st.tries < 3 && title_menu {
+                erlog!("titleload: (NG delete) New Game confirmed again ({})", press(inputs::XI_A, inputs::SCAN_E, st.tries));
+                st.tries += 1;
+                st.next_at = t + 1500;
+            } else if since > 12_000 {
+                give_up(&mut st, "(NG delete) the new game did not begin in 12 s");
             }
         }
     }

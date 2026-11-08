@@ -368,6 +368,9 @@ pub struct ErFinish {
     /// boss-bar body, dead by the game's word and still dead `finish.confirm_frames` later): (chr model id, NpcParam
     /// id, max HP). Taken by sora.rs each frame.
     pub boss_deaths: Vec<(i32, i32, i32)>,
+    /// (AUDIT-A WORLDTIME) The forms' own global game speed (worldtime.rs: Counter Shield's SetGlobalGameSpeed hit-stops),
+    /// set by sora.rs every frame before `post`: Elden Ring's game speed follows it too (this is the one writer of it).
+    pub form_rate: f32,
 }
 
 impl ErFinish {
@@ -394,6 +397,7 @@ impl ErFinish {
             told_off: false,
             expect: None,
             boss_deaths: Vec::new(),
+            form_rate: 1.0, // (AUDIT-A WORLDTIME)
         }
     }
 
@@ -404,11 +408,6 @@ impl ErFinish {
     /// (IMPL_ER31) A sequence runs or waits for its confirmation.
     pub fn busy(&self) -> bool {
         self.sequence.active() || self.pending.is_some()
-    }
-
-    /// The world's rate of the latest step (1.0 outside a sequence).
-    pub fn rate(&self) -> f32 {
-        self.frame.rate
     }
 
     pub fn locked(&self) -> bool {
@@ -426,7 +425,8 @@ impl ErFinish {
     /// The time the fixed-step accumulator is fed with: the task's delta, or the wall clock's while a sequence
     /// runs (the task delta may be scaled by the game speed we wrote).
     pub fn accumulator_dt(&self, task_dt: f32) -> f32 {
-        if self.active() {
+        // (AUDIT-A WORLDTIME) ... or while we hold Elden Ring's speed for any reason (a form's hit-stop too)
+        if self.active() || SPEED_FIELD.load(Ordering::SeqCst) != 0 {
             self.wall_dt
         } else {
             task_dt
@@ -614,8 +614,12 @@ impl ErFinish {
 
     /// ONCE A FRAME, after the steps: Elden Ring's game speed, the white plate.
     pub fn post(&mut self) {
-        if self.active() && self.rules.speed {
-            let rate = self.frame.rate.max(self.rules.er_rate_min).min(1.0);
+        // (AUDIT-A WORLDTIME) the forms' hit-stops share this route: the lowest of the two (KH3's channels), `finish.speed = 0`
+        // keeps Elden Ring's speed untouched for both
+        let form = if self.rules.speed { self.form_rate.clamp(0.0, 1.0) } else { 1.0 };
+        if (self.active() && self.rules.speed) || form < 1.0 {
+            let script = if self.active() && self.rules.speed { self.frame.rate } else { 1.0 };
+            let rate = kh_host::worldtime::combine(script, form).max(self.rules.er_rate_min).min(1.0);
             if rate < 1.0 || SPEED_FIELD.load(Ordering::SeqCst) != 0 {
                 speed_write(rate);
             }
@@ -692,7 +696,7 @@ mod tests {
         seen.sort();
         assert_eq!(seen, keys);
         // ON by default (the user, 2026-10-13: "the boss finish must be on by default"); the last-enemy option stays off.
-        assert!(FinishRules::DEFAULT.on && !FinishRules::DEFAULT.last_enemy);
+        const { assert!(FinishRules::DEFAULT.on && !FinishRules::DEFAULT.last_enemy) };
         // a key of kh-er.ini over the sheet; an out-of-range value is refused
         let keyed = FinishRules::DEFAULT.with_keys(&|k| match k { "finish.kh" => Some(1.0), "finish.rate" => Some(0.2), "finish.cuts" => Some(9.0), _ => None });
         assert!(keyed.on && keyed.rate == 0.2 && keyed.cuts == 3);

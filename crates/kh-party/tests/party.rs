@@ -52,6 +52,13 @@ impl Targets for Dummies {
     fn defense(&self, _id: TargetId) -> Option<TargetDefense> {
         Some(TargetDefense { defense: self.defense, max_hp: 10_000, hp_percent: 100.0, enemy_kind: true, damage_min: 0, damage_max: 0, resist: [0; 8], bio_type: 0 })
     }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
+    }
 }
 
 #[derive(Default)]
@@ -82,6 +89,7 @@ impl Rig {
         let config = if level99 { PartyConfig::test_level99() } else { PartyConfig::default() };
         let mut party = Party::new(config);
         party.don_prog.kh3_ai = true; // (DON-PROG) these tests are KH3's AI Donald (his five spells, his melee); the overhaul replaces them in play
+        party.gof.kh3_ai = true; // (GF-AI) and KH3's AI Goofy (his Push, Sweep, Jump, Tornado, Turbo, Discus): the overhaul replaces them in play
         party.spawn(Chara::Donald, Vec3::new(0.0, 180.0, 0.0), 0.0);
         party.spawn(Chara::Goofy, Vec3::new(0.0, -180.0, 0.0), 0.0);
         // (DON-PROG) KH3's AI Donald machinery as these tests know it: his five KH3 spell abilities (gone in play since the
@@ -176,7 +184,7 @@ fn donald_cure_heals_sora_and_spends_all_mp() {
     assert_eq!(rig.audio.0, vec![(d.0, 1)], "Cure on Sora: target voice number 1 (0x1411C8ED0)");
     let s = rig.party.status(d).unwrap();
     assert_eq!(s.mp, 0);
-    assert_eq!(s.mp_charge_left > 0.0, true);
+    assert!(s.mp_charge_left > 0.0);
     // a second spell is refused while MP charges
     let t2 = rig.party.command(d, MemberCommand::Action { def: ActionDef::DonaldFire, target: TargetRef::Sora });
     assert_eq!(rig.run_until_done(d, t2, 1.0), CommandStatus::Failed);
@@ -202,11 +210,11 @@ fn melee_and_jump_attacks_hit() {
 fn jump_attack_follows_jumpbase() {
     // the solver: same height, apex = m_JumpHeight, no fall: vz = sqrt(2 g h), t = vz / g
     let g = -980.0 * 1.5;
-    let v = kh_party::actions::jump_velocity(Vec3::ZERO, Vec3::new(300.0, 0.0, 0.0), 0.0, 200.0, g, 1.0, 1.0, 0.0);
+    let v = kh_party::actions::jump_velocity(Vec3::ZERO, Vec3::new(300.0, 0.0, 0.0), 0.0, 200.0, kh_party::actions::JumpGravity { g, s_up: 1.0, s_dur: 1.0, t_dur: 0.0 });
     assert!((v.z - (2.0f32 * 1470.0 * 200.0).sqrt()).abs() < 1e-3, "{v}");
     assert!((v.x - 300.0 / (v.z / 1470.0)).abs() < 1e-2, "{v}");
     // target 100 below: fall 100 adds sqrt(2 x 100 / g)
-    let v2 = kh_party::actions::jump_velocity(Vec3::ZERO, Vec3::new(300.0, 0.0, -100.0), 0.0, 200.0, g, 1.0, 1.0, 0.0);
+    let v2 = kh_party::actions::jump_velocity(Vec3::ZERO, Vec3::new(300.0, 0.0, -100.0), 0.0, 200.0, kh_party::actions::JumpGravity { g, s_up: 1.0, s_dur: 1.0, t_dur: 0.0 });
     let t = v2.z / 1470.0 + (200.0f32 / 1470.0).sqrt();
     assert!((v2.x - 300.0 / t).abs() < 1e-2, "{v2}");
     for chara in [Chara::Donald, Chara::Goofy] {
@@ -365,16 +373,19 @@ fn tornado_timeline_follows_the_decompiled_substeps() {
     assert_eq!(rig.party.view(g).unwrap().anim.clip, "M_1323");
 }
 
+/// (HUD-REVIVE, THE USER 2026-11-07: "They revive in combat after 60 seconds as a baseline") in party combat every friend's KO
+/// lasts row revive.in_combat_time (60 s; KH3's own 40 / 35 s are kept on record: `kh3_revive_time`), KH3's revive HP.
 #[test]
-fn damage_max_and_ko_revives_after_40_and_35_s() {
+fn damage_max_and_ko_revives_after_60_s_in_combat() {
     let mut rig = Rig::new(false, None);
     rig.step(2);
+    rig.party.set_in_battle(true);
     let d = rig.party.find(Chara::Donald).unwrap();
     let g = rig.party.find(Chara::Goofy).unwrap();
     let def = rig.party.defender(d).unwrap();
     let r = compute_damage(&Attacker::enemy(500), &def, &DamageAttack::physical(10.0), &DamageContext::new(GameLevel::Standard, 1));
     assert_eq!(r.base, 80.0); // m_DamageMax 24 limits the base (floor((24+S-D)/2)), friends at most 80 (0x1406326B5)
-    for (id, revive) in [(d, 40.0), (g, 35.0)] {
+    for (id, revive) in [(d, 60.0), (g, 60.0)] {
         let mut hit = HitRecord::empty(TargetId(99));
         hit.damage = 9999.0;
         hit.damage_kind = kh_core::enums::ETresDamageKind::Small;
@@ -385,11 +396,12 @@ fn damage_max_and_ko_revives_after_40_and_35_s() {
     }
     // invincible while KO'd (Die Begin vt+0x2068)
     assert!(!rig.party.receive_hit(d, &HitRecord::empty(TargetId(99))).accepted);
-    rig.step((35.5 / DT) as usize);
-    assert!(rig.party.status(g).unwrap().hp > 0, "Goofy back at 35 s");
-    assert_eq!(rig.party.status(d).unwrap().hp, 0, "Donald still down");
-    rig.step((5.0 / DT) as usize);
-    assert_eq!(rig.party.status(d).unwrap().hp, 35, "revive HP = 25 % of 140");
+    rig.step((59.0 / DT) as usize);
+    assert_eq!(rig.party.status(g).unwrap().hp, 0, "Goofy still down at 59 s (KH3 alone: 35 s)");
+    assert_eq!(rig.party.status(d).unwrap().hp, 0, "Donald still down at 59 s (KH3 alone: 40 s)");
+    rig.step((1.5 / DT) as usize);
+    assert!(rig.party.status(g).unwrap().hp > 0, "Goofy back at 60 s");
+    assert_eq!(rig.party.status(d).unwrap().hp, 22, "revive HP = 25 % of his 89");
     rig.step((3.0 / DT) as usize);
     assert_ne!(rig.party.view(d).unwrap().state, NpcStateId::Die);
     assert!(rig.events.iter().filter(|e| matches!(e, PartyEventKind::Revived)).count() == 2);
@@ -401,6 +413,7 @@ fn damage_max_and_ko_revives_after_40_and_35_s() {
 fn c2_functions_and_cure_on_a_knocked_out_friend() {
     let mut rig = Rig::new(true, None);
     rig.step(2);
+    rig.party.set_in_battle(true); // (HUD-REVIVE) in combat: no revive of the combat's end before the Cure
     let d = rig.party.find(Chara::Donald).unwrap();
     let g = rig.party.find(Chara::Goofy).unwrap();
     let magic = rig.party.status(d).unwrap().magic();
@@ -435,6 +448,7 @@ fn c2_functions_and_cure_on_a_knocked_out_friend() {
 fn hyper_healing_halves_the_ko_time() {
     let mut rig = Rig::new(true, None);
     rig.step(2);
+    rig.party.set_in_battle(true);
     let d = rig.party.find(Chara::Donald).unwrap();
     for m in [d, rig.party.find(Chara::Goofy).unwrap()] {
         rig.party.status_mut(m).unwrap().abilities.set(kh_core::enums::ETresAbilityKind::HyperHealing, 1, 1);
@@ -442,10 +456,42 @@ fn hyper_healing_halves_the_ko_time() {
     let mut hit = HitRecord::empty(TargetId(99));
     hit.damage = 9999.0;
     rig.party.receive_hit(d, &hit);
-    assert!((rig.party.view(d).unwrap().revive_left - 20.0).abs() < 0.01);
+    assert!((rig.party.view(d).unwrap().revive_left - 30.0).abs() < 0.01, "(HUD-REVIVE) 60 s / 2");
     let g = rig.party.find(Chara::Goofy).unwrap();
     rig.party.receive_hit(g, &hit);
-    assert!((rig.party.view(g).unwrap().revive_left - 17.5).abs() < 0.01);
+    assert!((rig.party.view(g).unwrap().revive_left - 30.0).abs() < 0.01);
+}
+
+/// (HUD-REVIVE, THE USER 2026-11-07: "allies revive when combat ends") OUT OF THE PARTY'S COMBAT a downed friend gets up at once
+/// (after his KO clip) with KH3's revive amount; KO'd in combat he stays down while it lasts and gets up when it ends.
+#[test]
+fn a_ko_ends_with_the_party_combat() {
+    let mut rig = Rig::new(false, None);
+    rig.step(2);
+    let d = rig.party.find(Chara::Donald).unwrap();
+    let g = rig.party.find(Chara::Goofy).unwrap();
+    let mut hit = HitRecord::empty(TargetId(99));
+    hit.damage = 9999.0;
+    hit.damage_kind = kh_core::enums::ETresDamageKind::Small;
+    // in combat: down for 10 s and more
+    rig.party.set_in_battle(true);
+    assert!(rig.party.receive_hit(g, &hit).killed);
+    rig.step((10.0 / DT) as usize);
+    assert_eq!(rig.party.view(g).unwrap().state, NpcStateId::Die);
+    assert_eq!(rig.party.status(g).unwrap().hp, 0);
+    // the combat ends: up with KH3's amount, then out of the Die state (the get-up), revived once
+    rig.party.set_in_battle(false);
+    rig.step(2);
+    let want = rig.party.status(g).unwrap().revive_hp();
+    assert_eq!(rig.party.status(g).unwrap().hp, want, "KH3's revive amount at the combat's end");
+    rig.step((3.0 / DT) as usize);
+    assert_ne!(rig.party.view(g).unwrap().state, NpcStateId::Die, "Goofy stood up when the combat ended");
+    assert!(!rig.party.view(g).unwrap().ko);
+    // out of combat already: a KO is over after his KO clip
+    assert!(rig.party.receive_hit(d, &hit).killed);
+    rig.step((4.0 / DT) as usize);
+    assert!(rig.party.status(d).unwrap().hp > 0 && rig.party.view(d).unwrap().state != NpcStateId::Die, "Donald up again out of combat");
+    assert_eq!(rig.events.iter().filter(|e| matches!(e, PartyEventKind::Revived)).count(), 2);
 }
 
 #[test]
@@ -647,7 +693,7 @@ fn spell_shapes_follow_the_blueprints() {
     fire.shapes(&mut v);
     assert_eq!((v.len(), v[0].radius), (1, 20.0));
     assert_eq!((fire.speed, fire.max_speed, fire.turn), (1000.0, 1500.0, 500.0));
-    let mut th = Projectile::spawn_at(ProjectileKind::Thunder, kh_party::MemberId(0), Chara::Donald, Vec3::ZERO, 0.0, TargetId::NONE, Some(Vec3::new(500.0, 0.0, 90.0)), Some(Vec3::new(500.0, 0.0, 0.0)));
+    let mut th = Projectile::spawn_at(ProjectileKind::Thunder, kh_party::MemberId(0), Chara::Donald, Vec3::ZERO, 0.0, kh_party::projectile::ProjectileAim { target: TargetId::NONE, point: Some(Vec3::new(500.0, 0.0, 90.0)), ground: Some(Vec3::new(500.0, 0.0, 0.0)) });
     assert_eq!(th.position, Vec3::new(500.0, 0.0, 0.0), "m_bIsDirectPos: at the target's feet");
     th.shapes(&mut v);
     assert_eq!(v.len(), 2);
@@ -1138,6 +1184,7 @@ fn an_item_on_a_knocked_out_friend_follows_the_item_path() {
     // in Die (the friends' pawn type 10 lets it through); the KO'd friend gets up.
     let mut rig = Rig::new(true, None);
     rig.step(2);
+    rig.party.set_in_battle(true); // (HUD-REVIVE) in combat: the item, not the combat's end, gets him up
     let d = rig.party.find(Chara::Donald).unwrap();
     let g = rig.party.find(Chara::Goofy).unwrap();
     let mut hit = HitRecord::empty(TargetId(99));
@@ -1486,7 +1533,7 @@ impl kh_core::World for Lift {
         self.inner.surface_flags(component)
     }
     fn component_motion(&self, component: u32) -> Option<kh_core::ComponentMotion> {
-        (component == 1).then(|| kh_core::ComponentMotion { location: self.offset, rotation: glam::Quat::IDENTITY, scale: Vec3::ONE, movable: true })
+        (component == 1).then_some(kh_core::ComponentMotion { location: self.offset, rotation: glam::Quat::IDENTITY, scale: Vec3::ONE, movable: true })
     }
 }
 type HitRecordWorld = kh_core::Hit;

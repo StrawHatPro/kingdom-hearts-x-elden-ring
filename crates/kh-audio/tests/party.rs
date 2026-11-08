@@ -10,7 +10,7 @@ use std::sync::{Arc, OnceLock};
 use glam::Vec3;
 use kh_audio::engine::PartyVoiceMode;
 use kh_audio::routes::{Context, Resolved};
-use kh_audio::{BoneFrame, Engine, Language, Listener, Pack, Routes, SeamPlay};
+use kh_audio::{AutoSeTick, BoneFrame, Engine, Language, Listener, Pack, Routes, SeamPlay};
 
 const DT: f32 = 1.0 / 60.0;
 
@@ -149,7 +149,7 @@ fn a_members_footsteps_use_its_own_table_per_surface() {
     let mut played = Vec::new();
     for (k, (anim, time, frame)) in rows.iter().enumerate() {
         let surface = if k < rows.len() / 2 { 10 } else { 13 };
-        let events = engine.party_auto_se(0, DT, frame, surface, Some((anim, *time)), &listener, &|_| None);
+        let events = engine.party_auto_se(0, AutoSeTick { dt: DT, frame, surface, anim: Some((anim, *time)), listener: &listener, bone: &|_| None });
         played.extend(events.iter().map(|e| (surface, e.motion)));
         engine.update(DT, &listener, &|_| None);
     }

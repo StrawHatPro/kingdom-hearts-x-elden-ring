@@ -532,7 +532,7 @@ mod tests {
             let mut log = Vec::new();
             for _ in 0..400 {
                 host.step_party(1.0 / 60.0, &world, &mut sora, &party, party[0].getter.point, &mut Nobody);
-                log.extend(host.log.drain(..));
+                log.append(&mut host.log);
                 if host.prizes.is_empty() {
                     break;
                 }
@@ -583,7 +583,7 @@ mod tests {
         let mut log = Vec::new();
         for _ in 0..400 {
             host.step_party(1.0 / 60.0, &world, &mut sora, &party, party[0].getter.point, &mut applied);
-            log.extend(host.log.drain(..));
+            log.append(&mut host.log);
             if host.prizes.is_empty() {
                 break;
             }

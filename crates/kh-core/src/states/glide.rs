@@ -48,10 +48,10 @@ fn can_glide(state: &StateData, s: &Pawn) -> bool {
         return false;
     }
     match state {
-        // JUMP: Jump+0xF8 == 0 && sub in {4, 6, 8} (the falling sub-steps; never while rising).
-        StateData::Jump(j) => !j.flow && matches!(j.sub, 4 | 6 | 8),
+        // JUMP: Jump+0xF8 == 0 && sub in {4, 6, 8} (the falling sub-steps; never while rising), (weapons P2) or
+        // pawn+0x1460 bit 0: resumed after a Keyblade switch (actions spec 7: any sub-step then).
+        StateData::Jump(j) => !j.flow && (matches!(j.sub, 4 | 6 | 8) || s.status.glide_resume),
         StateData::Glide(_) => true,
-        #[allow(unreachable_patterns)]
         _ => false,
     }
 }
@@ -98,9 +98,12 @@ impl PlayerState for Glide {
         self.sub = 1;
         // +0x8C = actor yaw (0x141384E6E): the request's yaw of the entry frame is overwritten.
         self.yaw = s.yaw;
-        // Play("GlideLoop", blend-in -1, mode 3); blend X = 0.
-        s.anim.play_with(AnimId::GlideLoop, PlayArgs::mode(3, -1.0));
-        s.anim.set_axis(0.0);
+        // Play("GlideLoop", blend-in -1, mode 3); blend X = 0. (weapons P2) Resumed after a Keyblade switch (pawn+0x1460
+        // bit 0, Begin 0x141384D20): only when GlideLoop is not already playing; the bit is cleared.
+        if !(super::weapon_change::take_glide_resume(s) && s.anim.name == AnimId::GlideLoop) {
+            s.anim.play_with(AnimId::GlideLoop, PlayArgs::mode(3, -1.0));
+            s.anim.set_axis(0.0);
+        }
         // The air-slide (0.6 s) and air-guard (0.3333 s) cool-downs start (0x141385176 / 0x14138518B).
         s.combat.air_slide_cooldown = A.airslide_cooldown;
         s.combat.air_guard_cooldown = A.guard_air_cooldown;

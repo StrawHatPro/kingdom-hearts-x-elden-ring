@@ -44,7 +44,8 @@ fn face_the_lip_track_of_donalds_lines_meets_kh3s_authored_lips() {
     // n_ex001 1301 M_1301: MOUTH_OPEN_03 0.472, close 0.640, MOUTH_OPEN_01 0.764, close 0.888 (voice 0.436)
     // n_ex001 1321 MagicFire: MOUTH_OPEN_05 0.064, close 0.207, MOUTH_OPEN_03 0.492, close 0.788, MOUTH_OPEN_01 1.020,
     // close 1.175 (voice 0.112)
-    let cases: [(&str, &str, &[(f32, Option<u8>)]); 2] = [
+    type Case = (&'static str, &'static str, &'static [(f32, Option<u8>)]);
+    let cases: [Case; 2] = [
         ("M_1301", "/Game/Sound/VOICE/Localization/ja/battle/NPC/DG/bt2160090do0", &[(0.036, Some(2)), (0.204, None), (0.328, Some(0)), (0.452, None)]),
         ("MagicFire", "/Game/Sound/VOICE/Localization/ja/battle/NPC/DG/bt2160120do0", &[(-0.048, Some(4)), (0.095, None), (0.38, Some(2)), (0.676, None), (0.908, Some(0)), (1.063, None)]),
     ];

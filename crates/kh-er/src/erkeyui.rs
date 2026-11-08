@@ -234,7 +234,7 @@ pub fn frame(control: &Control) {
     // THE FALLBACK (the detour is not there): the rows, written once the world is there (the SDK panics on params not
     // loaded), again every 10 s
     let fallback = r.items && ITEM_ORIGINAL.load(Ordering::Relaxed) == 0;
-    if fallback && crate::game::player_age() > 0 && s.checked.map_or(true, |t| t.elapsed().as_secs_f32() >= 10.0) {
+    if fallback && crate::game::player_age() > 0 && s.checked.is_none_or(|t| t.elapsed().as_secs_f32() >= 10.0) {
         s.checked = Some(Instant::now());
         let first = !s.hidden;
         let written = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| write_hidden(&mut s.rows))).unwrap_or(0);
@@ -256,7 +256,8 @@ pub fn frame(control: &Control) {
 /// rows not seen before are kept).
 fn write_hidden(rows: &mut Vec<(u32, bool, u8)>) -> usize {
     // SAFETY: the singleton lives as long as the game; game thread.
-    let Ok(repo) = (unsafe { SoloParamRepository::instance_mut() }) else { return 0 };
+    // (FINAL-FIX, the shutdown panic) never into a holder the game has emptied (its exit) or not filled yet
+    let Some(repo) = (unsafe { SoloParamRepository::instance_mut() }).ok().filter(|r| crate::game::param_loaded::<EquipParamGoods>(r)) else { return 0 };
     let mut written = 0;
     for (id, row) in repo.rows_mut::<EquipParamGoods>() {
         let Some((log, dialog)) = hidden_bits(row.goods_type()) else { continue };
@@ -275,7 +276,7 @@ fn write_hidden(rows: &mut Vec<(u32, bool, u8)>) -> usize {
 
 fn restore(rows: &[(u32, bool, u8)]) {
     // SAFETY: as above.
-    let Ok(repo) = (unsafe { SoloParamRepository::instance_mut() }) else { return };
+    let Some(repo) = (unsafe { SoloParamRepository::instance_mut() }).ok().filter(|r| crate::game::param_loaded::<EquipParamGoods>(r)) else { return }; // (FINAL-FIX)
     for (id, log, dialog) in rows {
         if let Some(row) = repo.get_mut::<EquipParamGoods>(*id) {
             row.set_show_log_cond_type(*log);
@@ -322,9 +323,9 @@ mod tests {
         assert_eq!(rules(None, None, None, None), Rules { banners: true, items: true });
         assert_eq!(rules(Some(true), None, None, None), Rules { banners: true, items: true });
         assert_eq!(rules(Some(false), None, None, None), Rules { banners: true, items: false }, "KH3's popup off: the game's item UI back");
-        assert_eq!(rules(None, Some(true), None, None).items, false, "hud.er_item_ui = 1");
-        assert_eq!(rules(None, None, Some(true), None).items, false, "the older hud.er_keyitem_ui = 1");
-        assert_eq!(rules(None, None, None, Some(true)).banners, false, "hud.er_banners = 1");
+        assert!(!rules(None, Some(true), None, None).items, "hud.er_item_ui = 1");
+        assert!(!rules(None, None, Some(true), None).items, "the older hud.er_keyitem_ui = 1");
+        assert!(!rules(None, None, None, Some(true)).banners, "hud.er_banners = 1");
         assert_eq!(rules(None, Some(false), Some(false), Some(false)), Rules { banners: true, items: true });
     }
 

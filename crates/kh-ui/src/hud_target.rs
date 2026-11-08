@@ -50,6 +50,45 @@ pub const SCOPE_FULL_CHARGE: i32 = 3;
 pub const SCOPE_CHARGING: i32 = 4;
 
 const PLANE: &str = "planeParent.lockonMarkPlane";
+/// (PROMPT-UI) The button notice ("ATTACK!" / "DODGE!" / "DIVE" / "FIRE!"): root child `buttonNoticeSet` (authored
+/// hidden) holding `buttonNotice` at (960, 782).
+const NOTICE_SET: &str = "buttonNoticeSet";
+const NOTICE_CLIP: &str = "buttonNoticeSet.buttonNotice";
+
+/// (PROMPT-UI) THE BUTTON NOTICE'S KEYS AND LABELS, as the controller passes them to `0x1416793E0(targetHud, mode, key,
+/// label, king)` [decompiled C]: the wrappers 0x14158B120 / 0x14158C180 (key 0xB, label 1), 0x14158B100 (0xC, 2),
+/// 0x14158B260 (0xC, 3), 0x14158C3C0 (7, 4). `label` -> string `kh3_system.cockpit.cockpit_000N`; `key` -> icon id by
+/// 0x1415B22D0 (0xB -> 0x24, 0xC -> 0x25, 7 -> 0x1A) -> markup by 0x141597760 (table 0x1486E0640 + id x 0x10: 0x24
+/// `<icon(Decide2)>`, 0x25 `<icon(Cancel2)>`, 0x1A `<icon(R22)>`, see [`notice_icon`]).
+pub const NOTICE_KEY_DECIDE: i32 = 0xB;
+pub const NOTICE_KEY_CANCEL: i32 = 0xC;
+pub const NOTICE_KEY_FIRE: i32 = 7;
+pub const NOTICE_LABEL_ATTACK: i32 = 1;
+pub const NOTICE_LABEL_DIVE: i32 = 2;
+pub const NOTICE_LABEL_DODGE: i32 = 3;
+pub const NOTICE_LABEL_FIRE: i32 = 4;
+
+/// (PROMPT-UI) The string key of a notice label (0x1416793E0's switch on its fourth argument).
+pub fn notice_label_key(label: i32) -> Option<&'static str> {
+    match label {
+        NOTICE_LABEL_ATTACK => Some("kh3_system.cockpit.cockpit_0003"),
+        NOTICE_LABEL_DIVE => Some("kh3_system.cockpit.cockpit_0004"),
+        NOTICE_LABEL_DODGE => Some("kh3_system.cockpit.cockpit_0006"),
+        NOTICE_LABEL_FIRE => Some("kh3_system.cockpit.cockpit_0007"),
+        _ => None,
+    }
+}
+
+/// (PROMPT-UI) The pad icon markup of a notice key. KH3's `Decide2` / `Cancel2` are aliases the game resolves by
+/// GamePadDecideType (the pack's `data/icon_text.json` note: western layout Decide = Cross, Cancel = Circle); the pack
+/// holds their resolved "2" icons `Cross2` / `Circle2` (A / B in the Xbox set).
+pub fn notice_icon(key: i32) -> &'static str {
+    match key {
+        NOTICE_KEY_CANCEL => "<icon(Circle2)>",
+        NOTICE_KEY_FIRE => "<icon(R22)>",
+        _ => "<icon(Cross2)>",
+    }
+}
 const EXP_PLANE: &str = "planeParent.poExpPntPlane";
 
 /// (IMPL_ER23B) THE UNIT AFTER AN EXP POPUP'S NUMBER. The movie's field (`expPntTxt.textField`, authoring text "t") is
@@ -209,6 +248,19 @@ impl HudTarget {
     /// `closeButtonNotice()`: empty in the movie.
     pub fn close_button_notice(&mut self) {}
 
+    /// (PROMPT-UI) The notice clip `buttonNoticeSet.buttonNotice` (McButtonNotice_256, placed at (960, 782) of the stage)
+    /// on one of its labels; its parent is made visible (the root authors `buttonNoticeSet` hidden).
+    pub fn play_button_notice(&mut self, label: &str) {
+        self.log(format!("buttonNotice.gotoAndPlay({label:?})"));
+        self.movie.set_visible(NOTICE_SET, true);
+        self.movie.goto_and_play(NOTICE_CLIP, label);
+    }
+
+    /// (PROMPT-UI) The notice clip's current label (tests, pictures).
+    pub fn button_notice_label(&self) -> Option<String> {
+        self.movie.current_label(NOTICE_CLIP).map(str::to_string)
+    }
+
     /// `updateFlowScope(a1)`: the ring gauge's frame.
     pub fn update_flow_scope(&mut self, a1: i32) {
         if let Some(scope) = self.current_flow_scope {
@@ -254,12 +306,11 @@ impl HudTarget {
                     self.is_full_charge = true;
                 }
             }
-            SCOPE_CHARGING => {
-                if self.is_open_shooter_scope {
+            SCOPE_CHARGING
+                if self.is_open_shooter_scope => {
                     self.movie.goto_and_play(l3, "change_nomal");
                     self.is_full_charge = false;
                 }
-            }
             _ => {}
         }
     }
@@ -561,6 +612,26 @@ pub struct TargetDriver {
     /// (integration pass) The push-button prompt on screen: the cursor key of the thing it is
     /// about (its clip is put at that thing's screen position), if any.
     push_mark: Option<Option<u64>>,
+    /// (PROMPT-UI) The button notice: `+0x2E0` (shown) with `+0x2E4` (its key), and the King variant it was opened with.
+    notice: Option<(i32, bool)>,
+}
+
+/// (PROMPT-UI) The modes of the HUD's notice function `0x1416793E0` [decompiled C]. The controller wrappers 0x14158C180 /
+/// 0x14158C260 / 0x14158B120 map their own mode m to it as 0 -> 0, 1 -> 1, 2 -> 3, 3 -> 2, 4 -> 4, 5 -> 5 ([`notice_mode_of`]).
+pub const NOTICE_SHOW: i32 = 0;
+pub const NOTICE_HIDE: i32 = 1;
+pub const NOTICE_USED: i32 = 2;
+pub const NOTICE_KEEP: i32 = 3;
+pub const NOTICE_SHOW2: i32 = 4;
+pub const NOTICE_USED3: i32 = 5;
+
+/// (PROMPT-UI) A controller wrapper's mode (0x14158C180 / 0x14158C260: 2 and 3 swap) as the HUD function's.
+pub fn notice_mode_of(wrapper: i32) -> i32 {
+    match wrapper {
+        2 => NOTICE_KEEP,
+        3 => NOTICE_USED,
+        m => m,
+    }
 }
 
 /// LOCAL: where the push-button prompt sits when the thing it is about is off screen or unknown
@@ -682,6 +753,63 @@ impl TargetDriver {
 
     pub fn push_mark_shown(&self) -> bool {
         self.push_mark.is_some()
+    }
+
+    /// (PROMPT-UI) THE BUTTON NOTICE, `0x1416793E0(targetHud, mode, key, label, king)` [decompiled C], the one HUD function
+    /// behind every controller prompt ("ATTACK!" on Decide, "DODGE!" / "DIVE" on Cancel, "FIRE!"): `text` is the label's
+    /// string (`notice_label_key`), the icon comes from `key` (`notice_icon`). The clip is `buttonNoticeSet.buttonNotice`
+    /// at its authored place (960, 782): the native code never moves it.
+    /// - 0 / 4 (show): ignored while one is shown (+0x2E0); else `openButtonNotice(icon, text)` and the clip plays `in`
+    ///   (4: `in2`; King: `inKing`).
+    /// - 1 (hide): `out` (King `outKing`); 2 (used): `select` (King `selectKing`); 5: `select3`. Each clears the shown flag.
+    /// - 3: `select2` (King `loopKing`) while it stays shown.
+    ///
+    /// Each label's frames and its own scripts are the movie's (in 9..18, loop 19..37, out 39..45, select 47..75,
+    /// select2 77..105, in2 107..117, select3 119..147); no SE is played by the function or the clip. The +0x2E8 key set
+    /// (keys whose notice is kept invisible, 0x26 clears it) is never filled by Sora's prompts: not ported.
+    pub fn button_notice(&mut self, hud: &mut HudTarget, mode: i32, key: i32, text: &str, king: bool) -> bool {
+        let label = match mode {
+            NOTICE_SHOW | NOTICE_SHOW2 => {
+                if self.notice.is_some() {
+                    return false;
+                }
+                self.notice = Some((key, king));
+                hud.open_button_notice(notice_icon(key), text);
+                if mode == NOTICE_SHOW2 {
+                    "in2"
+                } else if king {
+                    "inKing"
+                } else {
+                    "in"
+                }
+            }
+            NOTICE_HIDE | NOTICE_USED | NOTICE_USED3 => {
+                let Some((_, king)) = self.notice.take() else { return false };
+                match (mode, king) {
+                    (NOTICE_HIDE, false) => "out",
+                    (NOTICE_HIDE, true) => "outKing",
+                    (NOTICE_USED3, _) => "select3",
+                    (_, false) => "select",
+                    (_, true) => "selectKing",
+                }
+            }
+            NOTICE_KEEP => {
+                let Some((_, king)) = self.notice else { return false };
+                if king {
+                    "loopKing"
+                } else {
+                    "select2"
+                }
+            }
+            _ => return false,
+        };
+        hud.play_button_notice(label);
+        true
+    }
+
+    /// (PROMPT-UI) The notice is up (+0x2E0) and its key.
+    pub fn notice_shown(&self) -> Option<i32> {
+        self.notice.map(|n| n.0)
     }
 
     /// `0x1415895F0` -> `0x14167B630`: the lock counter. Static SE 19 per lock, 20 on the lock

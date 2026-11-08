@@ -8,7 +8,7 @@ use super::donald_combo as combo;
 use super::donald_moves as moves;
 use super::donald_shots::{self as shots, MissileKind};
 use super::*;
-use crate::donald::{data as don_data, DonAbilities, DonAbility, DonCmd, DonLearned, DonMods, Element, Reaction, SpellRef};
+use crate::donald::{data as don_data, DonAbilities, DonAbility, DonCmd, DonLearned, DonMods, Element, SpellRef};
 use crate::host::PartyHost;
 use crate::{Party, PartyConfig, SoraView};
 use kh_core::enums::ETresDamageKind;
@@ -52,6 +52,13 @@ impl Targets for Dummies {
     }
     fn defense(&self, _id: TargetId) -> Option<TargetDefense> {
         Some(TargetDefense { defense: 10, max_hp: 1_000_000, hp_percent: 100.0, enemy_kind: true, damage_min: 0, damage_max: 0, resist: [0; 8], bio_type: 0 })
+    }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
     }
 }
 
@@ -604,7 +611,7 @@ fn mp_charge_scales_with_magic_r7() {
     let rig = Rig::new(&[]);
     let s = &rig.m().status;
     let t = donald::mp_charge_time(s);
-    assert!(t < K.mpcharge_base && t >= K.mpcharge_base * K.mpcharge_ratio_min, "{t}");
+    assert!((K.mpcharge_base * K.mpcharge_ratio_min..K.mpcharge_base).contains(&t), "{t}");
     let sora = kh_core::status::tables::level_row(s.level).magic as f32 + 3.0;
     assert!((t - K.mpcharge_base * (sora / s.magic() as f32).clamp(K.mpcharge_ratio_min, 1.0)).abs() < 1e-4);
 }
@@ -880,7 +887,7 @@ fn aero_float_and_aero_glide_with_aero_attuned() {
     let (_, used_glide, s2) = glide(true);
     assert!(s2.contains(&"aero_glide"));
     assert!(used_glide > used_float, "Aero Glide stays up longer: {used_glide} vs {used_float}");
-    assert!(K.glide_aero_speed > K.float_speed);
+    const { assert!(K.glide_aero_speed > K.float_speed) };
 }
 
 #[test]
@@ -895,34 +902,28 @@ fn y_casts_the_y_lists_spell_and_the_team_attacks_keep_y() {
 // ================================================================================================ 2 stats, 6.6 team
 
 #[test]
-fn the_stats_are_the_docs_ratios_and_max_mp_has_the_steps() {
-    use crate::balance::BP;
-    assert_eq!((BP.n_ex001_lead_magic_ratio, BP.n_ex001_lead_mp_ratio, BP.n_ex001_lead_strength_ratio, BP.n_ex001_lead_hp_ratio, BP.n_ex001_lead_defense_ratio), (1.2, 1.25, 0.667, 0.85, 0.8)); // (2026-10-27) Strength 0.55 -> 0.667: 10 at level 1; (DONLINE2, 2026-10-27) Magic 1.25 -> 1.2: 18 at level 1, MP 1.5 -> 1.25: "make Donald have x1.25 MP"
+fn the_stats_are_the_docs_and_max_mp_has_the_steps() {
     let mut rig = Rig::new(&[]);
     let max = rig.m().status.max_mp();
     rig.party.status_mut(rig.id).unwrap().donald.as_mut().unwrap().learned.apply(crate::donald::DonStep::Arcane(crate::donald::ArcaneLine::Ultima));
     let after = rig.m().status.max_mp();
     assert_eq!(after - max, rig.m().status.donald.as_ref().unwrap().learned.mp_bonus(), "Max MP + learned.mp_bonus()");
-    // the leader's Max MP is 1.25x Sora's reference (+ his steps; DONLINE2, the user 2026-10-27: "make Donald have x1.25 MP")
+    // (GF-STATS) his own start + his boss rewards + the roster's steps, whatever Sora has
     let s = &rig.m().status;
-    let (_, sora_mp) = crate::balance::sora_reference(s);
-    assert_eq!(s.max_mp() - donald::mp_bonus(s), (1.25 * sora_mp as f32).round() as i32 + s.bonuses.totals(s.game_level).1 + s.roster.hp_mp(s.game_level).1);
+    assert_eq!(s.max_mp() - donald::mp_bonus(s), crate::balance::start_pools(Chara::Donald).1 + s.growth.mp + s.roster.hp_mp(s.game_level).1);
 }
 
 /// (DONLINE2) THE USER (2026-10-27): "make Donald's starting magic 18 at level 1" (the status screen's Magic: his row of
-/// party-balance-levels + the starting staff's 4) and "make Donald have x1.25 MP": Sora's opening Vitality / Balance /
-/// Wisdom (100 / 110 / 120 MP) give Donald 125 / 138 / 150 at the start.
+/// party-balance-levels + the starting staff's 4). (GF-STATS) His MP start is fixed at 138; his level-99 Magic is 86 (the user,
+/// 2026-11-01).
 #[test]
-fn donald_starts_with_magic_18_and_1_25x_soras_mp() {
-    let mut s = crate::FriendStatus::new(crate::Chara::Donald, 0);
+fn donald_starts_with_magic_18_and_his_own_mp() {
+    let s = crate::FriendStatus::new(crate::Chara::Donald, 0);
     assert_eq!((s.level, s.magic()), (1, 18));
     assert_eq!(crate::balance::base_stats(crate::Chara::Donald, 1).1 + 4, 18, "his row + the starting staff's 4");
-    for (sora_mp, want) in [(100, 125), (110, 138), (120, 150)] {
-        s.bal.sora = Some((100, sora_mp));
-        assert_eq!(s.max_mp(), want, "Sora {sora_mp} MP");
-    }
+    assert_eq!(s.max_mp(), 138);
     let l99 = crate::FriendStatus::test_level99(crate::Chara::Donald);
-    assert_eq!(l99.magic(), 80, "level 99");
+    assert_eq!(l99.magic(), 86, "level 99");
 }
 
 #[test]
@@ -1009,7 +1010,6 @@ fn harness_bal_damage_comparison() {
         let mut party = Party::new(PartyConfig { level99: false, total_exp: exp, seed: 0x5EED });
         let id = party.spawn(Chara::Donald, Vec3::ZERO, 0.0);
         party.set_pad(id, Some(Tuning::USER));
-        party.set_lead_reference(Some(crate::balance::sora_base(kh_core::status::GameLevel::Standard)));
         struct NoDef(Dummies);
         impl Targets for NoDef {
             fn enumerate(&self, out: &mut Vec<TargetInfo>) {
@@ -1026,6 +1026,13 @@ fn harness_bal_damage_comparison() {
             }
             fn defense(&self, _id: TargetId) -> Option<TargetDefense> {
                 None
+            }
+            // (AUDIT-B) forwarded: the hit's bone and its pose are the wrapped host's
+            fn hit_bone(&self, id: kh_core::TargetId, at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+                self.0.hit_bone(id, at)
+            }
+            fn bone_pose(&self, id: kh_core::TargetId, bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+                self.0.bone_pose(id, bone)
             }
         }
         let mut targets = NoDef(Dummies(vec![(TargetId(1), Vec3::new(1200.0, 0.0, 0.0))], Vec::new()));
@@ -1309,9 +1316,8 @@ fn the_aero_aura_speeds_recovery_from_hits() {
 
 #[test]
 fn max_mp_adds_the_boss_steps_for_the_leader_and_for_ai_donald() {
-    for leading in [true, false] {
+    {
         let mut s = crate::status::FriendStatus::new(Chara::Donald, crate::tables::level_row(Chara::Donald, 30).0);
-        s.set_leading(leading);
         let before = s.max_mp();
         let st = s.donald.as_mut().unwrap();
         st.learned = DonLearned::all();
@@ -1319,7 +1325,7 @@ fn max_mp_adds_the_boss_steps_for_the_leader_and_for_ai_donald() {
         st.learned.apply(crate::donald::DonStep::Arcane(crate::donald::ArcaneLine::Ultima));
         let bonus = st.learned.mp_bonus();
         assert_eq!(bonus, 3);
-        assert_eq!(s.max_mp() - before, bonus, "leading {leading}");
+        assert_eq!(s.max_mp() - before, bonus);
     }
 }
 
@@ -1460,7 +1466,7 @@ fn the_float_sways_his_staff_and_body_frame_rate_free() {
     assert!((hi - lo - 2.0 * K.float_sway_pose).abs() < 0.01 && (phi - plo - 2.0 * K.float_sway_pitch).abs() < 0.2, "{lo}..{hi} {plo}..{phi}");
     let period = 1.0 / K.float_sway_hz;
     assert!((moves::sway(0.37, false).1 - moves::sway(0.37 + period, false).1).abs() < 1e-3);
-    assert!(K.glide_aero_sway_hz > K.float_sway_hz);
+    const { assert!(K.glide_aero_sway_hz > K.float_sway_hz) };
     // in the game: the pitch the hosts draw moves, the held clip time moves, and both stop on landing
     let mut rig = Rig::new(&[]);
     rig.wear(&[DonAbility::AeroFloat]);
@@ -1740,7 +1746,7 @@ fn ai_donald_does_not_walk_while_casting() {
 /// shots; the frames measured on his posed skeleton: kh-partyhost tests/don_feet.rs) and he stands on the floor.
 #[test]
 fn holding_a_still_his_feet_stay_on_the_ground() {
-    assert!(K.charge_pose < 0.37, "MagicCast hops from 0.37: {}", K.charge_pose);
+    const { assert!(K.charge_pose < 0.37, "MagicCast hops from 0.37") };
     assert!(combo::def(combo::Step::WaveL).hold <= combo::def(combo::Step::WaveL).shot && combo::def(combo::Step::WaveR).hold <= combo::def(combo::Step::WaveR).shot);
     let mut rig = Rig::new(&[Vec3::new(1200.0, 0.0, 0.0)]);
     rig.until(Vec2::ZERO, &[A], 90, |r| r.state() == Some(donald::CHARGE)).expect("the charge");
@@ -1927,4 +1933,28 @@ fn kitfx_every_elements_missile_is_its_own_element() {
     }
     assert!(rig.effects.spawned.contains(&"vd_kitfx_thd_blt"));
     assert!(rig.audio.played.contains(&K.missile_thunder_launch_se));
+}
+
+/// (COMBAT-FIX) KH3 puts the staff's hit spheres (w_do_WepBase TresAtkColl0 groups "None" / "StickM") at ATK_01 + (-19, 0, 0)
+/// in the socket's own frame (0x140647950 turns m_RelativeLocation1 with the socket). The pack now carries the socket's
+/// rotation (`attack_sockets.rotations`, SocketKey::q); ATK_01 is roll 180 at 55.4 cm along wep's x and ATK_00 at its origin,
+/// so the point is 19 / 55.4 of the way from ATK_01 to ATK_00 on every frame: checked against the pack's ATK_00 track, which
+/// the rotation never saw.
+#[test]
+fn the_staff_spheres_sit_19_cm_down_the_staff_in_the_sockets_frame() {
+    let path = format!("{}/../../build/sora_pack/party/n_ex001/manifest.json", env!("CARGO_MANIFEST_DIR"));
+    let Ok(text) = std::fs::read_to_string(&path) else { return };
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    for (clip, seq) in [("M_1301", "1301"), ("M_1311", "1311"), ("MagicCast", "1341")] {
+        let keys = crate::tables::clip(crate::ids::Chara::Donald, clip).socket;
+        let frames = json["attack_sockets"]["clips"][seq]["sockets"].as_array().unwrap();
+        assert_eq!(keys.len(), frames.len(), "{clip}");
+        assert!(keys.iter().any(|k| k.q != [0.0, 0.0, 0.0, 1.0]), "{clip}: the pack's rotations are in");
+        for (k, f) in keys.iter().zip(frames) {
+            let v: Vec<f32> = f.as_array().unwrap().iter().map(|x| x.as_f64().unwrap() as f32).collect();
+            let (a0, a1) = (Vec3::new(v[0], v[1], v[2]), Vec3::new(v[3], v[4], v[5]));
+            let at = crate::actions::socket_point_at(keys, k.time, crate::actions::DONALD_STAFF_OFFSET);
+            assert!(at.distance(a1 + (a0 - a1) * (19.0 / 55.4)) < 0.05, "{clip} at {}: {at} against the staff's line", k.time);
+        }
+    }
 }

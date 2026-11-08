@@ -62,12 +62,11 @@ impl PlayerState for FrGoofyShoot {
                     self.link.sub = 4;
                 }
             }
-            4 => {
-                if cx.pawn.anim.ended {
+            4
+                if cx.pawn.anim.ended => {
                     self.link.sub = 5;
                     cx.pawn.queue.do_finish();
                 }
-            }
             _ => {}
         }
     }

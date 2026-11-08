@@ -276,7 +276,7 @@ impl PlayerState for WallRun {
             }
             1 => {
                 let s = &mut *cx.pawn;
-                if !self.valid || !(self.grace > 0.0) {
+                if !self.valid || self.grace.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
                     s.queue.do_chain();
                     return;
                 }

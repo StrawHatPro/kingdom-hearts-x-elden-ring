@@ -23,7 +23,7 @@
 //! - `party.draw` (default 0, testing aid): the friends' capsules and facing in the game's debug drawer.
 //! - `party.recover`, `party.word` (one-shots, development aids): read only by a build with the cargo feature `dev-aids`
 //!   (control.rs); the released mod ignores them.
-//! Sheet `sheets/port/party-er-host.json` (rows `nav.*`, `casts.*`, `ladder.*`, `stuck.*`, `catchup.*`, `warp.*`).
+//!   Sheet `sheets/port/party-er-host.json` (rows `nav.*`, `casts.*`, `ladder.*`, `stuck.*`, `catchup.*`, `warp.*`).
 
 pub mod glue;
 pub mod nav;
@@ -43,6 +43,8 @@ pub mod taunt;
 pub mod donaggro;
 // (AGGRO) whom Elden Ring's enemies attack: the whole party, by the abilities' rules and a threat model
 pub mod aggro;
+// (GF-THREAT) the game's own target search: SpEffectParam.targetPriority on a borrowed row per member
+pub mod prio;
 
 #[cfg(windows)]
 pub use host::*;
@@ -57,7 +59,8 @@ mod host {
     use kh_core::{Input, Output, Sora, TargetId};
 
     use super::aiworld::ErPartyTargets;
-    use super::glue::{BodyObs, FrameIn, HostRules, PartyCore};
+    use super::soratargets::SoraSeams;
+    use super::glue::{BodyObs, CoreStep, FrameIn, HostRules, PartyCore};
     use crate::control::{Control, OneShot};
     use crate::coords::{self, Frame};
     use crate::erlog;
@@ -70,6 +73,26 @@ mod host {
 
     fn sink(text: &str) {
         crate::log::write(text);
+    }
+
+    /// What the body is doing as a party frame takes it (`FrameIn`).
+    pub struct BodyFrame {
+        pub relocated: bool,
+        pub hidden: Option<&'static str>,
+        pub body_action: bool,
+    }
+
+    /// ER.0 STEPS 3 - 5 as the Sora host gives them (`PartySlot::after_sora_step`).
+    pub struct AfterSora<'a> {
+        pub out: &'a Output,
+        pub dt: f32,
+        pub world: &'a ErWorld,
+        pub targets: &'a mut ErTargets,
+        pub fx: &'a mut crate::fx::Fx,
+        pub lock_on: TargetId,
+        pub look: Option<Vec3>,
+        pub leaping: bool,
+        pub now: f64,
     }
 
     /// WHAT A SORA HOST HOLDS of the party: the core (taken from `KEPT` at the host's start, put back when it is dropped).
@@ -182,8 +205,7 @@ mod host {
 
         /// ONCE A FRAME before the steps (sora.rs pre_physics, after the follow phase): the keys, the park / reseat
         /// rules, the body's place, the camera of the AI.
-        #[allow(clippy::too_many_arguments)]
-        pub fn frame(&mut self, player: &PlayerIns, control: &Control, frame: &Frame, relocated: bool, hidden: Option<&'static str>, body_action: bool, dt: f32, now: f64) {
+        pub fn frame(&mut self, player: &PlayerIns, control: &Control, frame: &Frame, BodyFrame { relocated, hidden, body_action }: BodyFrame, dt: f32, now: f64) {
             let on = control.flag("party.er") != Some(false);
             // (FX5) `party.threat_range` (cm, default 1200; 0 = off): the friends' trees fight only what threatens the party
             kh_partyhost::aiworld::set_threat_range(control.f32("party.threat_range"));
@@ -242,7 +264,7 @@ mod host {
                     core.say(format!("party: t={now:.3}s {n} camp-menu edit(s) applied at once (EQ)"));
                 }
             }
-            if fired.is_some() && core.on {
+            if (fired.is_some() || control.on("atk.keep")) && core.on {
                 core.rt.recover();
                 core.say("party: party.recover: the friends' HP / MP are full".into());
             }
@@ -251,6 +273,11 @@ mod host {
                 let words: Vec<&str> = text.split_whitespace().collect();
                 let said = match words.as_slice() {
                     ["gg", rest @ ..] => kh_partyhost::custom::guard_word(&mut core.rt, rest),
+                    // (GF-BREAK) Goofy's debug words (`x3g stagger near 999`: a full gauge on the nearest enemy)
+                    ["x3g", rest @ ..] => core.rt.party.goofy_word(rest),
+                    // (LOADFALL, testing aid) the party host's own KO / HP words (`party-ko goofy`: a KO through his own damage
+                    // path, the leader's death and game over when he leads)
+                    ["party-ko", ..] | ["party-hp", ..] => core.rt.word(&text),
                     _ => {
                         core.rt.lead_word(&words);
                         "queued for the next route".to_string()
@@ -274,6 +301,32 @@ mod host {
         pub fn route(&mut self, sora: &mut Sora, input: &Input, dt: f32, world: &ErWorld, targets: &mut ErTargets, now: f64) -> Input {
             let mut latch = self.latch;
             let Some(core) = self.core_mut() else { return *input };
+            // (GF-SENSOR) R5: the attacks coming. (GF-POLISH) Those of an enemy aiming at nobody of the party are not ours: no "!", nothing for
+            // AI Goofy. A swing at another member stands; an aim that could not be read stands (the read can fail)
+            #[cfg(windows)]
+            {
+                let aims = super::aggro::aims_now(&core.rt, targets, sora.output().position);
+                let mut list = Vec::new();
+                for s in crate::telegraph::list() {
+                    if super::aggro::rules::telegraph_stands(&aims, s.attacker) {
+                        list.push(kh_party::goofy::Telegraph { attacker: s.attacker, class: s.class, perilous: s.perilous, eta: s.eta, active: s.active });
+                    } else {
+                        crate::telegraph::note_dropped(s.attacker);
+                    }
+                }
+                core.rt.party.set_telegraphs(&list);
+                let member = |c: kh_host::party::PartyChara| if c == kh_host::party::PartyChara::Sora { Some(kh_party::donald::cast::SORA_MEMBER) } else { core.rt.id(c) };
+                let aimed: Vec<_> = aims.iter().map(|(enemy, who)| kh_party::goofy::ai::EnemyAim { enemy: *enemy, on: who.and_then(|w| w.chara()).and_then(member) }).collect();
+                core.rt.party.set_enemy_aims(&aimed);
+                crate::telegraph::note_party(list.len());
+            }
+            #[cfg(windows)]
+            {
+                // (GF-INGAME) the test pilot's reading, and what his rules did (`atk.log`)
+                let lead = core.rt.leader;
+                crate::autopad::note_kit(lead.is_some_and(|id| core.rt.party.goofy_breaker_offered(id)));
+                crate::telegraph::log_events(&core.rt.party.gof.events);
+            }
             let leader = core.rt.leader_view_of(&sora.output(), sora.status()).position;
             let t = ErPartyTargets::new(targets, leader, &mut latch);
             let input = core.route(sora, input, dt, world, &t, now);
@@ -283,12 +336,11 @@ mod host {
 
         /// ER.0 STEP 2: SORA'S STEP with the party (his allies, heals on friends, the team seam); not at all while he is
         /// out of the active party (his output stays: the leader body follows the leader, stream S2).
-        #[allow(clippy::too_many_arguments)]
-        pub fn step_sora(&mut self, sora: &mut Sora, dt: f32, input: &Input, world: &ErWorld, targets: &mut ErTargets, fx: &mut crate::fx::Fx, ui: &mut crate::hud::Keep, before: &Output) -> Output {
+        pub fn step_sora(&mut self, sora: &mut Sora, dt: f32, input: &Input, SoraSeams { world, targets, fx, ui }: SoraSeams<'_>, before: &Output) -> Output {
             match self.core_mut() {
                 // (ER party S8) out of the party, Sora may be FOUND FIGHTING MARGIT: his stage step (else his output stays)
                 Some(core) if core.sora_skipped() => crate::unlock::stage_sora_step(sora, dt, world, fx).unwrap_or_else(|| Output { events: Vec::new(), ..before.clone() }),
-                Some(core) => super::soratargets::step(sora, dt, input, world, targets, &mut core.rt, fx, ui),
+                Some(core) => super::soratargets::step(sora, dt, input, SoraSeams { world, targets, fx, ui }, &mut core.rt),
                 None => {
                     sora.set_aura(0.0, 0.0); // (DON-KIT) no party: no Donald's aura
                     let mut host = kh_core::Host { world, targets, audio: &mut fx.audio, effects: &mut fx.effects, ui };
@@ -299,11 +351,9 @@ mod host {
 
         /// ER.0 STEPS 3 - 5, RIGHT AFTER SORA'S STEP: the party's step, the poses, the leader's lock, the trail and the
         /// fallbacks, the bodies' want list (`core().feed`).
-        #[allow(clippy::too_many_arguments)]
         /// `look`: Sora's look-at point (his "t_camera" bone of the last drawn pose: the friends' head look-at);
         /// `leaping`: AI Sora is in his ladder jump (LADDER2).
-        #[allow(clippy::too_many_arguments)]
-        pub fn after_sora_step(&mut self, sora: &mut Sora, out: &Output, dt: f32, world: &ErWorld, targets: &mut ErTargets, fx: &mut crate::fx::Fx, lock_on: TargetId, look: Option<Vec3>, leaping: bool, now: f64) {
+        pub fn after_sora_step(&mut self, sora: &mut Sora, AfterSora { out, dt, world, targets, fx, lock_on, look, leaping, now }: AfterSora<'_>) {
             let mut latch = self.latch;
             let (unlock_pack, unlock_sheets) = (self.pack.clone(), self.sheets.clone()); // (ER party S8)
             let Some(core) = self.core_mut() else { return };
@@ -316,7 +366,7 @@ mod host {
             let look = look.or(Some(out.capsule_center + Vec3::Z * 55.0));
             let casts = world.casts.get();
             let mut effects = CureWatch { inner: &mut fx.effects, seen: Vec::new() };
-            core.step(sora, out, dt, lock_on, world, &PartyIk(world), &mut t, &mut fx.audio, &mut effects, look, now);
+            core.step(sora, CoreStep { out, dt, lock_on, world, ik: &PartyIk(world), targets: &mut t, audio: &mut fx.audio, effects: &mut effects, sora_look: look, now });
             core.world_casts += world.casts.get().wrapping_sub(casts);
             // (DON-MAGIC) the statuses' Elden Ring side: the snapshot the hit routes read, the slowed / Frozen characters' speed,
             // the Blind enemies' aim
@@ -363,7 +413,7 @@ mod host {
                 }
             }
             // (ER party S8) THE UNLOCK RULE: who is in the party, the staged fights, Donald at the crone, the unlock moment
-            crate::unlock::party_step(core, &unlock_pack, &unlock_sheets, sora, out, dt, world, targets, fx, now);
+            crate::unlock::party_step(core, sora, crate::unlock::UnlockStep { pack: &unlock_pack, sheets: &unlock_sheets, out, dt, world, targets, fx, now });
             crate::conv::hold_party(core); // (CV1) a conversation holds the party: AI stopped, standing, looking at the speaker
             self.latch = latch;
         }

@@ -17,7 +17,7 @@ use glam::Vec3;
 
 use super::common::{ground_probe, on_ground, set_movement_input, turn};
 use super::{air_slide, dangle, floating, guard, hopping, rail_slide, slope_slide, wall_run, PlayerState, StateData, StateId};
-use crate::actions::{self, land_pose, A};
+use crate::actions::{self, A};
 use crate::anim::{AnimId, Notifies, PlayArgs};
 use crate::enums::ETresAbilityKind as Ability;
 use crate::pawn::{Ctx, Pawn};
@@ -253,6 +253,8 @@ pub(crate) fn jump_request(state: &mut StateData, cx: &mut Ctx) {
         // SLOPESLIDE (on the ground): yaw = the slide's target yaw; HOPPING (sub-steps 2, 3): its yaw.
         StateData::SlopeSlide(d) if slope_slide::jump_yaw(d, s).is_some() => (d.yaw, 0, false, false),
         StateData::Hopping(h) if hopping::jump_yaw(h).is_some() => (h.yaw, 0, false, false),
+        // (F-ARROWGUN) SHOOTERMODE (JumpRequest 0x14143D8F0 case 40): yaw = its aim yaw (+0xCC), args (3, 1, 1) as read: type 3, bAir.
+        StateData::ShooterMode(m) => (m.yaw, 3, true, false),
         // (GLIDE has no row: a new press needs a release first, and the release ended the glide.)
         _ => return,
     };
@@ -307,6 +309,12 @@ pub(crate) fn move_input(state: &mut StateData, yaw: f32, magnitude: f32) {
 /// Doubleflight and a super jump have no height cut in the game (II.3) and get none here.
 pub(crate) fn rising_from_a_jump(state: &StateData) -> bool {
     matches!(state, StateData::Jump(j) if (j.sub == 1 || j.sub == 2) && j.kind < 2)
+}
+
+/// (SPIRITSPRING) The Jump state of any type before its fall (sub-steps 0 - 2: the start, the rise; a super jump's
+/// whole clip): the host's spiritspring lift may act on it (sora.rs `step_hosted`; port addition).
+pub(crate) fn before_the_fall(state: &StateData) -> bool {
+    matches!(state, StateData::Jump(j) if j.sub <= 2)
 }
 
 /// `Fall(yaw)` (slot 172 0x141444C00, `same`): `RequestJump(yaw, 0, bFall = true)`: Jump begins
@@ -367,7 +375,7 @@ impl PlayerState for Jump {
             j.probe_cached = true;
             // The step-down flag: the run loop is playing, a request, and the stored probe distance
             // <= 40, whatever the hit flag (change D10).
-            j.step_down = matches!(s.anim.name, AnimId::RunLoopN | AnimId::RunLoopW | AnimId::RunLoopB) && j.request && j.probe_distance <= p.fall_step_down_height;
+            j.step_down = matches!(s.anim.logical /* (F-LOCO) the state's name */, AnimId::RunLoopN | AnimId::RunLoopW | AnimId::RunLoopB) && j.request && j.probe_distance <= p.fall_step_down_height;
             if s.cmc.floor_under(w, &p) {
                 // Standing on a walkable floor (component vt+0x9D8, 0x141386BED): no air jump
                 // from here; a stored land pose plays its landing clip at once (II.3 "Landing
@@ -402,6 +410,8 @@ impl PlayerState for Jump {
             play_jump(s, jump_name(j.kind, 0, j.b_names), 0);
         }
         j.last_z = s.cmc.location.z;
+        // (weapons P2) "pawn+0x1460 &= ~1" (Begin's common tail 0x141386EEB): the Keyblade switch's glide-resume bit.
+        s.status.glide_resume = false;
     }
 
     /// `TresPlayerState_Jump::Tick` 0x141395450 (4.2, 4.5, 4.6; actions spec II.3).
@@ -472,7 +482,7 @@ impl PlayerState for Jump {
                 skip_sub4 = true;
             } else if j.step_down {
                 // Keep the run loop playing; no landing test while the flag is set.
-                if s.anim.name != AnimId::RunLoopN {
+                if s.anim.logical != AnimId::RunLoopN { // (F-LOCO) the state's name
                     s.anim.play(AnimId::RunLoopN);
                 }
                 j.step_down_timer += dt;
@@ -498,10 +508,11 @@ impl PlayerState for Jump {
             1 if j.kind == 2 => {
                 if on_ground(s) && j.risen {
                     s.cmc.stop_movement();
-                    if j.request && !(p.land_roll_height_min > j.fall_height) {
+                    if j.request && p.land_roll_height_min.partial_cmp(&j.fall_height).is_none_or(std::cmp::Ordering::is_le) {
                         roll_land = true;
                     } else {
-                        s.anim.play_with(if j.b_names { AnimId::LandB } else { AnimId::Land }, PlayArgs::mode(2, -1.0));
+                        // (F-NANO) through the form's anim set (AnimSet8's LandB 8034 ...)
+                        s.anim.play_with(crate::combat::forms::anim(s.combat.form.cmd, if j.b_names { AnimId::LandB } else { AnimId::Land }), PlayArgs::mode(2, -1.0));
                     }
                     s.queue.flags.enable_change = false;
                     j.sub = 10;
@@ -587,7 +598,7 @@ impl PlayerState for Jump {
                 j.last_z = actor_z;
             }
             4 if !skip_sub4 => {
-                if j.flow && !(actor_z > j.start_z) {
+                if j.flow && actor_z.partial_cmp(&j.start_z).is_none_or(std::cmp::Ordering::is_le) {
                     // The flow jump ends when he is back at its start height (0x14139621F).
                     j.flow = false;
                     j.kind = 0;
@@ -599,15 +610,15 @@ impl PlayerState for Jump {
                     s.actions.second_jump = true;
                     s.cmc.stop_movement();
                     let weapon_out = s.actions.weapon_out;
-                    if !(j.fall_height > p.land_light_height_max) {
+                    if j.fall_height.partial_cmp(&p.land_light_height_max).is_none_or(std::cmp::Ordering::is_le) {
                         // LandName(2, weaponOut): LightLand / LightLandB.
-                        actions::play_as(s, if weapon_out { AnimId::LightLandB } else { AnimId::LightLand }, AnimId::LightLand);
+                        actions::play_as(s, crate::combat::forms::anim(s.combat.form.cmd, if weapon_out { AnimId::LightLandB } else { AnimId::LightLand }), AnimId::LightLand); // (F-NANO) the form's anim set
                     } else if j.request && j.fall_height >= p.land_roll_height_min {
                         // A stick request on the landing tick and a fall of 800 cm or more
                         // (comiss h,800; jb @0x1413962E3): Sheathe, "RollLand".
                         roll_land = true;
                     } else {
-                        actions::play_as(s, if weapon_out { AnimId::LandB } else { AnimId::Land }, AnimId::Land);
+                        actions::play_as(s, crate::combat::forms::anim(s.combat.form.cmd, if weapon_out { AnimId::LandB } else { AnimId::Land }), AnimId::Land); // (F-NANO) the form's anim set
                     }
                     s.queue.flags.enable_change = false;
                     j.sub = 10;
@@ -760,6 +771,3 @@ pub(crate) fn kind_of(state: &StateData) -> Option<u8> {
         _ => None,
     }
 }
-
-#[allow(dead_code)]
-const _: u8 = land_pose::NONE;

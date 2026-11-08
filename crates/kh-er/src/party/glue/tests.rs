@@ -37,6 +37,13 @@ impl kh_core::Targets for Fakes {
     fn apply_hit(&mut self, hit: &kh_core::HitRecord) -> kh_core::host::HitResult {
         self.0.apply_hit(hit)
     }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
+    }
 }
 
 impl PartyTargets for Fakes {
@@ -109,7 +116,7 @@ impl Run {
         let f = forward(self.out.yaw);
         self.core.camera.position = self.out.position - f * 450.0 + Vec3::Z * 220.0;
         self.core.camera.rotation = kh_camera::Rot { pitch: -15.0, yaw: self.out.yaw, roll: 0.0 };
-        self.core.step(&mut self.sora, &self.out, STEP, TargetId::NONE, &self.world, &kh_anim::NoIkWorld, &mut self.fakes, &mut self.null.audio, &mut self.null.effects, None, self.t);
+        self.core.step(&mut self.sora, CoreStep { out: &self.out, dt: STEP, lock_on: TargetId::NONE, world: &self.world, ik: &kh_anim::NoIkWorld, targets: &mut self.fakes, audio: &mut self.null.audio, effects: &mut self.null.effects, sora_look: None, now: self.t });
         self.t += STEP as f64;
         if self.core.rt.members.iter().any(|(_, id)| self.core.rt.party.member(*id).is_some_and(|m| m.steer.is_some())) {
             self.steered += 1;
@@ -311,6 +318,42 @@ fn the_party_jumps_the_ladder_after_the_leader() {
 {}", r.log());
 }
 
+/// (SPIRITSPRING) THE SPIRITSPRING CATCH-UP: the leader took a spring and landed on a cliff 30 m up (sora.rs: here put
+/// there); the friend who was within 20 m of the take-off jumps after him (the ladder jump's leap) and lands beside him on
+/// the cliff; the friend who was farther is left to the existing catch-up (no jump given). Nobody is stranded by the jump
+/// itself, and no new warp rule.
+#[test]
+fn the_spiritspring_catch_up_brings_the_friends_in_reach_up_the_cliff() {
+    // the floor at 0 up to x = 600, a cliff 3000 high beyond it
+    let mut r = harness!(TestWorld::floor().with_box(Vec3::new(600.0, -4000.0, -10.0), Vec3::new(6000.0, 4000.0, 3000.0)));
+    r.frames(60, None);
+    r.run_to(Vec3::new(400.0, 0.0, 0.0), 300);
+    r.frames(60, None);
+    let takeoff = r.out.position - Vec3::Z * Sora::origin_height_on_floor(&SORA_PARAMS);
+    // Goofy far away (out of reach of the take-off), Donald where the follow left him (near)
+    let far = takeoff + Vec3::new(-2600.0, 0.0, 0.0);
+    if let Some(id) = r.core.rt.members.iter().find(|m| m.0 == PartyChara::Goofy).map(|m| m.1) {
+        if let Some(m) = r.core.rt.party.member_mut(id) {
+            m.cmc.location = far + Vec3::Z * 100.0;
+        }
+    }
+    r.frames(2, None);
+    let donald_before = r.friend(PartyChara::Donald).position;
+    assert!(donald_before.distance(takeoff) < crate::spiritspring::rules::ALLY_RADIUS_CM, "Donald near the take-off: {donald_before:?}");
+    let (to, facing) = (Vec3::new(800.0, 0.0, 3000.0), 0.0);
+    r.core.spring_catch_up(to, facing, takeoff, crate::spiritspring::rules::ALLY_RADIUS_CM);
+    r.sora.teleport(Pose { position: to + Vec3::Z * Sora::origin_height_on_floor(&SORA_PARAMS), yaw: facing });
+    for _ in 0..300 {
+        r.frame(|_| {});
+        r.step(None);
+    }
+    assert_eq!(r.said("THE SPIRITSPRING CATCH-UP"), 1, "{}", r.log());
+    let d = r.friend(PartyChara::Donald);
+    assert!(d.position.z > 2990.0 && d.position.x > 600.0 && d.position.distance(to) > 40.0, "Donald beside the leader on the cliff: ({:.0}, {:.0}, {:.0})\n{}", d.position.x, d.position.y, d.position.z, r.log());
+    let line = r.log().lines().find(|l| l.contains("THE SPIRITSPRING CATCH-UP")).unwrap_or_default().to_string();
+    assert!(line.contains("Donald at (") && !line.contains("Goofy"), "only Donald (in reach) jumps after him, Goofy (out of reach) is left to the catch-up: {line}");
+}
+
 #[test]
 fn the_host_sheet_reads_every_row() {
     let text = std::fs::read_to_string(project("sheets/port/party-er-host.json")).expect("sheets/port/party-er-host.json");
@@ -359,6 +402,58 @@ fn with_donald_leading_sora_and_goofy_follow_him() {
     // the bodies wanted: Goofy and AI Sora (not the leader)
     let wants: Vec<PartyChara> = r.core.feed.wants.iter().map(|w| w.chara).collect();
     assert!(wants.contains(&PartyChara::Sora) && wants.contains(&PartyChara::Goofy) && !wants.contains(&PartyChara::Donald), "{wants:?}");
+}
+
+/// (LOADFALL, the in-game tester 2026-11-03: Goofy leading died in the middle of a hop, Continue, and the loaded body was
+/// written to his place of the host before, 20 m up: he fell for ever) A NEW SORA HOST STARTS A FRIEND LEADER ON THE
+/// GAME'S BODY, his motion of before (the hop's speed) stopped, while the party is still parked under the loading screen
+/// (no party step runs there), and the leader view the body code reads says so at once.
+#[test]
+fn a_new_host_starts_a_friend_leader_on_the_body_whatever_he_was_doing() {
+    let mut r = harness!(TestWorld::floor());
+    r.frames(30, None);
+    r.core.asked_formation = Some(kh_host::formation::Formation::new(&[PartyChara::Sora, PartyChara::Donald, PartyChara::Goofy], PartyChara::Goofy).unwrap());
+    r.frames(30, None);
+    assert_eq!(r.core.rt.leader_chara(), PartyChara::Goofy, "{}", r.log());
+    // mid-hop, far from where the next host's body stands: 20 m up, rising
+    let id = r.core.rt.leader.unwrap();
+    {
+        let m = r.core.rt.party.member_mut(id).unwrap();
+        m.cmc.location = Vec3::new(3000.0, -2000.0, 2000.0);
+        m.cmc.velocity = Vec3::new(300.0, 0.0, 600.0);
+    }
+    r.frames(1, None);
+    // the load: a new host, its body at the save's place (KH3 of the new frame), the party parked by the loading screen
+    let body = Vec3::new(120.0, 40.0, 0.0);
+    r.core.frame(FrameIn { on: true, fresh: true, relocated: false, hidden: Some("the loading screen"), body_action: false, trace: true, body: Some(BodyObs { feet: body, yaw: 33.0 }), pose: true, dt: STEP, now: r.t });
+    let v = r.core.rt.party.view(id).unwrap();
+    assert!(v.position.distance(body) < 1e-3 && v.velocity == Vec3::ZERO && (v.yaw - 33.0).abs() < 1e-3, "on the body, still: {:?} {:?}\n{}", v.position, v.velocity, r.log());
+    let lead = r.core.rt.leader_view_of(&r.out, r.sora.status());
+    assert!(lead.position.distance(body) < 1e-3 && lead.velocity == Vec3::ZERO, "the leader view is the new place at once: {:?}", lead.position);
+    assert_eq!(r.said("(LOADFALL)"), 1, "{}", r.log());
+    // parked under the loading screen: nothing moves him off it
+    for _ in 0..30 {
+        r.frame(|f| {
+            f.hidden = Some("the loading screen");
+            f.body = Some(BodyObs { feet: body, yaw: 33.0 });
+        });
+        r.step(None);
+    }
+    assert!(r.core.rt.leader_view_of(&r.out, r.sora.status()).position.distance(body) < 1e-3);
+    // the loaded save's formation makes Donald leader in the first live frame, his place still the old host's: he starts on
+    // the body too (the GOS in-game run: the body was written 4.6 m off to his stale place)
+    let donald = r.core.rt.id(PartyChara::Donald).unwrap();
+    r.core.rt.party.member_mut(donald).unwrap().cmc.location = Vec3::new(-4000.0, 2500.0, 900.0);
+    r.core.asked_formation = Some(kh_host::formation::Formation::new(&[PartyChara::Sora, PartyChara::Donald, PartyChara::Goofy], PartyChara::Donald).unwrap());
+    r.frame(|f| f.body = Some(BodyObs { feet: body, yaw: 33.0 }));
+    r.step(None);
+    assert_eq!(r.core.rt.leader_chara(), PartyChara::Donald, "{}", r.log());
+    assert!(r.core.rt.leader_view_of(&r.out, r.sora.status()).position.distance(body) < 30.0, "Donald on the body: {:?}\n{}", r.core.rt.leader_view_of(&r.out, r.sora.status()).position, r.log());
+    assert_eq!(r.said("(LOADFALL) the new leader Donald starts on the game's body"), 1, "{}", r.log());
+    // Sora leading: a new host leaves the friends to the reseat (nothing is put on the body)
+    r.core.asked_formation = Some(kh_host::formation::Formation::new(&[PartyChara::Sora, PartyChara::Donald, PartyChara::Goofy], PartyChara::Sora).unwrap());
+    r.frames(30, None);
+    assert!(r.core.place_leader_on_body().is_none());
 }
 
 #[test]
@@ -412,7 +507,9 @@ fn ert4_a_loaded_formation_never_holds_a_locked_character() {
 // --nocapture` prints the table.
 
 /// (name, gap max, gap mean, warps)
-fn k1_run(lead: Option<PartyChara>, curve: f32, secs: f32) -> Option<(Vec<(&'static str, f32, f32, u32)>, u32, String)> {
+type K1Row = (&'static str, f32, f32, u32);
+
+fn k1_run(lead: Option<PartyChara>, curve: f32, secs: f32) -> Option<(Vec<K1Row>, u32, String)> {
     let mut r = Run::new(TestWorld::floor())?;
     r.frames(30, None);
     if let Some(c) = lead {
@@ -554,6 +651,7 @@ fn a_load_with_a_friend_leading_places_the_others_beside_the_body() {
     assert!(Vec3::new(goofy.x - body.x, goofy.y - body.y, 0.0).length() < 300.0, "Goofy beside the body: ({:.0}, {:.0})\n{}", goofy.x, goofy.y, r.log());
     let sora = r.sora.output().position;
     assert!(Vec3::new(sora.x - body.x, sora.y - body.y, 0.0).length() < 400.0, "AI Sora beside the body: ({:.0}, {:.0})\n{}", sora.x, sora.y, r.log());
-    assert!(r.said("the friend leader's seat: the game's body") >= 1, "{}", r.log());
+    // (LOADFALL) the friend leader himself starts on the body at the new host (so the reseat finds him there already)
+    assert!(r.said("(LOADFALL) a new Sora host: the friend leader starts on the game's body") == 1, "{}", r.log());
+    assert!(r.core.rt.leader_view_of(&r.out, r.sora.status()).position.distance(body) < 1.0, "{}", r.log());
 }
-

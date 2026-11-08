@@ -63,9 +63,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use eldenring::cs::{EquipInventoryData, EquipParamAccessory, EquipParamGem, EquipParamGoods, EquipParamProtector, EquipParamWeapon, ItemId, ItemLotParam_enemy, ItemLotParam_map, MsgRepository, NpcParam, PlayerGameData, ShopLineupParam, SoloParamRepository, SpEffectParam};
+use eldenring::cs::{EquipInventoryData, EquipInventoryDataListEntry, InventoryItemsData, EquipParamAccessory, EquipParamGem, EquipParamGoods, EquipParamProtector, EquipParamWeapon, ItemId, ItemLotParam_enemy, ItemLotParam_map, MsgRepository, NpcParam, PlayerGameData, ShopLineupParam, SoloParamRepository, SpEffectParam};
 use eldenring::param::ITEMLOT_PARAM_ST;
-use fromsoftware_shared::FromStatic;
+use fromsoftware_shared::{FromStatic, MaybeEmpty};
 use glam::Vec3;
 use kh_core::enums::ETresAbilityKind;
 use kh_core::status::{BonusCounts, Reward};
@@ -84,6 +84,7 @@ pub(crate) const GIVE_FN: Located = Located { name: "item give (MapItemMan)", pa
 
 static RULES: OnceLock<LootRules> = OnceLock::new();
 static GATE_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
+
 /// The gate swallows mapped items (`loot.gate = 1`); it only tells what it sees (`loot.log = 1`).
 static GATE_ON: AtomicBool = AtomicBool::new(false);
 static GATE_LOG: AtomicBool = AtomicBool::new(false);
@@ -496,11 +497,18 @@ struct Type {
     taken: bool,
 }
 
+/// An enemy Sora killed: its target id, its NpcParam row, its maximum HP, where it fell (cm, KH frame).
+pub struct Kill {
+    pub target: u32,
+    pub npc_param: i32,
+    pub max_hp: i32,
+    pub at: Vec3,
+}
+
 pub struct ErLoot {
     types: HashMap<i32, Type>,
     rng: Rng,
     kh: bool,
-    told: HashSet<(u8, u32)>,
     pub kills: u32,
     pub boxes: u32,
     pub munny: i64,
@@ -520,6 +528,49 @@ pub struct ErLoot {
     /// (KEYPOP) Normal-inventory goods by item id: whether they get the key-item popup (lootmap `key_item_popup`; their
     /// params read once a session).
     popup_goods: HashMap<u32, bool>,
+    /// (TESTPREP) the key popups' view of loads (see [`key_watch`])
+    key_load: KeyLoad,
+}
+
+/// (TESTPREP, the combined round 2026-11-03: "OBTAINED Spirit Calling Bell" on every in-session load of slot 2) THE KEY
+/// POPUPS NEVER TAKE A LOAD FOR A GAIN. Found in the round's log: the game starts reading the asked slot at once and
+/// rebuilds the player's inventory from it 0.2 s after the request, while the player object still exists (`player gone`
+/// only ~0.9 s later); the watch's every-10-frames read then compared the LOADED save's key items with the old session's
+/// and a difference of 1 .. 4 items (the bell, which slot 9 lacked and slot 2 has; the Talisman Pouch) passed the "more
+/// than 4 at once" rule as gains. Not new today: the watch is HUD2 / KEYPOP's (2026-10-20 / 10-27) and the deployed
+/// `e412a9b8fb44` has it; the development aids' item give plays no part (nothing calls it at a load). It hits real
+/// players too: Continue / the death's reload / the Load screen into a save that holds a key item the session lacks.
+/// THE RULE: from a load's request (`prize::load_epoch` changes: every in-session load goes through
+/// `savegate::load_slot`) and while the game's load is asked or running (`savegate::load_in_flight`), every read only
+/// takes the baseline, until the load's screen (no player: the baseline is dropped as before) or at most
+/// [`KEY_QUIET_READS`] reads (a load that never happens).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct KeyLoad {
+    epoch: u32,
+    quiet: u32,
+}
+
+/// Baseline-only reads after a load's request when no loading screen came (about 10 s at one read per 10 frames).
+const KEY_QUIET_READS: u32 = 60;
+
+/// One read of the key-item watch: `now` = the items held (None: no player, a loading screen), `epoch` = the in-session
+/// loads asked so far, `loading` = the game's load is asked or running. Returns the items that came (the popups).
+fn key_watch(seen: &mut Option<HashMap<u32, u32>>, load: &mut KeyLoad, now: Option<HashMap<u32, u32>>, epoch: u32, loading: bool) -> Vec<(u32, u32)> {
+    let Some(now) = now else {
+        *seen = None;
+        load.quiet = 0;
+        return Vec::new();
+    };
+    if load.epoch != epoch || loading {
+        load.epoch = epoch;
+        load.quiet = KEY_QUIET_READS;
+    }
+    if load.quiet > 0 {
+        load.quiet -= 1;
+        *seen = Some(now);
+        return Vec::new();
+    }
+    key_gains(seen, now)
 }
 
 impl Default for ErLoot {
@@ -530,7 +581,7 @@ impl Default for ErLoot {
 
 impl ErLoot {
     pub fn new() -> ErLoot {
-        ErLoot { types: HashMap::new(), rng: Rng::new(0x4C4F_4F54), kh: false, told: HashSet::new(), kills: 0, boxes: 0, munny: 0, started: false, shop: Vec::new(), shop_on: false, seen: None, purged: false, clock: 0.0, keys_listed: false, key_seen: None, key_scan: 0, popup_goods: HashMap::new() /* (KEYPOP) */ }
+        ErLoot { types: HashMap::new(), rng: Rng::new(0x4C4F_4F54), kh: false, kills: 0, boxes: 0, munny: 0, started: false, shop: Vec::new(), shop_on: false, seen: None, purged: false, clock: 0.0, keys_listed: false, key_seen: None, key_scan: 0, popup_goods: HashMap::new() /* (KEYPOP) */, key_load: KeyLoad::default() /* (TESTPREP) */ }
     }
 
     fn start(&mut self, control: &Control) {
@@ -704,7 +755,7 @@ impl ErLoot {
 
     /// AN ENEMY SORA KILLED: with its type taken over, every row of its lot is rolled and what comes out is thrown
     /// as KH3 prize boxes at `at` (cm, KH frame) or paid as munny.
-    pub fn on_kill(&mut self, control: &Control, sora: &mut Sora, host: &mut PrizeHost, target: u32, npc_param: i32, max_hp: i32, at: Vec3) {
+    pub fn on_kill(&mut self, control: &Control, sora: &mut Sora, host: &mut PrizeHost, Kill { target, npc_param, max_hp, at }: Kill) {
         if control.flag("loot.kh") != Some(true) {
             return;
         }
@@ -848,7 +899,7 @@ impl ErLoot {
             return;
         }
         // SAFETY: as in `shop_start`.
-        if let Some(repo) = unsafe { SoloParamRepository::instance_mut() }.ok() {
+        if let Ok(repo) = unsafe { SoloParamRepository::instance_mut() } {
             for (id, value) in self.shop.drain(..) {
                 if let Some(row) = repo.get_mut::<ShopLineupParam>(id) {
                     row.set_value(value);
@@ -923,6 +974,11 @@ impl ErLoot {
             self.key_seen = None;
             return;
         }
+        // (THE USER 2026-11-02) a spirit ash powered up at Roderika is the same ash at its next level: a fresh baseline
+        if KEY_REBASE.swap(false, Ordering::Relaxed) {
+            self.key_seen = None;
+            self.key_scan = 0;
+        }
         if self.key_scan > 0 {
             self.key_scan -= 1;
             return;
@@ -930,11 +986,12 @@ impl ErLoot {
         self.key_scan = 10;
         let Some(data) = player_data() else {
             // a loading screen, no player: the next read starts afresh
-            self.key_seen = None;
+            let _ = key_watch(&mut self.key_seen, &mut self.key_load, None, crate::prize::load_epoch(), false);
             return;
         };
         let mut now: HashMap<u32, u32> = HashMap::new();
-        for entry in data.equipment.equip_inventory_data.items_data.current_key_entries().iter().filter_map(|e| e.as_option()) {
+        // (OUTFIT-UNLOCK) every key-item slot, not only those inside the in-use length
+        for entry in all_key_entries(&data.equipment.equip_inventory_data.items_data).iter().filter_map(|e| e.as_option()) {
             *now.entry(entry.item_id.into_inner()).or_default() += entry.quantity.max(1);
         }
         // (KEYPOP, the user 2026-10-27: "also multiplayer items should give the "key item" pop up that maps do") ... and the
@@ -960,7 +1017,8 @@ impl ErLoot {
                 *now.entry(raw).or_default() += entry.quantity.max(1);
             }
         }
-        for (raw, gained) in key_gains(&mut self.key_seen, now) {
+        // (TESTPREP) a load's inventory is never a gain (key_watch)
+        for (raw, gained) in key_watch(&mut self.key_seen, &mut self.key_load, Some(now), crate::prize::load_epoch(), crate::savegate::load_in_flight()) {
             let Some(item) = key_item_of(raw) else { continue };
             let what = kh_host::hud::ObtainedKind::ErKeyItem { name: item.name.clone(), caption: item.help.clone(), icon_id: item.icon_id };
             let shown = crate::hud::with_hud(|hud| hud.show_obtained(what));
@@ -969,10 +1027,22 @@ impl ErLoot {
     }
 }
 
-/// (ONLINEITEMS fix) Whether Elden Ring's own inventory shows this item (goods only can be hidden; other tables always show).
-fn shown_by_er(raw: u32) -> bool {
+/// (THE USER 2026-11-02) The key-item watch of the OBTAINED popup takes a fresh baseline at its next read.
+static KEY_REBASE: AtomicBool = AtomicBool::new(false);
+
+/// (THE USER 2026-11-02: Roderika's spirit tuning, spirittune.rs) An ash's entry became its next level's row: that is no
+/// item that "came" (no OBTAINED popup for it).
+pub(crate) fn rebaseline_key_items() {
+    KEY_REBASE.store(true, Ordering::Relaxed);
+}
+
+/// (KEYITEM-TUTORIALS, the user 2026-11-06: "remove Elden Ring's tutorial logs from the key items section in the item
+/// menu") Whether the KH3 Items screen's Key Items tab lists this item, and (the coordinator 2026-11-06) whether it gets
+/// KH3's OBTAINED popup: what Elden Ring's own inventory shows (ONLINEITEMS fix: goods only can be hidden; other tables
+/// always show), never one of its tutorial logs (lootmap `in_key_items_tab`; the goods stay in the save).
+fn on_key_items_tab(raw: u32) -> bool {
     match cat_of_item_id(raw) {
-        Some(Cat::Goods) => crate::lootmap::listed_on_kh_screens(&describe(Cat::Goods, raw & 0x0FFF_FFFF)),
+        Some(Cat::Goods) => crate::lootmap::in_key_items_tab(&describe(Cat::Goods, raw & 0x0FFF_FFFF), rules()),
         _ => true,
     }
 }
@@ -993,11 +1063,61 @@ fn key_gains(seen: &mut Option<HashMap<u32, u32>>, now: HashMap<u32, u32>) -> Ve
     gains
 }
 
+// ------------------------------------------------------------------------------------- (OUTFIT-UNLOCK) every key-item slot
+
+/// (OUTFIT-UNLOCK) THE ACTIVE KEY-ITEM LIST, EVERY ALLOCATED SLOT. The SDK's `current_key_entries()` stops at the list's in-use
+/// length; in game an owned key item stood past it (the Gold Sewing Needle, after Boc took the Sewing Needle: missing from the
+/// KH3 Key Items tab, shots/39_key_items_end.png, while the game refused to give a second one). So the slots are read up to the
+/// list's capacity (`key_items_capacity`, or `multiplay_key_items_capacity` while the accessor points at the multiplayer list);
+/// an empty slot is skipped by its own empty check (`MaybeEmpty::as_option`: the item id is not valid), never by the length.
+pub(crate) fn all_key_entries(items: &InventoryItemsData) -> &[MaybeEmpty<EquipInventoryDataListEntry>] {
+    let (head, n) = key_slots(items);
+    // SAFETY: the game's own key-item array: `n` <= the capacity it was allocated with (key_slot_count), from its head.
+    unsafe { std::slice::from_raw_parts(head, n) }
+}
+
+/// (OUTFIT-UNLOCK) [`all_key_entries`], to change an entry in place.
+pub(crate) fn all_key_entries_mut(items: &mut InventoryItemsData) -> &mut [MaybeEmpty<EquipInventoryDataListEntry>] {
+    let (head, n) = key_slots(items);
+    // SAFETY: as above; the inventory is borrowed mutably for the slice's life.
+    unsafe { std::slice::from_raw_parts_mut(head, n) }
+}
+
+fn key_slots(items: &InventoryItemsData) -> (*mut MaybeEmpty<EquipInventoryDataListEntry>, usize) {
+    let head = items.key_items_accessor.head.as_ptr();
+    let capacity = if head == items.key_items_head.as_ptr() {
+        items.key_items_capacity
+    } else if head == items.multiplay_key_items_head.as_ptr() {
+        items.multiplay_key_items_capacity
+    } else {
+        0
+    };
+    // SAFETY: the accessor's length pointer is the game's own field (the SDK reads it the same way).
+    let len = unsafe { *items.key_items_accessor.length.as_ref() };
+    (head, key_slot_count(len, capacity))
+}
+
+/// (OUTFIT-UNLOCK) How many key-item slots are read: the capacity (never less than the in-use length); an unknown or implausible
+/// capacity: the in-use length (the SDK's own view).
+pub(crate) fn key_slot_count(len: u32, capacity: u32) -> usize {
+    if capacity == 0 || capacity > MAX_KEY_SLOTS { len as usize } else { capacity.max(len) as usize }
+}
+
+/// (OUTFIT-UNLOCK) Above this a capacity is not believed (the game's key-item list holds a few hundred).
+const MAX_KEY_SLOTS: u32 = 4096;
+
+/// (OUTFIT-UNLOCK) An Elden Ring goods row's `EquipParamGoods.iconId` (the OBTAINED popup's picture; boc/unlock.rs).
+pub(crate) fn goods_icon_id(id: u32) -> Option<u32> {
+    repo().and_then(|r| r.get::<EquipParamGoods>(id)).map(|row| row.icon_id() as u32)
+}
+
 /// (HUD2) One Elden Ring key item as the Key Items tab lists it (name, caption, icon) by its item id.
 fn key_item_of(raw: u32) -> Option<KeyItem> {
     let cat = cat_of_item_id(raw)?;
-    if !shown_by_er(raw) {
-        return None; // (ONLINEITEMS fix) no popup for a row Elden Ring never shows
+    if !on_key_items_tab(raw) {
+        // (ONLINEITEMS fix) no popup for a row Elden Ring never shows; (KEYITEM-TUTORIALS) nor for a tutorial log: no longer
+        // a key item (Elden Ring's own tutorial pop-up is untouched)
+        return None;
     }
     let id = raw & 0x0FFF_FFFF;
     let name = item_name(cat, id).unwrap_or_else(|| format!("Elden Ring {} {id}", cat.name()));
@@ -1009,6 +1129,40 @@ fn key_item_of(raw: u32) -> Option<KeyItem> {
 #[cfg(test)]
 mod hud2_key_tests {
     use super::*;
+
+    /// (OUTFIT-UNLOCK) AN OWNED KEY ITEM PAST THE IN-USE LENGTH (the Gold Sewing Needle in game, shots/39_key_items_end.png): a
+    /// real array of the game's entries (`MaybeEmpty<EquipInventoryDataListEntry>`, its own empty check: the item id at + 4 is
+    /// "no item"), the in-use length 2, the capacity 8, the needle in slot 5. Read as the readers now read it
+    /// (`key_slot_count`): it is there and counts as owned; read as the SDK's `current_key_entries` (the length) it was missing.
+    #[test]
+    fn a_key_item_past_the_in_use_length_is_listed_and_owned() {
+        const GOLD: u32 = 0x4000_0000 | 8162;
+        const STONESWORD: u32 = 0x4000_0000 | 8000;
+        let size = std::mem::size_of::<MaybeEmpty<EquipInventoryDataListEntry>>();
+        assert!(size >= 12, "an entry holds a handle, the item id at + 4, the quantity");
+        // eight slots, all "no item" (every byte 0xFF), then two items written at their id's place (+ 4); the buffer is u64
+        // words so the entries are aligned as the game's are
+        assert_eq!(size % 4, 0);
+        let mut raw = vec![u32::MAX; size * 8 / 4 + 2];
+        for (slot, id) in [(0usize, STONESWORD), (5, GOLD)] {
+            raw[(slot * size + 4) / 4] = id;
+        }
+        let words: Vec<u64> = raw.chunks(2).map(|c| u64::from(c[0]) | (u64::from(*c.get(1).unwrap_or(&u32::MAX)) << 32)).collect();
+        let ptr = words.as_ptr() as *const MaybeEmpty<EquipInventoryDataListEntry>;
+        let ids = |n: usize| -> Vec<u32> {
+            // SAFETY: `n` <= 8 entries of the u64-aligned buffer above (plain integers read through the SDK's own type).
+            let slots = unsafe { std::slice::from_raw_parts(ptr, n) };
+            slots.iter().filter_map(|e| e.as_option()).map(|e| e.item_id.into_inner()).collect()
+        };
+        let (len, capacity) = (2u32, 8u32);
+        assert_eq!(ids(len as usize), vec![STONESWORD], "the SDK's view (the in-use length): the needle is missing");
+        assert_eq!(key_slot_count(len, capacity), 8);
+        let now = ids(key_slot_count(len, capacity));
+        assert_eq!(now, vec![STONESWORD, GOLD], "every slot: listed, owned; the empty slots skipped by their own check");
+        assert!(now.contains(&GOLD));
+        // an unknown / implausible capacity: the in-use length, never less than it
+        assert_eq!((key_slot_count(3, 0), key_slot_count(3, 1_000_000), key_slot_count(9, 4)), (3, 3, 9));
+    }
 
     fn map(v: &[(u32, u32)]) -> HashMap<u32, u32> {
         v.iter().copied().collect()
@@ -1026,6 +1180,41 @@ mod hud2_key_tests {
         assert_eq!(key_gains(&mut seen, map(&[(0x4000_1F40, 3), (0x4000_2000, 1), (0x4000_2100, 1)])), vec![(0x4000_1F40, 1)], "picked up again");
         let load: Vec<(u32, u32)> = (0..9).map(|k| (0x4000_3000 + k, 1)).collect();
         assert!(key_gains(&mut seen, map(&load)).is_empty(), "a load: baseline only");
+    }
+
+    /// (TESTPREP) THE ROUND'S CASE: slot 9's session holds no bell; slot 2 (with the bell) is loaded in session. The game
+    /// rebuilds the inventory 0.2 s after the request while the player still exists, so a read sees the loaded save's items
+    /// (one more: the bell). Before the fix that was a gain (the popup on every such load); now the request's epoch makes
+    /// every read baseline-only until the load's screen, and after it the first read is the baseline as before. A real
+    /// pickup after the load still pops.
+    #[test]
+    fn a_load_in_session_is_never_a_gain() {
+        const BELL: u32 = 0x4000_1FDE;
+        const POUCH: u32 = 0x4000_2738;
+        const STONESWORD: u32 = 0x4000_1F40;
+        let session = || map(&[(STONESWORD, 2), (POUCH, 1)]);
+        let loaded = || map(&[(STONESWORD, 2), (POUCH, 1), (BELL, 1)]);
+        // the old rule alone: the bell "came"
+        let mut seen = None;
+        let _ = key_gains(&mut seen, session());
+        assert_eq!(key_gains(&mut seen, loaded()), vec![(BELL, 1)], "the bug: a load's one extra key item looked like a pickup");
+        // the watch: the session's baseline, the load asked (epoch 1), the inventory rebuilt while the player stands
+        let (mut seen, mut load) = (None, KeyLoad::default());
+        assert!(key_watch(&mut seen, &mut load, Some(session()), 0, false).is_empty(), "the baseline");
+        assert!(key_watch(&mut seen, &mut load, Some(session()), 0, false).is_empty());
+        assert!(key_watch(&mut seen, &mut load, Some(loaded()), 1, true).is_empty(), "the load's inventory: no popup");
+        assert!(key_watch(&mut seen, &mut load, Some(loaded()), 1, true).is_empty(), "still loading");
+        assert!(key_watch(&mut seen, &mut load, None, 1, false).is_empty(), "the loading screen: no player");
+        assert!(key_watch(&mut seen, &mut load, Some(loaded()), 1, false).is_empty(), "back: the baseline");
+        assert_eq!(key_watch(&mut seen, &mut load, Some(map(&[(STONESWORD, 3), (POUCH, 1), (BELL, 1)])), 1, false), vec![(STONESWORD, 1)], "a real pickup after the load pops");
+        // a load asked while the game keeps the player and no loading screen comes (the round's stalled request): quiet
+        // for KEY_QUIET_READS reads, then normal again
+        let (mut seen, mut load) = (None, KeyLoad::default());
+        let _ = key_watch(&mut seen, &mut load, Some(session()), 0, false);
+        for _ in 0..KEY_QUIET_READS {
+            assert!(key_watch(&mut seen, &mut load, Some(loaded()), 2, false).is_empty(), "quiet after the request");
+        }
+        assert_eq!(key_watch(&mut seen, &mut load, Some(map(&[(STONESWORD, 2), (POUCH, 2), (BELL, 1)])), 2, false), vec![(POUCH, 1)], "the quiet ends");
     }
 }
 
@@ -1073,9 +1262,11 @@ fn key_items(data: &PlayerGameData) -> Vec<KeyItem> {
         }
     };
     let items = &data.equipment.equip_inventory_data.items_data;
-    for entry in items.current_key_entries().iter().filter_map(|e| e.as_option()) {
-        // (ONLINEITEMS fix) a hidden row is not listed (Elden Ring's own inventory does not show it)
-        if !shown_by_er(entry.item_id.into_inner()) {
+    // (OUTFIT-UNLOCK) every key-item slot (the KH3 Key Items tab missed the owned Gold Sewing Needle past the in-use length)
+    for entry in all_key_entries(items).iter().filter_map(|e| e.as_option()) {
+        // (ONLINEITEMS fix) a hidden row is not listed (Elden Ring's own inventory does not show it); (KEYITEM-TUTORIALS)
+        // nor one of Elden Ring's tutorial logs
+        if !on_key_items_tab(entry.item_id.into_inner()) {
             continue;
         }
         add(&mut out, entry.item_id.into_inner(), entry.quantity);
@@ -1093,8 +1284,9 @@ fn key_items(data: &PlayerGameData) -> Vec<KeyItem> {
             continue;
         }
         let item = describe(Cat::Goods, raw & 0x0FFF_FFFF);
-        // (ONLINEITEMS fix) never a row Elden Ring's own inventory hides (goods 166 and the like)
-        if !item.known || !crate::lootmap::listed_on_kh_screens(&item) || !matches!(rules().classify(&item, &ctx(Source::Unknown)).give, Give::Pass) {
+        // (ONLINEITEMS fix) never a row Elden Ring's own inventory hides (goods 166 and the like); (KEYITEM-TUTORIALS) nor a
+        // tutorial log
+        if !item.known || !crate::lootmap::in_key_items_tab(&item, rules()) || !matches!(rules().classify(&item, &ctx(Source::Unknown)).give, Give::Pass) {
             continue;
         }
         add(&mut out, raw, entry.quantity);

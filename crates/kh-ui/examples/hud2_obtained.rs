@@ -39,7 +39,7 @@ fn main() {
     // (HUD2 round 2) the user's overflow case and the box's extremes: `-- OUT_DIR round2`
     let cases = if args.get(1).map(String::as_str) == Some("round2") {
         let limgrave = "Map of the western region of Limgrave. The demesne of Limgrave, far south of the Erdtree, is bordered to the northwest by the cliffs of Stormveil, and under its ever-clouded skies roll the great steppes of the pale lands.".to_string();
-        let long = std::iter::repeat("A very long caption that keeps going so the box has to reach its tallest and the text has to step down in size.").take(9).collect::<Vec<_>>().join(" ");
+        let long = std::iter::repeat_n("A very long caption that keeps going so the box has to reach its tallest and the text has to step down in size.", 9).collect::<Vec<_>>().join(" ");
         vec![
             ("er_map_limgrave_5_lines", Obtained { picture: texture(&ui.join("er_icons/00261.png")), name: "Map: Limgrave, West".into(), caption: limgrave }),
             ("one_line", Obtained { picture: texture(&ui.join("er_icons/00228.png")), name: "Stonesword Key".into(), caption: "Breaks the seal on imp statues.".into() }),

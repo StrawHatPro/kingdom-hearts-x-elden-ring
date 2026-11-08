@@ -79,7 +79,7 @@ impl Model {
             for m in &self.meshes {
                 let start = out.indices.len();
                 let mut seen: std::collections::HashSet<[u32; 3]> = std::collections::HashSet::new();
-                for t in self.indices[m.first..m.first + m.count].chunks_exact(3) {
+                for t in self.indices[m.first..m.first + m.count].as_chunks::<3>().0 {
                     let r = [t[0], t[1], t[2]].map(|i| first.get(i as usize).copied().unwrap_or(i));
                     if r[0] == r[1] || r[1] == r[2] || r[0] == r[2] {
                         continue;
@@ -189,7 +189,7 @@ pub fn skin(model: &Model, world: &[Mat4], shown: &dyn Fn(u8) -> bool, to_game: 
         if m.group.is_some_and(|g| !shown(g)) {
             continue;
         }
-        for t in model.indices[m.first..m.first + m.count].chunks_exact(3) {
+        for t in model.indices[m.first..m.first + m.count].as_chunks::<3>().0 {
             let (a, b, c) = (t[0] as usize, t[1] as usize, t[2] as usize);
             if a >= n || b >= n || c >= n {
                 continue;
@@ -497,7 +497,8 @@ impl Crumble {
             chunks.push(Chunk { geo: chunk_mesh(tris, ids, centre, thick), centre, v0, axis: c_axis, rate: c_rate, release, split, size, frags });
         }
         // the cracks: the cells' borders, spreading from the side the beam strikes
-        let mut shared: HashMap<(Q3, Q3), Vec<(usize, Vec3, Vec3, Vec3)>> = HashMap::new();
+        type EdgeSide = (usize, Vec3, Vec3, Vec3); // (cell, normal, the edge's ends)
+        let mut shared: HashMap<(Q3, Q3), Vec<EdgeSide>> = HashMap::new();
         for (i, t) in tris.iter().enumerate() {
             for k in 0..3 {
                 shared.entry(edge_key(t.p[k], t.p[(k + 1) % 3])).or_default().push((cell[i], t.n, t.p[k], t.p[(k + 1) % 3]));
@@ -632,13 +633,15 @@ fn same_pose(a: (Vec3, Vec3), b: (Vec3, Vec3)) -> bool {
 /// crumbling (Zettaflare holds it frozen in its hurt pose: ZETTA), so the first crumble step finds it ready (no hitch, no
 /// step without cracks); a cut whose pose no longer matches the body (its bounds moved by more than 3 cm) is cut again. At the
 /// first crumble step the cut that matches is kept for good; while none is ready the whole silhouette stays.
+/// A cut on its thread: (whose, the bounds it was cut from, the thread).
+type Cutting = (u32, (Vec3, Vec3), std::thread::JoinHandle<(Crumble, Duration)>);
+
 #[derive(Default)]
 pub struct Driver {
     /// the cuts ready: (cut, the bounds it was cut from, kept for good)
     crumbles: Vec<(Crumble, (Vec3, Vec3), bool)>,
     pub threaded: bool,
-    #[allow(clippy::type_complexity)]
-    cutting: Vec<(u32, (Vec3, Vec3), std::thread::JoinHandle<(Crumble, Duration)>)>,
+    cutting: Vec<Cutting>,
     /// (for the log) the last cut kept: whose, its triangles, how long it took
     pub last_cut: Option<(u32, usize, Duration)>,
 }
@@ -882,14 +885,22 @@ fn shader(name: &str) -> Option<Vec<u8>> {
 
 /// A pipeline of ours: the soup's layout, no depth, one target of `format` blended by `blend`.
 unsafe fn pipeline(device: &ID3D12Device, root: &ID3D12RootSignature, vs: &[u8], ps: &[u8], format: DXGI_FORMAT, blend: D3D12_RENDER_TARGET_BLEND_DESC) -> windows::core::Result<ID3D12PipelineState> {
-    pipeline_in(device, root, vs, ps, format, blend, true, None)
+    pipeline_in(device, root, vs, ps, &PipeState { format, blend, soup: true, depth: None })
 }
 
-/// As `pipeline`; `soup` false: no vertex input (a full-screen triangle).
-/// `depth`: the small mask's depth (D32) tested with that function, written or not.
-#[allow(clippy::too_many_arguments)]
-unsafe fn pipeline_in(device: &ID3D12Device, root: &ID3D12RootSignature, vs: &[u8], ps: &[u8], format: DXGI_FORMAT, blend: D3D12_RENDER_TARGET_BLEND_DESC, soup: bool, depth: Option<(D3D12_COMPARISON_FUNC, bool)>) -> windows::core::Result<ID3D12PipelineState> {
-    let element = [D3D12_INPUT_ELEMENT_DESC { SemanticName: PCSTR(b"LOC\0".as_ptr()), SemanticIndex: 0, Format: DXGI_FORMAT_R32G32B32A32_FLOAT, InputSlot: 0, AlignedByteOffset: 0, InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, InstanceDataStepRate: 0 }];
+/// The fixed state of `pipeline_in`: one target of `format` blended by `blend`. `soup` false: no vertex input (a full-screen
+/// triangle). `depth`: the small mask's depth (D32) tested with that function, written or not.
+struct PipeState {
+    format: DXGI_FORMAT,
+    blend: D3D12_RENDER_TARGET_BLEND_DESC,
+    soup: bool,
+    depth: Option<(D3D12_COMPARISON_FUNC, bool)>,
+}
+
+/// As `pipeline`, with all of `PipeState`.
+unsafe fn pipeline_in(device: &ID3D12Device, root: &ID3D12RootSignature, vs: &[u8], ps: &[u8], state: &PipeState) -> windows::core::Result<ID3D12PipelineState> {
+    let PipeState { format, blend, soup, depth } = *state;
+    let element = [D3D12_INPUT_ELEMENT_DESC { SemanticName: PCSTR(c"LOC".as_ptr().cast()), SemanticIndex: 0, Format: DXGI_FORMAT_R32G32B32A32_FLOAT, InputSlot: 0, AlignedByteOffset: 0, InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, InstanceDataStepRate: 0 }];
     let mut blend_desc = D3D12_BLEND_DESC::default();
     blend_desc.RenderTarget[0] = blend;
     let mut formats = [DXGI_FORMAT_UNKNOWN; 8];
@@ -941,13 +952,13 @@ unsafe fn make(device: &ID3D12Device) -> Result<Gpu, String> {
     // (per depth direction, [forward z, reverse z]: the body writing its depth, its light tested against it)
     let mut mask = Vec::new();
     for func in [D3D12_COMPARISON_FUNC_LESS_EQUAL, D3D12_COMPARISON_FUNC_GREATER_EQUAL] {
-        let body = pipeline_in(device, &root, &vs, &ps, DXGI_FORMAT_R8G8B8A8_UNORM, max, true, Some((func, true))).map_err(|e| format!("pipeline: {e}"))?;
-        let light = pipeline_in(device, &root, &vs, &ps, DXGI_FORMAT_R8G8B8A8_UNORM, max, true, Some((func, false))).map_err(|e| format!("pipeline: {e}"))?;
+        let body = pipeline_in(device, &root, &vs, &ps, &PipeState { format: DXGI_FORMAT_R8G8B8A8_UNORM, blend: max, soup: true, depth: Some((func, true)) }).map_err(|e| format!("pipeline: {e}"))?;
+        let light = pipeline_in(device, &root, &vs, &ps, &PipeState { format: DXGI_FORMAT_R8G8B8A8_UNORM, blend: max, soup: true, depth: Some((func, false)) }).map_err(|e| format!("pipeline: {e}"))?;
         mask.push((body, light));
     }
     let light_shaders = shader("zdraw_imm.vs.dxil").zip(shader("zdraw_imm.ps.dxil"));
     let (Some(up_vs), Some(up_ps)) = (shader("zdraw_up.vs.dxil"), shader("zdraw_up.ps.dxil")) else { return Err("materials/er/zdraw_up.vs.dxil / zdraw_up.ps.dxil missing".to_string()) };
-    let up = pipeline_in(device, &root, &up_vs, &up_ps, DXGI_FORMAT_R8G8B8A8_UNORM, max, false, None).map_err(|e| format!("the mask's lay-over: {e}"))?;
+    let up = pipeline_in(device, &root, &up_vs, &up_ps, &PipeState { format: DXGI_FORMAT_R8G8B8A8_UNORM, blend: max, soup: false, depth: None }).map_err(|e| format!("the mask's lay-over: {e}"))?;
     let small_dsv: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV, NumDescriptors: 1, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| format!("views: {e}"))?;
     let small_rtv: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 1, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| format!("views: {e}"))?;
     let small_srv: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, NumDescriptors: 7, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, NodeMask: 0 }).map_err(|e| format!("views: {e}"))?;
@@ -972,7 +983,7 @@ unsafe fn ring(device: &ID3D12Device, bytes: usize) -> windows::core::Result<Rin
 
 /// Our GPU objects (made the first time; None: they cannot be made, the screen route for every body from then on).
 fn gpu<'a>(guard: &'a mut Option<Gpu>, device: &ID3D12Device) -> Option<&'a mut Gpu> {
-    if guard.as_ref().is_some_and(|g| g.device != unsafe { device.as_raw() } as usize) {
+    if guard.as_ref().is_some_and(|g| g.device != device.as_raw() as usize) {
         *guard = None;
     }
     if guard.is_none() {
@@ -992,12 +1003,21 @@ fn gpu<'a>(guard: &'a mut Option<Gpu>, device: &ID3D12Device) -> Option<&'a mut 
     guard.as_mut()
 }
 
+/// The finale's pass the own-model draws join: its device, list, root signature, frame slot and view.
+pub(crate) struct PassIn<'a> {
+    pub device: &'a ID3D12Device,
+    pub list: &'a ID3D12GraphicsCommandList,
+    pub root: &'a ID3D12RootSignature,
+    pub slot: usize,
+    pub view: &'a crate::finale::View,
+}
+
 /// (finale.rs `draw`) The soups of `ids` into the finale's mask (`mask_rtv`, `w` x `h`; max blending: r its body and
 /// pieces, g its light), drawn as the test level draws its mask: into a mask 960 pixels wide (the target's aspect), laid over
 /// with linear filtering. Returns the ids drawn. Draws with a root signature and a view heap of its own and binds `root` and
 /// `heap` again after: the caller sets its root arguments (CBVs, table), pipeline, targets, viewport and scissor again.
-#[allow(clippy::too_many_arguments)]
-pub(crate) unsafe fn draw_mask(device: &ID3D12Device, list: &ID3D12GraphicsCommandList, root: &ID3D12RootSignature, heap: &ID3D12DescriptorHeap, slot: usize, view: &crate::finale::View, ids: &[u32], mask_rtv: D3D12_CPU_DESCRIPTOR_HANDLE, w: u32, h: u32) -> Vec<u32> {
+pub(crate) unsafe fn draw_mask(pass: &PassIn, heap: &ID3D12DescriptorHeap, ids: &[u32], mask_rtv: D3D12_CPU_DESCRIPTOR_HANDLE, w: u32, h: u32) -> Vec<u32> {
+    let PassIn { device, list, root, slot, view } = *pass;
     let clip = &view.clip;
     if ids.is_empty() || slot >= SLOTS || GPU_FAILED.load(std::sync::atomic::Ordering::Relaxed) || w == 0 || h == 0 {
         return Vec::new();
@@ -1045,11 +1065,11 @@ pub(crate) unsafe fn draw_mask(device: &ID3D12Device, list: &ID3D12GraphicsComma
     // the body and its pieces first, then their light (cracks, embers)
     let mut ordered: Vec<[f32; 4]> = Vec::with_capacity(soups.iter().map(|s| s.1.len()).sum());
     for (_, s) in &soups {
-        ordered.extend(s.chunks_exact(3).filter(|t| t[0][3] < 1.5).flatten());
+        ordered.extend(s.as_chunks::<3>().0.iter().filter(|t| t[0][3] < 1.5).flatten());
     }
     let body_verts = ordered.len();
     for (_, s) in &soups {
-        ordered.extend(s.chunks_exact(3).filter(|t| t[0][3] >= 1.5).flatten());
+        ordered.extend(s.as_chunks::<3>().0.iter().filter(|t| t[0][3] >= 1.5).flatten());
     }
     let verts = ordered.len();
     let need = 512 + verts * 16;
@@ -1134,8 +1154,8 @@ fn transition(resource: &ID3D12Resource, before: D3D12_RESOURCE_STATES, after: D
 /// The bodies of `ids` in the light: their own model in the test level's light grey, faded in by `immerse`, behind whatever
 /// the scene depth holds nearer. `scale`: the light's scale to the target (vfx.rs `effect_scale`). Returns the ids drawn;
 /// binds `root` again after (the caller sets its root arguments again).
-#[allow(clippy::too_many_arguments)]
-pub(crate) unsafe fn draw_light(device: &ID3D12Device, list: &ID3D12GraphicsCommandList, root: &ID3D12RootSignature, slot: usize, format: DXGI_FORMAT, view: &crate::finale::View, scale: f32, table: D3D12_GPU_DESCRIPTOR_HANDLE, ids: &[u32]) -> Vec<u32> {
+pub(crate) unsafe fn draw_light(pass: &PassIn, format: DXGI_FORMAT, scale: f32, table: D3D12_GPU_DESCRIPTOR_HANDLE, ids: &[u32]) -> Vec<u32> {
+    let PassIn { device, list, root, slot, view } = *pass;
     if ids.is_empty() || slot >= SLOTS || GPU_FAILED.load(std::sync::atomic::Ordering::Relaxed) {
         return Vec::new();
     }
@@ -1350,8 +1370,7 @@ mod tests {
     #[test]
     fn zdraw_threaded_driver_cuts_ahead_while_held_and_recuts_a_moved_pose() {
         let body = cube_body(1.8);
-        let mut d = Driver::default();
-        d.threaded = true;
+        let mut d = Driver { threaded: true, ..Driver::default() };
         let ask = |crumble: f32| Ask { id: 5, silhouette: true, crumble, feet: Vec3::ZERO, radius: 30.0, half_height: 90.0, push: Vec3::X };
         // held as a silhouette: the whole body, the cut made meanwhile
         for _ in 0..200 {
@@ -1366,8 +1385,7 @@ mod tests {
         let s = d.step(&ask(0.12), Some(&body)).unwrap();
         assert!(d.has(5) && s.iter().any(|v| v[3] > 1.5), "the cut kept at the first crumble step, its cracks drawn");
         // a pose that moved before the crumble: cut again (the old cut not kept)
-        let mut d = Driver::default();
-        d.threaded = true;
+        let mut d = Driver { threaded: true, ..Driver::default() };
         for _ in 0..200 {
             d.step(&ask(0.0), Some(&body));
             if d.crumbles.iter().any(|c| c.0.id == 5) {

@@ -52,6 +52,13 @@ use crate::texture::Pixels;
 #[path = "vfxpost.rs"]
 mod post;
 pub use post::{eye_boost, set_eye_adapt, set_post};
+// (VFX-2) the effects' skeletal mesh components (TypeDataSQEX_SkeletalMesh): skelfx.rs
+#[path = "skelfx.rs"]
+mod skelfx;
+// (PARTY-NATIVE-LIGHT) Elden Ring's own light on the KH lit translucent effects: the copy of its light inputs (vfxlight.rs)
+#[path = "vfxlight.rs"]
+mod light_kit;
+pub(crate) use light_kit::{set_sun, FxSun};
 
 /// (ORBS) The colour gain of a prize orb's effect (`prize.glow`, kh-er prize.rs and the harness's `--orbs`): the glow over the
 /// eye factor the renderer already gives the eye-adaptation materials, so the orbs do not get it twice.
@@ -71,8 +78,8 @@ const QUAD_FLOATS: usize = 36;
 const MESH_INSTANCE_FLOATS: usize = 24;
 const PLAIN_FLOATS: usize = 33;
 const MESH_VERTEX_FLOATS: usize = 18;
-/// Rows of `KhParams`: 64 of the material, misc, er.
-const PARAM_ROWS: usize = 66;
+/// Rows of `KhParams`: 64 of the material, misc, er, (PARTY-NATIVE) fx (the game's fog mode: `fog_mode`).
+const PARAM_ROWS: usize = 67;
 /// Sampler heap entry of (address U, address V) = 3 * U + V with wrap 0, clamp 1, mirror 2; then the scene's.
 const SAMPLER_SCENE: u32 = 9;
 
@@ -156,6 +163,10 @@ type SortKey = (i32, f32, u64, u32);
 /// as before.
 pub static SORT_GROUPS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
+/// (PARTY-NATIVE) ctl `vfx.fxlit = 0` (a TEST switch, default on): the lit translucent effects draw their fog variant instead of
+/// their lit one (the A / B of Elden Ring's light on them).
+pub static LIT_VARIANTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
 /// (VFXR sort) The group's key of item `index` (`table`: `DrawList::group_table`), or the plain distance key of `at`.
 fn sort_of(list: &kh_vfx::DrawList, table: &[usize], index: usize, camera: Vec3, at: Vec3) -> (SortKey, usize) {
     let on = SORT_GROUPS.load(Ordering::Relaxed);
@@ -178,6 +189,8 @@ struct Prepared {
     screen: Vec<kh_vfx::ScreenFx>,
     /// (ZFIN) the materials drawn over Zettaflare's finale (`r.finale_over`: ZETTA's crumble fragments; finale.rs)
     over: Vec<u32>,
+    /// (VFX-2) the skeletal mesh components, posed and skinned (skelfx.rs)
+    skel: Vec<skelfx::Posed>,
 }
 
 /// The instance arrays of frames that are over, for the next ones (a volley of the shotlock is
@@ -244,6 +257,118 @@ static OPTIONS: Mutex<Option<VfxOptions>> = Mutex::new(None);
 static GPU: Mutex<Option<Gpu>> = Mutex::new(None);
 /// The formats of the target and the depth the draws go to (the worker makes pipeline states for them).
 static FORMATS: Mutex<Option<(i32, i32)>> = Mutex::new(None);
+
+// ---------------------------------------------------------------------------------------------------- (PARTY-NATIVE)
+// THE LIT (DEFERRED) EFFECTS ON THE CHARACTERS' NATIVE ROUTE (er_vfx.wgsl KH_FXNAT / KH_FX_GB; the user 2026-11-05: "Donald and
+// Goofy need to be rendering how Sora is rendering as well, as well as all of their effects"). A material whose KH3 shader writes
+// the G-buffer (outputs o1..o3) and has its native pair in its root (`n<letter><id>` / `g<letter><id>`, kh-shaderc --vfx --only
+// fxnat) is drawn as KH3 draws it: its G-buffer twin goes into the game's G-buffer in the early list beside the characters'
+// (`gbuffer_replay`, called by gfx.rs's G-buffer pass), the game's light passes light it, the characters' capture takes that
+// light, and its colour pass composes KH3's deferred result from it. Without a capture this frame, or without the pair, the
+// earlier shading stays.
+
+/// The frame constants' native row (er_vfx.wgsl `ErFrame.fxn`), appended after the forward rows.
+const FXN_FLOATS: usize = 4;
+/// Views of each frame slot's table (t12 the scene depth, t13 the scene colour copy, t14 / t15 the capture of the game's light,
+/// t16 / t17 the copy of the game's fog volume and its constants; (PARTY-NATIVE-LIGHT) t18 the lit rows, t19..t26 the irradiance
+/// volumes, t27 the light buffers, t28 / t29 the sun's cascade atlas and constants: vfxlight.rs `write_views`).
+const FRAME_VIEWS: usize = 18;
+/// G-buffer draws a frame slot keeps for the replay.
+const MAX_REPLAYS: usize = 4096;
+
+/// (PARTY-NATIVE) This frame's capture of the game's light (gfx.rs `HyCapture`: the light and geometry targets, raw pointers, in
+/// the native layout with the game's specular), the light-set mark of the KH G-buffer white, the normal match (cos).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FxCapture {
+    pub light: usize,
+    pub geo: usize,
+    pub mark: f32,
+    pub cos: f32,
+}
+
+static FX_CAPTURE: Mutex<Option<FxCapture>> = Mutex::new(None);
+/// (PARTY-NATIVE) The formats of the game's three G-buffer targets the KH draws write and of its depth (gfx.rs, from the
+/// hybrid's plan of the frame): the G-buffer twins' pipeline states are made for them.
+static GB_FORMATS: Mutex<Option<GbFormats>> = Mutex::new(None);
+/// (PARTY-NATIVE) The G-buffer draws recorded with this frame's colour pass, per frame slot (replayed by `gbuffer_replay`).
+static REPLAYS: Mutex<Vec<(usize, Vec<Replay>)>> = Mutex::new(Vec::new());
+static NATIVE_DRAWS: AtomicU32 = AtomicU32::new(0);
+static GB_DRAWS: AtomicU32 = AtomicU32::new(0);
+/// (PARTY-NATIVE) frames with the copy of the game's fog drawn, late batches drawn with their fog variant
+static FOG_FRAMES: AtomicU32 = AtomicU32::new(0);
+static FOG_BATCHES: AtomicU32 = AtomicU32::new(0);
+/// (PARTY-NATIVE-LIGHT) frames with the copy of the game's light inputs drawn, late batches drawn with their lit variant
+static LIT_FRAMES: AtomicU32 = AtomicU32::new(0);
+static LIT_BATCHES: AtomicU32 = AtomicU32::new(0);
+/// (round 3) late batches drawn with their plain variant (no lit / fog variant taken), and the lit-variant lines told
+static PLAIN_BATCHES: AtomicU32 = AtomicU32::new(0);
+static LIT_TOLD: AtomicU32 = AtomicU32::new(0);
+
+/// (the three render targets' formats, the depth's)
+pub(crate) type GbFormats = ([i32; 3], i32);
+
+/// (PARTY-NATIVE) gfx.rs, once a frame after the capture: the capture for the lit effects (None: no native capture this frame).
+pub(crate) fn set_capture(capture: Option<FxCapture>) {
+    if let Ok(mut c) = FX_CAPTURE.lock() {
+        *c = capture;
+    }
+}
+
+/// (PARTY-NATIVE) gfx.rs, with the hybrid's plan of the frame: the G-buffer's formats.
+pub(crate) fn set_gb_formats(formats: Option<GbFormats>) {
+    if let Ok(mut f) = GB_FORMATS.lock() {
+        if f.is_none() || formats.is_some() {
+            *f = formats;
+        }
+    }
+}
+
+/// (PARTY-NATIVE) The native row of the frame constants (pure, tested).
+fn fxn_row(capture: Option<FxCapture>) -> [f32; FXN_FLOATS] {
+    match capture {
+        Some(c) => [1.0, c.mark, c.cos.clamp(-1.0, 1.0), 0.0],
+        None => [0.0; FXN_FLOATS],
+    }
+}
+
+/// (PARTY-NATIVE) A G-buffer draw kept for the replay: its state, root arguments and geometry.
+struct Replay {
+    pso: ID3D12PipelineState,
+    frame: u64,
+    material: u64,
+    samplers: u64,
+    table: u64,
+    vertex: Vec<D3D12_VERTEX_BUFFER_VIEW>,
+    index: Option<D3D12_INDEX_BUFFER_VIEW>,
+    count: u32,
+    instances: u32,
+}
+
+// SAFETY: as Gpu (D3D12 objects are free-threaded; the views are plain GPU addresses).
+unsafe impl Send for Replay {}
+
+/// (PARTY-NATIVE) A material's native pair: the colour pass from the game's light (and its mirrored twin), and the G-buffer
+/// twin's files with its states for the formats they were made for.
+struct NativeFx {
+    colour: ID3D12PipelineState,
+    colour_mirrored: Option<ID3D12PipelineState>,
+    dir: PathBuf,
+    vertex: String,
+    pixel: String,
+    geo: Geo,
+    cull: D3D12_CULL_MODE,
+    one_sided: bool,
+    gb: Option<(GbFormats, ID3D12PipelineState, Option<ID3D12PipelineState>)>,
+    gb_failed: bool,
+}
+
+/// (PARTY-NATIVE) The native pair's file names of a translated variant (`<letter><id><suffix>`: an overlay's changed translation
+/// carries its suffix, `_vxl` / `_xwd`), None for a decal or a shader without G-buffer outputs (pure, tested). Every KH3 decal of
+/// the pack compiles to ONE target (FDeferredDecalPS `outputs` 1: o0 = its colour / the eye adaptation, DBM_SQEX_Overwrite /
+/// Translucent / Emissive): KH3's lights never reach a decal, so it has no pair.
+fn native_files(letter: &str, shader_id: u64, outputs: u64, suffix: &str) -> Option<(String, String)> {
+    (letter != "d" && outputs >= 4).then(|| (format!("n{letter}{shader_id}{suffix}.ps.dxil"), format!("g{letter}{shader_id}{suffix}.ps.dxil")))
+}
 // Numbers for the log (since the last `status`).
 static DRAWN_FRAMES: AtomicU32 = AtomicU32::new(0);
 static DRAWN_BATCHES: AtomicU32 = AtomicU32::new(0);
@@ -282,7 +407,7 @@ pub fn set_scene_light(light: f32) {
 /// The factor the scene is multiplied by (1 = nothing to do).
 pub(crate) fn scene_dim() -> f32 {
     let light = f32::from_bits(SCENE_LIGHT.load(Ordering::Relaxed));
-    light * light
+    light * light * crate::darkscreen::coefficient() // (AUDIT-A CAMS) x KH3's master light coefficient (the finishes' dark screen)
 }
 
 /// Which part of the frame's effects one call of [`draw`] records.
@@ -445,8 +570,32 @@ pub fn describe_latest() -> Vec<String> {
 pub fn status() -> String {
     let frames = DRAWN_FRAMES.swap(0, Ordering::Relaxed).max(1) as u64;
     let (ready, pending, failed, meshes, textures, bytes) = GPU.lock().ok().and_then(|g| g.as_ref().map(|g| (g.materials.iter().filter(|m| matches!(m, MatState::Ready(_))).count(), g.pending_materials, g.materials.iter().filter(|m| matches!(m, MatState::Failed)).count(), g.meshes.iter().filter(|m| matches!(m, MeshState::Ready(_))).count(), g.textures.len(), g.texture_bytes))).unwrap_or((0, 0, 0, 0, 0, 0));
+    // (PARTY-NATIVE) the lit materials on the native route: with their pair, with its G-buffer states for the formats
+    let (paired, gb_ready) = GPU.lock().ok().and_then(|g| g.as_ref().map(|g| {
+        let natives = g.materials.iter().filter_map(|m| match m {
+            MatState::Ready(m) => m.native.as_ref(),
+            _ => None,
+        });
+        let formats = GB_FORMATS.lock().ok().and_then(|f| *f);
+        (natives.clone().count(), natives.filter(|n| n.gb.as_ref().is_some_and(|x| Some(x.0) == formats)).count())
+    })).unwrap_or((0, 0));
+    // (PARTY-NATIVE-LIGHT) Elden Ring's own light on the lit translucent effects
+    let lit_made = GPU.lock().ok().and_then(|g| g.as_ref().map(|g| g.materials.iter().filter(|m| matches!(m, MatState::Ready(m) if m.lit.is_some())).count())).unwrap_or(0);
+    let lit_text = format!(
+        "(PARTY-NATIVE-LIGHT) the lit translucent effects in Elden Ring's own light: {lit_made} material(s) with their lit variant; {} frame(s) with the copy of the game's light inputs; blended batches this second by variant: lit {}, fog {}, plain {}; {}",
+        LIT_FRAMES.swap(0, Ordering::Relaxed),
+        LIT_BATCHES.swap(0, Ordering::Relaxed),
+        FOG_BATCHES.load(Ordering::Relaxed),
+        PLAIN_BATCHES.swap(0, Ordering::Relaxed),
+        GPU.lock().ok().and_then(|g| g.as_ref().map(|g| match (&g.lit, &g.lit_failed) {
+            (Some(k), _) => format!("{}; {}", k.status(), light_kit::frames_status()),
+            (None, Some(e)) => format!("not made: {e}"),
+            _ => "not made yet".to_string(),
+        })).unwrap_or_default()
+    );
+    let native = format!("(PARTY-NATIVE) lit effects on the native route: {paired} material(s) with their pair, {gb_ready} with G-buffer states; {} colour batch(es) from the game's light, {} G-buffer draw(s) this second; capture {}; the game's fog on the late effects: {} frame(s), {} batch(es) with their fog variant, {}; {}", NATIVE_DRAWS.swap(0, Ordering::Relaxed), GB_DRAWS.swap(0, Ordering::Relaxed), if FX_CAPTURE.lock().ok().and_then(|c| *c).is_some() { "bound" } else { "none" }, FOG_FRAMES.swap(0, Ordering::Relaxed), FOG_BATCHES.swap(0, Ordering::Relaxed), GPU.lock().ok().and_then(|g| g.as_ref().map(|g| match (&g.fog, &g.fog_failed) { (Some(k), _) => format!("volume {:?}{}", k.size, if k.volume.is_some() { "" } else { " (no copy yet)" }), (None, Some(e)) => format!("not made: {e}"), _ => "not made yet".to_string() })).unwrap_or_default(), crate::ffx::status());
     format!(
-        "vfx: {} | per frame: {} batches, {} instances; prepare {} us (max {}), draw {} us (max {}); peak {} particles | {} not ready, {} cut (buffer full) | materials {ready} ready, {pending} waiting, {failed} not drawable; {meshes} meshes, {textures} textures ({} MB) | (VFXR) {}",
+        "vfx: {} | per frame: {} batches, {} instances; prepare {} us (max {}), draw {} us (max {}); peak {} particles | {} not ready, {} cut (buffer full) | materials {ready} ready, {pending} waiting, {failed} not drawable; {meshes} meshes, {textures} textures ({} MB) | {native} | {lit_text} | (VFXR) {}",
         if options().on { "on" } else { "OFF" },
         DRAWN_BATCHES.swap(0, Ordering::Relaxed) as u64 / frames,
         DRAWN_INSTANCES.swap(0, Ordering::Relaxed) / frames,
@@ -487,8 +636,9 @@ fn ribbon_geometry(vertices: &mut Vec<f32>, indices: &mut Vec<u32>, ribbon: &kh_
         let tangent = along.normalize_or(view.right);
         let particle = [mid.x, mid.y, mid.z, a.distance(b)];
         let (ua, ub) = if ribbon.uv_turned { ([0.0, u * ribbon.tiles], [ribbon.v_scale, u * ribbon.tiles]) } else { ([u * ribbon.tiles, 0.0], [u * ribbon.tiles, ribbon.v_scale]) };
-        push_plain(vertices, a, [ua[0], ua[1], ua[0], ua[1]], color, [1.0; 4], ribbon.dynamic, misc, normal, tangent, particle);
-        push_plain(vertices, b, [ub[0], ub[1], ub[0], ub[1]], color, [1.0; 4], ribbon.dynamic, misc, normal, tangent, particle);
+        let shared = PlainShared { color, vcol: [1.0; 4], dynamic: ribbon.dynamic, misc, normal, tangent, particle };
+        push_plain(vertices, a, [ua[0], ua[1], ua[0], ua[1]], &shared);
+        push_plain(vertices, b, [ub[0], ub[1], ub[0], ub[1]], &shared);
     };
     for i in 0..last {
         let (p0, p1, p2, p3) = (&points[i.saturating_sub(1)], &points[i], &points[i + 1], &points[(i + 2).min(last)]);
@@ -510,17 +660,55 @@ fn ribbon_geometry(vertices: &mut Vec<f32>, indices: &mut Vec<u32>, ribbon: &kh_
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn push_plain(vertices: &mut Vec<f32>, position: Vec3, uv: [f32; 4], color: [f32; 4], vcol: [f32; 4], dynamic: [f32; 4], misc: [f32; 4], normal: Vec3, tangent: Vec3, particle: [f32; 4]) {
+/// (VFX-RING S) An EXACT ribbon (`kh_vfx::RibbonExact`, a dynamic shape's strip): one straight row per point, no smoothing,
+/// the A vertex with the point's colour and its own UV, the B vertex with the B colour and its UV (KH3's trail vertices,
+/// 0x144320580), in GAME space.
+fn ribbon_exact_geometry(vertices: &mut Vec<f32>, indices: &mut Vec<u32>, ribbon: &kh_vfx::Ribbon, exact: &kh_vfx::RibbonExact, view: &kh_vfx::Camera) {
+    let points = &ribbon.points;
+    if points.len() < 2 || exact.uvs.len() != points.len() || exact.b_colors.len() != points.len() {
+        return;
+    }
+    let first = (vertices.len() / PLAIN_FLOATS) as u32;
+    let misc = [ribbon.time, 0.0, 0.0, 1.0];
+    let last = points.len() - 1;
+    for (i, p) in points.iter().enumerate() {
+        let along = if i < last { points[i + 1].a - p.a } else { p.a - points[i - 1].a };
+        let mid = (p.a + p.b) * 0.5;
+        let normal = (view.position - mid).normalize_or(-view.forward);
+        let tangent = along.normalize_or(view.right);
+        let particle = [mid.x, mid.y, mid.z, p.a.distance(p.b)];
+        let uv = exact.uvs[i];
+        push_plain(vertices, p.a, [uv[0], uv[1], uv[0], uv[1]], &PlainShared { color: p.color, vcol: [1.0; 4], dynamic: ribbon.dynamic, misc, normal, tangent, particle });
+        push_plain(vertices, p.b, [uv[2], uv[3], uv[2], uv[3]], &PlainShared { color: exact.b_colors[i], vcol: [1.0; 4], dynamic: ribbon.dynamic, misc, normal, tangent, particle });
+    }
+    for r in 0..last as u32 {
+        let b = first + r * 2;
+        indices.extend([b, b + 1, b + 2, b + 1, b + 3, b + 2]);
+    }
+}
+
+/// What the two vertices of a ribbon's row have in common (`push_plain`).
+struct PlainShared {
+    color: [f32; 4],
+    vcol: [f32; 4],
+    dynamic: [f32; 4],
+    misc: [f32; 4],
+    normal: Vec3,
+    tangent: Vec3,
+    particle: [f32; 4],
+}
+
+fn push_plain(vertices: &mut Vec<f32>, position: Vec3, uv: [f32; 4], shared: &PlainShared) {
+    let PlainShared { color, vcol, dynamic, misc, normal, tangent, particle } = shared;
     vertices.extend_from_slice(&position.to_array());
     vertices.extend_from_slice(&uv);
-    vertices.extend_from_slice(&clamp_color(color));
-    vertices.extend_from_slice(&vcol);
-    vertices.extend_from_slice(&dynamic);
-    vertices.extend_from_slice(&misc);
+    vertices.extend_from_slice(&clamp_color(*color));
+    vertices.extend_from_slice(vcol);
+    vertices.extend_from_slice(dynamic);
+    vertices.extend_from_slice(misc);
     vertices.extend_from_slice(&normal.to_array());
     vertices.extend_from_slice(&tangent.to_array());
-    vertices.extend_from_slice(&particle);
+    vertices.extend_from_slice(particle);
 }
 
 /// THE HOST'S FRAME OF EFFECTS: the evaluator's draw list (GAME space) with the names behind its
@@ -531,7 +719,7 @@ pub fn submit(list: &kh_vfx::DrawList, materials: &[String], meshes: &[String], 
     let on = options();
     // (IMPL_ER39) the particle lights light the world (pointlight.rs), with the effects switched on
     crate::pointlight::set_fx_lights(if on.on { &list.lights } else { &[] });
-    if !on.on || (list.quads.is_empty() && list.meshes.is_empty() && list.ribbons.is_empty() && list.decals.is_empty() && list.screen.is_empty() /* (VFXR) */) {
+    if !on.on || (list.quads.is_empty() && list.meshes.is_empty() && list.ribbons.is_empty() && list.decals.is_empty() && list.screen.is_empty() /* (VFXR) */ && list.skeletal.is_empty() /* (VFX-2) */) {
         clear();
         return;
     }
@@ -542,9 +730,10 @@ pub fn submit(list: &kh_vfx::DrawList, materials: &[String], meshes: &[String], 
         let Ok(mut guard) = REGISTRY.lock() else { return };
         let registry = guard.get_or_insert_with(Registry::default);
         // Quads, by (material, blend), the order inside a batch kept.
-        let mut by_key: HashMap<(u32, kh_vfx::Blend, [u32; 4], usize), usize> = HashMap::new(); // (VFXR sort) + the group
+        type QuadKey = (u32, kh_vfx::Blend, [u32; 4], usize);
+        let mut by_key: HashMap<QuadKey, usize> = HashMap::new(); // (VFXR sort) + the group
         // (a draw list comes emitter by emitter: runs of one key; the map is only asked when the key changes)
-        let mut last: Option<((u32, kh_vfx::Blend, [u32; 4], usize), usize)> = None;
+        let mut last: Option<(QuadKey, usize)> = None;
         let quad_groups = list.group_table(0, list.quads.len()); // (VFXR sort)
         for (qi, quad) in list.quads.iter().enumerate() {
             let tint = list.tint_of(0, qi).unwrap_or([0.0; 4]); // (DON-MAGIC tint) tinted quads in batches of their own
@@ -598,7 +787,9 @@ pub fn submit(list: &kh_vfx::DrawList, materials: &[String], meshes: &[String], 
                 routed.push(crate::xsiweapon::FormWeapon { model: model.to_string(), to_world: kh_anim::Trs { translation, rotation, scale }, component: Vec::new() });
                 continue;
             }
-            let (sort, group) = sort_of(list, &mesh_groups, mi, view.position, Vec3::from(instance.transform.translation)); // (VFXR sort)
+            // (HEROLIGHT-KB) a hero-light glow's weapon copy is drawn ON the weapon as drawn this frame (herolight.rs `lock_mesh`)
+            let transform = crate::herolight::lock_mesh(meshes.get(instance.mesh as usize).map_or("", String::as_str), instance.transform, view.position);
+            let (sort, group) = sort_of(list, &mesh_groups, mi, view.position, Vec3::from(transform.translation)); // (VFXR sort)
             let slot = match by_mesh.get(&(instance.material, instance.blend, instance.mesh, tint.map(f32::to_bits), group)) {
                 Some(slot) => *slot,
                 None => {
@@ -610,8 +801,8 @@ pub fn submit(list: &kh_vfx::DrawList, materials: &[String], meshes: &[String], 
                 }
             };
             let batch = &mut prepared.meshes[slot];
-            let m3 = Mat3::from(instance.transform.matrix3);
-            let origin = Vec3::from(instance.transform.translation);
+            let m3 = Mat3::from(transform.matrix3);
+            let origin = Vec3::from(transform.translation);
             for k in 0..3 {
                 batch.data.extend_from_slice(&[m3.x_axis[k], m3.y_axis[k], m3.z_axis[k], origin[k]]);
             }
@@ -623,6 +814,12 @@ pub fn submit(list: &kh_vfx::DrawList, materials: &[String], meshes: &[String], 
         for batch in &mut prepared.meshes {
             batch.center /= (batch.data.len() / MESH_INSTANCE_FLOATS).max(1) as f32;
         }
+        // (VFX-2) the skeletal mesh components: posed for the mesh-particle shaders of their material, or (their own
+        // materials) to the character pipeline with the routed forms
+        let (skel, skel_forms) = skelfx::prepare(list, &mut |id, blend| materials.get(id as usize).and_then(|name| registry.material(name, Geo::Mesh, blend)), view.position);
+        prepared.skel = skel;
+        routed_all += skel_forms.len();
+        routed.extend(skel_forms);
         // (the nearest ROUTED_MAX to the camera)
         if routed.len() > ROUTED_MAX {
             routed.sort_by(|a, b| (a.to_world.translation - view.position).length_squared().total_cmp(&(b.to_world.translation - view.position).length_squared()));
@@ -651,7 +848,10 @@ pub fn submit(list: &kh_vfx::DrawList, materials: &[String], meshes: &[String], 
                 }
             };
             let batch = &mut prepared.plain[slot];
-            ribbon_geometry(&mut batch.vertices, &mut batch.indices, ribbon, view);
+            match list.ribbon_exact_of(ri) {
+                Some(exact) => ribbon_exact_geometry(&mut batch.vertices, &mut batch.indices, ribbon, exact, view), // (VFX-RING S)
+                None => ribbon_geometry(&mut batch.vertices, &mut batch.indices, ribbon, view),
+            }
         }
         // Decals: the box [-1, 1]^3 of each, shaded by the material's deferred-decal shader.
         if on.decals {
@@ -696,7 +896,7 @@ pub fn submit(list: &kh_vfx::DrawList, materials: &[String], meshes: &[String], 
         if !batch.decal {
             let n = (batch.vertices.len() / PLAIN_FLOATS).max(1);
             let mut sum = Vec3::ZERO;
-            for v in batch.vertices.chunks_exact(PLAIN_FLOATS) {
+            for v in batch.vertices.as_chunks::<PLAIN_FLOATS>().0 {
                 sum += Vec3::new(v[0], v[1], v[2]);
             }
             batch.center = sum / n as f32;
@@ -714,6 +914,16 @@ pub fn submit(list: &kh_vfx::DrawList, materials: &[String], meshes: &[String], 
 }
 
 // ------------------------------------------------------------------------------------ the GPU side
+
+/// What a material's pipeline state is made for (`Gpu::pipeline`): its pass, geometry, the distortion shader's route, its cull
+/// mode.
+#[derive(Clone, Copy)]
+struct PipeKind {
+    pass: Pass,
+    geo: Geo,
+    distort: bool,
+    cull: D3D12_CULL_MODE,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Pass {
@@ -745,6 +955,19 @@ struct GpuMaterial {
     /// emissive by the eye adaptation, so it shows at the tone mapper's input whatever the exposure (emissive 1.0 = white).
     /// Drawn with the frame constants that put it there (post::eye_boost), not with the lit-surface rule of the others.
     eye: bool,
+    /// (VFX-XLATE) the translated shader reads the frame behind it (a blur / warp material, its record's `scene`): drawn only
+    /// in a frame with the scene colour copy (t13), which it then asks for.
+    scene: bool,
+    /// (VFX-2) the constants a parameter of the material feeds (its record's `params`: (first float, count, the
+    /// translator's tree)): what a dynamic material instance (a skeletal mesh component's) sets is evaluated into them.
+    mid: Vec<(usize, usize, Value)>,
+    /// (PARTY-NATIVE) a lit (deferred) material's native pair (None: the earlier shading)
+    native: Option<Box<NativeFx>>,
+    /// (PARTY-NATIVE) its fog variant (plain, mirrored twin): drawn in the late stage with the game's fog (`FogKit`)
+    fog: Option<(ID3D12PipelineState, Option<ID3D12PipelineState>)>,
+    /// (PARTY-NATIVE-LIGHT) its lit variant (plain, mirrored twin; a forward-lit owner only): drawn in the late stage with Elden
+    /// Ring's own light and fog (vfxlight.rs `LitKit`)
+    lit: Option<(ID3D12PipelineState, Option<ID3D12PipelineState>)>,
 }
 
 /// (FP) `fx.cull_one_sided` (default on; read before the first material is made): one-sided mesh-particle materials cull
@@ -829,10 +1052,193 @@ struct Gpu {
     formats: (i32, i32),
     uploader: Uploader,
     told: Vec<String>,
+    /// (PARTY-NATIVE) the copy of the game's fog for the late effects (`FogKit`), made on the worker; why it could not be made
+    fog: Option<FogKit>,
+    fog_failed: Option<String>,
+    /// (PARTY-NATIVE-LIGHT) the copy of the game's light inputs for the lit effects (vfxlight.rs), made on the worker
+    lit: Option<light_kit::LitKit>,
+    lit_failed: Option<String>,
 }
 
 // SAFETY: D3D12 objects are free-threaded; the mapped pointers are only used under the mutex.
 unsafe impl Send for Gpu {}
+
+/// (PARTY-NATIVE) THE COPY OF THE GAME'S FOG for the late (blended / additive / modulate) effects: the fog composite's buffer and
+/// volume (ffx.rs `fog_bind`, this frame's) copied by two passes of ours with a root signature shaped like the game's at its
+/// pixel-stage tables b0..b3 / t0..t3 (shaders/er_fxfog.wgsl), into textures of ours the effects' fog variants read (t16 / t17).
+struct FogKit {
+    root: ID3D12RootSignature,
+    rows_pso: ID3D12PipelineState,
+    vol_pso: ID3D12PipelineState,
+    /// CB_SHADER_COMMON_PARAM's 76 rows + the volume's size, raw words (77 x 1 RGBA32_UINT), and its RTV
+    rows: ID3D12Resource,
+    rows_rtv: ID3D12DescriptorHeap,
+    /// per frame slot: the rows read back (the volume's size for the next use of the slot), its footprint
+    readback: Vec<ID3D12Resource>,
+    footprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
+    /// the volume copy (RGBA16F, the game's size) and one RTV per slice; None until its size is read back
+    volume: Option<(ID3D12Resource, ID3D12DescriptorHeap, [u32; 3])>,
+    rtv_size: usize,
+    /// the size read back most recently
+    size: [u32; 3],
+}
+
+/// (PARTY-NATIVE) The texels of the fog rows (the buffer's 76 rows + the volume's size).
+const FOG_TEXELS: u32 = 77;
+/// The frame constants' fog row (er_vfx.wgsl `ErFrame.fxf`), after the native row.
+const FXF_FLOATS: usize = 4;
+/// The largest fog volume taken (a guard against a misread size).
+const FOG_MAX: [u32; 3] = [512, 512, 256];
+
+/// (PARTY-NATIVE) A pass's fog mode (er_vfx.wgsl `KhParams.fx.x`; pure, tested): blended 0 (attenuated + in-scatter), additive 1
+/// (attenuated only), modulate 2, none 3 (opaque passes take the game's own composite; decals are drawn before it).
+fn fog_mode(pass: Pass) -> f32 {
+    match pass {
+        Pass::Translucent => 0.0,
+        Pass::Additive => 1.0,
+        Pass::Modulate => 2.0,
+        Pass::Opaque | Pass::DecalAdd | Pass::DecalBlend => 3.0,
+    }
+}
+
+/// (PARTY-NATIVE) A volume size read back is taken when every side is between 1 and `FOG_MAX` (pure, tested).
+fn fog_size_ok(size: [u32; 3]) -> bool {
+    size.iter().zip(FOG_MAX.iter()).all(|(s, m)| *s >= 1 && *s <= *m)
+}
+
+impl FogKit {
+    /// The kit for this device (its shaders: `<main root>/er/fxfog.vs.dxil`, `fxfog_rows.ps.dxil`, `fxfog_vol.ps.dxil`).
+    unsafe fn new(device: &ID3D12Device, dir: &Path) -> Result<FogKit, String> {
+        let text = |what: &str, e: windows::core::Error| format!("{what}: {e}");
+        let read = |f: &str| std::fs::read(dir.join("er").join(f)).map_err(|e| format!("{f}: {e} (kh-shaderc --only fxfog)"));
+        let (vs, rows_ps, vol_ps) = (read("fxfog.vs.dxil")?, read("fxfog_rows.ps.dxil")?, read("fxfog_vol.ps.dxil")?);
+        // the root signature: the game's pixel-stage tables at b0..b3 and t0..t3 (its GX root signature's 28 / 30), a slice at b5
+        let buffers = [D3D12_DESCRIPTOR_RANGE { RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_CBV, NumDescriptors: 4, BaseShaderRegister: 0, RegisterSpace: 0, OffsetInDescriptorsFromTableStart: 0 }];
+        let textures = [D3D12_DESCRIPTOR_RANGE { RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV, NumDescriptors: 4, BaseShaderRegister: 0, RegisterSpace: 0, OffsetInDescriptorsFromTableStart: 0 }];
+        let table = |ranges: &[D3D12_DESCRIPTOR_RANGE]| D3D12_ROOT_PARAMETER { ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE, Anonymous: D3D12_ROOT_PARAMETER_0 { DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE { NumDescriptorRanges: ranges.len() as u32, pDescriptorRanges: ranges.as_ptr() } }, ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL };
+        let parameters = [
+            table(&buffers),
+            table(&textures),
+            D3D12_ROOT_PARAMETER { ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS, Anonymous: D3D12_ROOT_PARAMETER_0 { Constants: D3D12_ROOT_CONSTANTS { ShaderRegister: 5, RegisterSpace: 0, Num32BitValues: 4 } }, ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL },
+        ];
+        let desc = D3D12_ROOT_SIGNATURE_DESC { NumParameters: parameters.len() as u32, pParameters: parameters.as_ptr(), NumStaticSamplers: 0, pStaticSamplers: std::ptr::null(), Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE };
+        let mut blob: Option<ID3DBlob> = None;
+        D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &mut blob, None).map_err(|e| text("fog root signature", e))?;
+        let blob = blob.ok_or("fog root signature: no blob")?;
+        let root: ID3D12RootSignature = device.CreateRootSignature(0, std::slice::from_raw_parts(blob.GetBufferPointer() as *const u8, blob.GetBufferSize())).map_err(|e| text("CreateRootSignature (fog)", e))?;
+        let pso = |pixel: &[u8], format: DXGI_FORMAT| -> Result<ID3D12PipelineState, String> {
+            let mut formats = [DXGI_FORMAT_UNKNOWN; 8];
+            formats[0] = format;
+            let mut blend = D3D12_BLEND_DESC::default();
+            blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8;
+            let d = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
+                // SAFETY: a borrowed copy of the interface pointer for the duration of the call.
+                pRootSignature: std::mem::transmute_copy(&root),
+                VS: D3D12_SHADER_BYTECODE { pShaderBytecode: vs.as_ptr() as *const c_void, BytecodeLength: vs.len() },
+                PS: D3D12_SHADER_BYTECODE { pShaderBytecode: pixel.as_ptr() as *const c_void, BytecodeLength: pixel.len() },
+                BlendState: blend,
+                SampleMask: u32::MAX,
+                RasterizerState: D3D12_RASTERIZER_DESC { FillMode: D3D12_FILL_MODE_SOLID, CullMode: D3D12_CULL_MODE_NONE, DepthClipEnable: false.into(), ..Default::default() },
+                DepthStencilState: D3D12_DEPTH_STENCIL_DESC { DepthEnable: false.into(), StencilEnable: false.into(), ..Default::default() },
+                PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+                NumRenderTargets: 1,
+                RTVFormats: formats,
+                DSVFormat: DXGI_FORMAT_UNKNOWN,
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                ..Default::default()
+            };
+            device.CreateGraphicsPipelineState(&d).map_err(|e| text("CreateGraphicsPipelineState (fog)", e))
+        };
+        let rows_pso = pso(&rows_ps, DXGI_FORMAT_R32G32B32A32_UINT)?;
+        let vol_pso = pso(&vol_ps, DXGI_FORMAT_R16G16B16A16_FLOAT)?;
+        let rows_desc = D3D12_RESOURCE_DESC { Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D, Width: FOG_TEXELS as u64, Height: 1, DepthOrArraySize: 1, MipLevels: 1, Format: DXGI_FORMAT_R32G32B32A32_UINT, SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 }, Flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, ..Default::default() };
+        let rows = committed(device, D3D12_HEAP_TYPE_DEFAULT, &rows_desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE).map_err(|e| text("fog rows", e))?;
+        let rows_rtv: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 1, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| text("fog rows rtv", e))?;
+        device.CreateRenderTargetView(&rows, None, rows_rtv.GetCPUDescriptorHandleForHeapStart());
+        let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+        let mut total = 0u64;
+        device.GetCopyableFootprints(&rows_desc, 0, 1, 0, Some(&mut footprint), None, None, Some(&mut total));
+        let mut readback = Vec::new();
+        for _ in 0..FRAME_SLOTS {
+            readback.push(committed(device, D3D12_HEAP_TYPE_READBACK, &buffer_desc(total), D3D12_RESOURCE_STATE_COPY_DEST).map_err(|e| text("fog readback", e))?);
+        }
+        let rtv_size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) as usize;
+        Ok(FogKit { root, rows_pso, vol_pso, rows, rows_rtv, readback, footprint, volume: None, rtv_size, size: [0; 3] })
+    }
+
+    /// The volume's size this slot's readback holds (written by its previous use: the GPU is past it), and the volume copy
+    /// made again when it differs.
+    unsafe fn take_size(&mut self, device: &ID3D12Device, slot: usize) {
+        let Some(readback) = self.readback.get(slot) else { return };
+        let mut at: *mut c_void = std::ptr::null_mut();
+        if readback.Map(0, Some(&D3D12_RANGE { Begin: 0, End: (self.footprint.Offset as usize) + FOG_TEXELS as usize * 16 }), Some(&mut at)).is_err() || at.is_null() {
+            return;
+        }
+        let texel = (at as *const u8).add(self.footprint.Offset as usize + (FOG_TEXELS as usize - 1) * 16) as *const u32;
+        let size = [*texel, *texel.add(1), *texel.add(2)];
+        readback.Unmap(0, Some(&D3D12_RANGE { Begin: 0, End: 0 }));
+        self.size = size;
+        if !fog_size_ok(size) || self.volume.as_ref().is_some_and(|v| v.2 == size) {
+            return;
+        }
+        let desc = D3D12_RESOURCE_DESC { Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE3D, Width: size[0] as u64, Height: size[1], DepthOrArraySize: size[2] as u16, MipLevels: 1, Format: DXGI_FORMAT_R16G16B16A16_FLOAT, SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 }, Flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, ..Default::default() };
+        let (Ok(volume), Ok(heap)) = (committed(device, D3D12_HEAP_TYPE_DEFAULT, &desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE), device.CreateDescriptorHeap::<ID3D12DescriptorHeap>(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: size[2], Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 })) else { return };
+        let start = heap.GetCPUDescriptorHandleForHeapStart();
+        for z in 0..size[2] {
+            let rtv = D3D12_RENDER_TARGET_VIEW_DESC { Format: DXGI_FORMAT_R16G16B16A16_FLOAT, ViewDimension: D3D12_RTV_DIMENSION_TEXTURE3D, Anonymous: D3D12_RENDER_TARGET_VIEW_DESC_0 { Texture3D: D3D12_TEX3D_RTV { MipSlice: 0, FirstWSlice: z, WSize: 1 } } };
+            device.CreateRenderTargetView(&volume, Some(&rtv), D3D12_CPU_DESCRIPTOR_HANDLE { ptr: start.ptr + z as usize * self.rtv_size });
+        }
+        // (the one before may be named by a frame in flight: kept until the GPU is past it, GPUSAFE)
+        if let Some((old, old_heap, _)) = self.volume.replace((volume, heap, size)) {
+            crate::outfit::retire(Box::new(old));
+            crate::outfit::retire(Box::new(old_heap));
+        }
+        rlog!("vfx: (PARTY-NATIVE) the game's fog volume is {}x{}x{}: its copy for the late effects is made", size[0], size[1], size[2]);
+    }
+
+    /// The copy of this frame's fog (`bind`: the game's views heap and its composite's tables) into our rows and volume,
+    /// recorded into `list`; true when the volume copy was drawn (the effects may read it). Leaves the fog root signature and
+    /// the game's heap bound: the caller binds its own again.
+    unsafe fn copy(&self, list: &ID3D12GraphicsCommandList, slot: usize, bind: crate::ffx::FogBind) -> bool {
+        let raw = bind.heaps[0] as *mut c_void;
+        let Some(views) = ID3D12DescriptorHeap::from_raw_borrowed(&raw) else { return false };
+        list.SetGraphicsRootSignature(&self.root);
+        list.SetDescriptorHeaps(&[Some(views.clone())]);
+        list.SetGraphicsRootDescriptorTable(0, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: bind.buffers });
+        list.SetGraphicsRootDescriptorTable(1, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: bind.textures });
+        list.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        // the rows (and the volume's size), then into this slot's readback
+        list.ResourceBarrier(&[transition(&self.rows, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET)]);
+        let rtv = self.rows_rtv.GetCPUDescriptorHandleForHeapStart();
+        list.OMSetRenderTargets(1, Some(&rtv), false, None);
+        list.RSSetViewports(&[D3D12_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: FOG_TEXELS as f32, Height: 1.0, MinDepth: 0.0, MaxDepth: 1.0 }]);
+        list.RSSetScissorRects(&[windows::Win32::Foundation::RECT { left: 0, top: 0, right: FOG_TEXELS as i32, bottom: 1 }]);
+        list.SetPipelineState(&self.rows_pso);
+        list.DrawInstanced(3, 1, 0, 0);
+        list.ResourceBarrier(&[transition(&self.rows, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE)]);
+        if let Some(readback) = self.readback.get(slot) {
+            let to = D3D12_TEXTURE_COPY_LOCATION { pResource: std::mem::transmute_copy(readback), Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { PlacedFootprint: self.footprint } };
+            let from = D3D12_TEXTURE_COPY_LOCATION { pResource: std::mem::transmute_copy(&self.rows), Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 } };
+            list.CopyTextureRegion(&to, 0, 0, 0, &from, None);
+        }
+        list.ResourceBarrier(&[transition(&self.rows, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)]);
+        // the volume, slice by slice, at the size the readback gave (None: the next frames, once it is known)
+        let Some((volume, heap, size)) = self.volume.as_ref().filter(|v| v.2 == self.size) else { return false };
+        list.ResourceBarrier(&[transition(volume, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET)]);
+        list.RSSetViewports(&[D3D12_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: size[0] as f32, Height: size[1] as f32, MinDepth: 0.0, MaxDepth: 1.0 }]);
+        list.RSSetScissorRects(&[windows::Win32::Foundation::RECT { left: 0, top: 0, right: size[0] as i32, bottom: size[1] as i32 }]);
+        list.SetPipelineState(&self.vol_pso);
+        let start = heap.GetCPUDescriptorHandleForHeapStart();
+        for z in 0..size[2] {
+            let rtv = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: start.ptr + z as usize * self.rtv_size };
+            list.OMSetRenderTargets(1, Some(&rtv), false, None);
+            list.SetGraphicsRoot32BitConstants(2, 4, [z, 0u32, 0, 0].as_ptr() as *const c_void, 0);
+            list.DrawInstanced(3, 1, 0, 0);
+        }
+        list.ResourceBarrier(&[transition(volume, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)]);
+        true
+    }
+}
 
 /// `PACK/vfx/shaders/shading.json` + which shader files exist.
 struct Shading {
@@ -941,6 +1347,19 @@ fn overlay_vfb(json: &mut Value, built: &mut Value, dir: &Path, on: bool) -> usi
     overlay_xw(json, built, staged.or_else(|| read(dir.join("shaders").join("shading_vfb.json"))), over_built)
 }
 
+/// (PARTY-NATIVE) Lays a root's `shaders/shading_fwl.json` + `er/shaders_fwl.json` (tools/vfx_xlate_overlay.js --take light over
+/// tools/sora_vfx_shaders.js --fwl: the lit translucents translated WITH their light input, the forward lighting or the indirect
+/// lighting cache, under `<letter><id>_fwl`; their fog / lit variants `f…_fwl` / `l…_fwl` are found by file name) over its table,
+/// after every other overlay; returns the count. Without the two files nothing changes.
+fn overlay_fwl(json: &mut Value, built: &mut Value, dir: &Path) -> usize {
+    let read = |path: PathBuf| std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok());
+    let n = overlay_xw(json, built, read(dir.join("shaders").join("shading_fwl.json")), read(dir.join("er").join("shaders_fwl.json")));
+    if n > 0 {
+        rlog!("vfx: (PARTY-NATIVE) {n} shader(s) / record(s) of shading_fwl.json laid over {} (the lit translucents with their light input: lit variants l<pixel file> in the native mode)", dir.display());
+    }
+    n
+}
+
 fn shading() -> Option<&'static Shading> {
     SHADING
         .get_or_init(|| {
@@ -971,6 +1390,16 @@ fn shading() -> Option<&'static Shading> {
                     if n > 0 {
                         rlog!("vfx: (XW-d) {n} shader(s) / record(s) of shading_xwd.json laid over the main table (TEXCOORD9 / Primitive[10] translated: tmt_cry_00a, (RSF round 21) jmb_smk_imp_00sa, tmt_cyl_pil_00sa); fx.xs_fix = 0 switches it off");
                     }
+                    // (VFX-XLATE) the main table's shading_vxl.json + er/shaders_vxl.json (new files, tools/vfx_xlate_overlay.js): the
+                    // owners the translator's scene-colour / collection / Primitive / View[160] rules now take (the blur and warp
+                    // materials, the Ghost Horde afterimage smt_so050_stf_tsn_00k ...) under new shader names; fx.main_fix = 0: without it
+                    if MAIN_OVERLAY.load(Ordering::Relaxed) {
+                        let n = overlay_xw(&mut json, &mut built, read(dir.join("shaders").join("shading_vxl.json")), read(dir.join("er").join("shaders_vxl.json")));
+                        if n > 0 {
+                            rlog!("vfx: (VFX-XLATE) {n} shader(s) / record(s) of shading_vxl.json laid over the main table (scene colour, collections, Primitive, View[160]); fx.main_fix = 0 switches it off");
+                        }
+                    }
+                    overlay_fwl(&mut json, &mut built, &dir); // (PARTY-NATIVE) the lit translucents with their light input, last
                     tell_untranslated(&json, "main"); // (RSF round 21)
                     tell_bad_expressions(&json, "main"); // (RSF round 20)
                     Some(Shading { dir, json, built })
@@ -1018,6 +1447,7 @@ fn party_shading() -> Option<&'static Shading> {
                     if n > 0 {
                         rlog!("vfx: (RSF round 21) the party table: {n} shader(s) / record(s) of shading_xwd.json laid over it (TEXCOORD9 / Primitive[10] translated); fx.xs_fix = 0 switches it off");
                     }
+                    overlay_fwl(&mut json, &mut built, &dir); // (PARTY-NATIVE) the lit translucents with their light input, last
                     tell_untranslated(&json, "party"); // (RSF round 21)
                     tell_bad_expressions(&json, "party"); // (RSF round 20)
                     Some(Shading { dir, json, built })
@@ -1068,6 +1498,7 @@ fn xsi_shading() -> Option<&'static Shading> {
                     if n > 0 {
                         rlog!("vfx: (XW-d) {n} shader(s) / record(s) of shading_xwd.json laid over the XS table (tmt_cry_00a, the XS assets' own materials); fx.xs_fix = 0 switches it off");
                     }
+                    overlay_fwl(&mut json, &mut built, &dir); // (PARTY-NATIVE) the lit translucents with their light input, last
                     tell_untranslated(&json, "XS"); // (RSF round 21)
                     Some(Shading { dir, json, built })
                 }
@@ -1078,6 +1509,58 @@ fn xsi_shading() -> Option<&'static Shading> {
             }
         })
         .as_ref()
+}
+
+/// (P5 WEAPON DRAW) THE KEYBLADES' EFFECT ROOT (PACK/keyblades/vfx: every keyblade's trails, appear effects and form
+/// effects, tools/sora_keyblades_pack.js + `kh-shaderc --vfx --pack PACK/keyblades`): its own shading table, built shaders,
+/// materials, meshes and textures, as the XSI root's. The effect side names its materials / meshes `kbfx:<name>`
+/// (kh_host::vfx::KB_NAMESPACE). Without such a name nothing of it is read.
+pub const KB_NAMESPACE: &str = "kbfx:";
+
+static KB_SHADING: OnceLock<Option<Shading>> = OnceLock::new();
+
+fn kb_shading() -> Option<&'static Shading> {
+    KB_SHADING
+        .get_or_init(|| {
+            let pack = crate::SHARED.lock().ok().and_then(|g| g.as_ref().map(|s| s.pack.clone()))?;
+            let dir = pack.join("keyblades").join("vfx");
+            let read = |path: PathBuf| std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok());
+            match (read(dir.join("shaders").join("shading.json")), read(dir.join("er").join("shaders.json"))) {
+                (Some(json), Some(built)) => {
+                    rlog!("vfx: (P5) the keyblades' effect root's own shading table and {} built shader variants read from {}", built.get("shaders").and_then(Value::as_array).map_or(0, Vec::len), dir.display());
+                    tell_untranslated(&json, "keyblades");
+                    Some(Shading { dir, json, built })
+                }
+                (json, _) => {
+                    rlog!("vfx: (P5) NO KEYBLADE EFFECT ROOT: {} (cargo run --release -p kh-shaderc -- --vfx --pack PACK/keyblades): the keyblades' own effect materials are not drawn", if json.is_none() { "PACK/keyblades/vfx/shaders/shading.json is missing" } else { "PACK/keyblades/vfx/er/shaders.json is missing" });
+                    None
+                }
+            }
+        })
+        .as_ref()
+}
+
+/// (P5) The main pack's folder for a texture file the keyblades' root (`dir`) names but does not carry (its table names
+/// 238 files that only the main pack has); None for another root or a file the root has.
+fn shading_main_dir_for(dir: &Path, file: &str) -> Option<PathBuf> {
+    if !KB_SHADING.get().and_then(|s| s.as_ref()).is_some_and(|k| k.dir == dir) || dir.join(file).is_file() {
+        return None;
+    }
+    shading().map(|m| m.dir.clone()).filter(|m| m.join(file).is_file())
+}
+
+/// (P5) For a material of the keyblades' root whose owner's shader that root did not build: the main pack's built shader of
+/// the owner of the same name (its folder, its pixel file `<letter><id>[suffix].ps.dxil`). None for another root, an owner
+/// the main table lacks or did not build either.
+fn same_owner_in_main(root: &Shading, owner: &str, letter: &str) -> Option<(PathBuf, String)> {
+    if !KB_SHADING.get().and_then(|s| s.as_ref()).is_some_and(|k| k.dir == root.dir) || owner.is_empty() {
+        return None;
+    }
+    let main = shading()?;
+    let id = main.json.get("owners")?.get(owner)?.get("id")?.as_u64()?;
+    let suffix = main.json.get("pixel_suffix").and_then(|p| p.get(format!("{letter}{id}"))).and_then(Value::as_str).unwrap_or("");
+    let file = format!("{letter}{id}{suffix}.ps.dxil");
+    main.built.get("shaders").and_then(Value::as_array)?.iter().any(|x| x.get("file").and_then(Value::as_str) == Some(file.as_str())).then(|| (main.dir.clone(), file))
 }
 
 /// (XW) Lays an overlay table (`shading_xw.json`: owners / materials records by name) and its built shaders
@@ -1118,6 +1601,10 @@ fn split_ns<'a>(name: &'a str, main: &'static Shading) -> Option<(&'static Shadi
     if let Some(rest) = name.strip_prefix(XSI_NAMESPACE) {
         return xsi_shading().map(|s| (s, rest));
     }
+    // (P5) `kbfx:<name>` = the keyblades' root
+    if let Some(rest) = name.strip_prefix(KB_NAMESPACE) {
+        return kb_shading().map(|s| (s, rest));
+    }
     match name.strip_prefix(PARTY_NAMESPACE) {
         Some(rest) => party_shading().map(|s| (s, rest)),
         None => Some((main, name)),
@@ -1133,12 +1620,17 @@ fn ns_key(dir: &Path, file: &str) -> String {
     if XSI_SHADING.get().and_then(|s| s.as_ref()).is_some_and(|p| p.dir == dir) {
         return format!("{XSI_NAMESPACE}{file}");
     }
+    if KB_SHADING.get().and_then(|s| s.as_ref()).is_some_and(|p| p.dir == dir) {
+        return format!("{KB_NAMESPACE}{file}");
+    }
     file.to_string()
 }
 
 /// (ER90) Which second root a name that found none asked for (the log's words).
 fn root_words(name: &str) -> &'static str {
-    if name.starts_with(XSI_NAMESPACE) {
+    if name.starts_with(KB_NAMESPACE) {
+        "the keyblades' effect root (PACK/keyblades/vfx with er/shaders.json)"
+    } else if name.starts_with(XSI_NAMESPACE) {
         "the XS effect root (PACK/xsi/vfx with er/shaders.json)"
     } else {
         "the party effect root (PACK/party/vfx with er/shaders.json)"
@@ -1223,7 +1715,8 @@ impl Gpu {
         let text = |what: &str, e: windows::core::Error| format!("{what}: {e}");
         // ---- the root signature (the contract at the head of this file)
         let material_textures = [D3D12_DESCRIPTOR_RANGE { RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV, NumDescriptors: MATERIAL_TEXTURES as u32, BaseShaderRegister: 0, RegisterSpace: 0, OffsetInDescriptorsFromTableStart: 0 }];
-        let frame_textures = [D3D12_DESCRIPTOR_RANGE { RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV, NumDescriptors: 2, BaseShaderRegister: MATERIAL_TEXTURES as u32, RegisterSpace: 0, OffsetInDescriptorsFromTableStart: 0 }];
+        // (PARTY-NATIVE) t12..t15: + the capture of the game's light (FRAME_VIEWS)
+        let frame_textures = [D3D12_DESCRIPTOR_RANGE { RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV, NumDescriptors: FRAME_VIEWS as u32, BaseShaderRegister: MATERIAL_TEXTURES as u32, RegisterSpace: 0, OffsetInDescriptorsFromTableStart: 0 }];
         let samplers = [D3D12_DESCRIPTOR_RANGE { RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, NumDescriptors: 2048, BaseShaderRegister: 0, RegisterSpace: 0, OffsetInDescriptorsFromTableStart: 0 }];
         let constants = |register: u32| D3D12_ROOT_PARAMETER { ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV, Anonymous: D3D12_ROOT_PARAMETER_0 { Descriptor: D3D12_ROOT_DESCRIPTOR { ShaderRegister: register, RegisterSpace: 0 } }, ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL };
         let table = |ranges: &[D3D12_DESCRIPTOR_RANGE]| D3D12_ROOT_PARAMETER { ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE, Anonymous: D3D12_ROOT_PARAMETER_0 { DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE { NumDescriptorRanges: ranges.len() as u32, pDescriptorRanges: ranges.as_ptr() } }, ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL };
@@ -1252,7 +1745,7 @@ impl Gpu {
             let desc = D3D12_SAMPLER_DESC { Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR, AddressU: u, AddressV: v, AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP, MipLODBias: 0.0, MaxAnisotropy: 1, ComparisonFunc: D3D12_COMPARISON_FUNC_NEVER, BorderColor: [0.0; 4], MinLOD: 0.0, MaxLOD: D3D12_FLOAT32_MAX };
             device.CreateSampler(&desc, D3D12_CPU_DESCRIPTOR_HANDLE { ptr: sampler_start.ptr + k * sampler_size });
         }
-        let srv_heap: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, NumDescriptors: (MAX_MATERIALS * MATERIAL_TEXTURES + FRAME_SLOTS * 2 + post::POST_DESCRIPTORS /* (VFXR) */) as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, NodeMask: 0 }).map_err(|e| text("srv heap", e))?;
+        let srv_heap: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, NumDescriptors: (MAX_MATERIALS * MATERIAL_TEXTURES + FRAME_SLOTS * FRAME_VIEWS /* (PARTY-NATIVE) */ + post::POST_DESCRIPTORS /* (VFXR) */) as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, NodeMask: 0 }).map_err(|e| text("srv heap", e))?;
         let srv_size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) as usize;
         let dsv_heap: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV, NumDescriptors: FRAME_SLOTS as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).map_err(|e| text("dsv heap", e))?;
         let dsv_size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV) as usize;
@@ -1263,9 +1756,9 @@ impl Gpu {
         let fence: ID3D12Fence = device.CreateFence(0, D3D12_FENCE_FLAG_NONE).map_err(|e| text("fence", e))?;
         let mut uploader = Uploader { queue, allocator, list, fence, value: 0 };
         let (white, _) = uploader.texture(device, &Pixels { width: 1, height: 1, mips: vec![(0, 1, 1)], data: vec![255; 4] }, false)?;
-        // The two frame descriptors of every slot start as the white texture.
+        // The frame descriptors of every slot start as the white texture.
         let start = srv_heap.GetCPUDescriptorHandleForHeapStart();
-        for k in 0..FRAME_SLOTS * 2 {
+        for k in 0..FRAME_SLOTS * FRAME_VIEWS {
             device.CreateShaderResourceView(&white, None, D3D12_CPU_DESCRIPTOR_HANDLE { ptr: start.ptr + (MAX_MATERIALS * MATERIAL_TEXTURES + k) * srv_size });
         }
         let mut slots = Vec::new();
@@ -1275,7 +1768,7 @@ impl Gpu {
             buffer.Map(0, None, Some(&mut at)).map_err(|e| text("Map", e))?;
             slots.push(SlotBuffer { address: buffer.GetGPUVirtualAddress(), buffer, mapped: at as *mut u8 });
         }
-        Ok(Gpu { device: device.clone(), root, srv_heap, srv_size, sampler_heap, dsv_heap, dsv_size, white, textures: HashMap::new(), texture_bytes: 0, materials: Vec::new(), pending_materials: 0, meshes: Vec::new(), slots, scene_copy: None, shaders: HashMap::new(), pipelines: HashMap::new(), formats, uploader, told: Vec::new() })
+        Ok(Gpu { device: device.clone(), root, srv_heap, srv_size, sampler_heap, dsv_heap, dsv_size, white, textures: HashMap::new(), texture_bytes: 0, materials: Vec::new(), pending_materials: 0, meshes: Vec::new(), slots, scene_copy: None, shaders: HashMap::new(), pipelines: HashMap::new(), formats, uploader, told: Vec::new(), fog: None, fog_failed: None, lit: None, lit_failed: None /* (PARTY-NATIVE-LIGHT) */ })
     }
 
     fn tell(&mut self, text: String) {
@@ -1335,16 +1828,16 @@ impl Gpu {
         }
     }
 
-    /// The pipeline state of (vertex shader file, pixel shader file, pass, geometry).
-    /// (FP) `cull`: the cull mode of a non-decal draw (NONE but for one-sided mesh particles); a decal keeps `decal_cull`.
-    #[allow(clippy::too_many_arguments)]
-    unsafe fn pipeline(&mut self, dir: &Path, vertex_file: &str, pixel_file: &str, pass: Pass, geo: Geo, distort: bool, cull: D3D12_CULL_MODE) -> Option<ID3D12PipelineState> {
+    /// The pipeline state of (vertex shader file, pixel shader file, `kind`).
+    /// (FP) `kind.cull`: the cull mode of a non-decal draw (NONE but for one-sided mesh particles); a decal keeps `decal_cull`.
+    unsafe fn pipeline(&mut self, dir: &Path, vertex_file: &str, pixel_file: &str, kind: PipeKind) -> Option<ID3D12PipelineState> {
+        let PipeKind { pass, geo, distort, cull } = kind;
         let key = (ns_key(dir, vertex_file), ns_key(dir, pixel_file), pass as u8, distort, cull.0); // (ER party S5) the party root's apart
         if let Some(found) = self.pipelines.get(&key) {
             return found.clone();
         }
         let (vertex, pixel) = (self.shader(dir, vertex_file)?, self.shader(dir, pixel_file)?);
-        let element = |index: u32, format: DXGI_FORMAT, slot: u32, offset: u32, instanced: bool| D3D12_INPUT_ELEMENT_DESC { SemanticName: PCSTR(b"LOC\0".as_ptr()), SemanticIndex: index, Format: format, InputSlot: slot, AlignedByteOffset: offset, InputSlotClass: if instanced { D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA } else { D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA }, InstanceDataStepRate: u32::from(instanced) };
+        let element = |index: u32, format: DXGI_FORMAT, slot: u32, offset: u32, instanced: bool| D3D12_INPUT_ELEMENT_DESC { SemanticName: PCSTR(c"LOC".as_ptr().cast()), SemanticIndex: index, Format: format, InputSlot: slot, AlignedByteOffset: offset, InputSlotClass: if instanced { D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA } else { D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA }, InstanceDataStepRate: u32::from(instanced) };
         let (f3, f4) = (DXGI_FORMAT_R32G32B32_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT);
         let elements: Vec<D3D12_INPUT_ELEMENT_DESC> = match geo {
             Geo::Quad => (0..9).map(|k| element(k, f4, 0, k * 16, true)).collect(),
@@ -1418,6 +1911,76 @@ impl Gpu {
         state
     }
 
+    /// (PARTY-NATIVE) A G-buffer twin's pipeline state: the material's vertex stage and its `g<letter><id>` pixel stage into the
+    /// game's three G-buffer targets (`formats`), depth test and write as the opaque pass, the characters' stencil class written
+    /// (the game's light passes and its TAA treat the texel as a character's, as they do the KH characters').
+    unsafe fn gb_pipeline(&mut self, n: &NativeFx, formats: GbFormats, cull: D3D12_CULL_MODE) -> Option<ID3D12PipelineState> {
+        let (vertex, pixel) = (self.shader(&n.dir, &n.vertex)?, self.shader(&n.dir, &n.pixel)?);
+        let element = |index: u32, format: DXGI_FORMAT, slot: u32, offset: u32, instanced: bool| D3D12_INPUT_ELEMENT_DESC { SemanticName: PCSTR(c"LOC".as_ptr().cast()), SemanticIndex: index, Format: format, InputSlot: slot, AlignedByteOffset: offset, InputSlotClass: if instanced { D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA } else { D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA }, InstanceDataStepRate: u32::from(instanced) };
+        let (f3, f4) = (DXGI_FORMAT_R32G32B32_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT);
+        // (the layouts of `pipeline`)
+        let elements: Vec<D3D12_INPUT_ELEMENT_DESC> = match n.geo {
+            Geo::Quad => (0..9).map(|k| element(k, f4, 0, k * 16, true)).collect(),
+            Geo::Ribbon | Geo::Decal => vec![element(0, f3, 0, 0, false), element(1, f4, 0, 12, false), element(2, f4, 0, 28, false), element(3, f4, 0, 44, false), element(4, f4, 0, 60, false), element(5, f4, 0, 76, false), element(6, f3, 0, 92, false), element(7, f3, 0, 104, false), element(8, f4, 0, 116, false)],
+            Geo::Mesh => {
+                let mut v = vec![element(0, f3, 0, 0, false), element(1, f3, 0, 12, false), element(2, f4, 0, 24, false), element(3, f4, 0, 40, false), element(4, f4, 0, 56, false)];
+                v.extend((0..6).map(|k| element(5 + k, f4, 1, k * 16, true)));
+                v
+            }
+        };
+        let mut formats_rt = [DXGI_FORMAT_UNKNOWN; 8];
+        for (k, f) in formats.0.iter().enumerate() {
+            formats_rt[k] = DXGI_FORMAT(*f);
+        }
+        let stencil = matches!(DXGI_FORMAT(formats.1), DXGI_FORMAT_D32_FLOAT_S8X24_UINT | DXGI_FORMAT_D24_UNORM_S8_UINT);
+        let replace = D3D12_DEPTH_STENCILOP_DESC { StencilFailOp: D3D12_STENCIL_OP_KEEP, StencilDepthFailOp: D3D12_STENCIL_OP_KEEP, StencilPassOp: D3D12_STENCIL_OP_REPLACE, StencilFunc: D3D12_COMPARISON_FUNC_ALWAYS };
+        let desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
+            // SAFETY: a borrowed copy of the interface pointer for the duration of the call.
+            pRootSignature: std::mem::transmute_copy(&self.root),
+            VS: D3D12_SHADER_BYTECODE { pShaderBytecode: vertex.as_ptr() as *const c_void, BytecodeLength: vertex.len() },
+            PS: D3D12_SHADER_BYTECODE { pShaderBytecode: pixel.as_ptr() as *const c_void, BytecodeLength: pixel.len() },
+            BlendState: D3D12_BLEND_DESC::default(),
+            SampleMask: u32::MAX,
+            RasterizerState: D3D12_RASTERIZER_DESC { FillMode: D3D12_FILL_MODE_SOLID, CullMode: cull, FrontCounterClockwise: false.into(), DepthClipEnable: true.into(), ..Default::default() },
+            DepthStencilState: D3D12_DEPTH_STENCIL_DESC { DepthEnable: true.into(), DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ALL, DepthFunc: D3D12_COMPARISON_FUNC_GREATER_EQUAL, StencilEnable: stencil.into(), StencilReadMask: 0xFF, StencilWriteMask: 0xFF, FrontFace: replace, BackFace: replace },
+            InputLayout: D3D12_INPUT_LAYOUT_DESC { pInputElementDescs: elements.as_ptr(), NumElements: elements.len() as u32 },
+            PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+            NumRenderTargets: formats.0.len() as u32,
+            RTVFormats: formats_rt,
+            DSVFormat: DXGI_FORMAT(formats.1),
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            ..Default::default()
+        };
+        match self.device.CreateGraphicsPipelineState(&desc) {
+            Ok(state) => Some(state),
+            Err(e) => {
+                self.tell(format!("(PARTY-NATIVE) the G-buffer twin {} + {} could not be made ({e}): the material keeps its earlier shading", n.vertex, n.pixel));
+                None
+            }
+        }
+    }
+
+    /// (PARTY-NATIVE) The G-buffer twins' states of the ready materials for this frame's G-buffer formats, a few per call (the
+    /// worker's; the drawing thread only tries the lock). Returns how many were made.
+    unsafe fn make_gb_states(&mut self, formats: GbFormats, most: usize) -> usize {
+        let wanted: Vec<usize> = (0..self.materials.len()).filter(|k| matches!(&self.materials[*k], MatState::Ready(m) if m.native.as_ref().is_some_and(|n| !n.gb_failed && n.gb.as_ref().is_none_or(|g| g.0 != formats)))).take(most).collect();
+        for k in &wanted {
+            let MatState::Ready(m) = &mut self.materials[*k] else { continue };
+            let Some(n) = m.native.take() else { continue };
+            let plain = self.gb_pipeline(&n, formats, n.cull);
+            let turned = if n.one_sided { self.gb_pipeline(&n, formats, one_sided_cull(true)) } else { None };
+            let mut n = n;
+            match plain {
+                Some(p) if !n.one_sided || turned.is_some() => n.gb = Some((formats, p, turned)),
+                _ => n.gb_failed = true,
+            }
+            if let MatState::Ready(m) = &mut self.materials[*k] {
+                m.native = Some(n);
+            }
+        }
+        wanted.len()
+    }
+
     /// One material of the registry made ready (the test app's `build_material`, for this host).
     unsafe fn build_material(&mut self, id: usize, key: &MatKey, shading: &Shading) -> MatState {
         let dir = shading.dir.clone();
@@ -1446,7 +2009,14 @@ impl Gpu {
         let mut timed = false;
         // (FP) the material's `two_sided` (its table record; the generic variant: its material file); unknown: two-sided
         let mut two_sided = shaded.as_ref().and_then(|s| s.get("two_sided")).and_then(Value::as_bool).unwrap_or(true);
-        let (pixel_file, mut vertex_file, distort_file);
+        let (mut pixel_file, mut vertex_file, mut distort_file);
+        // (P5) the folder the shaders are read from (the root's own; see the keyblades' fallback below)
+        let mut shader_dir = dir.clone();
+        let mut scene = false; // (VFX-XLATE)
+        let mut first_pixel = String::new(); // (PARTY-NATIVE-LIGHT round 3) the pixel file the table names, before any fallback
+        let mut native_pair: Option<(String, String)> = None; // (PARTY-NATIVE)
+        // (VFX-2) the record's parameter trees (only a --root / --vxl table has them)
+        let mid: Vec<(usize, usize, Value)> = shaded.as_ref().and_then(|s| s.get("params")).and_then(Value::as_array).map(|a| a.iter().filter_map(|p| Some((p.get("at")?.as_u64()? as usize, p.get("n")?.as_u64()? as usize, p.get("tree")?.clone()))).filter(|(at, n, _)| at + n <= 64 * 4).collect()).unwrap_or_default();
         match (&shaded, &translated) {
             (Some(s), Some((class, c))) => {
                 blend = s.get("blend_mode").and_then(Value::as_str).unwrap_or("BLEND_Translucent").to_string();
@@ -1459,7 +2029,10 @@ impl Gpu {
                 // (XW-b) a shader whose translation changed: its new file (`pixel_suffix` of an overlay)
                 let suffix = shading.json.get("pixel_suffix").and_then(|p| p.get(format!("{letter}{shader_id}"))).and_then(Value::as_str).unwrap_or("");
                 pixel_file = format!("{letter}{shader_id}{suffix}.ps.dxil");
+                first_pixel.clone_from(&pixel_file); // (PARTY-NATIVE-LIGHT round 3)
+                native_pair = native_files(letter, shader_id, c.get("outputs").and_then(Value::as_u64).unwrap_or(1), suffix); // (PARTY-NATIVE)
                 timed = c.get("uses_time").and_then(Value::as_bool).unwrap_or(false);
+                scene = c.get("scene").and_then(Value::as_bool).unwrap_or(false); // (VFX-XLATE)
                 // The owner's own vertex shader for mesh particles (world position offset), when it was built.
                 // (XW-d) `pixel_suffix` names the vertex / distortion shaders' new files too ("v<id>", "x<letter><id>")
                 let suffix_of = |k: &str| shading.json.get("pixel_suffix").and_then(|p| p.get(k)).and_then(Value::as_str).unwrap_or("").to_string();
@@ -1486,8 +2059,23 @@ impl Gpu {
                     }
                 }
                 if !built(&pixel_file) {
-                    self.tell(format!("{name}: its shader {pixel_file} was not built: not drawn"));
-                    return MatState::Failed;
+                    // (P5) the keyblades' root: an owner its own build lacks (jmt_loc_00sa, the beam trails of most keyblades)
+                    // takes the main pack's build of THE SAME OWNER (the same shader and parameter layout); this material's
+                    // values and textures stay its own
+                    match same_owner_in_main(shading, s.get("owner").and_then(Value::as_str).unwrap_or(""), letter) {
+                        Some((main_dir, file)) => {
+                            self.tell(format!("{name}: its shader {pixel_file} was not built in its root: the main pack's {file} of the same owner"));
+                            (shader_dir, pixel_file, distort_file, scene) = (main_dir, file, None, false);
+                            native_pair = None; // (PARTY-NATIVE) another root's build: not its native pair
+                            if key.geo == Geo::Mesh {
+                                vertex_file = "mesh.vs.dxil".to_string();
+                            }
+                        }
+                        None => {
+                            self.tell(format!("{name}: its shader {pixel_file} was not built: not drawn"));
+                            return MatState::Failed;
+                        }
+                    }
                 }
             }
             _ => {
@@ -1508,7 +2096,7 @@ impl Gpu {
                     let k = k.to_lowercase();
                     k.contains("nml") || k.contains("normal") || k.contains("wpo") || k.contains("dist") || k.contains("break") || k.contains("constraint") || k.contains("opa") || k.contains("mask")
                 };
-                let emissive = tex(&["BaseColorTex" /* (loot) a character-type material without a translated shader (the item boxes): its base colour, unlit */, "Tex Emi", "Tex Main", "Tex Core", "Emi Tex", "texture", "base_tex", "tex_A", "Tex Glow", "1 Grayscale Texture A"]).or_else(|| named.iter().find(|(k, _)| !is_data(k)).map(|(_, t)| t.clone())).or_else(|| json.get("unnamed_textures").and_then(Value::as_array).and_then(|a| a.first().cloned()));
+                let emissive = tex(&["BaseColorTex" /* (loot) a character-type material without a translated shader (the item boxes): its base colour, unlit */, "Tex Emi", "Tex Main", "Tex Core", "Emi Tex", "texture", "base_tex", "tex_A", "Tex Glow", "1 Grayscale Texture A"]).or_else(|| named.iter().find(|(k, t)| !is_data(k) && t.get("file").and_then(Value::as_str).is_some() /* (P2 hitfx) one with a packed file: Dead of Night's matcap shards (vw_so120_str00) name a cube map first, which the pack cannot decode */).map(|(_, t)| t.clone())).or_else(|| json.get("unnamed_textures").and_then(Value::as_array).and_then(|a| a.first().cloned()));
                 let opacity = tex(&["Tex Opa", "1 Tex Opa", "Tex Opq", "Tex Mask", "Tex_mask1"]);
                 let mono = emissive.as_ref().is_some_and(|t| t.get("sampler_type").and_then(Value::as_str) == Some("SAMPLERTYPE_Alpha"));
                 let file_of = |t: &Option<Value>| t.as_ref().and_then(|t| t.get("file")).and_then(Value::as_str).map(str::to_string);
@@ -1564,18 +2152,19 @@ impl Gpu {
         }
         // (er.x: no scene depth is read while the depth is being written)
         params[65 * 4] = if pass == Pass::Opaque { 1.0 } else { 0.0 };
+        params[66 * 4] = fog_mode(pass); // (PARTY-NATIVE) KhParams.fx.x
         // (FP) a one-sided mesh particle culls the faces turned away from the camera (a mirrored instance: its own twins)
         let one_sided = key.geo == Geo::Mesh && !two_sided && CULL_ONE_SIDED.load(Ordering::Relaxed);
         let cull = if one_sided { one_sided_cull(false) } else { D3D12_CULL_MODE_NONE };
-        let Some(pipeline) = self.pipeline(&dir, &vertex_file, &pixel_file, pass, key.geo, false, cull) else { return MatState::Failed };
+        let Some(pipeline) = self.pipeline(&shader_dir, &vertex_file, &pixel_file, PipeKind { pass, geo: key.geo, distort: false, cull }) else { return MatState::Failed };
         let distort = match &distort_file {
-            Some(file) => self.pipeline(&dir, &vertex_file, file, pass, key.geo, true, cull),
+            Some(file) => self.pipeline(&shader_dir, &vertex_file, file, PipeKind { pass, geo: key.geo, distort: true, cull }),
             None => None,
         };
         let mirrored = if one_sided {
-            let Some(twin) = self.pipeline(&dir, &vertex_file, &pixel_file, pass, key.geo, false, one_sided_cull(true)) else { return MatState::Failed };
+            let Some(twin) = self.pipeline(&shader_dir, &vertex_file, &pixel_file, PipeKind { pass, geo: key.geo, distort: false, cull: one_sided_cull(true) }) else { return MatState::Failed };
             let distort_twin = match &distort_file {
-                Some(file) => self.pipeline(&dir, &vertex_file, file, pass, key.geo, true, one_sided_cull(true)),
+                Some(file) => self.pipeline(&shader_dir, &vertex_file, file, PipeKind { pass, geo: key.geo, distort: true, cull: one_sided_cull(true) }),
                 None => None,
             };
             Some((twin, distort_twin))
@@ -1588,12 +2177,17 @@ impl Gpu {
         samplers[10] = 0;
         samplers[11] = 4;
         samplers[12] = SAMPLER_SCENE;
-        for slot in 0..MATERIAL_TEXTURES {
+        for (slot, sampler) in samplers.iter_mut().enumerate().take(MATERIAL_TEXTURES) {
             let at = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: start.ptr + (id * MATERIAL_TEXTURES + slot) * self.srv_size };
             let resource = match textures.get(slot).and_then(|t| t.as_ref()) {
                 Some((file, srgb, u, v)) => {
-                    samplers[slot] = u * 3 + v;
-                    self.texture(&dir, file, *srgb)
+                    *sampler = u * 3 + v;
+                    // (P5) a texture the keyblades' table names but its root does not carry: the main pack's file
+                    let tex_dir = match shading_main_dir_for(&dir, file) {
+                        Some(main) => main,
+                        None => dir.clone(),
+                    };
+                    self.texture(&tex_dir, file, *srgb)
                 }
                 None => None,
             };
@@ -1608,7 +2202,49 @@ impl Gpu {
         }
         // (VFXR) its eye-adaptation flag (the material's own file)
         let eye = std::fs::read_to_string(dir.join("materials").join(format!("{name}.json"))).is_ok_and(|t| t.contains("\"SQEXEnableEmissiveRevEyeAdaptation\":true") || t.contains("\"SQEXEnableEmissiveRevEyeAdaptation\": true"));
-        MatState::Ready(GpuMaterial { pipeline, distort, pass, params, samplers, timed, mirrored, eye })
+        // (PARTY-NATIVE) the fog variant of a late (blended / additive / modulate) material, when its root has it (`f<pixel file>`)
+        let fog_file = format!("f{pixel_file}");
+        let fog = if fog_mode(pass) < 2.5 && shader_dir.join("er").join(&fog_file).is_file() {
+            let plain = self.pipeline(&shader_dir, &vertex_file, &fog_file, PipeKind { pass, geo: key.geo, distort: false, cull });
+            let turned = if one_sided { self.pipeline(&shader_dir, &vertex_file, &fog_file, PipeKind { pass, geo: key.geo, distort: false, cull: one_sided_cull(true) }) } else { None };
+            plain.filter(|_| !one_sided || turned.is_some()).map(|p| (p, turned))
+        } else {
+            None
+        };
+        // (PARTY-NATIVE-LIGHT) the lit variant of a late forward-lit material (its owner reads the forward light), when its root has
+        // it (`l<pixel file>`: Elden Ring's own light and fog at the effect pixel)
+        let lit_file = format!("l{pixel_file}");
+        let lit = if fog_mode(pass) < 2.5 && shader_dir.join("er").join(&lit_file).is_file() {
+            let plain = self.pipeline(&shader_dir, &vertex_file, &lit_file, PipeKind { pass, geo: key.geo, distort: false, cull });
+            let turned = if one_sided { self.pipeline(&shader_dir, &vertex_file, &lit_file, PipeKind { pass, geo: key.geo, distort: false, cull: one_sided_cull(true) }) } else { None };
+            plain.filter(|_| !one_sided || turned.is_some()).map(|p| (p, turned))
+        } else {
+            None
+        };
+        // (PARTY-NATIVE-LIGHT round 3) why a material of a lit owner has or lacks its lit variant (each such material once, at most
+        // LIT_TOLD lines): its pass and fog mode (a lit variant only for a late pass), the file the table named and the one taken
+        // (a fallback to the main pack's same owner has no _fwl), the folder, and whether the lit file is there
+        if (first_pixel.contains("_fwl") || lit.is_some() || shader_dir.join("er").join(&lit_file).is_file()) && LIT_TOLD.fetch_add(1, Ordering::Relaxed) < 160 {
+            let found = shader_dir.join("er").join(&lit_file).is_file();
+            let state = match (lit.is_some(), found) {
+                (true, _) => "taken",
+                (false, true) if fog_mode(pass) >= 2.5 => "found, not for this pass",
+                (false, true) => "found, its pipeline state failed",
+                (false, false) => "absent",
+            };
+            rlog!("vfx: (PARTY-NATIVE-LIGHT) {name}: pass {pass:?} (fog mode {}), shader {first_pixel} -> {pixel_file} in {}: lit variant {lit_file} {state}", fog_mode(pass), shader_dir.display());
+        }
+        // (PARTY-NATIVE) the native pair of a lit (deferred) opaque / masked material, when its root has it; its G-buffer twin's
+        // states follow on the worker once the G-buffer's formats are known (`make_gb_states`)
+        let native = match native_pair {
+            Some((n_file, g_file)) if pass == Pass::Opaque && shader_dir.join("er").join(&n_file).is_file() && shader_dir.join("er").join(&g_file).is_file() => {
+                let colour = self.pipeline(&shader_dir, &vertex_file, &n_file, PipeKind { pass, geo: key.geo, distort: false, cull });
+                let colour_mirrored = if one_sided { self.pipeline(&shader_dir, &vertex_file, &n_file, PipeKind { pass, geo: key.geo, distort: false, cull: one_sided_cull(true) }) } else { None };
+                colour.filter(|_| !one_sided || colour_mirrored.is_some()).map(|colour| Box::new(NativeFx { colour, colour_mirrored, dir: shader_dir.clone(), vertex: vertex_file.clone(), pixel: g_file, geo: key.geo, cull, one_sided, gb: None, gb_failed: false }))
+            }
+            _ => None,
+        };
+        MatState::Ready(GpuMaterial { pipeline, distort, pass, params, samplers, timed, mirrored, eye, scene, mid /* (VFX-2) */, native, fog, lit /* (PARTY-NATIVE-LIGHT) */ })
     }
 
     unsafe fn build_mesh(&mut self, name: &str, dir: &Path) -> MeshState {
@@ -1815,7 +2451,8 @@ pub(crate) fn worker_tick(device: &ID3D12Device) -> bool {
         }
     }
     // ---- what is wanted and not made yet
-    let (material_jobs, mesh_jobs, total): (Vec<(usize, MatKey)>, Vec<(usize, String)>, usize) = {
+    type Jobs<T> = Vec<(usize, T)>;
+    let (material_jobs, mesh_jobs, total): (Jobs<MatKey>, Jobs<String>, usize) = {
         let registry = REGISTRY.lock().unwrap();
         let Some(registry) = registry.as_ref() else { return false };
         let guard = GPU.lock().unwrap();
@@ -1825,6 +2462,52 @@ pub(crate) fn worker_tick(device: &ID3D12Device) -> bool {
         let all: Vec<usize> = (0..registry.keys.len()).filter(pending_material).collect();
         (all.iter().take(8).map(|id| (*id, registry.keys[*id].clone())).collect(), (0..registry.mesh_names.len()).filter(pending_mesh).take(16).map(|id| (id, registry.mesh_names[id].clone())).collect(), all.len())
     };
+    // (PARTY-NATIVE) the copy of the game's fog for the late effects (once, in the native mode)
+    if crate::hybrid::native_now() {
+        let mut guard = GPU.lock().unwrap();
+        if let Some(gpu) = guard.as_mut().filter(|g| g.fog.is_none() && g.fog_failed.is_none()) {
+            // SAFETY: object creation on the host's device from our own thread (free-threaded API).
+            match crate::hook::as_ours(|| unsafe { FogKit::new(&gpu.device, &shading.dir) }) {
+                Ok(kit) => {
+                    rlog!("vfx: (PARTY-NATIVE) the game's fog for the late effects is ready (its composite's buffer and volume are copied each frame)");
+                    gpu.fog = Some(kit);
+                }
+                Err(e) => {
+                    rlog!("vfx: (PARTY-NATIVE) no copy of the game's fog ({e}): the late effects are drawn without it");
+                    gpu.fog_failed = Some(e);
+                }
+            }
+            return true;
+        }
+    }
+    // (PARTY-NATIVE-LIGHT) the copy of the game's light inputs for the lit translucent effects (once, in the native mode)
+    if crate::hybrid::native_now() {
+        let mut guard = GPU.lock().unwrap();
+        if let Some(gpu) = guard.as_mut().filter(|g| g.lit.is_none() && g.lit_failed.is_none()) {
+            // SAFETY: object creation on the host's device from our own thread (free-threaded API).
+            match crate::hook::as_ours(|| unsafe { light_kit::LitKit::new(&gpu.device, &shading.dir) }) {
+                Ok(kit) => {
+                    rlog!("vfx: (PARTY-NATIVE-LIGHT) Elden Ring's own light for the lit translucent effects is ready (its light passes' constants, irradiance volumes and light buffers are copied each frame)");
+                    gpu.lit = Some(kit);
+                }
+                Err(e) => {
+                    rlog!("vfx: (PARTY-NATIVE-LIGHT) no copy of the game's light inputs ({e}): the lit translucent effects keep their earlier light");
+                    gpu.lit_failed = Some(e);
+                }
+            }
+            return true;
+        }
+    }
+    // (PARTY-NATIVE) the lit effects' G-buffer twins for this frame's G-buffer formats (a few per tick)
+    if let Some(gb) = GB_FORMATS.lock().ok().and_then(|g| *g) {
+        let mut guard = GPU.lock().unwrap();
+        if let Some(gpu) = guard.as_mut() {
+            // SAFETY: as above.
+            if crate::hook::as_ours(|| unsafe { gpu.make_gb_states(gb, 4) }) > 0 {
+                return true;
+            }
+        }
+    }
     if material_jobs.is_empty() && mesh_jobs.is_empty() {
         if let Ok(mut guard) = GPU.lock() {
             if let Some(gpu) = guard.as_mut() {
@@ -1981,7 +2664,7 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
     let late_stage = matches!(cx.stage, Stage::All | Stage::Late);
     let post_bloom = post_kit.is_some() && post::bloom_factor() > 0.0;
     let post_screen = post_kit.is_some() && late_stage && post::screen_on() && !prepared.screen.is_empty();
-    let wants_copy = (post_bloom && late_stage && (!prepared.quads.is_empty() || !prepared.meshes.is_empty() || !prepared.plain.is_empty())) || options.distort && prepared.quads.iter().map(|b| b.material).chain(prepared.meshes.iter().map(|b| b.material)).chain(prepared.plain.iter().map(|b| b.material)).any(|id| ready(id).is_some_and(|m| m.distort.is_some()));
+    let wants_copy = (post_bloom && late_stage && (!prepared.quads.is_empty() || !prepared.meshes.is_empty() || !prepared.plain.is_empty())) || prepared.quads.iter().map(|b| b.material).chain(prepared.meshes.iter().map(|b| b.material)).chain(prepared.plain.iter().map(|b| b.material)).any(|id| ready(id).is_some_and(|m| (options.distort && m.distort.is_some()) || m.scene /* (VFX-XLATE) */));
     // (only of a plain single-sample 2D target: the copy is made with the target's own description, so that
     // CopyResource is always between two resources of one shape)
     let copyable = target_desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && target_desc.SampleDesc.Count == 1 && target_desc.DepthOrArraySize == 1;
@@ -1996,7 +2679,33 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
             }
         }
     }
+    // (PARTY-NATIVE) THE GAME'S FOG for the late effects, the native mode only: this frame's composite bindings (ffx.rs), the
+    // volume's size this slot read back last time; `fog_ready` = its copy is drawn below and the fog variants may read it
+    let fog_bind = crate::ffx::fog_bind().filter(|_| crate::hybrid::native_now() && matches!(cx.stage, Stage::Late | Stage::OverFinale));
+    if fog_bind.is_some() {
+        let device = gpu.device.clone();
+        if let Some(kit) = gpu.fog.as_mut() {
+            kit.take_size(&device, cx.slot);
+        }
+    }
+    // (PARTY-NATIVE-LIGHT) ELDEN RING'S OWN LIGHT for the lit translucent effects, the native mode only: this frame's light inputs
+    // (ffx.rs `lit_binds`: the tile lighting at least), the sizes this slot read back last time
+    let lit_late = crate::hybrid::native_now() && matches!(cx.stage, Stage::Late | Stage::OverFinale); // (round 2)
+    let lit_binds = if lit_late { Some(crate::ffx::lit_binds()).filter(|b| b.tile.is_some()) } else { None };
+    if let Some(binds) = lit_binds.as_ref() {
+        let device = gpu.device.clone();
+        if let Some(kit) = gpu.lit.as_mut() {
+            kit.prepare(&device, cx.slot, binds);
+        }
+    }
     let gpu: &Gpu = gpu;
+    // (PARTY-NATIVE-LIGHT) what the copy below draws (the frame's lit rows say so), the sun of this frame
+    let lit_plan = match (lit_binds.as_ref(), gpu.lit.as_ref()) {
+        (Some(b), Some(k)) => k.plan(b),
+        _ => light_kit::LitPlan::default(),
+    };
+    let lit_sun = light_kit::sun();
+    let fog_ready = fog_bind.is_some() && gpu.fog.as_ref().is_some_and(|k| k.volume.as_ref().is_some_and(|v| v.2 == k.size));
     let copy_ready = wants_copy && copyable && gpu.scene_copy.as_ref().is_some_and(|(_, w, h, f)| (*w, *h, *f) == (target_desc.Width as u32, target_desc.Height, target_desc.Format.0));
 
     // ---- what is drawn, by pass
@@ -2004,6 +2713,7 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
         Quad(&'a QuadBatch),
         Mesh(&'a MeshBatch),
         Plain(&'a PlainBatch),
+        Skel(&'a skelfx::Posed), // (VFX-2)
     }
     let mut opaque: Vec<(Item, &GpuMaterial)> = Vec::new();
     let mut decals: Vec<(Item, &GpuMaterial)> = Vec::new();
@@ -2020,6 +2730,7 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
         }
     }
     items.extend(prepared.plain.iter().map(|b| (Item::Plain(b), b.material, b.center, b.sort)));
+    items.extend(prepared.skel.iter().map(|b| (Item::Skel(b), b.material, b.center, b.sort))); // (VFX-2)
     let grouped = SORT_GROUPS.load(Ordering::Relaxed); // (VFXR sort)
     for (item, material, center, sort) in items {
         match gpu.materials.get(material as usize) {
@@ -2071,6 +2782,7 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
                 Item::Quad(b) => b.material,
                 Item::Mesh(b) => b.material,
                 Item::Plain(b) => b.material,
+                Item::Skel(b) => b.material, // (VFX-2)
             };
             prepared.over.contains(&id) == over_stage
         });
@@ -2092,7 +2804,11 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
     }
     // (VFXR sort) KH3's translucency order: priority, then far to near, then the emitters of one component in their order
     blended.sort_by(|a, b| a.0 .0.cmp(&b.0 .0).then(a.0 .1.total_cmp(&b.0 .1)).then(a.0 .2.cmp(&b.0 .2)).then(a.0 .3.cmp(&b.0 .3)));
-    let distorted: Vec<usize> = if copy_ready { (0..blended.len()).filter(|k| blended[*k].2.distort.is_some()).collect() } else { Vec::new() };
+    // (VFX-XLATE) a material that reads the frame behind it is not drawn without the copy (it would read white)
+    if !copy_ready {
+        blended.retain(|(_, _, m)| !m.scene);
+    }
+    let distorted: Vec<usize> = if copy_ready && options.distort /* (VFX-XLATE) the copy may be made for a scene reader alone */ { (0..blended.len()).filter(|k| blended[*k].2.distort.is_some()).collect() } else { Vec::new() };
 
     // ---- the slot's upload buffer
     let slot = &gpu.slots[cx.slot];
@@ -2123,6 +2839,15 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
     frame.extend_from_slice(&[cx.scale * options.hdr, if options.solid { 1.0 } else { 0.0 }, 1.0, 0.0]);
     let lit = cx.lit / (cx.scale * options.hdr).max(1.0e-9);
     frame.extend_from_slice(&[lit.x, lit.y, lit.z, 1.0]);
+    crate::fwdlight::extend_frame(&mut frame, cx.scale * options.hdr); // (VFX-2 lit) ErFrame.fwd_*: Elden Ring's light for the forward-lit effects
+    // (PARTY-NATIVE) ErFrame.fxn: this frame's capture of the game's light for the lit effects (gfx.rs `set_capture`)
+    let capture = FX_CAPTURE.lock().ok().and_then(|c| *c);
+    frame.resize(48 + crate::fwdlight::FRAME_FLOATS, 0.0);
+    frame.extend_from_slice(&fxn_row(capture));
+    // (PARTY-NATIVE) ErFrame.fxf: the copy of the game's fog is bound at t16 / t17 this frame
+    frame.extend_from_slice(&[if fog_ready { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0][..FXF_FLOATS]);
+    // (PARTY-NATIVE-LIGHT) ErFrame.fxl: what the copy of the game's light inputs holds this frame, the sun's colour and cascades
+    frame.extend_from_slice(&light_kit::fxl_row(&lit_plan, lit_sun.as_ref()));
     let Some(frame_constants) = put(as_bytes(&frame), 256) else { return };
     // (VFXR) the frame constants of the eye-adaptation materials: KH3's emissive 1.0 at the host tone mapper's 1.0
     let boost = post::eye_boost();
@@ -2134,6 +2859,7 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
         f[44] /= k;
         f[45] /= k;
         f[46] /= k;
+        crate::fwdlight::eye(&mut f[48..], k); // (VFX-2 lit) the forward lights' colours as lit
         match put(as_bytes(&f), 256) {
             Some(at) => at,
             None => return,
@@ -2145,19 +2871,60 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
     // ---- the frame's two views: the scene depth (read-only) and the scene colour copy
     let start = gpu.srv_heap.GetCPUDescriptorHandleForHeapStart();
     let gpu_start = gpu.srv_heap.GetGPUDescriptorHandleForHeapStart();
-    let frame_table = MAX_MATERIALS * MATERIAL_TEXTURES + cx.slot * 2;
+    let frame_table = MAX_MATERIALS * MATERIAL_TEXTURES + cx.slot * FRAME_VIEWS; // (PARTY-NATIVE) FRAME_VIEWS
     let depth_srv = D3D12_SHADER_RESOURCE_VIEW_DESC { Format: depth_srv_format, ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D, Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 { Texture2D: D3D12_TEX2D_SRV { MostDetailedMip: 0, MipLevels: 1, PlaneSlice: 0, ResourceMinLODClamp: 0.0 } } };
     cx.device.CreateShaderResourceView(cx.depth, Some(&depth_srv), D3D12_CPU_DESCRIPTOR_HANDLE { ptr: start.ptr + frame_table * gpu.srv_size });
     match gpu.scene_copy.as_ref().filter(|_| copy_ready) {
         Some((copy, ..)) => cx.device.CreateShaderResourceView(copy, None, D3D12_CPU_DESCRIPTOR_HANDLE { ptr: start.ptr + (frame_table + 1) * gpu.srv_size }),
         None => cx.device.CreateShaderResourceView(&gpu.white, None, D3D12_CPU_DESCRIPTOR_HANDLE { ptr: start.ptr + (frame_table + 1) * gpu.srv_size }),
     }
+    // (PARTY-NATIVE) t14 / t15: the capture of the game's light (the characters' own targets; white without one)
+    for (k, raw) in [capture.map(|c| c.light), capture.map(|c| c.geo)].into_iter().enumerate() {
+        let at = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: start.ptr + (frame_table + 2 + k) * gpu.srv_size };
+        let raw = raw.unwrap_or(0) as *mut c_void;
+        match ID3D12Resource::from_raw_borrowed(&raw) {
+            Some(resource) if !raw.is_null() => cx.device.CreateShaderResourceView(resource, None, at),
+            _ => cx.device.CreateShaderResourceView(&gpu.white, None, at),
+        }
+    }
+    // (PARTY-NATIVE) t16 / t17: the copy of the game's fog (volume, rows); white without one (no shader reads them then)
+    let fog_kit = gpu.fog.as_ref();
+    let fog_views: [Option<&ID3D12Resource>; 2] = [fog_kit.and_then(|k| k.volume.as_ref().map(|v| &v.0)).filter(|_| fog_ready), fog_kit.map(|k| &k.rows).filter(|_| fog_ready)];
+    for (k, resource) in fog_views.into_iter().enumerate() {
+        let at = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: start.ptr + (frame_table + 4 + k) * gpu.srv_size };
+        cx.device.CreateShaderResourceView(resource.unwrap_or(&gpu.white), None, at);
+    }
+    // (PARTY-NATIVE-LIGHT) t18..t29: the copy of the game's light inputs and the sun's cascades (null views of the right kind without)
+    light_kit::write_views(cx.device, gpu.lit.as_ref(), &lit_plan, lit_sun.as_ref(), |k| D3D12_CPU_DESCRIPTOR_HANDLE { ptr: start.ptr + (frame_table + 6 + k) * gpu.srv_size });
     let read_only_view = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: gpu.dsv_heap.GetCPUDescriptorHandleForHeapStart().ptr + cx.slot * gpu.dsv_size };
     let flags = if has_stencil { D3D12_DSV_FLAG_READ_ONLY_DEPTH | D3D12_DSV_FLAG_READ_ONLY_STENCIL } else { D3D12_DSV_FLAG_READ_ONLY_DEPTH };
     cx.device.CreateDepthStencilView(cx.depth, Some(&D3D12_DEPTH_STENCIL_VIEW_DESC { Format: cx.depth_format, ViewDimension: D3D12_DSV_DIMENSION_TEXTURE2D, Flags: flags, Anonymous: D3D12_DEPTH_STENCIL_VIEW_DESC_0 { Texture2D: D3D12_TEX2D_DSV { MipSlice: 0 } } }), read_only_view);
 
     // ---- recording
     let list = cx.list;
+    // (PARTY-NATIVE) the copy of this frame's fog first (its own root signature and the game's heap; ours are bound below). The
+    // rows (and the volume's size for the readback) are copied whenever the composite was seen; the volume once its size is known.
+    let fog_drawn = match (fog_bind, fog_kit) {
+        (Some(bind), Some(kit)) if !blended.is_empty() || !fog_ready => kit.copy(list, cx.slot, bind),
+        _ => false,
+    };
+    let fog_ready = fog_ready && fog_drawn;
+    if fog_ready {
+        FOG_FRAMES.fetch_add(1, Ordering::Relaxed);
+    }
+    // (PARTY-NATIVE-LIGHT) the copy of this frame's light inputs (its own root signature and the game's heap; ours are bound below)
+    // (round 2: in every late frame with this frame's tile lighting, whatever else the frame has: without an irradiance-volume source
+    // the SH holds the local lights alone, the sun is per pixel; the lit variants are drawn whenever this copy is)
+    let lit_ready = match (lit_binds.as_ref(), gpu.lit.as_ref()) {
+        (Some(b), Some(k)) if lit_plan.scene => k.copy(list, cx.slot, b, &lit_plan),
+        _ => false,
+    };
+    if lit_ready {
+        LIT_FRAMES.fetch_add(1, Ordering::Relaxed);
+    }
+    if lit_late {
+        light_kit::note_frame(lit_ready, &lit_plan, lit_sun.as_ref(), blended.iter().any(|(_, _, m)| m.lit.is_some()));
+    }
     list.SetGraphicsRootSignature(&gpu.root);
     list.SetDescriptorHeaps(&[Some(gpu.srv_heap.clone()), Some(gpu.sampler_heap.clone())]);
     list.SetGraphicsRootConstantBufferView(0, frame_constants);
@@ -2169,7 +2936,17 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
     let (mut batches, mut instances) = (0u32, 0u64);
     let seconds = prepared.seconds;
     // (FP) `mirror`: a one-sided mesh material's twin of `pipeline` for its mirrored instances (GpuMaterial::mirrored)
-    let mut emit = |item: &Item, m: &GpuMaterial, material_id: u32, pipeline: &ID3D12PipelineState, mirror: Option<&ID3D12PipelineState>, put: &mut dyn FnMut(&[u8], usize) -> Option<u64>| {
+    // (PARTY-NATIVE) `gb`: the G-buffer twin's states (plain, mirrored) of a lit material drawn on the native route: each draw is
+    // also kept for `gbuffer_replay` with the same constants and geometry
+    let mut replays: Vec<Replay> = Vec::new();
+    let mut emit = |item: &Item, m: &GpuMaterial, material_id: u32, pipeline: &ID3D12PipelineState, mirror: Option<&ID3D12PipelineState>, gb: Option<(&ID3D12PipelineState, Option<&ID3D12PipelineState>)>, put: &mut dyn FnMut(&[u8], usize) -> Option<u64>| {
+        let table = gpu_start.ptr + (material_id as usize * MATERIAL_TEXTURES * gpu.srv_size) as u64;
+        let mut keep = |turned: bool, frame: u64, material: u64, samplers: u64, vertex: Vec<D3D12_VERTEX_BUFFER_VIEW>, index: Option<D3D12_INDEX_BUFFER_VIEW>, count: u32, instances: u32| {
+            let pso = gb.and_then(|(plain, twin)| if turned { twin } else { Some(plain) });
+            if let Some(pso) = pso.filter(|_| replays.len() < MAX_REPLAYS) {
+                replays.push(Replay { pso: pso.clone(), frame, material, samplers, table, vertex, index, count, instances });
+            }
+        };
         let mut params = *m.params;
         if m.timed {
             params[64 * 4 + 1] = seconds;
@@ -2179,7 +2956,37 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
             Item::Quad(b) => b.tint,
             Item::Mesh(b) => b.tint,
             Item::Plain(b) => b.tint,
+            Item::Skel(_) => [0.0; 4], // (VFX-2)
         };
+        // (VFX-2) a skeletal mesh component's dynamic material: its parameters evaluated into the material's constants
+        if let Item::Skel(b) = item {
+            for (at, n, tree) in &m.mid {
+                let v = skelfx::eval_tree(tree, seconds, &b.params);
+                params[*at..*at + *n].copy_from_slice(&v[..*n]);
+            }
+        }
+        // (AUDIT-C) a DECAL's constants that are arithmetic over what its emitter drives (Decal_CustomParam0..2, Decal_Color,
+        // Decal_Opacity: TypeDataSQEX_Decal, every frame) evaluated per decal, as UE evaluates uniform expressions per draw;
+        // the translator puts only a bare parameter into the pixel input (sora_vfx_shaders.js DECAL_PARAMS), so e.g. Rage's
+        // finisher pool gdi_ant_fin_dcl00, whose dissolve is clamp(CustomParam1) x (smooth range + 1) ..., stayed solid at rest
+        // and popped off at its 5 s end instead of dissolving at 2 .. 3 s. Inputs read from the decal's own vertex (the layout
+        // written above: colour at 7, time / custom at 19).
+        if let Item::Plain(b) = item {
+            if b.decal && b.vertices.len() >= PLAIN_FLOATS {
+                let v = &b.vertices;
+                let inputs = [
+                    ("Decal_Color".to_string(), [v[7], v[8], v[9], v[10]], true),
+                    ("Decal_Opacity".to_string(), [v[10]; 4], false),
+                    ("Decal_CustomParam0".to_string(), [v[20]; 4], false),
+                    ("Decal_CustomParam1".to_string(), [v[21]; 4], false),
+                    ("Decal_CustomParam2".to_string(), [v[22]; 4], false),
+                ];
+                for (at, n, tree) in m.mid.iter().filter(|(_, _, t)| t.to_string().contains("\"Decal_")) {
+                    let value = skelfx::eval_tree(tree, seconds, &inputs);
+                    params[*at..*at + *n].copy_from_slice(&value[..*n]);
+                }
+            }
+        }
         if tint[3] > 0.0 {
             params[65 * 4 + 1] = tint[0] * tint[3];
             params[65 * 4 + 2] = tint[1] * tint[3];
@@ -2189,7 +2996,8 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
         // (VFXR) the eye-adaptation materials' frame constants (not for modulate: it multiplies the scene)
         // (VFXR decal eye) not for the deferred decals either, unless `vfx.eye_decals = 1` (EYE_DECALS)
         let eye_here = m.eye && m.pass != Pass::Modulate && (EYE_DECALS.load(std::sync::atomic::Ordering::Relaxed) || !matches!(m.pass, Pass::DecalAdd | Pass::DecalBlend));
-        list.SetGraphicsRootConstantBufferView(0, if eye_here { frame_eye } else { frame_constants });
+        let frame_now = if eye_here { frame_eye } else { frame_constants };
+        list.SetGraphicsRootConstantBufferView(0, frame_now);
         match item {
             Item::Quad(batch) => {
                 let Some(at) = put(as_bytes(&batch.data), 16) else { return };
@@ -2198,8 +3006,10 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
                 list.SetGraphicsRootConstantBufferView(1, material_constants);
                 list.SetGraphicsRootDescriptorTable(2, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: gpu_start.ptr + (material_id as usize * MATERIAL_TEXTURES * gpu.srv_size) as u64 });
                 list.SetGraphicsRootShaderResourceView(5, sampler_index);
-                list.IASetVertexBuffers(0, Some(&[D3D12_VERTEX_BUFFER_VIEW { BufferLocation: at, SizeInBytes: (batch.data.len() * 4) as u32, StrideInBytes: (QUAD_FLOATS * 4) as u32 }]));
+                let view = D3D12_VERTEX_BUFFER_VIEW { BufferLocation: at, SizeInBytes: (batch.data.len() * 4) as u32, StrideInBytes: (QUAD_FLOATS * 4) as u32 };
+                list.IASetVertexBuffers(0, Some(&[view]));
                 list.DrawInstanced(6, count, 0, 0);
+                keep(false, frame_now, material_constants, sampler_index, vec![view], None, 6, count); // (PARTY-NATIVE)
                 instances += count as u64;
             }
             Item::Mesh(batch) => {
@@ -2207,8 +3017,8 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
                 // (FP) a one-sided material: its mirrored instances apart, with the twin that culls the other winding (the
                 // order inside each part kept); a batch of one kind is drawn whole, as before
                 let split: Option<(Vec<f32>, Vec<f32>)> = mirror.and_then(|_| {
-                    let rows = batch.data.chunks_exact(MESH_INSTANCE_FLOATS);
-                    let flipped = rows.clone().filter(|r| instance_mirrored(r)).count();
+                    let rows = batch.data.as_chunks::<MESH_INSTANCE_FLOATS>().0.iter();
+                    let flipped = rows.clone().filter(|r| instance_mirrored(r.as_slice())).count();
                     (flipped > 0).then(|| {
                         let (mut plain, mut turned) = (Vec::new(), Vec::new());
                         for r in rows {
@@ -2217,22 +3027,40 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
                         (plain, turned)
                     })
                 });
-                let parts: Vec<(&[f32], &ID3D12PipelineState)> = match (&split, mirror) {
-                    (Some((plain, turned)), Some(twin)) => [(plain.as_slice(), pipeline), (turned.as_slice(), twin)].into_iter().filter(|(d, _)| !d.is_empty()).collect(),
-                    _ => vec![(batch.data.as_slice(), pipeline)],
+                // (PARTY-NATIVE) + whether a part is the mirrored one (its G-buffer twin's state)
+                let parts: Vec<(&[f32], &ID3D12PipelineState, bool)> = match (&split, mirror) {
+                    (Some((plain, turned)), Some(twin)) => [(plain.as_slice(), pipeline, false), (turned.as_slice(), twin, true)].into_iter().filter(|(d, _, _)| !d.is_empty()).collect(),
+                    _ => vec![(batch.data.as_slice(), pipeline, false)],
                 };
-                for (data, state) in parts {
+                for (data, state, turned) in parts {
                     let Some(at) = put(as_bytes(data), 16) else { return };
                     let count = (data.len() / MESH_INSTANCE_FLOATS) as u32;
                     list.SetPipelineState(state);
                     list.SetGraphicsRootConstantBufferView(1, material_constants);
                     list.SetGraphicsRootDescriptorTable(2, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: gpu_start.ptr + (material_id as usize * MATERIAL_TEXTURES * gpu.srv_size) as u64 });
                     list.SetGraphicsRootShaderResourceView(5, sampler_index);
-                    list.IASetVertexBuffers(0, Some(&[mesh.vertex_view, D3D12_VERTEX_BUFFER_VIEW { BufferLocation: at, SizeInBytes: (data.len() * 4) as u32, StrideInBytes: (MESH_INSTANCE_FLOATS * 4) as u32 }]));
+                    let views = [mesh.vertex_view, D3D12_VERTEX_BUFFER_VIEW { BufferLocation: at, SizeInBytes: (data.len() * 4) as u32, StrideInBytes: (MESH_INSTANCE_FLOATS * 4) as u32 }];
+                    list.IASetVertexBuffers(0, Some(&views));
                     list.IASetIndexBuffer(Some(&mesh.index_view));
                     list.DrawIndexedInstanced(mesh.index_count, count, 0, 0, 0);
+                    keep(turned, frame_now, material_constants, sampler_index, views.to_vec(), Some(mesh.index_view), mesh.index_count, count); // (PARTY-NATIVE)
                     instances += count as u64;
                 }
+            }
+            // (VFX-2) a skeletal mesh component: its skinned vertices (skelfx.rs buffers) as one mesh instance
+            Item::Skel(batch) => {
+                let Some((vertex_view, index_view, count)) = skelfx::gpu_mesh(cx.device, frame_id, batch) else { return };
+                let Some(at) = put(as_bytes(&batch.rows), 16) else { return };
+                list.SetPipelineState(if batch.mirrored { mirror.unwrap_or(pipeline) } else { pipeline });
+                list.SetGraphicsRootConstantBufferView(1, material_constants);
+                list.SetGraphicsRootDescriptorTable(2, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: gpu_start.ptr + (material_id as usize * MATERIAL_TEXTURES * gpu.srv_size) as u64 });
+                list.SetGraphicsRootShaderResourceView(5, sampler_index);
+                let views = [vertex_view, D3D12_VERTEX_BUFFER_VIEW { BufferLocation: at, SizeInBytes: (MESH_INSTANCE_FLOATS * 4) as u32, StrideInBytes: (MESH_INSTANCE_FLOATS * 4) as u32 }];
+                list.IASetVertexBuffers(0, Some(&views));
+                list.IASetIndexBuffer(Some(&index_view));
+                list.DrawIndexedInstanced(count, 1, 0, 0, 0);
+                keep(batch.mirrored && mirror.is_some(), frame_now, material_constants, sampler_index, views.to_vec(), Some(index_view), count, 1); // (PARTY-NATIVE)
+                instances += 1;
             }
             Item::Plain(batch) => {
                 let (Some(vertices), Some(indices)) = (put(as_bytes(&batch.vertices), 16), put(as_bytes(&batch.indices), 16)) else { return };
@@ -2240,9 +3068,12 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
                 list.SetGraphicsRootConstantBufferView(1, material_constants);
                 list.SetGraphicsRootDescriptorTable(2, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: gpu_start.ptr + (material_id as usize * MATERIAL_TEXTURES * gpu.srv_size) as u64 });
                 list.SetGraphicsRootShaderResourceView(5, sampler_index);
-                list.IASetVertexBuffers(0, Some(&[D3D12_VERTEX_BUFFER_VIEW { BufferLocation: vertices, SizeInBytes: (batch.vertices.len() * 4) as u32, StrideInBytes: (PLAIN_FLOATS * 4) as u32 }]));
-                list.IASetIndexBuffer(Some(&D3D12_INDEX_BUFFER_VIEW { BufferLocation: indices, SizeInBytes: (batch.indices.len() * 4) as u32, Format: DXGI_FORMAT_R32_UINT }));
+                let view = D3D12_VERTEX_BUFFER_VIEW { BufferLocation: vertices, SizeInBytes: (batch.vertices.len() * 4) as u32, StrideInBytes: (PLAIN_FLOATS * 4) as u32 };
+                let index = D3D12_INDEX_BUFFER_VIEW { BufferLocation: indices, SizeInBytes: (batch.indices.len() * 4) as u32, Format: DXGI_FORMAT_R32_UINT };
+                list.IASetVertexBuffers(0, Some(&[view]));
+                list.IASetIndexBuffer(Some(&index));
                 list.DrawIndexedInstanced(batch.indices.len() as u32, 1, 0, 0, 0);
+                keep(false, frame_now, material_constants, sampler_index, vec![view], Some(index), batch.indices.len() as u32, 1); // (PARTY-NATIVE)
                 instances += 1;
             }
         }
@@ -2252,12 +3083,25 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
         Item::Quad(b) => b.material,
         Item::Mesh(b) => b.material,
         Item::Plain(b) => b.material,
+        Item::Skel(b) => b.material, // (VFX-2)
     };
     // 1. opaque and masked: depth test and write (the targets are bound as gfx.rs left them)
     list.OMSetRenderTargets(1, Some(&cx.target_view), false, Some(&cx.depth_view));
+    // (PARTY-NATIVE) a lit material with its native pair ready for this frame's G-buffer formats, in a frame with the capture:
+    // its colour pass from the game's light, its G-buffer twin kept for the replay
+    let gb_formats = GB_FORMATS.lock().ok().and_then(|g| *g);
+    let native_stage = capture.is_some() && matches!(cx.stage, Stage::All | Stage::Early);
+    let mut native_drawn = 0u32;
     for (item, m) in &opaque {
-        emit(item, m, id_of(item), &m.pipeline, m.mirrored.as_ref().map(|t| &t.0), &mut put);
+        match m.native.as_ref().filter(|_| native_stage).and_then(|n| n.gb.as_ref().filter(|g| Some(g.0) == gb_formats).map(|g| (n, g))) {
+            Some((n, (_, gb, gb_turned))) => {
+                native_drawn += 1;
+                emit(item, m, id_of(item), &n.colour, n.colour_mirrored.as_ref(), Some((gb, gb_turned.as_ref())), &mut put);
+            }
+            None => emit(item, m, id_of(item), &m.pipeline, m.mirrored.as_ref().map(|t| &t.0), None, &mut put),
+        }
     }
+    NATIVE_DRAWS.fetch_add(native_drawn, Ordering::Relaxed);
     if !decals.is_empty() || !blended.is_empty() {
         // 2. the depth is read by the shaders from here on: read-only, and a texture
         let read_state = D3D12_RESOURCE_STATE_DEPTH_READ | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
@@ -2275,7 +3119,7 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
             for k in &distorted {
                 let (_, item, m) = &blended[*k];
                 if let Some(pipeline) = &m.distort {
-                    emit(item, m, id_of(item), pipeline, m.mirrored.as_ref().and_then(|t| t.1.as_ref()), &mut put);
+                    emit(item, m, id_of(item), pipeline, m.mirrored.as_ref().and_then(|t| t.1.as_ref()), None, &mut put);
                 }
             }
         }
@@ -2295,7 +3139,7 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
             list.OMSetStencilRef(u32::from(crate::gfx::CHAR_STENCIL & 0xC0));
         }
         for (item, m) in &decals {
-            emit(item, m, id_of(item), &m.pipeline, m.mirrored.as_ref().map(|t| &t.0), &mut put);
+            emit(item, m, id_of(item), &m.pipeline, m.mirrored.as_ref().map(|t| &t.0), None, &mut put);
         }
         if decal_ref {
             list.OMSetStencilRef(0);
@@ -2309,14 +3153,45 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
             list.RSSetViewports(&[D3D12_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: cx.width as f32, Height: cx.height as f32, MinDepth: 0.0, MaxDepth: 1.0 }]);
             list.RSSetScissorRects(&[windows::Win32::Foundation::RECT { left: 0, top: 0, right: cx.width as i32, bottom: cx.height as i32 }]);
         }
+        // (PARTY-NATIVE) with this frame's copy of the game's fog: each material's fog variant (its pixels fogged at their depth)
+        // (PARTY-NATIVE-LIGHT) with this frame's copy of the game's light inputs: a forward-lit material's lit variant (Elden Ring's light
+        // and fog at its pixels) before its fog variant
+        let mut fogged = 0u32;
+        let mut lit_drawn = 0u32;
+        let mut plain = 0u32; // (round 3)
         for (_, item, m) in &blended {
-            emit(item, m, id_of(item), &m.pipeline, m.mirrored.as_ref().map(|t| &t.0), &mut put);
+            match (m.lit.as_ref().filter(|_| lit_ready && LIT_VARIANTS.load(Ordering::Relaxed)), m.fog.as_ref().filter(|_| fog_ready)) { // (PARTY-NATIVE) vfx.fxlit
+                (Some((plain, turned)), _) => {
+                    lit_drawn += 1;
+                    emit(item, m, id_of(item), plain, turned.as_ref(), None, &mut put);
+                }
+                (None, Some((plain, turned))) => {
+                    fogged += 1;
+                    emit(item, m, id_of(item), plain, turned.as_ref(), None, &mut put);
+                }
+                (None, None) => {
+                    plain += 1;
+                    emit(item, m, id_of(item), &m.pipeline, m.mirrored.as_ref().map(|t| &t.0), None, &mut put);
+                }
+            }
         }
+        FOG_BATCHES.fetch_add(fogged, Ordering::Relaxed);
+        LIT_BATCHES.fetch_add(lit_drawn, Ordering::Relaxed);
+        PLAIN_BATCHES.fetch_add(plain, Ordering::Relaxed);
         // 3. as gfx.rs had it
         list.ResourceBarrier(&[transition(cx.depth, read_state, D3D12_RESOURCE_STATE_DEPTH_WRITE)]);
         list.OMSetRenderTargets(1, Some(&cx.target_view), false, Some(&cx.depth_view));
     }
     drop(emit);
+    // (PARTY-NATIVE) this slot's G-buffer draws for gfx.rs's G-buffer pass (recorded after this colour pass, executed before it)
+    if matches!(cx.stage, Stage::All | Stage::Early) {
+        if let Ok(mut r) = REPLAYS.lock() {
+            r.retain(|(s, _)| *s != cx.slot);
+            if !replays.is_empty() {
+                r.push((cx.slot, replays));
+            }
+        }
+    }
     // (VFXR) 4. the post passes of the late stage: KH3's bloom of what the effects added, the screen passes they ask for
     if late_stage && (post_bloom || post_screen) {
         if let Some(k) = post_kit.as_mut() {
@@ -2343,6 +3218,90 @@ pub(crate) unsafe fn draw(cx: &DrawCx) {
     DRAW_MAX.fetch_max(micros, Ordering::Relaxed);
 }
 
+/// (PARTY-NATIVE) gfx.rs at the start of a frame's recording (before the decals' stage): no capture yet, and nothing of this
+/// slot's earlier frame is replayed.
+pub(crate) fn begin_frame(slot: usize) {
+    set_capture(None);
+    if let Ok(mut r) = REPLAYS.lock() {
+        r.retain(|(s, _)| *s != slot);
+    }
+}
+
+/// (PARTY-NATIVE) gfx.rs before the capture: some opaque lit effect of the latest draw list has its native pair ready for the
+/// G-buffer's formats (the capture then covers the picture, so that their texels are captured with the characters').
+pub(crate) fn native_wanted() -> bool {
+    let Some(prepared) = LATEST.lock().ok().and_then(|g| g.clone()) else { return false };
+    let Ok(guard) = GPU.try_lock() else { return false };
+    let Some(gpu) = guard.as_ref() else { return false };
+    let formats = GB_FORMATS.lock().ok().and_then(|g| *g);
+    let ready = |id: u32| matches!(gpu.materials.get(id as usize), Some(MatState::Ready(m)) if m.pass == Pass::Opaque && m.native.as_ref().is_some_and(|n| n.gb.as_ref().is_some_and(|g| Some(g.0) == formats)));
+    prepared.quads.iter().map(|b| b.material).chain(prepared.meshes.iter().map(|b| b.material)).chain(prepared.plain.iter().map(|b| b.material)).chain(prepared.skel.iter().map(|b| b.material)).any(ready)
+}
+
+/// (PARTY-NATIVE) gfx.rs's G-buffer pass: this slot has lit effects' G-buffer draws to replay.
+pub(crate) fn replay_pending(slot: usize) -> bool {
+    REPLAYS.lock().is_ok_and(|r| r.iter().any(|(s, v)| *s == slot && !v.is_empty()))
+}
+
+/// (PARTY-NATIVE) What `gbuffer_replay` draws into.
+pub(crate) struct GbReplayCx<'a> {
+    pub list: &'a ID3D12GraphicsCommandList,
+    pub slot: usize,
+    /// the first of the three G-buffer targets' views (consecutive), the scene depth's writable view
+    pub targets: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub depth: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// (PARTY-NATIVE) THE LIT EFFECTS' G-BUFFER TWINS, in gfx.rs's G-buffer pass (the early list, after the characters' writes and
+/// before the game's light passes): every draw `draw` kept for this slot, with its G-buffer state, the same constants and
+/// geometry, the characters' stencil class. Leaves this module's root signature and heaps bound (the caller binds its own
+/// again). Returns the draws.
+pub(crate) unsafe fn gbuffer_replay(cx: &GbReplayCx) -> u32 {
+    let replays = match REPLAYS.lock() {
+        Ok(mut r) => match r.iter().position(|(s, _)| *s == cx.slot) {
+            Some(k) => r.swap_remove(k).1,
+            None => return 0,
+        },
+        Err(_) => return 0,
+    };
+    let Ok(guard) = GPU.try_lock() else { return 0 };
+    let Some(gpu) = guard.as_ref() else { return 0 };
+    let list = cx.list;
+    let gpu_start = gpu.srv_heap.GetGPUDescriptorHandleForHeapStart();
+    let frame_table = MAX_MATERIALS * MATERIAL_TEXTURES + cx.slot * FRAME_VIEWS;
+    list.SetGraphicsRootSignature(&gpu.root);
+    list.SetDescriptorHeaps(&[Some(gpu.srv_heap.clone()), Some(gpu.sampler_heap.clone())]);
+    list.SetGraphicsRootDescriptorTable(3, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: gpu_start.ptr + (frame_table * gpu.srv_size) as u64 });
+    list.SetGraphicsRootDescriptorTable(4, gpu.sampler_heap.GetGPUDescriptorHandleForHeapStart());
+    list.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    list.RSSetViewports(&[D3D12_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: cx.width as f32, Height: cx.height as f32, MinDepth: 0.0, MaxDepth: 1.0 }]);
+    list.RSSetScissorRects(&[windows::Win32::Foundation::RECT { left: 0, top: 0, right: cx.width as i32, bottom: cx.height as i32 }]);
+    list.OMSetRenderTargets(3, Some(&cx.targets), true, Some(&cx.depth));
+    list.OMSetStencilRef(u32::from(crate::gfx::CHAR_STENCIL));
+    let mut n = 0u32;
+    for r in &replays {
+        list.SetPipelineState(&r.pso);
+        list.SetGraphicsRootConstantBufferView(0, r.frame);
+        list.SetGraphicsRootConstantBufferView(1, r.material);
+        list.SetGraphicsRootDescriptorTable(2, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: r.table });
+        list.SetGraphicsRootShaderResourceView(5, r.samplers);
+        list.IASetVertexBuffers(0, Some(&r.vertex));
+        match r.index {
+            Some(index) => {
+                list.IASetIndexBuffer(Some(&index));
+                list.DrawIndexedInstanced(r.count, r.instances, 0, 0, 0);
+            }
+            None => list.DrawInstanced(r.count, r.instances, 0, 0),
+        }
+        n += 1;
+    }
+    list.OMSetStencilRef(0);
+    GB_DRAWS.fetch_add(n, Ordering::Relaxed);
+    n
+}
+
 /// What KH3's scene-linear 1.0 of an effect becomes in the host's scene target.
 ///
 /// THE RULE (IMPL_ER_FX_STATE.md): effects are EMISSIVE: their brightness on screen should be
@@ -2363,6 +3322,48 @@ pub fn effect_scale(exposure: Option<f32>, fallback: f32) -> f32 {
 mod tests {
     use super::*;
 
+    /// (PARTY-NATIVE) the lit effects' native route: the pair's names (never for a decal, a shader without G-buffer outputs or
+    /// an overlay's changed translation), the frame row, and the harness's frame layout the row lands in
+    #[test]
+    fn party_native_lit_effects_take_the_native_pair_and_row() {
+        assert_eq!(native_files("m", 65, 4, ""), Some(("nm65.ps.dxil".to_string(), "gm65.ps.dxil".to_string())));
+        assert_eq!(native_files("s", 15, 5, ""), Some(("ns15.ps.dxil".to_string(), "gs15.ps.dxil".to_string())));
+        assert_eq!(native_files("d", 7, 4, ""), None, "a decal");
+        assert_eq!(native_files("m", 3, 1, ""), None, "an unlit (forward) shader");
+        assert_eq!(native_files("m", 319, 4, "_vxl"), Some(("nm319_vxl.ps.dxil".to_string(), "gm319_vxl.ps.dxil".to_string())), "an overlay's new translation: its own pair");
+        assert_eq!(fxn_row(None), [0.0; FXN_FLOATS]);
+        let c = FxCapture { light: 1, geo: 2, mark: 1.0 / 255.0, cos: 3.0 };
+        assert_eq!(fxn_row(Some(c)), [1.0, 1.0 / 255.0, 1.0, 0.0]);
+        // the harness: the native row follows the forward rows, behind the 48 floats of the frame's head
+        let wgsl = include_str!("../shaders/er_vfx.wgsl");
+        let head = &wgsl[wgsl.find("struct ErFrame {").unwrap()..];
+        let head = &head[..head.find("\n}").unwrap()];
+        assert!(head.find("fwd_l: array<vec4<f32>, 64>,").unwrap() < head.find("fxn: vec4<f32>,").unwrap(), "fxn after the forward rows");
+        assert_eq!(crate::fwdlight::FRAME_FLOATS, (8 + 5 + 64) * 4, "the forward rows' size the row is written behind");
+        // the colour pass keeps the earlier shading where the texel is not its own; the G-buffer twin writes the KH white
+        assert!(wgsl.contains("if (fx.ok > 0.5) {") && wgsl.contains("g.albedo = vec4<f32>(1.0, 1.0, 1.0, er.fxn.y);"));
+        assert!(wgsl.contains("@group(1) @binding(14) var er_hy_light") && wgsl.contains("@group(1) @binding(15) var er_hy_geo"));
+    }
+
+    /// (PARTY-NATIVE) the game's fog on the late effects: each pass's mode, the volume sizes taken, and the harness's layout (the
+    /// fog row after the native row, the material's fog row after `er`, t16 / t17, the composite's function applied at the end)
+    #[test]
+    fn party_native_late_effects_take_the_games_fog() {
+        assert_eq!([Pass::Translucent, Pass::Additive, Pass::Modulate, Pass::Opaque, Pass::DecalAdd, Pass::DecalBlend].map(fog_mode), [0.0, 1.0, 2.0, 3.0, 3.0, 3.0]);
+        assert!(fog_size_ok([160, 90, 64]) && !fog_size_ok([0, 90, 64]) && !fog_size_ok([160, 90, 4096]));
+        assert_eq!(PARAM_ROWS, 67, "64 material rows, misc, er, fx");
+        let wgsl = include_str!("../shaders/er_vfx.wgsl");
+        let frame = &wgsl[wgsl.find("struct ErFrame {").unwrap()..];
+        let frame = &frame[..frame.find("\n}").unwrap()];
+        assert!(frame.find("fxn: vec4<f32>,").unwrap() < frame.find("fxf: vec4<f32>,").unwrap());
+        let params = &wgsl[wgsl.find("struct KhParams {").unwrap()..];
+        let params = &params[..params.find("\n}").unwrap()];
+        assert!(params.find("er: vec4<f32>,").unwrap() < params.find("fx: vec4<f32>,").unwrap());
+        assert!(wgsl.contains("@group(1) @binding(16) var er_fog_vol: texture_3d<f32>;") && wgsl.contains("@group(1) @binding(17) var er_fog_rows: texture_2d<u32>;"));
+        assert!(wgsl.contains("scene = scene * fog.transmit + fog.inscatter;"));
+        assert_eq!(FRAME_VIEWS, 18, "(PARTY-NATIVE-LIGHT) + t18..t29");
+    }
+
     /// (XW) the overlay replaces exactly the records it names and adds its shaders; without its shaders file nothing changes
     #[test]
     fn the_xw_overlay_lays_its_records_over_the_table() {
@@ -2381,6 +3382,55 @@ mod tests {
         let over = serde_json::json!({ "pixel_suffix": { "d9": "_xwb" }, "owners": {} });
         assert_eq!(overlay_xw(&mut json, &mut built, Some(over), Some(serde_json::json!({ "shaders": [{ "file": "d9_xwb.ps.dxil" }] }))), 1);
         assert_eq!(json["pixel_suffix"]["d9"], "_xwb");
+    }
+
+    /// (PARTY-NATIVE) a root's _fwl overlay: inert without its two files; with them its owners, records and `<letter><id>_fwl`
+    /// shaders are laid over the table (the fog / lit variants are then `f` / `l` + that pixel file); the harness gives the
+    /// translated ILC rows Elden Ring's SH in a lit variant and 0 elsewhere
+    #[test]
+    fn party_native_the_fwl_overlay_is_inert_without_its_files() {
+        let dir = std::env::temp_dir().join(format!("kh_fwl_overlay_test_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("shaders")).unwrap();
+        std::fs::create_dir_all(dir.join("er")).unwrap();
+        let mut json = serde_json::json!({ "owners": { "hmt_wat_lit_00a": { "id": 32, "sprite": { "ok": true } } }, "materials": { "hmi_wat": { "owner": "hmt_wat_lit_00a", "cb": [0] } } });
+        let mut built = serde_json::json!({ "shaders": [{ "name": "s32", "file": "s32.ps.dxil", "ok": true }] });
+        let (j0, b0) = (json.clone(), built.clone());
+        assert_eq!(overlay_fwl(&mut json, &mut built, &dir), 0);
+        assert_eq!((&json, &built), (&j0, &b0), "no files: nothing changes");
+        std::fs::write(dir.join("shaders").join("shading_fwl.json"), r#"{ "pixel_suffix": { "s32": "_fwl" }, "owners": { "hmt_wat_lit_00a": { "id": 32, "sprite": { "ok": true, "ilc": true } } }, "materials": { "hmi_wat": { "owner": "hmt_wat_lit_00a", "cb": [1] } } }"#).unwrap();
+        assert_eq!(overlay_fwl(&mut json, &mut built, &dir), 0, "the records without the shaders file: nothing changes");
+        assert_eq!((&json, &built), (&j0, &b0));
+        std::fs::write(dir.join("er").join("shaders_fwl.json"), r#"{ "shaders": [{ "name": "s32_fwl", "file": "s32_fwl.ps.dxil", "ok": true }] }"#).unwrap();
+        assert_eq!(overlay_fwl(&mut json, &mut built, &dir), 3);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(json["pixel_suffix"]["s32"], "_fwl");
+        assert_eq!(json["owners"]["hmt_wat_lit_00a"]["sprite"]["ilc"], true);
+        assert_eq!(json["materials"]["hmi_wat"]["cb"][0], 1);
+        assert_eq!(built["shaders"].as_array().unwrap().len(), 2);
+        let pixel_file = format!("s32{}.ps.dxil", json["pixel_suffix"]["s32"].as_str().unwrap());
+        assert_eq!((format!("f{pixel_file}"), format!("l{pixel_file}")), ("fs32_fwl.ps.dxil".to_string(), "ls32_fwl.ps.dxil".to_string()));
+        let wgsl = include_str!("../shaders/er_vfx.wgsl");
+        let at = wgsl.find("fn kh_fwd_ilc(k: i32)").unwrap();
+        let lit = wgsl[..at].rfind("#ifdef KH_FXLIT").unwrap();
+        assert!(wgsl[lit..at].lines().all(|l| l.trim() != "#endif"), "the SH version is the lit variant's");
+        assert!(wgsl[at..].contains("let s = kh_lit_sh[k - 8];") && wgsl[at..].contains("s.w / 0.886228"));
+        assert_eq!(wgsl.matches("fn kh_fwd_ilc(k: i32) -> vec4<f32> {").count(), 2, "and a 0 version for the other variants");
+    }
+
+    /// (VFX-XLATE) the harness carries what the translator's --root / --vxl tables call (the scene-colour read outside the
+    /// fragment-only block, so the vertex variants that splice the same owners compile; the scene particle colours), and the
+    /// filter's edge reads the scene depth only when the pass says the depth is readable
+    #[test]
+    fn vfx_xlate_the_harness_has_the_scene_colour_read_and_the_particle_colours() {
+        let shader = include_str!("../shaders/er_vfx.wgsl");
+        let at = shader.find("fn kh_scene_color(").expect("kh_scene_color");
+        let generated = shader.find("//KH_GENERATED").expect("the splice marker");
+        assert!(at < generated, "defined before the translated shaders");
+        assert!(!shader[..at].trim_end().ends_with("#ifdef ER_FRAGMENT"), "not fragment-only");
+        for field in ["pbase", "pbright", "pdark", "psynth"] {
+            assert!(shader.contains(&format!("i.{field} = ")), "{field} is set");
+        }
+        assert!(shader.contains("kh.m[3].w > 0.5"), "the edge needs the readable-depth flag");
     }
 
     #[test]
@@ -2513,12 +3563,24 @@ pub struct CharDrive {
     pub name: String,
     pub value: [f32; 4],
     pub vector: bool,
+    /// (AUDIT-B W-VFX) the form weapon / pawn model the effect hangs on (its `kb:<model>` slots of Sora's library), None: the
+    /// owner's body. KH3's SQEX_Material_Scalar / _Vector (0x144378F10 / 0x144379F10) write the mesh the component is
+    /// attached to (0x1442871A0's last case): Clock Drill's vw_so114_fns_mnk00 greys the Clock and the drill (to_gray_scale).
+    pub mesh: Option<String>,
+    /// (FREEZE-FX) Every slot of the owner's library, his held weapons' too (KH3's SetFrozen sends the freeze rows to the pawn's
+    /// equipment: kh-host `CharDrive::equipment`).
+    pub equipment: bool,
 }
 
 static CHAR_DRIVES: Mutex<Vec<CharDrive>> = Mutex::new(Vec::new());
-/// (owner, parameter) -> the values every slot had before the drive (given back when it ends)
-#[allow(clippy::type_complexity)]
-static CHAR_HELD: Mutex<Vec<((u8, String), Vec<(Option<f32>, Option<[f32; 4]>)>)>> = Mutex::new(Vec::new());
+/// What every slot of a library held of one parameter: (scalar, vector).
+type HeldValues = Vec<HeldValue>;
+/// (MIMIC-BOSS drives fix) One slot's held (scalar, vector) of one parameter.
+type HeldValue = (Option<f32>, Option<[f32; 4]>);
+/// (owner, parameter, mesh) -> the values every slot had before the drive (given back when it ends)
+/// (AUDIT-B W-VFX) keyed by the mesh too: a drive of a form weapon's slots is held apart from the body's
+type HeldKey = (u8, String, String);
+static CHAR_HELD: Mutex<Vec<(HeldKey, HeldValues)>> = Mutex::new(Vec::new());
 /// `vfx.char_fx` (default on): the drives reach the characters.
 pub static CHAR_FX: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
@@ -2534,14 +3596,15 @@ pub fn set_char_drives(drives: Vec<CharDrive>) {
 /// uniform expressions: InLight, InLightColor, InLightCenterPosition ..., Aura, OpacityFade).
 pub(crate) fn apply_char_drives(lib: &mut kh_look::library::Library, owner: u8) {
     let drives: Vec<CharDrive> = if CHAR_FX.load(Ordering::Relaxed) { CHAR_DRIVES.lock().map(|d| d.iter().filter(|x| x.owner == owner).cloned().collect()).unwrap_or_default() } else { Vec::new() };
-    let mesh = if owner == 0 { "sora" } else { "" };
+    // (AUDIT-B W-VFX) the slots a drive reaches: the body ("sora"; a friend: every mesh), or the form weapon it hangs on
+    let mesh_of = |d: &CharDrive| -> String { if owner == 0 && !d.equipment { sora_mesh_of(d.mesh.as_deref()) } else { String::new() } };
     let Ok(mut held) = CHAR_HELD.lock() else { return };
     // the ended ones back
-    held.retain(|((o, name), before)| {
-        if *o != owner || drives.iter().any(|d| &d.name == name) {
+    held.retain(|((o, name, mesh), before)| {
+        if *o != owner || drives.iter().any(|d| &d.name == name && &mesh_of(d) == mesh) {
             return true;
         }
-        for (slot, (s, v)) in lib.slots.iter_mut().filter(|s| mesh.is_empty() || s.mesh == mesh).zip(before.iter()) {
+        for (slot, (s, v)) in lib.slots.iter_mut().filter(|s| mesh.is_empty() || &s.mesh == mesh).zip(before.iter()) {
             match s {
                 Some(x) => drop(slot.scalars.insert(name.clone(), *x)),
                 None => drop(slot.scalars.remove(name)),
@@ -2554,9 +3617,10 @@ pub(crate) fn apply_char_drives(lib: &mut kh_look::library::Library, owner: u8) 
         false
     });
     for d in &drives {
-        if !held.iter().any(|((o, n), _)| *o == owner && n == &d.name) {
+        let mesh = mesh_of(d);
+        if !held.iter().any(|((o, n, m), _)| *o == owner && n == &d.name && m == &mesh) {
             let before = lib.slots.iter().filter(|s| mesh.is_empty() || s.mesh == mesh).map(|s| (s.scalars.get(&d.name).copied(), s.vectors.get(&d.name).copied())).collect();
-            held.push(((owner, d.name.clone()), before));
+            held.push(((owner, d.name.clone(), mesh.clone()), before));
         }
         for slot in lib.slots.iter_mut().filter(|s| mesh.is_empty() || s.mesh == mesh) {
             if d.vector {
@@ -2566,6 +3630,83 @@ pub(crate) fn apply_char_drives(lib: &mut kh_look::library::Library, owner: u8) 
             }
         }
     }
+}
+
+/// (AUDIT-B W-VFX) The slots of Sora's library a drive on Sora (or a copy of Sora) reaches: the body "sora", or the form
+/// weapon it hangs on.
+fn sora_mesh_of(d: Option<&str>) -> String {
+    match d {
+        // (HAIR-PULSE) the Kingdom Key is drawn from the main pack: its slots are "kingdom_key" (never `kb:w_so010`)
+        Some(crate::keyblade::KINGDOM_KEY) => "kingdom_key".to_string(),
+        Some(m) => format!("{}{m}", crate::keyblade::PREFIX),
+        None => "sora".to_string(),
+    }
+}
+
+/// (MIMIC-BOSS drives fix) A slot of Sora's library as a COPY of Sora draws it (copy member m: `owner` = m + 1, kh-host
+/// `char_drives`): the player's (owner 0) drives taken back to what the slot held before them, then the copy's own drives
+/// put on (the same body / form-weapon mesh rule). His form glow, in-light and aura are HIS, never the player's. None = the
+/// slot as it is (neither touches it).
+pub(crate) fn copy_drive_slot(lib: &kh_look::library::Library, index: usize, owner: u8) -> Option<kh_look::library::Slot> {
+    let slot = lib.slots.get(index)?;
+    let drives: Vec<CharDrive> = if owner != 0 && CHAR_FX.load(Ordering::Relaxed) { CHAR_DRIVES.lock().map(|d| d.iter().filter(|x| x.owner == owner && (x.equipment || sora_mesh_of(x.mesh.as_deref()) == slot.mesh)).cloned().collect()).unwrap_or_default() } else { Vec::new() };
+    // the player's held values of this slot: its place among the slots of that mesh (CHAR_HELD's order)
+    let undo: Vec<(String, HeldValue)> = CHAR_HELD
+        .lock()
+        .map(|held| {
+            held.iter()
+                .filter(|((o, _, mesh), _)| *o == 0 && (mesh.is_empty() || *mesh == slot.mesh))
+                .filter_map(|((_, name, mesh), before)| {
+                    let at = lib.slots[..index].iter().filter(|s| mesh.is_empty() || s.mesh == *mesh).count();
+                    before.get(at).map(|b| (name.clone(), *b))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if drives.is_empty() && undo.is_empty() {
+        return None;
+    }
+    let mut out = slot.clone();
+    for (name, (s, v)) in undo {
+        match s {
+            Some(x) => drop(out.scalars.insert(name.clone(), x)),
+            None => drop(out.scalars.remove(&name)),
+        }
+        match v {
+            Some(x) => drop(out.vectors.insert(name, x)),
+            None => drop(out.vectors.remove(&name)),
+        }
+    }
+    for d in drives {
+        if d.vector {
+            out.vectors.insert(d.name, d.value);
+        } else {
+            out.scalars.insert(d.name, d.value[0]);
+        }
+    }
+    Some(out)
+}
+
+/// (HAIR-PULSE) A weapon slot's in-light centres for its draw: the host hands a drive on a weapon its centre in the world (w 1,
+/// kh-host `char_drives`); the weapon materials measure it from their own object position (`p8` = `kh.obj`, the drawn mesh's
+/// bounds origin: w_so200_mat0_Inst's KH_C554 197-230, `distance(p8 + centre - view x CameraOffset, pixel)`), so it becomes
+/// `world - object.obj` with w 0 (the camera offset is applied by kh_vfx when it samples). Some(copy) when the slot has one.
+pub(crate) fn weapon_in_light(slot: &kh_look::library::Slot, object: &kh_look::library::ObjectRows) -> Option<kh_look::library::Slot> {
+    if slot.mesh == "sora" {
+        return None;
+    }
+    let world = |n: &str| slot.vectors.get(n).filter(|v| v[3] == 1.0).copied();
+    let centres = [kh_vfx::screen::in_light_names(0)[3], kh_vfx::screen::in_light_names(1)[3]];
+    if centres.iter().all(|n| world(n).is_none()) {
+        return None;
+    }
+    let mut out = slot.clone();
+    for name in centres {
+        if let Some(w) = world(name) {
+            out.vectors.insert(name.to_string(), [w[0] - object.obj.x, w[1] - object.obj.y, w[2] - object.obj.z, 0.0]);
+        }
+    }
+    Some(out)
 }
 
 // (VFXR occlusion) what the decals' stencil test lets through, as D3D12 evaluates it: (ref & mask) NOT_EQUAL (value & mask)
@@ -2591,3 +3732,8 @@ mod vfxr_occlusion_tests {
         assert!(decal_stencil(DXGI_FORMAT_D32_FLOAT).is_none());
     }
 }
+
+// (HAIR-PULSE) every form through the core, the effect side and these drives on every outfit's library: none leaves Sora pulsing
+#[cfg(test)]
+#[path = "vfx_form_pulse_tests.rs"]
+mod form_pulse_tests;

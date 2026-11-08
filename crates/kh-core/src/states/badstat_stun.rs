@@ -68,7 +68,8 @@ impl PlayerState for BadstatStun {
             }
             // 1: until the status is gone; the flicks' time is taken off it.
             1 => {
-                if !cx.pawn.combat.bad.is(kind::STUN) {
+                // (MIMIC-STANCE) a stance break holds the loop too (combat/stance.rs)
+                if !cx.pawn.combat.bad.is(kind::STUN) && !cx.pawn.combat.bad.stance.broken() {
                     play_clip(cx.pawn, "BadStatStunEnd", 2);
                     cx.pawn.queue.flags.enable_change = true;
                     self.sub = 2;

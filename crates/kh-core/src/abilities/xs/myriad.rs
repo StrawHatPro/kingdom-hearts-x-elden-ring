@@ -34,7 +34,7 @@ pub(crate) fn begin(cx: &mut Ctx) {
 /// The summon ended: the finale.
 pub(crate) fn tick(cx: &mut Ctx) {
     if cx.pawn.anim.name == AnimId::StyleChange9 && cx.pawn.anim.ended {
-        cx.pawn.anim.play_with(AnimId::M_9419, PlayArgs::mode(2, -1.0));
+        cx.pawn.anim.play_with(AnimId::M9419, PlayArgs::mode(2, -1.0));
     }
 }
 

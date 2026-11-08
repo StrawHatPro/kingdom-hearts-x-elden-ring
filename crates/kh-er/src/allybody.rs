@@ -66,12 +66,16 @@ pub mod rules {
     pub struct SlotView {
         pub chara: Option<PartyChara>,
         pub state: SlotState,
+        /// (MIMIC SORA) the slot is Mimic Sora's (its chara is `Sora`), never AI Sora's.
+        pub mimic: bool,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub struct WantView {
         pub chara: PartyChara,
         pub hittable: bool,
+        /// (MIMIC SORA) Mimic Sora's want (kh-partyhost `AllyWant::mimic`).
+        pub mimic: bool,
     }
 
     /// What the pool does this frame.
@@ -89,6 +93,10 @@ pub mod rules {
         Park(usize),
         /// Ask the creator for a body for this friend (at most one a frame).
         Spawn(PartyChara),
+        /// (MIMIC SORA, THE USER 2026-11-03: "build mimic Sora") a free slot is given to Mimic Sora / a body is asked for
+        /// him: the fourth key of the pool, beside Sora's, Donald's and Goofy's (AI Sora's body route, the spirit team).
+        ReuseMimic(usize),
+        SpawnMimic,
     }
 
     /// THE POOL RULE: every wanted friend keeps his slot; a KO'd one keeps it parked; a friend without one takes a
@@ -101,14 +109,15 @@ pub mod rules {
                 out.push(Action::Drop(i));
             }
         }
-        let wanted = |c: PartyChara| wants.iter().any(|w| w.chara == c);
+        // (MIMIC SORA) a slot is a friend's or the mimic's: (chara, mimic) is the key
+        let wanted = |c: PartyChara, mimic: bool| wants.iter().any(|w| w.chara == c && w.mimic == mimic);
         let mut free: Vec<usize> = Vec::new();
         for (i, s) in slots.iter().enumerate() {
             if !alive(s) {
                 continue;
             }
             match s.chara {
-                Some(c) if !wanted(c) => {
+                Some(c) if !wanted(c, s.mimic) => {
                     out.push(Action::Release(i));
                     free.push(i);
                 }
@@ -119,7 +128,7 @@ pub mod rules {
         let count = slots.iter().filter(|s| alive(s)).count();
         let mut spawned = false;
         for w in wants {
-            match slots.iter().position(|s| alive(s) && s.chara == Some(w.chara)) {
+            match slots.iter().position(|s| alive(s) && s.chara == Some(w.chara) && s.mimic == w.mimic) {
                 Some(i) => match slots[i].state {
                     SlotState::Parked if w.hittable => out.push(Action::Activate(i)),
                     SlotState::Live if !w.hittable => out.push(Action::Park(i)),
@@ -128,12 +137,12 @@ pub mod rules {
                 None => {
                     if let Some(k) = free.iter().position(|i| slots[*i].state != SlotState::Spawning) {
                         let i = free.remove(k);
-                        out.push(Action::Reuse(i, w.chara));
+                        out.push(if w.mimic { Action::ReuseMimic(i) } else { Action::Reuse(i, w.chara) });
                         if w.hittable {
                             out.push(Action::Activate(i));
                         }
                     } else if spawn_ok && !spawned && count < max {
-                        out.push(Action::Spawn(w.chara));
+                        out.push(if w.mimic { Action::SpawnMimic } else { Action::Spawn(w.chara) });
                         spawned = true;
                     }
                 }
@@ -209,6 +218,8 @@ pub mod rules {
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub struct AllyHit {
         pub chara: PartyChara,
+        /// (MIMIC SORA) the hit was on Mimic Sora's body (its chara is `Sora`): delivered to his core, never AI Sora's.
+        pub mimic: bool,
         /// HP the Elden Ring body lost.
         pub lost: i32,
         /// The reference maximum the share is taken of (the body's own maximum, or `body.ref_hp`).
@@ -224,6 +235,8 @@ pub mod rules {
         pub direction: Vec3,
         /// `status.burn_flinch` (a loss below the minimum share still flinches; Sora's rule).
         pub burn_flinch: bool,
+        /// (GF-SENSOR) The attack behind it, as the sensor read it.
+        pub info: kh_core::host::AttackInfo,
     }
 
     impl AllyHit {
@@ -262,6 +275,7 @@ pub mod rules {
                 damage: self.amount(p, friend_max),
                 damage_kind: kind.unwrap_or(ETresDamageKind::Small),
                 attack_name: "er.body",
+                attack_info: self.info, // (GF-SENSOR)
                 attacker: if self.known || self.causer != TargetId::NONE { HitAttacker { position: self.from, yaw: self.causer_yaw, radius: self.causer_radius, valid: true } } else { HitAttacker::NONE },
                 ..HitRecord::empty(self.causer)
             };
@@ -395,6 +409,14 @@ pub mod rules {
         pub immune: u16,
         /// A parked body (KO, cutscene, free) is held this far below the leader (m; 0 = at his feet).
         pub park_depth: f32,
+        /// (GF-INGAME) What reaches a body: the rows `body.swing.*` (allybody_live.rs `body_frame`).
+        pub swing_on: bool,
+        pub swing_reach: f32,
+        pub swing_arc: f32,
+        pub swing_height: f32,
+        pub swing_aim: f32,
+        pub swing_bullet: f32,
+        pub swing_scale: f32,
         pub owner_match: f32,
         pub test_offset: f32,
         pub test_report: Vec<f32>,
@@ -405,7 +427,7 @@ pub mod rules {
     impl Default for Sheet {
         fn default() -> Self {
             Sheet {
-                max: 3,
+                max: 4, // (MIMIC SORA) Donald, Goofy, AI Sora and Mimic Sora
                 order: vec![BodyRoute::Buddy, BodyRoute::C0000, BodyRoute::Copy],
                 buddy: [Pick::Auto; 3],
                 height: [1.8, 1.0, 1.8],
@@ -422,6 +444,13 @@ pub mod rules {
                 target_fails: 3,
                 immune: 900,
                 park_depth: 30.0,
+                swing_on: true,
+                swing_reach: 230.0,
+                swing_arc: 80.0,
+                swing_height: 260.0,
+                swing_aim: 200.0,
+                swing_bullet: 1.2,
+                swing_scale: 0.6,
                 owner_match: 80.0,
                 test_offset: 3.0,
                 test_report: vec![10.0, 30.0, 60.0],
@@ -471,6 +500,13 @@ pub mod rules {
                     "body.target_fails" => value.as_u64().map(|v| s.target_fails = v as u32).is_some(),
                     "body.immune" => value.as_u64().map(|v| s.immune = v as u16).is_some(),
                     "body.park_depth" => f().map(|v| s.park_depth = v).is_some(),
+                    "body.swing.on" => f().map(|v| s.swing_on = v != 0.0).is_some(),
+                    "body.swing.reach" => f().map(|v| s.swing_reach = v).is_some(),
+                    "body.swing.arc" => f().map(|v| s.swing_arc = v).is_some(),
+                    "body.swing.height" => f().map(|v| s.swing_height = v).is_some(),
+                    "body.swing.aim" => f().map(|v| s.swing_aim = v).is_some(),
+                    "body.swing.bullet" => f().map(|v| s.swing_bullet = v).is_some(),
+                    "body.swing.scale" => f().map(|v| s.swing_scale = v).is_some(),
                     "test.ko_grace" => f().map(|v| s.ko_grace = v).is_some(),
                     "owner.match" => f().map(|v| s.owner_match = v).is_some(),
                     "test.offset" => f().map(|v| s.test_offset = v).is_some(),
@@ -491,10 +527,27 @@ pub mod rules {
         use SlotState::*;
 
         fn slot(chara: Option<PartyChara>, state: SlotState) -> SlotView {
-            SlotView { chara, state }
+            SlotView { chara, state, mimic: false }
         }
         fn want(chara: PartyChara, hittable: bool) -> WantView {
-            WantView { chara, hittable }
+            WantView { chara, hittable, mimic: false }
+        }
+
+        /// (MIMIC SORA) the mimic's body is a fourth key beside AI Sora's: both are kept at once, neither takes the other's.
+        #[test]
+        fn mimic_his_body_is_a_fourth_key_beside_ai_soras() {
+            let mimic = WantView { chara: PartyChara::Sora, hittable: true, mimic: true };
+            let ai_sora = want(PartyChara::Sora, true);
+            // AI Sora has his body: the mimic gets a new one, never AI Sora's
+            assert_eq!(plan(&[slot(Some(PartyChara::Sora), Live)], &[ai_sora, mimic], true, 4), vec![Action::SpawnMimic]);
+            let both = [slot(Some(PartyChara::Sora), Live), SlotView { chara: Some(PartyChara::Sora), state: Live, mimic: true }];
+            assert_eq!(plan(&both, &[ai_sora, mimic], true, 4), vec![], "two AI Soras + the player: both bodies kept");
+            // the mimic leaves (dies, times out, the save point): his body is released and free, never despawned
+            assert_eq!(plan(&both, &[ai_sora], true, 4), vec![Action::Release(1)]);
+            // a free body is given to the next mimic
+            assert_eq!(plan(&[slot(None, Parked)], &[mimic], true, 4), vec![Action::ReuseMimic(0), Action::Activate(0)]);
+            // AI Sora's slot is never his when only the mimic is wanted
+            assert_eq!(plan(&[slot(Some(PartyChara::Sora), Live)], &[mimic], true, 4), vec![Action::Release(0), Action::ReuseMimic(0), Action::Activate(0)]);
         }
 
         /// (ER party I) a frozen reading never speaks; one that changes is his ground; parked = nothing.
@@ -555,7 +608,7 @@ pub mod rules {
         #[test]
         fn a_body_loss_becomes_the_same_share_of_the_friends_maximum() {
             let p = Params::default();
-            let hit = AllyHit { chara: PartyChara::Donald, lost: 100, ref_max: 1000, class: Loss::Hit, causer: TargetId(4), from: Vec3::new(-100.0, 0.0, 0.0), causer_yaw: 0.0, causer_radius: 50.0, known: true, direction: Vec3::X, burn_flinch: true };
+            let hit = AllyHit { chara: PartyChara::Donald, mimic: false, lost: 100, ref_max: 1000, class: Loss::Hit, causer: TargetId(4), from: Vec3::new(-100.0, 0.0, 0.0), causer_yaw: 0.0, causer_radius: 50.0, known: true, direction: Vec3::X, burn_flinch: true, info: kh_core::host::AttackInfo::NONE };
             let amount = hit.amount(&p, 200);
             assert!((amount - p.damage_in(100, 1000, 200)).abs() < 1e-4);
             let r = hit.record(&p, 200, Vec3::ZERO);

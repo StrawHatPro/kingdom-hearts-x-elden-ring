@@ -68,7 +68,7 @@ pub fn set_test(chara: u8, light: GameLight) {
 /// the camera. `viewport` = (width, height), `tan_y` = the vertical half-angle's tangent.
 pub fn probe_at(clip: &Mat4, feet: Vec3, viewport: (f32, f32), tan_y: f32, world: Option<f32>) -> Vec4 {
     let f = *clip * feet.extend(1.0);
-    if !(f.w > 0.3) || !f.is_finite() {
+    if f.w.partial_cmp(&0.3).is_none_or(std::cmp::Ordering::is_le) || !f.is_finite() {
         return Vec4::ZERO;
     }
     let (w, h) = viewport;
@@ -174,16 +174,6 @@ pub fn steady(chara: u8, base: &GameLight, feet: Vec3) -> Option<GameLight> {
         let out = with_probes(base, &eased);
         out.probed().then_some(out)
     })
-}
-
-/// Forget every friend's readings (the renderer's shutdown / a device change).
-pub fn reset() {
-    if let Ok(mut v) = STATE.lock() {
-        v.clear();
-    }
-    if let Ok(mut s) = SLOTS.lock() {
-        s.clear();
-    }
 }
 
 #[cfg(test)]

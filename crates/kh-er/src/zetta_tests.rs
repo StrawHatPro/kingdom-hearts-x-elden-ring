@@ -39,10 +39,11 @@ fn zetta_a_forced_hit_lands_in_full_and_level_99_kills_malenia() {
     // "allow Zettaflare to be scaled up"); (DONLINE2, the user 2026-10-27: "make Donald's starting magic 18 at level 1")
     // his Magic at level 99 is 80 now (ratio 1.2, kh-party balance): 80 x 40.2394 = 3220 KH = 38,640 at x12, power kept
     let magic = kh_party::balance::base_stats(kh_party::Chara::Donald, 99).1 + 4;
-    assert_eq!(magic, 80);
-    let full = p.damage_out(3220.0);
-    // (2026-10-28) the conversion x8 (the user: "lower the scale to 8"): 3220 KH = 25,760
-    assert!((full - 25760).abs() <= 8, "{full}");
+    // (2026-11-01, the user: "Donald Level 99 magic should be 86"; its power kept): 86 x 40.2394 = 3461 KH
+    assert_eq!(magic, 86);
+    let full = p.damage_out(3461.0);
+    // (2026-10-28) the conversion x8 (the user: "lower the scale to 8"): 3461 KH = 27,688
+    assert!((full - 27688).abs() <= 8, "{full}");
     // first hit on her: nothing measured yet, the bullet asks the full number; she keeps 17.3 % (the user's run)
     let ask = crate::targets::forced_ask(full, 0.0);
     assert_eq!(ask, full);
@@ -110,7 +111,7 @@ fn zetta_the_drawn_size_is_one_real_body_with_its_reach() {
 /// Sora case's: a soldier, Malenia (57 x 130 cm capsule, her sword and duplicates), a giant, a 6 m boss.
 #[test]
 fn zetta_every_er_body_gets_the_reference_frame_scaled_about_it() {
-    use kh_party::donald::zettaflare::{beam_girth, cam_pose, cam_shots, seq_time, staff_local, target_size, Basis, CamSubject, Frame, DON_ZETTA_PARAMS, EVENT_DONALD_YAW_OFF};
+    use kh_party::donald::zettaflare::{beam_girth, cam_pose, cam_shots, seq_time, staff_local, target_size, Basis, CamScene, CamSubject, Frame, DON_ZETTA_PARAMS, EVENT_DONALD_YAW_OFF};
     let z = DON_ZETTA_PARAMS; // (the sheet's numbers: other tests here install their own)
     let shots = cam_shots();
     let yaw_of = |d: Vec3| d.y.atan2(d.x).to_degrees();
@@ -122,7 +123,7 @@ fn zetta_every_er_body_gets_the_reference_frame_scaled_about_it() {
         let donald = Frame { origin: Vec3::ZERO, yaw: yaw + EVENT_DONALD_YAW_OFF };
         let target = Frame { origin: goal, yaw };
         let beam = Basis::beam(donald.point(staff_local(&z)), goal);
-        (cam_pose(&shots, t, 5.0, &z, donald, target, beam, CamSubject { at: goal, size: target_size(half, radius, &z), animated: true, radius, half: 0.0 }, None).unwrap(), goal)
+        (cam_pose(&shots, t, &z, CamScene { channel: 5.0, donald, target, beam, subject: CamSubject { at: goal, size: target_size(half, radius, &z), animated: true, radius, half: 0.0 }, end: None }).unwrap(), goal)
     };
     // (the Sora case: the test level's Sora in his hurt pose, the body that fills the reference's region: fit 1)
     let sora = (z.zetta_frame_body_height * 0.5, z.zetta_frame_body_width * 0.5);

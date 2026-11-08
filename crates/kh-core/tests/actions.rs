@@ -878,6 +878,13 @@ impl Targets for Engaged {
     fn engaged_count(&self) -> u32 {
         self.0
     }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
+    }
 }
 
 #[test]
@@ -886,7 +893,7 @@ fn the_battle_flag_follows_the_engaged_count_with_a_1_s_linger() {
     let world = TestWorld::floor();
     let origin = Vec3::Z * Sora::origin_height_on_floor(&SORA_PARAMS);
     let mut sora = Sora::new(SORA_PARAMS, Pose { position: origin, yaw: 0.0 }).with_tuning(Tuning::GAME_EXACT).with_status(level99());
-    let mut step = |sora: &mut Sora, engaged: u32| {
+    let step = |sora: &mut Sora, engaged: u32| {
         let mut null = NullHost::default();
         let mut targets = Engaged(engaged);
         let mut host = null.host(&world);
@@ -1016,7 +1023,7 @@ fn the_users_jump_cut_applies_to_the_high_jump_and_not_to_the_double_flight() {
     let floor = bench.last().position.z;
     bench.step(jump_press(Vec2::ZERO));
     let top = apex(&mut bench, idle(), 90, floor);
-    assert!(top >= 110.0 && top < 111.0, "tap: {top}");
+    assert!((110.0..111.0).contains(&top), "tap: {top}");
     bench.until(idle(), 100, |o, _| o.state == StateId::Idle);
     bench.step(jump_press(Vec2::ZERO));
     let top = apex(&mut bench, jump_hold(Vec2::ZERO), 90, floor);

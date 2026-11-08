@@ -37,6 +37,8 @@ pub mod yfx; // (YFX) the Y Arcane spells' look and sound (Comet, Gravity, Meteo
 pub mod hybrid_look; // (HYB) the 15 hybrids' look and sound
 #[cfg(test)]
 mod spellb_tests; // (DON-SPELLB)
+#[cfg(test)]
+mod vfxring_jb_tests; // (VFX-RING) the thunder ultimate's trace (Judgment Bolt's storm)
 pub mod sora_magic; // (DON-MAGIC part A) the magic Donald shares with Sora
 pub mod zettaflare; // (ZETTA) Zettaflare as the KH3 cutscene shows it
 pub mod cast_look; // (FACE) where he looks while he casts (the cast's target; not during Zettaflare)

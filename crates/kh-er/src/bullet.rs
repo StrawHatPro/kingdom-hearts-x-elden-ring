@@ -358,7 +358,7 @@ impl Bullets {
                     }
                     seen.push(atk);
                     if let Some(a) = repo.get::<AtkParam_Pc>(atk) {
-                        if seen.len() % 12 == 0 && shown < 60 {
+                        if seen.len().is_multiple_of(12) && shown < 60 {
                             shown += 1;
                             erlog!(
                                 "bullet:   row {id} life {} v {} r {} sfx {} > atk {atk}: phys {} mag {} fire {} thun {} dark {} stam {} poise {} lvl {} corr {}/{}/{} sp {} {} throw {} arrow {} addbase {} attr {} spattr {} type {}",
@@ -703,7 +703,7 @@ impl Bullets {
     ///   bullet's attack id, no behaviour's attack reference): 370 of 12855 rows. The game reads AtkParam_Npc for a
     ///   bullet an NPC owns (2178 bullet attack ids have a row in both tables: the player's spells cast by NPCs); its
     ///   AtkParam_Pc row of the same id, where there is one (1 of the 370), is patched too.
-    /// None of the player slots' rows; rows without visuals first.
+    ///   None of the player slots' rows; rows without visuals first.
     fn pick_owned(&mut self) {
         use eldenring::cs::{AtkParam_Npc, BehaviorParam, BehaviorParam_PC};
         self.owned_picked = true;
@@ -899,7 +899,7 @@ fn patch_bullet_row(b: &mut BULLET_PARAM_ST, atk_id: u32, attack: Attack, shape:
 }
 
 /// The game's own spawn call with a block built as the module comment says.
-fn spawn(owner: FieldInsHandle, target: Option<FieldInsHandle>, from: Vec3, dir: Vec3, bullet_id: u32, shape: Shape) -> Result<(), String> {
+pub(crate) fn spawn(owner: FieldInsHandle, target: Option<FieldInsHandle>, from: Vec3, dir: Vec3, bullet_id: u32, shape: Shape) -> Result<(), String> { // (WORLDTIME-2) pub(crate): chrtime.rs's test shot
     {
         let mut data = SpawnData([0; 0x110]);
         put(&mut data, 0x00, game::handle_bits(&owner));

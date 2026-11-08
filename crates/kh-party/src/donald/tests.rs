@@ -349,8 +349,10 @@ fn resonance_pips_refund_and_full_power_opens_the_za_tier() {
     // off-element: full price, no Resonance
     let water = c.check_cast(SpellRef::Line1(Element::Water, 1), &l, MAX_MP, MAX_MP, false, &data).unwrap();
     assert_eq!((water.pct, water.attuned), (12.0, false));
-    // not enough MP
-    assert_eq!(c.check_cast(SpellRef::Line1(Element::Fire, 4), &l, 26, MAX_MP, false, &data).unwrap_err(), Refusal::NotEnoughMp { need: 27 });
+    // (THE USER 2026-11-02: "make sure Donald and his spells ... have this as well") the party's MP rule: 26 MP casts the 27-MP
+    // -za (its full price, the last MP into MP Charge when it starts); only 0 MP is short
+    assert_eq!(c.check_cast(SpellRef::Line1(Element::Fire, 4), &l, 26, MAX_MP, false, &data).map(|p| p.mp), Ok(27));
+    assert_eq!(c.check_cast(SpellRef::Line1(Element::Fire, 4), &l, 0, MAX_MP, false, &data).unwrap_err(), Refusal::NotEnoughMp { need: 27 });
 }
 
 #[test]
@@ -488,8 +490,10 @@ fn arcane_flow_gains_decays_and_the_y_list() {
     let offers = c.y_offers(&l, MAX_MP, MAX_MP, &data);
     assert_eq!(names(&offers), [SpellRef::Arcane(ArcaneLine::Comet, 1), SpellRef::Arcane(ArcaneLine::Gravity, 1)]);
     assert_eq!(offers.iter().map(|o| (o.affordable, o.mp)).collect::<Vec<_>>(), [(true, 40), (true, 45)], "set MP: Comet 40, Gravity 45");
-    let poor = c.y_offers(&l, 39, MAX_MP, &data);
-    assert!(poor.iter().all(|o| !o.affordable), "below its set MP: greyed with the MP it needs");
+    // (THE USER 2026-11-02) the party's MP rule: below its set MP still castable (the last MP into MP Charge); 0 MP greys it
+    assert!(c.y_offers(&l, 39, MAX_MP, &data).iter().all(|o| o.affordable), "below its set MP: castable");
+    let poor = c.y_offers(&l, 0, MAX_MP, &data);
+    assert!(poor.iter().all(|o| !o.affordable), "0 MP: greyed with the MP it needs");
     // (user 2026-10-23: "make gravity cost 1 star and comet cost 2 stars") casting Gravity (1) with 2 leaves 1
     let p = c.check_cast(SpellRef::Arcane(ArcaneLine::Gravity, 1), &l, MAX_MP, MAX_MP, false, &data).unwrap();
     c.commit_cast(&p, &mods(), &data);
@@ -537,10 +541,14 @@ fn ultima_and_zettaflare_conditions() {
     let zy = |c: &DonCore, mp: i32| c.y_offers(&l, mp, MAX_MP, &data).into_iter().find(|y| y.spell == SpellRef::Arcane(ArcaneLine::Zettaflare, 1));
     let z = zy(&c, MAX_MP).unwrap();
     assert!(z.affordable && z.mp == MAX_MP, "his whole bar ({})", z.mp);
-    assert!(zy(&c, MAX_MP - 1).is_none() && zy(&c, 1).is_none() && zy(&c, 0).is_none(), "not offered short of a full bar");
-    for mp in [0, 1, 7, MAX_MP - 1] {
-        assert_eq!(c.check_cast(SpellRef::Arcane(ArcaneLine::Zettaflare, 1), &l, mp, MAX_MP, false, &data).unwrap_err(), Refusal::NotEnoughMp { need: MAX_MP }, "{mp} MP: refused");
+    // (THE USER 2026-11-02: "make sure Donald and his spells (including Zettaflare) have this as well") no full bar any more: any
+    // MP above 0 casts it, and all of it goes (crate::mp_rule::spend_all at its start)
+    assert!(zy(&c, MAX_MP - 1).is_some_and(|z| z.affordable) && zy(&c, 1).is_some_and(|z| z.affordable), "offered with any MP");
+    assert!(zy(&c, 0).is_none(), "not at 0 MP");
+    for mp in [1, 7, MAX_MP - 1] {
+        assert_eq!(c.check_cast(SpellRef::Arcane(ArcaneLine::Zettaflare, 1), &l, mp, MAX_MP, false, &data).map(|p| p.mp), Ok(mp), "{mp} MP: castable, all of it");
     }
+    assert_eq!(c.check_cast(SpellRef::Arcane(ArcaneLine::Zettaflare, 1), &l, 0, MAX_MP, false, &data).unwrap_err(), Refusal::NotEnoughMp { need: MAX_MP }, "0 MP: refused");
     let p = c.check_cast(SpellRef::Arcane(ArcaneLine::Zettaflare, 1), &l, MAX_MP, MAX_MP, false, &data).unwrap();
     assert_eq!(p.mp, MAX_MP);
     assert!(!c.zetta_slow);

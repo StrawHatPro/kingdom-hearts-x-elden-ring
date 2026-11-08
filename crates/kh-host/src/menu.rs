@@ -33,11 +33,44 @@ pub struct MenuInput {
     timer: [f32; 4],
     events: Vec<(u8, bool)>,
     pressed: u32,
+    /// (THE USER 2026-11-03: "right stick scroll") the right stick up / down as two keys of their own, their repeat timers,
+    /// and the lines asked for since the last [`MenuInput::take_scroll`] (positive: down the text).
+    scroll_down: [bool; 2],
+    scroll_timer: [f32; 2],
+    scroll: i32,
 }
 
 impl MenuInput {
     pub const fn new() -> MenuInput {
-        MenuInput { down: [false; 4], timer: [0.0; 4], events: Vec::new(), pressed: 0 }
+        MenuInput { down: [false; 4], timer: [0.0; 4], events: Vec::new(), pressed: 0, scroll_down: [false; 2], scroll_timer: [0.0; 2], scroll: 0 }
+    }
+
+    /// (THE USER 2026-11-03: "right stick scroll") One sample of the right stick's vertical axis (-1..1, up positive, as
+    /// the pad reports it) for the descriptions that run past their box (`kh_ui::Movie::scroll_fits`): past
+    /// [`NAV_STICK`] it is a key (up / down), one line on the press, then KH3's menu key repeat while held
+    /// ([`NAV_REPEAT_FIRST`], [`NAV_REPEAT_NEXT`]: the lists' timing). A host's two keyboard keys come in the same way
+    /// (+1 / -1).
+    pub fn step_scroll(&mut self, right_y: f32, dt: f32) {
+        let held = [right_y > NAV_STICK, right_y < -NAV_STICK];
+        for (k, &on) in held.iter().enumerate() {
+            let step = if k == 0 { -1 } else { 1 };
+            if !on {
+                self.scroll_down[k] = false;
+                continue;
+            }
+            if !self.scroll_down[k] {
+                self.scroll_down[k] = true;
+                self.scroll_timer[k] = NAV_REPEAT_FIRST;
+                self.scroll += step;
+            } else if nav_repeat(&mut self.scroll_timer[k], dt) {
+                self.scroll += step;
+            }
+        }
+    }
+
+    /// The description lines asked for since the last call (positive: down), for `Hud::scroll_help`.
+    pub fn take_scroll(&mut self) -> i32 {
+        std::mem::take(&mut self.scroll)
     }
 
     /// One input sample: notes the pad buttons pressed and turns the D-pad and the left stick into
@@ -54,8 +87,8 @@ impl MenuInput {
             pad.held.has(B::DPadLeft) || (stick.x < -NAV_STICK && ax > ay),
             pad.held.has(B::DPadRight) || (stick.x > NAV_STICK && ax > ay),
         ];
-        for dir in 0..4 {
-            if !down[dir] {
+        for (dir, &held) in down.iter().enumerate() {
+            if !held {
                 self.down[dir] = false;
                 continue;
             }
@@ -99,24 +132,6 @@ pub fn cutscene_input(input: &kh_core::Input) -> kh_core::Input {
     kh_core::Input { camera_yaw: input.camera_yaw, view: input.view, ..kh_core::Input::default() }
 }
 
-#[cfg(test)]
-mod nav_tests {
-    use super::*;
-
-    #[test]
-    fn a_held_key_repeats_after_0_6_s_and_then_every_0_06_s() {
-        // 60 Hz frames after the press frame; the frame numbers of the repeats.
-        let (mut timer, dt) = (NAV_REPEAT_FIRST, 1.0 / 60.0);
-        let repeats: Vec<i32> = (1..=50).filter(|_| nav_repeat(&mut timer, dt)).collect();
-        // 0.6 s = 36 frames: the timer is below zero on the 37th held frame (float: 36 x 1/60
-        // leaves a hair above or below zero, either is the game's own arithmetic); then every
-        // 4th frame (0.06 s = 3.6 frames, no carry).
-        assert!(repeats[0] == 36 || repeats[0] == 37, "{repeats:?}");
-        assert_eq!(repeats[1] - repeats[0], 4, "{repeats:?}");
-        assert_eq!(repeats[2] - repeats[1], 4, "{repeats:?}");
-    }
-}
-
 /// THE CAMP MENU'S HOST HOOK FOR A PAD-ONLY HOST (`Hud::camp_hook`; the test app has its own in
 /// menu_model.rs, which also follows the device used last): the settings guide shows the pad's Menu
 /// glyph, and the character picture's clip of the Abilities and Stats screens plays in when the screen
@@ -140,5 +155,45 @@ pub fn pad_camp_hook(movie: &mut kh_ui::Movie, fonts: &kh_ui::Fonts) {
         } else if !open && now.as_deref().is_some_and(|l| l != "off") {
             movie.goto_and_stop(anm, "off");
         }
+    }
+}
+
+#[cfg(test)]
+mod nav_tests {
+    use super::*;
+
+    #[test]
+    fn a_held_key_repeats_after_0_6_s_and_then_every_0_06_s() {
+        // 60 Hz frames after the press frame; the frame numbers of the repeats.
+        let (mut timer, dt) = (NAV_REPEAT_FIRST, 1.0 / 60.0);
+        let repeats: Vec<i32> = (1..=50).filter(|_| nav_repeat(&mut timer, dt)).collect();
+        // 0.6 s = 36 frames: the timer is below zero on the 37th held frame (float: 36 x 1/60
+        // leaves a hair above or below zero, either is the game's own arithmetic); then every
+        // 4th frame (0.06 s = 3.6 frames, no carry).
+        assert!(repeats[0] == 36 || repeats[0] == 37, "{repeats:?}");
+        assert_eq!(repeats[1] - repeats[0], 4, "{repeats:?}");
+        assert_eq!(repeats[2] - repeats[1], 4, "{repeats:?}");
+    }
+
+    /// (THE USER 2026-11-03: "right stick scroll") The right stick on the descriptions: one line on the push, KH3's menu
+    /// repeat while held (0.6 s, then every 0.06 s), nothing in the dead middle, up negative.
+    #[test]
+    fn the_right_stick_scrolls_a_line_a_push_and_repeats_when_held() {
+        let mut input = MenuInput::new();
+        let dt = 1.0 / 60.0;
+        input.step_scroll(-0.9, dt);
+        assert_eq!(input.take_scroll(), 1, "down: one line on the push");
+        for _ in 0..30 {
+            input.step_scroll(-0.9, dt);
+        }
+        assert_eq!(input.take_scroll(), 0, "no repeat before 0.6 s");
+        for _ in 0..14 {
+            input.step_scroll(-0.9, dt);
+        }
+        assert!(input.take_scroll() >= 2, "then the repeat");
+        input.step_scroll(0.3, dt);
+        assert_eq!(input.take_scroll(), 0, "the dead middle");
+        input.step_scroll(1.0, dt);
+        assert_eq!(input.take_scroll(), -1, "up");
     }
 }

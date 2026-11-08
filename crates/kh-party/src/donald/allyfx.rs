@@ -251,7 +251,7 @@ fn spawn_barrier_look(cx: &mut Ctx, caster: MemberId, member: MemberId, level: u
     let name = fx::BARRIER_LOOK[(level.clamp(1, 3) - 1) as usize];
     let scale = barrier_scale(cx.party, member, sora_is_member);
     // its colours are authored in the effect (no recolour: a tint lifts every streak to its brightest channel, the thick look)
-    magic_fx::spawn_fx_tint(cx, caster, Some(spell), name, attach_on(member, sora_is_member, Vec3::ZERO), scale, true, None)
+    magic_fx::spawn_fx_tint(cx, caster, Some(spell), name, magic_fx::FxPlace { at: attach_on(member, sora_is_member, Vec3::ZERO), scale, persistent: true }, None)
 }
 
 /// (DON-SPELLB) ONE WORN SPELL PER MEMBER (the user, 2026-10-22: "each character can only have one effect like that active
@@ -289,9 +289,16 @@ fn spawn_core(cx: &mut Ctx, caster: MemberId, spell: SpellRef, p: Vec3) -> Optio
     magic_fx::spawn_fx(cx, caster, Some(spell), fx::ORB_CORE, Attach::World(p), magic().orbs_ball_scale, true)
 }
 
-/// BALL LIGHTNING on `member` (standing at `from`): a new set, or (balls remaining) the recast hurls them at `aim`.
-#[allow(clippy::too_many_arguments)]
-pub fn put_orbs(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, member: MemberId, level: u8, row: &DonSpellRow, aim: Option<Aim>, _sora_is_member: bool, from: Vec3) {
+/// Who wears a spell and where they stand.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Wearer {
+    pub member: MemberId,
+    pub from: Vec3,
+}
+
+/// BALL LIGHTNING on `on.member` (standing at `on.from`): a new set, or (balls remaining) the recast hurls them at `aim`.
+pub fn put_orbs(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, on: Wearer, level: u8, row: &DonSpellRow, aim: Option<Aim>) {
+    let Wearer { member, from } = on;
     let m = magic();
     let spell = SpellRef::Line2(Element::Thunder, level);
     // (DON-SPELLB) one worn spell per member: Ball Lightning replaces the barrier (its ribbons fade out)

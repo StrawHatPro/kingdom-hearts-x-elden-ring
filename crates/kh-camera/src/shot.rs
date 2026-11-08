@@ -21,9 +21,9 @@
 //! 3. when the move ends, a blend of [`BLEND_OUT`] s (ease-out, exponent 2, as the game's camera
 //!    blends) to the camera underneath, which the host has put behind Sora (the field camera's
 //!    own `reset`, the result of the R3 button).
-//! The camera never passes through level geometry: each shot's position is the end of one
-//! sphere sweep (radius [`PROBE_RADIUS`], the field camera's) from its look point. The sticks do
-//! not reach it; the host also keeps them from the camera underneath while it shows.
+//!    The camera never passes through level geometry: each shot's position is the end of one
+//!    sphere sweep (radius [`PROBE_RADIUS`], the field camera's) from its look point. The sticks do
+//!    not reach it; the host also keeps them from the camera underneath while it shows.
 
 use glam::Vec3;
 use kh_core::World;

@@ -463,7 +463,7 @@ pub fn begin_float(p: &mut NpcPawn, host: &mut PartyHost) {
     // (KITFX) the user 2026-10-23: "aero glide needs a little non-annoying sfx": a gentle whoosh at the start, at most once
     // per `float.se_debounce` (quick toggles never stack it); the quiet loop starts in float_tick
     let clock = kit::kit_ref(p).map_or(0.0, |k| k.clock);
-    if kit::kit_ref(p).and_then(|k| k.float_whoosh_at).map_or(true, |t| clock - t >= K.float_se_debounce) {
+    if kit::kit_ref(p).and_then(|k| k.float_whoosh_at).is_none_or(|t| clock - t >= K.float_se_debounce) {
         sound_vol(p, host, K.float_se_start, false, K.float_se_start_volume);
         if let Some(k) = kit::kit(p) {
             k.float_whoosh_at = Some(clock);

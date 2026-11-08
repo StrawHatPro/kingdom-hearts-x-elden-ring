@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::camp::{CampMenu, CampScreen, Dialog, DialogKind, TopEntry, CONFIG_VISIBLE};
 use crate::camp_custom::{CustomLayer, HelpLayer, GROUP_ITEM, TAB_KEYS};
-use crate::camp_equip::{EquipLayer, CAT_ACCESSORY, CAT_ARMOUR, CAT_ITEM, CAT_KEY, CAT_MATERIAL, CAT_WEAPON, ITEM_TABS, KIND_ACCESSORY, KIND_ARMOUR, KIND_ITEM, KIND_WEAPON};
+use crate::camp_equip::{EquipLayer, CAT_ACCESSORY, CAT_ARMOUR, CAT_ITEM, CAT_KEY, CAT_MATERIAL, CAT_WEAPON, ITEM_TABS, KIND_ACCESSORY, KIND_ARMOUR, KIND_ITEM, KIND_SPIRIT, KIND_WEAPON, SPIRIT_COST_TITLE, SPIRIT_GROUP};
 use crate::def::{MovieDef, Pack, PackError};
 use crate::geom::Matrix;
 use crate::list::{set_y, RowState, ScrollBar, TabBar};
@@ -35,6 +35,23 @@ pub const LIBRARIES: [&str; 5] = ["MainLibrary", "ItemListLibrary", "ItemStatusL
 
 const TOP: &str = "topMenu";
 
+/// (OUTFIT-UNLOCK) KH3's places of the top list's nine slots in `topMenu.cmdBtnTopMenu` (its frame 1: `topMenu1` .. `topMenu9`
+/// at x -790, y -408 + 96 k, i.e. stage y 132 .. 900 under the clip at 540). The ninth (900) lies on the frame's bottom band
+/// (stage y about 870: the help line, munny and time); KH3's list never had a ninth entry in the port before the Outfits
+/// entry came back beside Title Screen. KH3's list has no scroll (no arrows, no scroll clip in the movie), so with more than
+/// eight entries the slots CLOSE UP: 80 apart from the first (the ninth at y 232, stage 772, above KH3's eighth), every row
+/// and the focused row's help line above the band. Eight or fewer: KH3's own places.
+pub const TOP_SLOT_X: f32 = -790.0;
+pub const TOP_SLOT_FIRST_Y: f32 = -408.0;
+pub const TOP_SLOT_STEP: f32 = 96.0;
+pub const TOP_SLOT_STEP_NINE: f32 = 80.0;
+
+/// (OUTFIT-UNLOCK) Where top slot `i` (0-based) stands with `shown` entries.
+pub fn top_slot_at(i: usize, shown: usize) -> (f32, f32) {
+    let step = if shown > 8 { TOP_SLOT_STEP_NINE } else { TOP_SLOT_STEP };
+    (TOP_SLOT_X, TOP_SLOT_FIRST_Y + step * i as f32)
+}
+
 /// (party) The top screen's panel of party slot `n` (1 .. 5).
 fn panel_path(n: usize) -> String {
     format!("topMenu.statusAnm.status.charaWindow0{}", n.clamp(1, 5))
@@ -45,6 +62,34 @@ const GUIDE: &str = "stageFrame.stageObjR.btnInfo.btnInfoText.txText.textField";
 const ABILITY: &str = "ability.abilityAnm";
 const AP_PANE: &str = "ability.abilityAnm.selectCharaImage1.abilityParameterAnm.abilityParameter";
 const CONFIG_PACK: &str = "config.configMenu.configPack";
+/// (CAMP-OPTIONS) the Config page's own clip, the tab bar made on it and where it stands (the clip's frame: the page's centre;
+/// the bar's 552 px over the rows, its name line above it), the names of the extra slider rows.
+const CONFIG_MENU: &str = "config.configMenu";
+/// (CAMP-OPTIONS) A tab's icon: KH3 PC's settings-menu category (its label) where KH3 has the group, else the camp menu's
+/// category icon (its label). By the options host's tab keys (kh-host er_options.rs TAB_*).
+fn tab_icon(key: u32) -> (Option<&'static str>, &'static str) {
+    match key {
+        3 => (Some("categoryDsp"), "camp8"),
+        4 => (Some("categorySnd"), "camp8"),
+        6 => (Some("categoryGpad"), "camp8"),
+        7 => (Some("categoryKbd"), "camp8"),
+        8 => (Some("categoryGrap"), "camp8"),
+        10 => (None, "save6"),
+        2 => (None, "camp6"),
+        9 => (None, "top"),
+        _ => (None, "camp8"),
+    }
+}
+
+/// (CAMP-OPTIONS) The icons' size and centre in a tab item (the tab's bar: `bg` at +46, +20, 40 px tall).
+const TAB_ICON_SETTING: (f32, f32, f32) = (36.0, 46.0, 20.0);
+const TAB_ICON_CAMP: (f32, f32, f32) = (34.0, 46.0, 20.0);
+
+/// (CAMP-OPTIONS) the Dialog window's authored matrix, its size and its content holder's place.
+type DialogFrame = (Matrix, (f32, f32), (f32, f32));
+const OPTION_TABS: &str = "erOptionTabs";
+const OPTION_TABS_AT: (f32, f32) = (-276.0, -318.0);
+const OPTION_SLIDER: &str = "erOptionSlider";
 const EQ_DETAIL: &str = "equip.equipDetailAnm";
 const EQ_REPLACE: &str = "equip.equipReplaceAnm";
 const BACKYARD: &str = "backyard.backyardAnm";
@@ -173,6 +218,8 @@ fn kind_icon(kind: u8) -> &'static str {
         KIND_WEAPON => "<icon(Weapon)>",
         KIND_ARMOUR => "<icon(Armor)>",
         KIND_ACCESSORY => "<icon(Accessory)>",
+        // (Summon) a spirit ash: KH3's Link icon (the summon command's own, as the side lines show a Link)
+        KIND_SPIRIT => "<icon(Link)>",
         _ => "<icon(BattleItem)>",
     }
 }
@@ -208,6 +255,16 @@ pub struct CampMenuView {
     config_thumb: HashMap<usize, f32>,
     /// (IMPL_ER21) `m_originalGaugeWidth` of each slider, as the gauge's authored horizontal scale (taken once).
     config_gauge: HashMap<usize, f32>,
+    /// (CAMP-OPTIONS) the tabbed Config screen's tab bar (a `ListTabCamp` of ItemListLibrary placed on the page), its extra
+    /// slider rows (KH3's page has three), and the slot each shown row took last.
+    option_tabs: TabBar,
+    option_sliders: usize,
+    option_slots: Vec<String>,
+    /// (CAMP-OPTIONS, the user: "use appropriate icons for the different groups of options in the options menu at the top") KH3
+    /// PC's own settings-menu category icons (its SettingMenu movie, `SettingMenu_fla.McCategoryIcon_8`: Display, Graphics,
+    /// Sound, Gamepad, Keyboard, Exit) and the tab keys their icons were made for.
+    settings_icons: Option<(Arc<MovieDef>, u32)>,
+    option_icon_keys: Vec<u32>,
     equip_layer: EquipLayer,
     custom_layer: CustomLayer,
     items_target: bool,
@@ -219,13 +276,26 @@ pub struct CampMenuView {
     dialog_open: bool,
     dialog_closing: bool,
     dialog_stamp: u64,
+    /// (CAMP-OPTIONS) KH3's `Dialog.setText` layout (newgame::dialog_text_layout, as ASH-ROWS ported it) for a dialog with a
+    /// literal text (the options host's questions): the window's authored matrix, size and content holder's place (taken once),
+    /// and the layout in force (`None`: the authored window).
+    dialog_frame: Option<DialogFrame>,
+    dialog_layout: Option<crate::newgame::DialogLayout>,
     /// (IMPL_ER37) The item pictures and help-text ids of the pack, and the item each status pane shows (by pane path).
     pub art: crate::item_art::ItemArt,
     pane_item: HashMap<String, Option<String>>,
     /// (party PF) the icon-based Party Formation screen: its pictures, and the screen while it is up
     formation_art: crate::party_formation::FormationArt,
     formation_scene: Option<crate::party_formation::FormationScene>,
+    /// (GOOFY) Goofy's Parry Techniques page (camp_parry.rs): its pictures, the page while it is up, the help line shown
+    parry_art: crate::camp_parry::ParryArt,
+    parry_scene: Option<crate::camp_parry::ParryScene>,
+    parry_help: String,
 }
+
+/// (GOOFY) The Abilities screen's clips the Parry Techniques page stands in for while it is up (the list with its category
+/// bands and scroll bar, the list's title, the member's AP pane, the empty-list line).
+const PARRY_HIDES: [&str; 4] = ["ability.abilityAnm.abilityList", "ability.abilityAnm.abilityListTitleAnm", "ability.abilityAnm.selectCharaImage1", "ability.abilityAnm.textField"];
 
 /// (party PF) The clips of the camp's top screen the Party Formation screen hides (the character list, the status panels
 /// and the 3D pictures placed on them, the entries, the goal line): its own icons stand there.
@@ -245,12 +315,21 @@ impl CampMenuView {
         let def: Arc<MovieDef> = pack.movie_linked(Self::MOVIE, &LIBRARIES)?;
         let page = pack.movie_linked("GameHelp", &LIBRARIES)?;
         let dialog = pack.movie_linked("Dialog", &LIBRARIES)?;
+        // (CAMP-OPTIONS) KH3 PC's settings menu, for its category icons (absent: the tabs go without them)
+        let settings_icons = pack.movie_linked("SettingMenu", &LIBRARIES).ok().and_then(|d| {
+            let ch = d.chars.iter().find_map(|(id, c)| match c {
+                crate::def::Char::Sprite(s) if s.class.as_deref() == Some("SettingMenu_fla.McCategoryIcon_8") => Some(*id),
+                _ => None,
+            })?;
+            Some((d, ch))
+        });
         let mut strings = HashMap::new();
         for table in ["kh3_camp", "kh3_system", "kh3_gamehelp", "kh3_item", "kh3_menu"] {
             strings.extend(pack.string_table(table));
         }
         let art = crate::item_art::ItemArt::load(pack);
         let formation_art = crate::party_formation::FormationArt::load(pack);
+        let parry_art = crate::camp_parry::ParryArt::load(pack);
         Ok(CampMenuView {
             movie: Movie::new(def),
             fonts,
@@ -270,6 +349,11 @@ impl CampMenuView {
             config_pack_y: None,
             config_thumb: HashMap::new(),
             config_gauge: HashMap::new(),
+            option_tabs: TabBar::new(format!("{CONFIG_MENU}.{OPTION_TABS}")),
+            option_sliders: 0,
+            option_slots: Vec::new(),
+            settings_icons,
+            option_icon_keys: Vec::new(),
             equip_layer: EquipLayer::Slots,
             custom_layer: CustomLayer::Top,
             items_target: false,
@@ -280,10 +364,15 @@ impl CampMenuView {
             dialog_open: false,
             dialog_closing: false,
             dialog_stamp: 0,
+            dialog_frame: None,
+            dialog_layout: None,
             art,
             pane_item: HashMap::new(),
             formation_art,
             formation_scene: None,
+            parry_art,
+            parry_scene: None,
+            parry_help: String::new(),
         })
     }
 
@@ -349,13 +438,9 @@ impl CampMenuView {
         if self.movie.exists(&spinner) {
             self.movie.set_visible(&spinner, false);
         }
-        // (IMPL_ER42) a long text (Elden Ring's descriptions) cut to what the field holds: see `crate::render::fit_text`
-        let field = format!("{pane}.txHelp.textField");
-        let help = match self.movie.node(&field).map(|n| &n.kind) {
-            Some(crate::player::Kind::Text(t)) => crate::render::fit_text(&self.fonts, &t.def, help),
-            _ => help.to_string(),
-        };
-        self.text(&field, &help);
+        // (THE USER 2026-11-03: "...never cut off") a long text (Elden Ring's descriptions) is never cut: it shrinks, then
+        // scrolls (the shared fit rule, `Movie::set_text_fit`; IMPL_ER42 cut it to three lines and "...")
+        self.fit_text(&format!("{pane}.txHelp.textField"), help);
         let shown = texture.as_ref().and(item).map(str::to_string);
         if self.pane_item.get(pane) != Some(&shown) {
             let image = format!("{pane}.itemImage");
@@ -365,6 +450,40 @@ impl CampMenuView {
                 crate::controls::icon_load(sprite, texture);
             }
             self.pane_item.insert(pane.to_string(), shown);
+        }
+    }
+
+    /// (weapons P11) A WEAPON'S PARAMETER ROWS in an item status pane (`ItemStatusA1` / `A2`): KH3's weapon fill
+    /// `0x14154BB30` plays the parameter block's `set1` (`parameterSet1`), writes Strength and Magic into labels 1 / 2
+    /// (`txNum`; their names and icons are the proxy's `0x14154B120`: window_0110 <icon(Power)>, window_0120
+    /// <icon(MagicPower)>) and up to three ability names into labels 4 .. 6 (icon 0x12), hiding the unused ones.
+    /// LOCAL: label 3, which KH3's proxy hides (`0x141539E60`), shows a Keyblade's Keyblade Forge level ("Level",
+    /// `kh3_camp.status.item_0010`); for a friend's weapon it stays hidden as in KH3.
+    fn weapon_parameters(&mut self, pane: &str, rows: &(i32, i32, Option<u8>, Vec<String>)) {
+        let block = format!("{pane}.parameters");
+        if self.movie.current_label(&block) != Some("set1") {
+            self.movie.goto_and_play(&block, "set1");
+        }
+        let set = format!("{block}.parameterSet1");
+        let (strength, magic, level, abilities) = rows;
+        let numbers = [(self.string("kh3_system.general.window_0110"), "<icon(Power)>", Some(*strength)), (self.string("kh3_system.general.window_0120"), "<icon(MagicPower)>", Some(*magic)), (self.string("kh3_camp.status.item_0010"), "", level.map(i32::from))];
+        for (n, (name, icon, value)) in numbers.into_iter().enumerate() {
+            let label = format!("{set}.label{}", n + 1);
+            self.movie.set_visible(&label, value.is_some());
+            if let Some(value) = value {
+                self.fit_text(&format!("{label}.txName.textField"), &name);
+                self.text(&format!("{label}.txIcon"), icon);
+                self.text(&format!("{label}.txNum"), &value.to_string());
+            }
+        }
+        for n in 0..crate::camp_equip::PANE_ABILITIES {
+            let label = format!("{set}.label{}", n + 4);
+            let name = abilities.get(n);
+            self.movie.set_visible(&label, name.is_some());
+            if let Some(name) = name {
+                self.fit_text(&format!("{label}.txName.textField"), name);
+                self.text(&format!("{label}.txIcon"), "<icon(WeponAbility)>");
+            }
         }
     }
 
@@ -396,16 +515,39 @@ impl CampMenuView {
         self.movie.set_text(path, text, &self.fonts);
     }
 
+    /// (THE USER 2026-11-03: "...never cut off") A description or help field: the shared fit rule (shrink, then scroll).
+    fn fit_text(&mut self, path: &str, text: &str) {
+        self.movie.set_text_fit(path, text, &self.fonts);
+    }
+
     fn key_text(&mut self, path: &str, key: &str) {
         let text = self.string(key);
         self.text(path, &text);
+    }
+
+    /// The guide plate is up (its `in`, `loop` or `in2`), whatever the cached text says.
+    fn guide_shown(&self) -> bool {
+        matches!(self.movie.current_label(&format!("{FRAME}.btnInfo")), Some("in" | "loop" | "in2"))
+    }
+
+    /// (THE USER 2026-11-02: "The camp menu also has the 'Add / Remove' guide above there after using the party select")
+    /// THE GUIDE GOES WITH THE SCREEN THAT SET IT: the plate is a clip of its own that the root's `in` / `out` do not
+    /// reset, so a menu closed on a screen with a guide (Party Formation's "Add / Remove", Items' "Discard" ...) left
+    /// the plate up with that text, and the next opening only forgot the cached text: the top level showed the old
+    /// screen's guide. Now the plate is taken down on close and again on open (whatever the cache says), and every
+    /// change of screen starts without a guide: the new screen puts up its own (KH3's top level: none).
+    fn drop_guide(&mut self) {
+        if self.guide_shown() {
+            self.movie.goto_and_play(&format!("{FRAME}.btnInfo"), "out");
+        }
+        self.guide.clear();
     }
 
     fn set_guide(&mut self, text: &str) {
         if self.guide != text {
             // `tres.rsl.BtnInfo`: the guide plate comes in with a text and goes with none.
             let plate = format!("{FRAME}.btnInfo");
-            let shown = matches!(self.movie.current_label(&plate), Some("in" | "loop" | "in2"));
+            let shown = self.guide_shown();
             if text.is_empty() {
                 if shown {
                     self.movie.goto_and_play(&plate, "out");
@@ -423,14 +565,18 @@ impl CampMenuView {
     /// Slot 74 `0x1415C8DD0`: the menu is shown (root `in`), the top screen is filled.
     pub fn open(&mut self, menu: &CampMenu) {
         self.movie.goto_and_play("", "in");
+        // (CAMP-OPTIONS) the settings screen on its own (Elden Ring's title SYSTEM / its System entry): only KH3's frame and the
+        // Config page come in, never the camp's top (its entries, the party panels, munny and time)
+        self.movie.set_visible(TOP, !menu.config_only);
         self.pane_item.clear(); // (IMPL_ER37) the panes load their picture again
+        self.parry_down(); // (GOOFY) a page left from the last opening
         self.open = true;
         self.closing = false;
         self.shown_cursor = None;
         self.shown_screen = CampScreen::Top;
         self.frame_filled = false;
         self.stamp = 0;
-        self.guide.clear();
+        self.drop_guide(); // (THE USER 2026-11-02) a plate left up by the last opening goes too, not only its text
         // Entries: the shown ones fill the clips from the top; unused clips are invisible.
         for i in 0..9 {
             let button = format!("{TOP}.cmdBtnTopMenu.topMenu{}", i + 1);
@@ -449,6 +595,9 @@ impl CampMenuView {
                 }
                 None => drop(self.movie.set_visible(&button, false)),
             }
+            // (OUTFIT-UNLOCK) the slot's place: KH3's own, closed up when more than eight entries are shown
+            let (x, y) = top_slot_at(i, menu.entries.len());
+            self.movie.set_position(&button, x, y, 0.0);
         }
         // The frame: title "MENU", play time, munny.
         self.key_text(&format!("{TOP}.stageCategory.category.categoryName.txName"), "kh3_camp.top.title_0001");
@@ -499,6 +648,11 @@ impl CampMenuView {
     /// (party PF) The Party Formation screen while it is up (tests, pictures).
     pub fn formation_scene(&self) -> Option<&crate::party_formation::FormationScene> {
         self.formation_scene.as_ref()
+    }
+
+    /// (OF) Sora's bust on the Party Formation screen from his worn outfit's HUD face sheet (kh-host hud_outfit.rs).
+    pub fn set_sora_bust(&mut self, face_sheet: std::sync::Arc<crate::def::Texture>) {
+        self.formation_art.set_sora_bust(face_sheet);
     }
 
     /// The party panels (`0x1415D3530` -> `0x1415D0020`, one per `m_PartyParams` slot): name, LV, HP, MP, the EXP
@@ -593,8 +747,10 @@ impl CampMenuView {
                 self.fill_stats(menu);
             }
         }
+        self.sync_parry(menu); // (GOOFY) before the list: taking the page down asks the list for a fresh fill
         match menu.screen {
-            CampScreen::Abilities => self.sync_abilities(menu),
+            CampScreen::Abilities if !menu.parry.on => self.sync_abilities(menu),
+            CampScreen::Config if menu.tabbed.is_some() => self.sync_config_tabbed(menu), // (CAMP-OPTIONS)
             CampScreen::Config => self.sync_config(menu),
             CampScreen::Equipment => self.sync_equipment(menu),
             CampScreen::Items => self.sync_items(menu),
@@ -613,7 +769,10 @@ impl CampMenuView {
         self.shown_screen = now;
         self.pane_item.clear(); // (IMPL_ER37) the screen's panes load their picture again
         self.stamp = 0;
-        let top_like = |s: CampScreen| matches!(s, CampScreen::Top | CampScreen::Character(_));
+        // (THE USER 2026-11-02, the guide that stayed after the party select) no screen inherits another's guide: the
+        // new one sets its own on its first fill (stamp 0), the top level and the character list have none
+        self.set_guide("");
+        let top_like =|s: CampScreen| matches!(s, CampScreen::Top | CampScreen::Character(_));
         match (was, now) {
             (CampScreen::Top, CampScreen::Character(_)) => {
                 self.movie.goto_and_play(TOP, top_label(was, now).unwrap_or("inChara"));
@@ -683,7 +842,6 @@ impl CampMenuView {
             self.leave_sub(was);
             self.movie.goto_and_play(TOP, top_label(was, now).unwrap_or("back"));
             self.fill_panel(menu);
-            self.set_guide("");
         }
     }
 
@@ -703,8 +861,10 @@ impl CampMenuView {
         }
     }
 
+    /// A screen's help band (ability and Art help, Customize, Equipment, Outfits ...): the shared fit rule, never cut
+    /// (THE USER 2026-11-03: "...never cut off"; a long text ran on under the band's frame before).
     fn help_line(&mut self, holder: &str, text: &str) {
-        self.text(&format!("{holder}.helpText.txHelpText.textField"), text);
+        self.fit_text(&format!("{holder}.helpText.txHelpText.textField"), text);
     }
 
     // ------------------------------------------------------------------------- Stats (10.7)
@@ -715,6 +875,9 @@ impl CampMenuView {
         let cap = |v: i32| v.min(999).to_string();
         let help = self.string("kh3_camp.status.detail_0020").replace("{0}", &s.name);
         self.help_line("status", &help);
+        // (THE USER 2026-11-02, every screen its own guide) KH3's Stats guide: "Select Friend" (L2 / R2) with friends, none alone
+        let guide = if menu.party.len() > 1 { self.string("kh3_camp.status.button_0001") } else { String::new() };
+        self.set_guide(&guide);
         let list1 = format!("{STATS}.statusList1");
         for (field, value) in [("articleLv", self.string("kh3_camp.status.item_0010")), ("articleAp", "AP".into()), ("articleExp", self.string("kh3_camp.status.item_0020")), ("articleNextLv", self.string("kh3_camp.status.item_0030")), ("lvNum", s.level.to_string()), ("apNum", cap(s.ap_max)), ("expNum", s.exp.to_string()), ("nextLvNum", s.next_level().to_string())] {
             self.text(&format!("{list1}.{field}"), &value);
@@ -752,9 +915,62 @@ impl CampMenuView {
 
     // --------------------------------------------------------------------- Abilities (10.4)
 
+    /// (GOOFY, THE USER 2026-11-02) THE PARRY TECHNIQUES PAGE (camp_parry.rs) over the Abilities screen: up while the menu
+    /// says so, the list's clips hidden under it, the focused row's help in the screen's help band, KH3's own guide.
+    fn sync_parry(&mut self, menu: &CampMenu) {
+        let up = menu.screen == CampScreen::Abilities && menu.parry.on;
+        if !up {
+            if self.parry_down() {
+                self.stamp = 0; // the list fills again (its help line and guide)
+            }
+            return;
+        }
+        if self.parry_scene.is_none() {
+            self.parry_scene = Some(crate::camp_parry::ParryScene::new(&self.parry_art, &self.fonts));
+            for path in PARRY_HIDES {
+                if self.movie.exists(path) {
+                    self.movie.set_visible(path, false);
+                }
+            }
+            self.parry_help.clear();
+        }
+        if let Some(scene) = self.parry_scene.as_mut() {
+            scene.set(&menu.parry);
+        }
+        let help = menu.parry.focused().map_or_else(|| crate::camp_parry::PAGE_HELP.to_string(), |r| r.help());
+        if self.parry_help != help {
+            // (THE USER 2026-11-03: "...never cut off") the whole text in the band: shrunk, then scrolled (`help_line`)
+            self.help_line("ability", &help);
+            self.parry_help = help;
+        }
+        // KH3's own guide of a next list: "Show Next List", and "Select Friend" when there are friends
+        let guide = self.string(if menu.party.len() > 1 { "kh3_camp.ability.button_0015" } else { "kh3_camp.ability.button_0025" });
+        self.set_guide(&guide);
+    }
+
+    /// (GOOFY) Takes the page down: its nodes go, the list's clips are the timeline's again. False: it was not up.
+    fn parry_down(&mut self) -> bool {
+        if self.parry_scene.take().is_none() {
+            return false;
+        }
+        crate::camp_parry::clear(&mut self.movie);
+        for path in PARRY_HIDES {
+            if let Some(node) = self.movie.node_mut(path) {
+                node.script_visible = None;
+            }
+        }
+        true
+    }
+
+    /// (GOOFY) The Parry Techniques page while it is up (tests, pictures).
+    pub fn parry_scene(&self) -> Option<&crate::camp_parry::ParryScene> {
+        self.parry_scene.as_ref()
+    }
+
     fn sync_abilities(&mut self, menu: &mut CampMenu) {
+        let parry = menu.parry.available(); // (GOOFY) Goofy's "Show Next List"
         let a = &mut menu.abilities;
-        let stamp = stamp_of(&(&a.list, a.used_ap, a.max_ap, a.rows.iter().map(|r| r.equipped).collect::<Vec<_>>())) ^ self.movie.exists(&a.list.item_path(0)) as u64;
+        let stamp = stamp_of(&(&a.list, a.used_ap, a.max_ap, a.rows.iter().map(|r| r.equipped).collect::<Vec<_>>(), parry)) ^ self.movie.exists(&a.list.item_path(0)) as u64;
         if stamp == self.stamp {
             return;
         }
@@ -769,11 +985,12 @@ impl CampMenuView {
             self.movie.goto_and_play(&format!("{ABILITY}.selectCharaImage1.abilityParameterAnm"), "normal");
             self.text(&format!("{ABILITY}.selectCharaImage1.charaName"), &menu.stats.name.clone());
             self.text(&format!("{AP_PANE}.ap"), "AP");
-            // The guide without "Show Next List" (those pages are not in the port).
-            let guide = self.string("kh3_camp.ability.button_0012");
-            let guide = guide.split("  <icon(Triangle)>").next().unwrap_or("").to_string();
-            self.set_guide(&guide);
         }
+        // The guide without "Show Next List" (the Keyblade's pages are not in the port); (GOOFY) with it when the member
+        // has his Parry Techniques page (KH3's own text whole)
+        let guide = self.string("kh3_camp.ability.button_0012");
+        let guide = if parry { guide } else { guide.split("  <icon(Triangle)>").next().unwrap_or("").to_string() };
+        self.set_guide(&guide);
         let empty = if a.rows.is_empty() { self.string("kh3_system.general.system_0013") } else { String::new() };
         self.text(&format!("{ABILITY}.textField"), &empty);
         // AP numbers and gauges: `m_NowUseApNum`, `m_MaxApNum`, `m_ApGauge` and the preview.
@@ -919,7 +1136,199 @@ impl CampMenuView {
                 self.string(&format!("kh3_camp.config.detail_{:04}", base + by_choice.unwrap_or(0))).replace("{0}", &shown)
             })
             .unwrap_or_default();
-        self.text("config.configMenu.helpText.txHelpText.textField", &help);
+        self.fit_text("config.configMenu.helpText.txHelpText.textField", &help); // (THE USER 2026-11-03) never cut
+    }
+
+    // ---------------------------------------------------- (CAMP-OPTIONS) the tabbed Config screen (camp_options.rs)
+
+    /// THE TABBED CONFIG SCREEN, drawn with KH3's own Config page: each shown row takes a KH3 row of its kind (the page's
+    /// `CoConfigSetting1` choice rows, its `CoConfigSetting2` slider rows; more slider rows are made from the same class,
+    /// as KH3's own `createTab` makes its tabs) and is moved to its place (48 apart, the native table); the tab bar is the
+    /// camp's `ListTabCamp` (the Items screen's) with the shown tab's name, LB / RB on its arrows; the help line is the
+    /// row's own (a KH3 row's: KH3's `kh3_camp.config.detail_NNNN`).
+    fn sync_config_tabbed(&mut self, menu: &mut CampMenu) {
+        if !self.movie.exists(&format!("{CONFIG_PACK}.setConfigValue1")) {
+            return;
+        }
+        let Some(tabbed) = menu.tabbed.as_mut() else { return };
+        let flash = tabbed.tab_flash.take();
+        let titles = tabbed.tab_titles();
+        let (tab, in_sub) = (tabbed.tab, tabbed.in_sub());
+        let name = match tabbed.page() {
+            Some(page) if in_sub => format!("{} > {}", titles.get(tab).cloned().unwrap_or_default(), page.title),
+            Some(page) => page.title.clone(),
+            None => String::new(),
+        };
+        let help = tabbed.help();
+        let stamp = stamp_of(&(&menu.options, menu.option_cursor, menu.option_scroll, &titles, tab, &name, &help, flash));
+        if stamp == self.stamp {
+            return;
+        }
+        let fresh = self.stamp == 0;
+        self.stamp = stamp;
+        if fresh {
+            let guide = self.string("kh3_camp.config.button_0001");
+            self.set_guide(&guide);
+        }
+        if self.config_pack_y.is_none() || fresh {
+            if let Some(node) = self.movie.node(CONFIG_PACK).filter(|n| !n.script_matrix) {
+                self.config_pack_y = Some(node.matrix.ty);
+            }
+        }
+        // the tab bar
+        // (the class is ItemListLibrary's: a copy of the Items screen's own bar's character)
+        if !self.movie.exists(&format!("{CONFIG_MENU}.{OPTION_TABS}")) && (self.movie.add_instance(CONFIG_MENU, "tres.rsl.ListTabCamp", OPTION_TABS) || self.movie.add_copy_of(CONFIG_MENU, &format!("{BACKYARD}.backyardItem.listTabCamp"), OPTION_TABS)) {
+            self.movie.set_position(&format!("{CONFIG_MENU}.{OPTION_TABS}"), OPTION_TABS_AT.0, OPTION_TABS_AT.1, 0.0);
+        }
+        self.option_tabs.build(&mut self.movie, titles.len(), &[]);
+        for k in 0..titles.len() {
+            self.movie.set_visible(&format!("{CONFIG_MENU}.{OPTION_TABS}.t{k}.imageIcon"), false);
+        }
+        self.option_tabs.set_switch_icons(&mut self.movie, "<icon(L1)>", "<icon(R1)>", &self.fonts);
+        let keys: Vec<u32> = tabbed.tabs.iter().map(|t| t.key).collect();
+        self.tab_icons(&keys);
+        self.option_tabs.select(&mut self.movie, tab, &name, flash, &self.fonts);
+        // the rows: a slot of the row's kind for each
+        let choice_slots: Vec<String> = (1..=26usize).filter(|n| ![4usize, 5, 22].contains(n)).map(|n| format!("{CONFIG_PACK}.setConfigValue{n}")).collect();
+        let mut slider_slots: Vec<String> = [4usize, 5, 22].iter().map(|n| format!("{CONFIG_PACK}.setConfigValue{n}")).collect();
+        let sliders_needed = menu.options.iter().filter(|r| r.choices.is_empty()).count();
+        while slider_slots.len() + self.option_sliders < sliders_needed && self.option_sliders < 16 {
+            let name = format!("{OPTION_SLIDER}{}", self.option_sliders);
+            if !self.movie.add_instance(CONFIG_PACK, "CoConfigSetting2", &name) {
+                break;
+            }
+            self.option_sliders += 1;
+        }
+        slider_slots.extend((0..self.option_sliders).map(|k| format!("{CONFIG_PACK}.{OPTION_SLIDER}{k}")));
+        let (mut choices, mut sliders) = (choice_slots.iter(), slider_slots.iter());
+        let mut used: Vec<String> = Vec::new();
+        for (r, row) in menu.options.clone().iter().enumerate() {
+            let Some(item) = (if row.choices.is_empty() { sliders.next() } else { choices.next() }).cloned() else { continue };
+            self.movie.set_visible(&item, true);
+            self.movie.set_position(&item, 0.0, 48.0 * r as f32, 0.0);
+            let selected = menu.option_cursor == r;
+            self.config_row(&item, row, selected);
+            used.push(item);
+        }
+        for slot in choice_slots.iter().chain(slider_slots.iter()) {
+            if !used.contains(slot) {
+                self.movie.set_visible(slot, false);
+            }
+        }
+        self.option_slots = used;
+        if let Some(y) = self.config_pack_y {
+            set_y(&mut self.movie, CONFIG_PACK, y - 48.0 * menu.option_scroll as f32);
+        }
+        let max = menu.options.len().saturating_sub(CONFIG_VISIBLE) as u32;
+        self.config_bar.set(&mut self.movie, max, menu.option_scroll as u32, CONFIG_VISIBLE as f32 / menu.options.len().max(1) as f32, max > 0);
+        // the help line: the row's own; `@N` = KH3's row N (its detail text by the shown choice, as KH3's screen)
+        let help = match help.strip_prefix('@').and_then(|n| n.parse::<usize>().ok()) {
+            Some(n) => {
+                let base = CONFIG_KEYS.get(n.saturating_sub(1)).copied().unwrap_or(0);
+                let shown = menu.options.get(menu.option_cursor).map(|r| r.value_text()).unwrap_or_default();
+                let by_choice = (0..3).find(|k| self.strings.get(&format!("kh3_camp.config.choice_{:04}", base + k)) == Some(&shown));
+                self.string(&format!("kh3_camp.config.detail_{:04}", base + by_choice.unwrap_or(0))).replace("{0}", &shown)
+            }
+            None => help,
+        };
+        self.fit_text("config.configMenu.helpText.txHelpText.textField", &help);
+    }
+
+    /// (CAMP-OPTIONS) EACH TAB'S ICON (the user: "use appropriate icons for the different groups of options"): KH3's own art,
+    /// placed in the tab item over its bar, so the tab's own `select` highlight carries it: KH3 PC's settings-menu category
+    /// icons where KH3 has the group (Display, Graphics, Sound, Gamepad, Keyboard, Exit), the camp menu's own category icons
+    /// for the rest (Game Options: Config's gear `camp8`; Camera Options: the Gummiphone's `camp6`; KINGDOM HEARTS III: the
+    /// menu's own `top`). The icons are made once per set of tabs.
+    fn tab_icons(&mut self, keys: &[u32]) {
+        let built = (0..keys.len()).all(|k| self.movie.exists(&format!("{CONFIG_MENU}.{OPTION_TABS}.t{k}.erIcon")));
+        if built && self.option_icon_keys == keys {
+            return;
+        }
+        self.option_icon_keys = keys.to_vec();
+        for (k, key) in keys.iter().enumerate() {
+            let tab = format!("{CONFIG_MENU}.{OPTION_TABS}.t{k}");
+            let icon = format!("{tab}.erIcon");
+            let (setting, camp) = tab_icon(*key);
+            let made = match (setting, &self.settings_icons) {
+                (Some(label), Some((def, ch))) => {
+                    let made = self.movie.add_foreign(&tab, &def.clone(), *ch, "erIcon");
+                    if made {
+                        self.movie.goto_and_stop(&icon, label);
+                    }
+                    made.then_some(TAB_ICON_SETTING)
+                }
+                _ => {
+                    // (the top screen's entry icons: KH3's full-colour set, every label drawn: camp1 .. camp9, save1 .. save6, top)
+                    let made = self.movie.add_copy_of(&tab, &format!("{TOP}.cmdBtnTopMenu.topMenu1.categoryIcon"), "erIcon");
+                    if made {
+                        self.movie.goto_and_stop(&icon, camp);
+                    }
+                    made.then_some(TAB_ICON_CAMP)
+                }
+            };
+            // fitted into the tab: its art's own bounds scaled to the icon height, centred on the tab's bar
+            let bounds = self.movie.node(&icon).and_then(|n| n.sprite()).map(crate::list::local_bounds).filter(|b| b.y1 > b.y0 && b.x1 > b.x0);
+            if let (Some((height, cx, cy)), Some(b), Some(node)) = (made, bounds, self.movie.node_mut(&icon)) {
+                let scale = height / (b.y1 - b.y0).max(b.x1 - b.x0);
+                node.matrix = Matrix::new(scale, 0.0, 0.0, scale, cx - scale * (b.x0 + b.x1) * 0.5, cy - scale * (b.y0 + b.y1) * 0.5);
+                node.script_matrix = true;
+                // (the settings menu's art is a faint backdrop there (its own alpha about a third): shown whole here)
+                if made == Some(TAB_ICON_SETTING) {
+                    node.cx.mul = [2.6, 2.6, 2.6, 3.0];
+                }
+            }
+        }
+    }
+
+    /// (CAMP-OPTIONS) One Config row drawn into a KH3 row (`item`): name, value (the slider of a slider row, the value with its
+    /// arrows of a choice row), its state (select / normal / disable). The same rules as `sync_config`.
+    fn config_row(&mut self, item: &str, row: &crate::camp::OptionRow, selected: bool) {
+        self.text(&format!("{item}.itemName"), &row.label);
+        let key = stamp_of(&item) as usize;
+        if row.choices.is_empty() {
+            self.text(&format!("{item}.slider.sliderBar.textField"), &row.value.to_string());
+            let ratio = if row.range.1 > row.range.0 { (row.value.saturating_sub(row.range.0)) as f32 / (row.range.1 - row.range.0) as f32 } else { 0.0 };
+            let offsets = &mut self.config_thumb;
+            let gauges = &mut self.config_gauge;
+            if let Some(bar) = self.movie.sprite_mut(&format!("{item}.slider.sliderBar")) {
+                let bar_node = bar.child("bar").map(|b| (b.matrix.tx, b.sprite().map(crate::list::local_bounds).map_or(0.0, |r| (r.x1 - r.x0) * b.matrix.a)));
+                if let Some((bar_x, bar_width)) = bar_node {
+                    if let Some(gauge) = bar.child_mut("gauge") {
+                        let authored = *gauges.entry(key).or_insert(gauge.matrix.a);
+                        gauge.matrix.a = (authored * ratio).max(0.001);
+                        gauge.script_matrix = true;
+                    }
+                    if let Some(thumb) = bar.child_mut("thumb") {
+                        let offset = *offsets.entry(key).or_insert(thumb.matrix.tx - bar_x);
+                        thumb.matrix.tx = bar_x + offset + bar_width * ratio;
+                        thumb.script_matrix = true;
+                    }
+                }
+            }
+        } else {
+            self.text(&format!("{item}.selectValue"), &row.value_text());
+            for (arrow, shown) in [("changeArrowAnmLeft", selected && row.stored && row.value > 0), ("changeArrowAnmRight", selected && row.stored && (row.value as usize) + 1 < row.choices.len())] {
+                let label = if shown { "loop" } else { "off" };
+                if self.movie.current_label(&format!("{item}.{arrow}")) != Some(label) {
+                    self.movie.goto_and_play(&format!("{item}.{arrow}"), label);
+                }
+            }
+        }
+        let label = match (selected, row.stored) {
+            (true, _) => "select",
+            (false, true) => "normal",
+            (false, false) => "disable",
+        };
+        if self.movie.current_label(item) != Some(label) {
+            self.movie.goto_and_play(item, label);
+            // (CAMP-OPTIONS, BUTTON-ICONS's report: a disabled row kept its highlight after the cursor left) the row's
+            // "disable" frame asks its background for a "disable" label it does not have (ConfigLibrary listItemBgConf: normal,
+            // selectIn, decide, selectOut), so the background stayed on the highlight: it is put back on its rest frames, as a
+            // disabled row shows before the cursor ever came
+            if label == "disable" {
+                self.movie.goto_and_play(&format!("{item}.listItemBgConf"), "normal");
+            }
+        }
     }
 
     // --------------------------------------------------------------------- Equipment (10.5)
@@ -971,20 +1380,34 @@ impl CampMenuView {
         }
         let guide = self.string(e.guide_key());
         self.set_guide(&guide);
-        let help = self.string(e.help_key());
+        // (Summon) the spirit-ash slots' help line is COMPOSED (camp_equip::SPIRIT_HELP), not in the pack
+        // (weapons P11) the ability list's help line: the ability under the cursor (with its "no effect" note)
+        let help = e.ability_help().map(str::to_string).or_else(|| e.local_help().map(str::to_string)).unwrap_or_else(|| self.string(e.help_key()));
         self.help_line(EQ_DETAIL, &help);
         self.help_line(EQ_REPLACE, &help);
         let none = self.string("kh3_item.weapon.kb_none");
-        let groups = [self.string("kh3_camp.equip.group_0001"), self.string("kh3_camp.equip.group_0002"), self.string("kh3_camp.equip.group_0003"), self.string("kh3_camp.equip.group_0004")];
+        let groups = [self.string("kh3_camp.equip.group_0001"), self.string("kh3_camp.equip.group_0002"), self.string("kh3_camp.equip.group_0003"), self.string("kh3_camp.equip.group_0004"), SPIRIT_GROUP.to_string() /* (Summon) COMPOSED */];
         // The status pane: the highlighted piece's help text (see the module comment).
         // (IMPL_ER37) with the piece's picture; the stock list fills its own pane (itemStatusA2, below)
         let highlighted = e.highlighted().cloned();
-        let piece_help = highlighted.as_ref().map(|p| self.piece_help(&p.id, &p.name, &p.help)).unwrap_or_default();
+        // (weapons P11) a Keyblade's text ends with its shotlocks (`Piece::pane_help`, KH3's title "Shotlocks")
+        let shotlock_title = self.string("kh3_camp.ability.group_0050");
+        let piece_help = highlighted.as_ref().map(|p| p.pane_help(&self.piece_help(&p.id, &p.name, &p.help), &shotlock_title)).unwrap_or_default();
         let (pane, stock_pane) = (format!("{detail}.itemStatusA1"), format!("{replace}.itemStatusA2"));
         let target = if e.layer == EquipLayer::Stock { &stock_pane } else { &pane };
-        self.item_pane(target, highlighted.as_ref().map(|p| p.id.as_str()), &piece_help);
+        // (THE USER 2026-11-03) a spirit ash's picture is Elden Ring's own (`Piece::art_id`: the shared ERICON route)
+        let art_id = highlighted.as_ref().map(crate::camp_equip::Piece::art_id);
+        self.item_pane(target, art_id.as_deref(), &piece_help);
+        // (weapons P11) THE WEAPON'S PARAMETER ROWS (KH3's `parameterSet1`) in the pane that shows it; the other pane's off
+        let rows = highlighted.as_ref().and_then(crate::camp_equip::Piece::weapon_rows).map(|(s, m, l, a)| (s, m, l, a.into_iter().map(str::to_string).collect::<Vec<_>>()));
+        let shown = target.clone();
         for p in [&pane, &stock_pane] {
-            self.movie.goto_and_play(&format!("{p}.parameters"), "off");
+            match &rows {
+                Some(rows) if *p == shown => self.weapon_parameters(p, rows),
+                _ => {
+                    self.movie.goto_and_play(&format!("{p}.parameters"), "off");
+                }
+            }
         }
         let e = &mut menu.equipment;
         let fonts = self.fonts.clone();
@@ -1001,12 +1424,16 @@ impl CampMenuView {
                 (KIND_ARMOUR, false) => "lineArmor",
                 (KIND_ACCESSORY, true) => "lineTitleAccessory",
                 (KIND_ACCESSORY, false) => "lineAccessory",
+                // (Summon) the spirit-ash area: the line art KH3 draws under the ability list of this same row symbol
+                // (`lineTitleAbility` / `lineAbility`), so the new area reads as a group of its own, not as more item slots
+                (KIND_SPIRIT, true) => "lineTitleAbility",
+                (KIND_SPIRIT, false) => "lineAbility",
                 (_, true) => "lineTitleItem",
                 (_, false) => "lineItem",
             };
             movie.goto_and_stop(&format!("{path}.equipListTitleItem"), label);
             if first {
-                movie.set_text(&format!("{path}.equipListTitleItem.equipCategoryTitleColor.equipCategoryTitleAnm.equipCategoryTitle"), &groups[slot.kind.min(3) as usize], &fonts);
+                movie.set_text(&format!("{path}.equipListTitleItem.equipCategoryTitleColor.equipCategoryTitleAnm.equipCategoryTitle"), &groups[slot.kind.min(KIND_SPIRIT) as usize], &fonts);
             }
             movie.goto_and_stop(&format!("{path}.abilityCategoryTitleColor"), "off");
             movie.set_text(&format!("{path}.textIcon.textField"), if slot.piece.is_some() { kind_icon(slot.kind) } else { "" }, &fonts);
@@ -1025,7 +1452,13 @@ impl CampMenuView {
                     self.movie.goto_and_play(&visible, "loop");
                 }
                 self.key_text(&format!("{visible}.equipListTitle.listTitleItem"), "kh3_camp.equip.list_0002");
-                self.key_text(&format!("{visible}.equipListTitle.listTitleCnt"), "kh3_camp.equip.list_0001");
+                // (Summon) over the ashes the number column is their MP cost (COMPOSED title, camp_equip::SPIRIT_COST_TITLE)
+                let spirits = e.slot().is_some_and(|s| s.kind == KIND_SPIRIT);
+                if spirits {
+                    self.text(&format!("{visible}.equipListTitle.listTitleCnt"), SPIRIT_COST_TITLE);
+                } else {
+                    self.key_text(&format!("{visible}.equipListTitle.listTitleCnt"), "kh3_camp.equip.list_0001");
+                }
                 let empty = if e.stock_rows.is_empty() { self.string("kh3_camp.equip.list_0004") } else { String::new() };
                 self.text(&format!("{replace}.textField"), &empty);
                 let rows = e.stock_rows.clone();
@@ -1034,8 +1467,10 @@ impl CampMenuView {
                     movie.set_text(&format!("{path}.textIcon.textField"), kind_icon(row.piece.kind), &fonts);
                     movie.goto_and_stop(&format!("{path}.equipMark"), if row.count.is_none() { "loop" } else { "off" });
                     movie.set_text(&format!("{path}.listItemName"), &row.piece.name, &fonts);
-                    movie.set_text(&format!("{path}.itemCnt"), &row.count.map_or(String::new(), |c| c.to_string()), &fonts);
-                    movie.set_visible(&format!("{path}.coTextReplace"), row.count.is_some());
+                    let number = if spirits { row.piece.cost_text() } else { row.count.map_or(String::new(), |c| c.to_string()) };
+                    movie.set_text(&format!("{path}.itemCnt"), &number, &fonts);
+                    // (Summon) no count's "x" before an ash's MP cost
+                    movie.set_visible(&format!("{path}.coTextReplace"), row.count.is_some() && !spirits);
                     RowState::default()
                 });
                 // The preview pane `ItemStatusB` (`0x1415AA460`): the value with the piece, `up` /
@@ -1216,6 +1651,9 @@ impl CampMenuView {
                 let key = if button == "btnCmdMenu1" { c.data.magic_label.clone().unwrap_or_else(|| key.to_string()) } else { key.to_string() };
                 self.key_text(&format!("{menu_root}.{button}.cmdMenuListName.textField"), &key);
             }
+            // (GF-UI) Goofy has no Magic entry, and with it no first group
+            self.movie.set_visible(&format!("{menu_root}.btnCmdMenu1"), !c.data.hide_magic);
+            self.movie.set_visible(&format!("{menu_root}.sectionTitle1"), !c.data.hide_magic);
             // Entries without content are hidden: Links (no link learned), the friends not in the party.
             // (XSI) KH3's Links button carries the Shotlock choice (XS 2.8) when there is one.
             let shotlock = c.data.shotlock.as_ref().filter(|s| !s.choices.is_empty()).map(|s| s.text());
@@ -1223,17 +1661,20 @@ impl CampMenuView {
             if let Some(text) = shotlock {
                 self.text(&format!("{menu_root}.btnCmdMenu2.cmdMenuListName.textField"), &text);
             }
+            let arts = c.data.arts_page.as_ref().map(|a| a.label.clone());
             for n in 1..=4 {
-                let shown = n <= friends;
+                // (GF-UI) Goofy's Arts while he does not lead: the button after the friends
+                let arts_here = n == friends + 1 && arts.is_some();
+                let shown = n <= friends || arts_here;
                 self.movie.set_visible(&format!("{menu_root}.btnBattleStyle{n}"), shown);
                 if shown {
                     // `custom_0006 ..` = "{0}": the friend's name
-                    let name = c.data.friends[n - 1].name.clone();
+                    let name = if arts_here { arts.clone().unwrap_or_default() } else { c.data.friends[n - 1].name.clone() };
                     self.text(&format!("{menu_root}.btnBattleStyle{n}.cmdMenuListName.textField"), &name);
                 }
             }
         }
-        let mut buttons: Vec<String> = ["btnCmdMenu1", "btnShortcut1", "btnShortcut2", "btnShortcut3"].iter().map(|b| b.to_string()).collect();
+        let mut buttons: Vec<String> = ["btnCmdMenu1", "btnShortcut1", "btnShortcut2", "btnShortcut3"].iter().filter(|b| !(c.data.hide_magic && **b == "btnCmdMenu1")).map(|b| b.to_string()).collect();
         // (XSI) the Shotlock entry: KH3's Links button, under Magic; its text follows the choice
         if let Some(s) = c.data.shotlock.as_ref().filter(|s| !s.choices.is_empty()) {
             buttons.insert(1, "btnCmdMenu2".to_string());
@@ -1241,6 +1682,9 @@ impl CampMenuView {
             self.text(&format!("{menu_root}.btnCmdMenu2.cmdMenuListName.textField"), &text);
         }
         buttons.extend((1..=c.data.friends.len().min(4)).map(|n| format!("btnBattleStyle{n}")));
+        if c.data.arts_page.is_some() {
+            buttons.push(format!("btnBattleStyle{}", c.data.friends.len().min(3) + 1)); // (GF-UI)
+        }
         for (index, button) in buttons.iter().enumerate() {
             self.button_state(&format!("{menu_root}.{button}"), index == c.top_cursor, true);
         }
@@ -1354,18 +1798,23 @@ impl CampMenuView {
         if matches!(layer, CustomLayer::Set | CustomLayer::List) {
             let set = format!("{CUSTOM}.shortcut2ndLayer.setShortcutCmd");
             self.movie.goto_and_stop(&format!("{set}.cmdMenuWindow"), "four");
-            self.key_text(&format!("{set}.sectionTitle8.sectionTitleText8.textField"), ["kh3_camp.customize.group_0006", "kh3_camp.customize.group_0007", "kh3_camp.customize.group_0008"][c.page.min(2)]);
+            match c.data.arts_page.as_ref().filter(|_| c.on_arts).map(|a| a.label.clone()) {
+                Some(label) => self.text(&format!("{set}.sectionTitle8.sectionTitleText8.textField"), &label), // (GF-UI)
+                None => self.key_text(&format!("{set}.sectionTitle8.sectionTitleText8.textField"), ["kh3_camp.customize.group_0006", "kh3_camp.customize.group_0007", "kh3_camp.customize.group_0008"][c.page.min(2)]),
+            }
+            let page = c.page().clone(); // (GF-UI) the page in force
             // The face buttons right, top, left, bottom, as in the HUD panel (5.5).
             for (n, pad) in ["<icon(Circle)>", "<icon(Triangle)>", "<icon(Square)>", "<icon(Cross)>"].into_iter().enumerate() {
                 let button = format!("{set}.btnSetShortcutCmd{}", n + 1);
-                let kind = c.data.shortcuts[c.page.min(2)][n];
-                let entry = c.data.entry(kind).cloned();
+                let kind = page.shortcuts[c.page.min(2)][n];
+                let entry = page.entry(kind).cloned();
                 self.text(&format!("{button}.padBtn.txPadBtn"), pad);
                 self.text(&format!("{button}.textIcon.textField"), entry.as_ref().map_or("", |e| group_icon(e.group)));
-                let name = c.data.name(kind);
+                let name = page.name(kind);
                 self.text(&format!("{button}.shortcutSetName.textField"), &name);
                 self.movie.goto_and_stop(&format!("{button}.autoReloadMark"), if entry.is_some_and(|e| e.auto_reload) { "loop" } else { "off" });
-                self.button_state(&button, c.set_cursor == n, true);
+                // (GF-UI) a fixed button shows greyed, as a greyed row of KH3's lists
+                self.button_state(&button, c.set_cursor == n, page.set_rules[n] != crate::camp_custom::SetRule::Fixed);
             }
         }
         if layer == CustomLayer::List {
@@ -1374,11 +1823,15 @@ impl CampMenuView {
             let tabs = c.tabs();
             let tab = tabs.get(c.tab).copied().unwrap_or(0);
             // (party X2) the Magic tab of a friend leader's own list (Goofy: "Abilities")
-            let tab_key = match (&c.data.magic_label, TAB_KEYS[tab].1) {
+            let tab_key = match (&c.page().magic_label, TAB_KEYS[tab].1) {
                 (Some(label), Some(crate::camp_custom::GROUP_MAGIC)) => label.clone(),
                 _ => TAB_KEYS[tab].0.to_string(),
             };
-            let tab_name = self.string(&tab_key);
+            // (GF-UI) a page's own text for the tab ("Shield Arts")
+            let tab_name = match (&c.page().magic_text, TAB_KEYS[tab].1) {
+                (Some(text), Some(crate::camp_custom::GROUP_MAGIC)) => text.clone(),
+                _ => self.string(&tab_key),
+            };
             self.custom_tabs.select(&mut self.movie, c.tab, &tab_name, c.tab_flash.take(), &self.fonts);
             let rows: Vec<crate::camp_custom::CommandEntry> = c.list_rows().into_iter().cloned().collect();
             let fonts = self.fonts.clone();
@@ -1449,11 +1902,16 @@ impl CampMenuView {
         if !self.movie.exists(&format!("{}.container", o.list.path)) {
             return;
         }
-        let stamp = stamp_of(&(&o.list, o.worn, o.outfits.len())) ^ self.movie.exists(&o.list.item_path(0)) as u64 ^ 0x0F17;
+        // (OUTFIT-UNLOCK) the munny in the stamp: a paid change (camp.rs `Pending::Outfit`) redraws the frame's counter
+        let stamp = stamp_of(&(&o.list, o.worn, o.outfits.len(), menu.stats.munny)) ^ self.movie.exists(&o.list.item_path(0)) as u64 ^ 0x0F17;
         if stamp == self.stamp {
             return;
         }
         self.stamp = stamp;
+        if self.frame_filled {
+            self.text(&format!("{FRAME}.munny.munnyNum.textField"), &menu.stats.munny.to_string());
+        }
+        let o = &mut menu.outfits;
         let worn = o.outfits.get(o.worn).map(|(_, n)| n.clone()).unwrap_or_default();
         self.help_line("gameHelp", &format!("{} Wearing: {worn}", crate::camp::OUTFITS_DETAIL));
         let fonts = self.fonts.clone();
@@ -1504,13 +1962,19 @@ impl CampMenuView {
         self.dialog_open = true;
         self.dialog_closing = false;
         self.dialog_stamp = stamp;
-        let text = self.string(dialog.text_key).replace("{0}", &dialog.argument);
+        // (CAMP-OPTIONS) a dialog without a text key shows its argument as it is (the options host's question, the game's own text)
+        let text = if dialog.text_key.is_empty() { dialog.argument.clone() } else { self.string(dialog.text_key).replace("{0}", &dialog.argument) };
         self.dialog.set_visible("dialogText", true);
-        self.dialog.set_text("dialogText.textField", &text, &self.fonts);
         let buttons: Vec<String> = match dialog.kind {
             DialogKind::Ok => vec![self.string("kh3_system.general.choice_0003")],
             DialogKind::YesNo => vec![self.string("kh3_system.general.choice_0001"), self.string("kh3_system.general.choice_0002")],
         };
+        if dialog.text_key.is_empty() {
+            self.lay_dialog(&text, &buttons); // (CAMP-OPTIONS) KH3's own layout around a text of any length
+        } else {
+            self.unlay_dialog();
+            self.dialog.set_text("dialogText.textField", &text, &self.fonts);
+        }
         for (n, name) in ["dialogButton", "dialogButton2"].into_iter().enumerate() {
             self.dialog.set_visible(name, n < buttons.len());
             if let Some(label) = buttons.get(n) {
@@ -1539,8 +2003,88 @@ impl CampMenuView {
             self.dialog.set_position("dialogText", x, y, 0.0);
         }
         if let Some((x, y)) = stage(&self.dialog, &format!("{holder}.poDialogButton")) {
+            // (CAMP-OPTIONS) the button canvas of KH3's layout (under the text's last line), when one is in force
+            let (cx, cy) = self.dialog_layout.map_or((0.0, 0.0), |l| l.canvas);
+            let (x, y) = (x + cx, y + cy);
             self.dialog.set_position("dialogButton", x, y, 0.0);
             self.dialog.set_position("dialogButton2", x, y + 35.0, 0.0);
+        }
+    }
+
+    /// (CAMP-OPTIONS) The window's authored frame (taken once, before any layout changed it).
+    fn dialog_frame(&mut self) -> DialogFrame {
+        if self.dialog_frame.is_none() {
+            let base = self.dialog.node("dialog.dialogAnm.dialogWin.dialogWin2").map_or(Matrix::IDENTITY, |n| n.matrix);
+            let size = self.dialog.node("dialog.dialogAnm.dialogPoAll").map_or((510.0, 186.0), |n| (-2.0 * n.matrix.tx, -2.0 * n.matrix.ty));
+            let holder = self.dialog.node("dialog.dialogAnm.dialogPoAll.dialogPoAll2").map_or((0.0, 0.0), |n| (n.matrix.tx, n.matrix.ty));
+            self.dialog_frame = Some((base, size, holder));
+        }
+        self.dialog_frame.unwrap_or((Matrix::IDENTITY, (510.0, 186.0), (0.0, 0.0)))
+    }
+
+    /// (CAMP-OPTIONS) KH3's `Dialog.setText(text)` (method 192: crate::newgame::dialog_text_layout, ASH-ROWS's port; the same
+    /// steps as the Workshop's `lay_dialog`): the field as wide as the widest line, the window and its content holder around it,
+    /// the buttons under the last line.
+    fn lay_dialog(&mut self, text: &str, buttons: &[String]) {
+        const FIELD: &str = "dialogText.textField";
+        const PO_ALL: &str = "dialog.dialogAnm.dialogPoAll.dialogPoAll2";
+        let (base, default_window, _) = self.dialog_frame();
+        let def = match self.dialog.node(FIELD) {
+            Some(crate::player::Node { kind: crate::player::Kind::Text(t), .. }) => Some(t.def.clone()),
+            _ => None,
+        };
+        let button_def = match self.dialog.node("dialogButton.dialogBtnText.textField") {
+            Some(crate::player::Node { kind: crate::player::Kind::Text(t), .. }) => Some(t.def.clone()),
+            _ => None,
+        };
+        let Some((def, font)) = def.and_then(|d| self.fonts.get(d.font_class.as_deref()).cloned().filter(|_| d.size > 0.0).map(|f| (d, f))) else {
+            self.dialog.set_text_fit(FIELD, text, &self.fonts);
+            return;
+        };
+        let fonts = self.fonts.clone();
+        let text_width = text.lines().map(|line| crate::render::markup_width(&fonts, &font, line, def.size)).fold(0.0, f32::max);
+        let buttons_width = button_def.and_then(|b| fonts.get(b.font_class.as_deref()).cloned().map(|f| (f, b.size))).map_or(0.0, |(f, size)| buttons.iter().map(|b| crate::render::markup_width(&fonts, &f, b, size)).fold(0.0, f32::max));
+        let height = |field_w: f32| crate::newgame::text_height(&font, def.size, def.leading, crate::render::wrap_text(&fonts, &font, text, def.size, field_w - 4.0).lines().count());
+        let holder = |movie: &Movie, name: &str| movie.node(&format!("{PO_ALL}.{name}")).map_or((0.0, 0.0), |n| (n.matrix.tx, n.matrix.ty));
+        let (text_pos, button_pos) = (holder(&self.dialog, "poDialogText"), holder(&self.dialog, "poDialogButton"));
+        let default_text = self.dialog.sprite(&format!("{PO_ALL}.poDialogText")).map_or((0.0, 0.0), |s| {
+            let mut r = crate::geom::Rect::EMPTY;
+            for n in &s.children {
+                if let crate::player::Kind::Shape(sh) = &n.kind {
+                    r = r.union(&sh.bounds.rect().transform(&n.matrix));
+                }
+            }
+            if r.is_empty() { (0.0, 0.0) } else { (r.x1 - r.x0, r.y1 - r.y0) }
+        });
+        let d = crate::newgame::dialog_text_layout(text_width, height, (buttons.len(), buttons_width), default_window, [text_pos, button_pos], default_text);
+        let (sx, sy) = (d.layout.window.0 / default_window.0.max(1.0), d.layout.window.1 / default_window.1.max(1.0));
+        if let Some(node) = self.dialog.node_mut("dialog.dialogAnm.dialogWin.dialogWin2") {
+            node.matrix = Matrix::new(base.a * sx, base.b * sx, base.c * sy, base.d * sy, base.tx, base.ty);
+            node.script_matrix = true;
+        }
+        self.dialog.set_position(PO_ALL, d.layout.holder.0, d.layout.holder.1, 0.0);
+        self.dialog.set_text(FIELD, text, &self.fonts);
+        if let Some(node) = self.dialog.node_mut(FIELD) {
+            let tx = node.matrix.tx;
+            if let crate::player::Kind::Text(t) = &mut node.kind {
+                t.adjust = Some((1.0, tx + t.def.bounds.x0, d.field.0));
+            }
+        }
+        self.dialog_layout = Some(d.layout);
+    }
+
+    /// (CAMP-OPTIONS) The authored window again (a keyed dialog after a laid-out one).
+    fn unlay_dialog(&mut self) {
+        if self.dialog_layout.take().is_none() {
+            return;
+        }
+        let (base, _, holder) = self.dialog_frame();
+        if let Some(node) = self.dialog.node_mut("dialog.dialogAnm.dialogWin.dialogWin2") {
+            node.matrix = base;
+        }
+        self.dialog.set_position("dialog.dialogAnm.dialogPoAll.dialogPoAll2", holder.0, holder.1, 0.0);
+        if let Some(crate::player::Node { kind: crate::player::Kind::Text(t), .. }) = self.dialog.node_mut("dialogText.textField") {
+            t.adjust = None;
         }
     }
 
@@ -1551,11 +2095,14 @@ impl CampMenuView {
             self.leave_sub(was);
             self.sync_dialog(None);
             self.movie.goto_and_play("", "out");
+            self.drop_guide(); // (THE USER 2026-11-02) the screen's guide leaves with the menu (the plate is its own clip)
             self.closing = true;
             // (party PF) the icons fade with it
             if let Some(scene) = self.formation_scene.as_mut() {
                 scene.close();
             }
+            // (GOOFY) the Parry Techniques page goes at once (its clips come back for the next opening)
+            self.parry_down();
         }
     }
 
@@ -1571,6 +2118,11 @@ impl CampMenuView {
             if let Some(node) = self.movie.node_mut(FORMATION_HELP) {
                 node.cx = crate::geom::Cx { mul: [1.0, 1.0 - 0.55 * flash, 1.0 - 0.6 * flash, 1.0], add: [0.0; 4] };
             }
+        }
+        // (GOOFY) the Parry Techniques page's frame
+        if let Some(scene) = self.parry_scene.as_mut() {
+            scene.step();
+            scene.apply(&mut self.movie);
         }
         if self.page_open {
             self.page.tick();

@@ -60,6 +60,7 @@ fn shape(p: &Value, kind: ShapeKind) -> Shape {
         owner_scale: flag(p, "bApplyOwnerScale", true),
         location_scale: flag(p, "bApplySpawnLocationOwnerScale", true),
         mesh_rotation: !flag(p, "bNoMeshRotation", false) && !s(p, "SpawnRotCalcMode").ends_with("QUAT_Normals"),
+        spawn_rot: crate::ring::SpawnRot::parse(p), // (VFX-RING)
     }
 }
 
@@ -292,7 +293,15 @@ pub fn parse(short: &str, p: &Value, def: &mut EmitterDef) -> Option<Option<Modu
             None
         }
         "SQEX_TailShapeExData_Wave" => {
-            def.tail_wave = Some(TailWaveDef { move_vector: vec3(p.get("MoveVector"), Vec3::ZERO), random: dist(p, "RandomMoveVector").filter(|d| d.max_abs() != 0.0), interval: num(p, "RandomInterval", 0.0) });
+            // (VFX-2) the range the helper draws in (DistributionVector GetRange: a uniform's min / max, a constant's value)
+            let d = p.get("RandomMoveVector").and_then(|r| r.get("distribution"));
+            let v3 = |v: Option<&Value>| v.and_then(Value::as_array).filter(|a| a.len() >= 3).map(|a| Vec3::new(a[0].as_f64().unwrap_or(0.0) as f32, a[1].as_f64().unwrap_or(0.0) as f32, a[2].as_f64().unwrap_or(0.0) as f32));
+            let random_range = d.and_then(|d| match (v3(d.get("min")), v3(d.get("max")), v3(d.get("constant"))) {
+                (Some(lo), Some(hi), _) => Some((lo, hi)),
+                (_, _, Some(c)) => Some((c, c)),
+                _ => None,
+            });
+            def.tail_wave = Some(TailWaveDef { move_vector: vec3(p.get("MoveVector"), Vec3::ZERO), random: dist(p, "RandomMoveVector").filter(|d| d.max_abs() != 0.0), random_range, interval: num(p, "RandomInterval", 0.0), emitter_mat: p.get("bUseEmitterMat").and_then(Value::as_bool).unwrap_or(false) });
             None
         }
         _ => return None,

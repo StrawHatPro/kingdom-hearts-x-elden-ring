@@ -20,6 +20,15 @@ const SHOTS = {
   UNISON_BLIZZARD: { spawn: 'ROOT_UP_100', ref: '0x14134CCE0' },
   UNISON_THUNDER: { spawn: 'ROOT_UP_100', ref: '0x14134CCE0' },
   FUSION_SPIN: { spawn: 'ROOT_ATTACHED_GOOFY', ref: '0x14134C710' },
+  // (AUDIT-C) Rage Form's shots: COMBO_ANTI's shot handler (anim interface slot 69 0x141357AF0) spawns AN_UPPER for kind 0xBF
+  // (Crimson Upper) and AN_CRIMSONBLAST / 1 / 2 / 3 (by the Riskcharges) for 0xC5 (Crimson Blast); FINISH_AN's body
+  // 0x1413DEBC0 spawns AN_FINISH. The caller places them (kh-core combat/forms/rage.rs `shot`).
+  AN_UPPER: { spawn: 'ANTI', ref: '0x141357AF0' },
+  AN_CRIMSONBLAST: { spawn: 'ANTI', ref: '0x141357AF0' },
+  AN_CRIMSONBLAST1: { spawn: 'ANTI', ref: '0x141357AF0' },
+  AN_CRIMSONBLAST2: { spawn: 'ANTI', ref: '0x141357AF0' },
+  AN_CRIMSONBLAST3: { spawn: 'ANTI', ref: '0x141357AF0' },
+  AN_FINISH: { spawn: 'ANTI', ref: '0x1413DEBC0' },
 };
 
 const load = (pkg) => JSON.parse(fs.readFileSync(path.join(CONTENT, pkg.replace(/^\/Game\//, '') + '.uasset.json'), 'utf8'));
@@ -79,6 +88,7 @@ for (const [shot, rule] of Object.entries(SHOTS)) {
   const cdo = merged(links, (l) => l.cdo);
   const atk = merged(links, (l) => l.comps.TresAtkColl0);
   const part = merged(links, (l) => l.comps.ParticleComp);
+  const move = merged(links, (l) => l.comps.ProjectileComp); // (AUDIT-C) InitialSpeed (cm/s; 0 = it stands)
   const fire = (cdo.MyFireEffects || [])[0] || {};
   const auto = atk.m_CollAutoActivate || [];
   (atk.CollisionShapesSrc || []).forEach((s, k) => {
@@ -94,11 +104,11 @@ for (const [shot, rule] of Object.entries(SHOTS)) {
       part.Template ? part.Template.name : '', vec(part.RelativeLocation),
       hit.m_PawnHitEffect ? hit.m_PawnHitEffect.name : '', hit.m_PawnHitSEAsset ? hit.m_PawnHitSEAsset.name : '', atk.m_fHitEffectRandomOffsetRadius || 0,
       fire.MyParticleSystem ? fire.MyParticleSystem.name : '', fire.MySoundCue ? fire.MySoundCue.name : '',
-      rule.spawn, rule.ref, source,
+      rule.spawn, rule.ref, source, move.InitialSpeed || 0, // (AUDIT-C) speed
     ]);
   });
 }
 const columns = ['id', 'shot', 'class', 'group', 'row', 'shape', 'mesh', 'life', 'no_destroy', 'size', 'inc_size', 'max_size', 'size_curve', 'loc', 'scale', 'inc_scale', 'max_scale', 'interval', 'map_hit',
-  'particle', 'particle_loc', 'hit_effect', 'hit_se', 'hit_offset', 'fire_effect', 'fire_se', 'spawn', 'ref_addr', 'source'];
+  'particle', 'particle_loc', 'hit_effect', 'hit_se', 'hit_offset', 'fire_effect', 'fire_se', 'spawn', 'ref_addr', 'source', 'speed' /* (AUDIT-C) */];
 const n = writeSheet(path.join(ROOT, 'sheets/port/sora-combat-shots.json'), 'sora-combat-shots', 'port', columns, rows);
 console.log(`sora-combat-shots: ${n} rows`);

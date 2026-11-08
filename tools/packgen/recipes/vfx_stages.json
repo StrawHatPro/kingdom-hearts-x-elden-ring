@@ -14,6 +14,10 @@
   "xsi_xwc": { "table": "xsi", "args": ["--xsi", "--no-twp-all", "--xw-decals", "all", "--xw-break", "--xsi-extra", "@extra:xwc"] },
   "main_xwd": { "table": "main", "args": [] },
   "party_xwd": { "table": "party", "args": ["--party"] },
-  "xsi_xwd": { "table": "xsi", "args": ["--xsi", "--xsi-extra", "@extra:xwd"] }
+  "xsi_xwd": { "table": "xsi", "args": ["--xsi", "--xsi-extra", "@extra:xwd"] },
+  "main_vxl": { "table": "main", "decal_dyn": false, "args": ["--vxl"] },
+  "main_fwl": { "table": "main", "decal_dyn": false, "args": ["--fwl", "--xw-break", "--trig"] },
+  "party_fwl": { "table": "party", "decal_dyn": false, "args": ["--party", "--fwl", "--xw-break", "--trig"] },
+  "xsi_fwl": { "table": "xsi", "decal_dyn": false, "args": ["--xsi", "--fwl", "--xw-break"] }
  }
 }

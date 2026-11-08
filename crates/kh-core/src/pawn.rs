@@ -30,6 +30,9 @@ pub(crate) struct Pawn {
     pub cmc: Cmc,
     /// The actor's yaw, degrees.
     pub yaw: f32,
+    /// (F-LOCO) The actor's pitch, degrees, nose up positive (UE `FRotator::Pitch`): 0 but in the attacks that pitch toward
+    /// their target (Attack +0x1F4 bit 5: PlayAttack 0x1413378B0 kinds 0x91 / 0x96 / 0xAF / 0xBC, Facing 0x14134D0E0).
+    pub pitch: f32,
     /// The `FullBody` montage slot. `anim.reverse_leg` is the state flag `m_bReverseLeg`
     /// (state +0x84 bit 1) as the latest pose tick left it.
     pub anim: AnimPlayer,
@@ -95,6 +98,9 @@ pub(crate) struct Pawn {
     pub aura_ghost: f32,
     /// (CHESTFIX) PORT ADDITION: AI Sora's follow speed cap in the run loop, cm/s (`Sora::set_follow_cap`; None = KH3's).
     pub follow_cap: Option<f32>,
+    /// (SPIRITSPRING) PORT ADDITION: the host's spiritspring lift for the next step, cm above the jump's take-off
+    /// (`Sora::spring_lift`; taken by every step; None = KH3's jump untouched).
+    pub spring_lift: Option<f32>,
     /// The fields of the action states (actions.rs): availability bits, reaction type, stance.
     pub actions: crate::actions::PawnActions,
 }
@@ -106,6 +112,7 @@ impl Pawn {
             tuning: Tuning::default(),
             cmc,
             yaw,
+            pitch: 0.0, // (F-LOCO)
             anim_ticked: anim.request(),
             anim,
             stick_magnitude: 0.0,
@@ -134,6 +141,7 @@ impl Pawn {
             aura_recovery: 0.0,
             aura_ghost: 0.0,
             follow_cap: None,
+            spring_lift: None,
             actions: crate::actions::PawnActions::default(),
         }
     }
@@ -206,7 +214,6 @@ impl DerefMut for Ctx<'_, '_> {
 
 // ============================================================================ the host seam
 // Not all of these have a caller in the stage-1 states: they are the seam for the states to come.
-#[allow(dead_code)]
 impl Ctx<'_, '_> {
     /// Starts a sound: `Audio::play` + the event. The handle stops it later.
     pub fn play_sound(&mut self, play: SoundPlay) -> SoundHandle {

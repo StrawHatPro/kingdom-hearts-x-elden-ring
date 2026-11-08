@@ -12,7 +12,11 @@
 //                          main command styles, UI system sounds (static SE table), world skins, gauge rules
 //   render/hud_1080.png    the HUD composed offline by tools/lib/gfx_render.js (validation)
 //   manifest.json, validation.json, sheet_rows.json (rows for sheets/port/sora-assets.json, ids ui/...)
-// Usage: node tools/sora_ui_pack.js [--check] [--no-render]
+// Usage: node tools/sora_ui_pack.js [--check] [--no-render] [--only=Name,Name]
+//   --only: (OF) a TARGETED STEP: only the named movies of MOVIES are decoded; their movie / as3 / layout files and their
+//   textures are written, and their entries are merged into the pack's manifest.json and textures/atlas.json. Nothing
+//   else of the pack (strings, data, icons, render, validation, the sheet) is touched. Used 2026-11-03 for the costume
+//   portraits: --only=FacePcTsSora01,FacePcMiSora01,FacePcCaSora01,FacePcBxSora01
 // Spec: docs/sora-ui-spec.md. Nothing here is distributed: the pack stays under build/.
 'use strict';
 const fs = require('fs'), path = require('path'), crypto = require('crypto');
@@ -32,6 +36,8 @@ const MOVIES = [
   ['HudRight', '01_hud/hud_right/HudRight', 'hud'], ['HudTarget', '01_hud/hud_target/HudTarget', 'hud'], ['HudInput', '01_hud/hud_input/HudInput', 'hud'],
   ['HudOperation', '01_hud/hud_operation/HudOperation', 'hud'], ['FacePcExSora01', '01_hud/face/FacePcExSora01', 'hud'], ['FacePcEx1Sora01', '01_hud/face/FacePcEx1Sora01', 'hud'],
   ['FacePcEx2Sora01', '01_hud/face/FacePcEx2Sora01', 'hud'], ['FaceNpcExDonald', '01_hud/face/FaceNpcExDonald', 'hud'], ['FaceNpcExGoofy', '01_hud/face/FaceNpcExGoofy', 'hud'], ['FaceNpcExSora', '01_hud/face/FaceNpcExSora', 'hud'] /* (party P) Sora in a friend slot */,
+  // (OF) THE USER 2026-11-03: "make sure Sora's HUD changes for his costumes": KH3's portrait movies of his world costumes
+  ['FacePcTsSora01', '01_hud/face/FacePcTsSora01', 'hud'], ['FacePcMiSora01', '01_hud/face/FacePcMiSora01', 'hud'], ['FacePcCaSora01', '01_hud/face/FacePcCaSora01', 'hud'], ['FacePcBxSora01', '01_hud/face/FacePcBxSora01', 'hud'],
   ['NaviMapGra', '03_navimapgra/NaviMapGra', 'hud'], ['MapName', '22_mapname/MapName', 'hud'], ['KeyItem', '20_keyitem/KeyItem', 'hud'],
   ['Message', '92_message/Message', 'hud'], ['MultiItemGet', '92_message/MultiItemGet', 'hud'], ['CenterInformation', '92_message/CenterInformation', 'hud'], ['Dialog', '92_message/Dialog', 'menu'], ['CutsceneText', '92_message/CutsceneText', 'hud'], // (new game) the centred text of TresUI_SetCutsceneText: the opening's questions
  
@@ -42,6 +48,10 @@ const MOVIES = [
   ['BrightnessOption', '19_config/BrightnessOption', 'menu'], ['SaveLoad', '17_saveload/SaveLoad', 'menu'], ['GameHelp', '16_game_help/GameHelp', 'menu'],
   ['BattleReport', '18_battlereport/BattleReport', 'menu'], ['Tutorial', '11_title/Tutorial', 'menu'], ['TresFont', '91_font/TresFont', 'font'],
   ['MarkLibrary', '90_rsl/menulibrary/MarkLibrary', 'lib'], ['Shop', '41_shop/Shop', 'menu'], // (SHOP, merged by PORT30) KH3's Moogle shop
+  // (F-HUD) the form logos of the command menu's title plate (MainCommandData m_SwfAsset of the CHANGE_* rows; HudCommand's
+  // Loader m_actLogoLoader puts the movie's first child into cmdMenu.cmdActLogo.cmdActLogoShort.actLogo). Targeted step:
+  // --only=ActLogoK01,...,ActLogoK25,ActLogoS01 (the list below)
+  ...['K01', 'K02', 'K03', 'K04', 'K05', 'K06', 'K07', 'K08', 'K09', 'K10', 'K11', 'K12', 'K13', 'K14', 'K15', 'K16', 'K17', 'K18', 'K19', 'K20', 'K21', 'K22', 'K23', 'K24', 'K25', 'S01'].map((k) => ['ActLogo' + k, '01_hud/act_logo/ActLogo' + k, 'hud']),
 ];
 const STRING_TABLES = ['kh3_system', 'kh3_menu', 'kh3_camp', 'kh3_item', 'kh3_settings', 'kh3_level', 'kh3_char_name', 'kh3_gamehelp', 'kh3_tutorial', 'kh3_map'];
 const FONT_RANGES = [[0x20, 0x7e], [0xa0, 0x17f], [0x2010, 0x2027], [0x2030, 0x203a], [0x20ac, 0x20ac], [0x2122, 0x2122], [0x2190, 0x2193], [0x25a0, 0x25cf], [0x3000, 0x3002], [0xff01, 0xff5e]];
@@ -350,7 +360,7 @@ function itemIconsOut() {
   for (const r of JSON.parse(fs.readFileSync(table, 'utf8')).rows) {
     if (!KINDS.has(String(r.m_Category).split('::')[1])) continue;
     if (r.m_HelpTextID && /^kh3_item./.test(String(r.m_HelpTextID))) out.help[r.m_KeyName] = String(r.m_HelpTextID);
-    const asset = String(r.m_IconAsset || ''); const m = /^\/Game\/(UI\/Icon\/Item\/[A-Za-z0-9_]+)\./.exec(asset);
+    const asset = String(r.m_IconAsset || ''); const m = /^\/Game\/(UI\/Icon\/(?:Steam\/)?Item\/[A-Za-z0-9_]+)\./.exec(asset); // (P9b) + the PC release's Steam/Item folder (Dead of Night: weapon017)
     const late = /WEAPON|KEYITEM/.test(String(r.m_Category)); // (IMPL_ER37) the added kinds: a gap is noted, not a failed check
     if (!m) { if (late) out.no_icon = [...(out.no_icon || []), r.m_KeyName]; else problems.push('item icons: ' + r.m_KeyName + ' has no icon asset'); continue; }
     const image = m[1];
@@ -395,7 +405,39 @@ function abilitiesOut() {
 }
 
 // =========================================================================================== main
+// (OF) --only=A,B: the targeted step (see the usage above)
+function mainOnly(names) {
+  const want = names.split(',').map((s) => s.trim()).filter(Boolean);
+  const manifest = JSON.parse(fs.readFileSync(path.join(OUT, 'manifest.json'), 'utf8'));
+  const atlas = JSON.parse(fs.readFileSync(path.join(OUT, 'textures/atlas.json'), 'utf8'));
+  for (const name of want) {
+    const row = MOVIES.find((m) => m[0] === name); if (!row) throw new Error(`--only: ${name} is not in MOVIES`);
+    const mv = loadMovie(row[1]); mv.name = name; mv.kind = row[2];
+    for (const im of mv.swf.imports || []) problems.push(`${name}: imports ${im.name} from ${im.url} (a targeted step does not check libraries)`);
+    const { o, as3, counts } = movieOut(mv);
+    put(`movies/${name}.json`, JSON.stringify(o)); put(`as3/${name}.as3.txt`, as3.listing); put(`layout/${name}.json`, JSON.stringify(layoutOut(mv)));
+    const entry = { name, kind: mv.kind, source: mv.pkg, source_sha256: sha256(mv.raw), gfx_bytes: mv.raw.length, stage: o.stage, fps: o.fps, root_frames: o.root.frames, document_class: o.document_class, files: { movie: `movies/${name}.json`, as3: `as3/${name}.as3.txt`, layout: `layout/${name}.json` }, counts };
+    const at = manifest.movies.findIndex((m) => m.name === name); if (at >= 0) manifest.movies[at] = entry; else manifest.movies.push(entry);
+  }
+  let unresolved = 0; for (const name of want) for (const sh of Object.values(JSON.parse(files.get(`movies/${name}.json`)).shapes)) for (const f of sh.fills) if (f.kind === 'bitmap' && !f.texture) unresolved++;
+  for (const t of texCache.values()) {
+    put(t.file, t.png); const seen = new Set(); const regs = t.regions.filter((r) => { const k = r.rect.join(','); if (seen.has(k)) return false; seen.add(k); return true; });
+    atlas.textures[t.file] = { size: [t.width, t.height], pixel_format: t.format, source: t.content, used_by: [...t.usedBy].sort(), regions: regs };
+    const e = { file: t.file, source: t.content, size: [t.width, t.height], pixel_format: t.format, used_by: [...t.usedBy].sort(), regions: regs.length };
+    const at = manifest.textures.findIndex((x) => x.file === t.file); if (at >= 0) manifest.textures[at] = e; else manifest.textures.push(e);
+  }
+  put('textures/atlas.json', JSON.stringify(atlas));
+  manifest.counts.movies = manifest.movies.length; manifest.counts.textures = manifest.textures.length;
+  put('manifest.json', JSON.stringify(manifest, null, 1) + '\n');
+  if (!checkOnly) for (const [rel, data] of files) { const f = path.join(OUT, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, data); }
+  console.log(`sora_ui_pack ${VERSION} --only ${want.join(',')}: ${files.size} files${checkOnly ? ' (check only)' : ' -> build/sora_pack/ui'}; bitmap fills without a texture: ${unresolved}`);
+  if (problems.length) console.log('  problems (' + problems.length + '):\n   ' + problems.join('\n   '));
+  if (unresolved) process.exitCode = 1;
+}
+
 function main() {
+  const only = process.argv.find((a) => a.startsWith('--only='));
+  if (only) return mainOnly(only.slice('--only='.length));
   const movies = new Map(); const manifest = { format: 'kh3-sora-ui-pack/1', generator: `tools/sora_ui_pack.js ${VERSION}`, movies: [], textures: [], fonts: [], strings: [], data: [], counts: {} };
   for (const [name, rel, kind] of MOVIES) { const mv = loadMovie(rel); mv.name = name; mv.kind = kind; movies.set(name, mv); }
   let fonts = {};
@@ -415,6 +457,7 @@ function main() {
   const fontClasses = new Set(); for (const mv of movies.values()) for (const t of Object.values(mv.out.texts)) if (t.font_class) fontClasses.add(t.font_class);
   for (const fc of fontClasses) if (!fonts[fc]) problems.push('text font class not in TresFont: ' + fc);
   const iconCount = iconTextOut(); const itemIconCount = itemIconsOut(); abilitiesOut();
+  { const fi = require("./forge_icons.js").build(); for (const [rel, data] of fi.files) put(rel, data); for (const p of fi.problems) problems.push("forge icons: " + p); } // (FORGE-PREVIEW) KH3 Forge pictures: keychains + whole Keyblades (tools/forge_icons.js)
   // textures + atlas description
   const atlas = { format: 'kh3-ui-atlas/1', note: 'regions = source rectangles (texture pixels: x, y, w, h) of the bitmap-filled rectangles of the movies\' shapes', textures: {} };
   for (const t of [...texCache.values()].sort((a, b) => a.file < b.file ? -1 : 1)) { put(t.file, t.png); const seen = new Set(); const regs = t.regions.filter((r) => { const k = r.rect.join(','); if (seen.has(k)) return false; seen.add(k); return true; }); atlas.textures[t.file] = { size: [t.width, t.height], pixel_format: t.format, source: t.content, used_by: [...t.usedBy].sort(), regions: regs }; manifest.textures.push({ file: t.file, source: t.content, size: [t.width, t.height], pixel_format: t.format, used_by: [...t.usedBy].sort(), regions: regs.length }); }
@@ -445,7 +488,7 @@ function main() {
   put('manifest.json', JSON.stringify(manifest, null, 1) + '\n');
   // ---- sheet rows (13 columns of sheets/port/sora-assets.json)
   const rows = [];
-  const srcOf = (rel) => { if (rel.startsWith('textures/') && rel.endsWith('.png')) { const t = [...texCache.values()].find((x) => x.file === rel); return t.content; } const m = /^(movies|as3|layout)\/(\w+)\./.exec(rel); if (m) return movies.get(m[2]).pkg; if (rel.startsWith('fonts/')) return movies.get('TresFont').pkg; return '-'; };
+  const srcOf = (rel) => { if (rel.startsWith('textures/') && rel.endsWith('.png')) { const t = [...texCache.values()].find((x) => x.file === rel); return t ? t.content : '-'; /* (SETUP-TOOLS) the Forge pictures (tools/forge_icons.js) are no movie texture */ } const m = /^(movies|as3|layout)\/(\w+)\./.exec(rel); if (m) return movies.get(m[2]).pkg; if (rel.startsWith('fonts/')) return movies.get('TresFont').pkg; return '-'; };
   for (const [rel, data] of [...files.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1)) {
     const kind = rel === 'manifest.json' ? 'manifest' : rel.endsWith('.png') ? 'texture' : 'data';
     const role = rel.startsWith('textures/') && rel.endsWith('.png') ? ['ui-bitmap'] : rel.startsWith('fonts/') && rel.endsWith('.png') ? ['ui-font-atlas'] : rel.startsWith('render/') ? ['validation-render'] : '-';

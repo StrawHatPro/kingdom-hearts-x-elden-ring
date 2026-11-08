@@ -28,48 +28,60 @@ use crate::magic::tables::Sheet;
 use crate::pawn::{Ctx, Pawn};
 use crate::sora::MovementState;
 
+// (SHOT-A) the fields are pub(crate): the other Keyblades' shotlocks (magic/shotlocks/<family>.rs) run in this state.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ShootFlow {
-    sub: u8,
+    pub(crate) sub: u8,
     /// +0x8C `ETresShootFlowKind`.
     pub kind: u8,
     /// +0x90, +0x94, +0x98, +0x9C.
-    spawn_index: i32,
+    pub(crate) spawn_index: i32,
     pub n: i32,
-    per_tick: i32,
-    remaining: i32,
+    pub(crate) per_tick: i32,
+    pub(crate) remaining: i32,
     /// +0xA0, +0xA4, +0xA8, +0xAC.
-    ring_timer: f32,
-    syphon_timer: f32,
-    face_timer: f32,
-    face_yaw: f32,
+    pub(crate) ring_timer: f32,
+    pub(crate) syphon_timer: f32,
+    pub(crate) face_timer: f32,
+    pub(crate) face_yaw: f32,
     /// +0x84 bit 4 (face request); +0xCC bits 0 (ring active / shot seen), 3 (facing).
-    face_request: bool,
-    ring_active: bool,
-    facing: bool,
+    pub(crate) face_request: bool,
+    pub(crate) ring_active: bool,
+    pub(crate) facing: bool,
     /// +0xD0, +0xE4, +0xF8.
-    first_target: TargetId,
-    origin: Vec3,
-    lift_target: Vec3,
+    pub(crate) first_target: TargetId,
+    pub(crate) origin: Vec3,
+    pub(crate) lift_target: Vec3,
     /// Begin finished the state at once (no locked target left).
-    finished: bool,
-    /// (XSI) Spectral Rays' beams fired so far (abilities/xs/spectral.rs).
-    beams: i32,
+    pub(crate) finished: bool,
+    // (SHOT-A laser) XSI's `beams` count of kind 11 is gone: KH3's update 0x1413B9600 runs it (magic/shotlocks/laser.rs).
+    /// (SHOT-A) +0xB8 the projectile FName (resolved by the held weapon's projectile set), +0xC0 the effect group every
+    /// Play passes, +0xC4 the voice index: Begin's per-kind set-up (sora-shotlocks kind.k<N>.*).
+    pub(crate) proj_name: &'static str,
+    pub(crate) group: i32,
+    pub(crate) voice: i32,
+    /// (SHOT-A) +0xCC bit 2 (OnTiming of kind 0x2A).
+    pub(crate) timing2: bool,
+    /// (SHOT-A) +0x118: the projectile the Shot handler keeps for kinds 7 / 0x16 (0 = none).
+    pub(crate) kept: u32,
+    /// (SHOT-A) The per-family part of the state (magic/shotlocks `Ext`).
+    pub(crate) ext: crate::magic::shotlocks::Ext,
 }
 
 impl ShootFlow {
-    pub const RESET: ShootFlow = ShootFlow { sub: 0, kind: 0, spawn_index: 0, n: 0, per_tick: 0, remaining: 0, ring_timer: 0.0, syphon_timer: 0.0, face_timer: 0.0, face_yaw: 0.0, face_request: false, ring_active: false, facing: false, first_target: TargetId::NONE, origin: Vec3::ZERO, lift_target: Vec3::ZERO, finished: false, beams: 0 };
+    pub const RESET: ShootFlow = ShootFlow { sub: 0, kind: 0, spawn_index: 0, n: 0, per_tick: 0, remaining: 0, ring_timer: 0.0, syphon_timer: 0.0, face_timer: 0.0, face_yaw: 0.0, face_request: false, ring_active: false, facing: false, first_target: TargetId::NONE, origin: Vec3::ZERO, lift_target: Vec3::ZERO, finished: false, proj_name: "-", group: 0, voice: 0, timing2: false, kept: 0, ext: crate::magic::shotlocks::Ext::None };
 
     fn ragnarok(&self) -> bool {
-        self.kind == KIND_KC_RAGNAROK
+        // (SHOT-A) every kind of the Ragnarok update 0x1413B88F0 (Union Ragnarok 28, 31, 33, 35: sora-shotlocks)
+        self.kind == KIND_KC_RAGNAROK || crate::magic::shotlocks::ragnarok_code(self.kind)
     }
 
     /// `vt+0x398(h)` 0x1413AD550: the lift check.
-    fn lift_check(&mut self, cx: &Ctx, h: f32) -> bool {
+    pub(crate) fn lift_check(&mut self, cx: &Ctx, h: f32) -> bool {
         let extra = Sheet::Shot.num("kc2.lift.sweep_extra_length");
         let (hit, mut distance, _) = ground_probe(cx.pawn, cx.world, h + extra);
         if hit {
-            if !(distance < h) {
+            if distance.partial_cmp(&h).is_none_or(std::cmp::Ordering::is_ge) {
                 return false;
             }
         } else {
@@ -84,7 +96,7 @@ impl ShootFlow {
     }
 
     /// `vt+0x3A0(dt)` 0x1413C5400: in practice one swept move.
-    fn lift_step(&mut self, cx: &mut Ctx, dt: f32) -> bool {
+    pub(crate) fn lift_step(&mut self, cx: &mut Ctx, dt: f32) -> bool {
         let (w, s) = (cx.world, &mut *cx.pawn);
         let p = *s.params();
         let dz = self.lift_target.z - s.cmc.location.z;
@@ -99,7 +111,7 @@ impl ShootFlow {
     }
 
     /// The volley set-up `vt+0x3F0` 0x1413C3330 (G 1.5).
-    fn set_up(&mut self, cx: &mut Ctx) {
+    pub(crate) fn set_up(&mut self, cx: &mut Ctx) {
         let aim = &cx.pawn.magic.aim;
         self.n = aim.total;
         if self.n > 0 {
@@ -117,7 +129,7 @@ impl ShootFlow {
 
     /// The direction of formation slot `phi` degrees (G 1.7's closed form): on a cone of half
     /// angle 60 around the horizontal axis `a` (pawn -> blade tip).
-    fn cone(&self, cx: &Ctx, phi: f32) -> Vec3 {
+    pub(crate) fn cone(&self, cx: &Ctx, phi: f32) -> Vec3 {
         let d = self.origin - shotlock::lock_point(cx);
         let flat = Vec3::new(d.x, d.y, 0.0);
         let a = if flat.length_squared() > 1.0e-8 { flat.normalize() } else { flat };
@@ -128,11 +140,12 @@ impl ShootFlow {
     }
 
     /// The spawner `vt+0x3F8` / `vt+0x420` (G 1.6): at the end of every update tick.
-    fn spawner(&mut self, cx: &mut Ctx) {
+    pub(crate) fn spawner(&mut self, cx: &mut Ctx) {
         if self.remaining <= 0 || self.n <= 0 {
             return;
         }
-        let def = StageDef::shotlock(self.ragnarok());
+        // (SHOT-A) the kind's projectile by the held weapon's set (Snakebite: MI_SHOT); the Kingdom Key's as before.
+        let def = crate::magic::shotlocks::volley_def(cx, self).unwrap_or_else(|| StageDef::shotlock(self.ragnarok()));
         let targets: Vec<TargetId> = cx.pawn.magic.aim.locked.iter().map(|e| e.target).collect();
         for i in 0..self.per_tick {
             if self.remaining <= 0 {
@@ -154,7 +167,7 @@ impl ShootFlow {
     }
 
     /// The formation `vt+0x400` / `vt+0x428` (G 1.7): first thing in sub-step 5.
-    fn formation(&mut self, cx: &mut Ctx, dt: f32) {
+    pub(crate) fn formation(&mut self, cx: &mut Ctx, dt: f32) {
         if !self.ring_active || cx.pawn.magic.volley.is_empty() || self.n <= 0 {
             return;
         }
@@ -181,7 +194,7 @@ impl ShootFlow {
     }
 
     /// `PostTick` 0x1413C51D0 (G 1.3): the facing toward the first locked target.
-    fn post_tick(&mut self, cx: &mut Ctx, dt: f32) {
+    pub(crate) fn post_tick(&mut self, cx: &mut Ctx, dt: f32) {
         let rate = Sheet::Shot.num("kc2.state.face_alpha_per_s");
         let mut alpha = dt * rate;
         if std::mem::take(&mut self.face_request) {
@@ -208,12 +221,13 @@ impl ShootFlow {
     /// state finished (no spawner call on that tick).
     fn volley_update(&mut self, cx: &mut Ctx, dt: f32) -> bool {
         let s = Sheet::Shot;
-        let (charge, fire) = if self.ragnarok() { (AnimId::M_1481, AnimId::M_1482) } else { (AnimId::M_1473, AnimId::M_1474) };
+        let (charge, fire) = if self.ragnarok() { (AnimId::M1481, AnimId::M1482) } else { (AnimId::M1473, AnimId::M1474) };
         if self.sub == 0 {
             let pawn = &mut *cx.pawn;
             pawn.cmc.gravity_off = true;
             pawn.cmc.stop_movement();
             pawn.cmc.set_flying();
+            if let Some(g) = crate::magic::shotlocks::play_group(self) { pawn.next_effect_group = Some(g); } // (SHOT-A) Snakebite's 0x7A3
             pawn.anim.play_with(charge, PlayArgs::mode(2, -1.0));
             self.face_request = true;
             self.sub = 4;
@@ -222,17 +236,17 @@ impl ShootFlow {
             }
             return true;
         }
-        if self.sub == 3 {
-            if self.lift_step(cx, dt) {
+        if self.sub == 3
+            && self.lift_step(cx, dt) {
                 self.sub = 4;
             }
             // Falls through into the sub-step 4 code in the same tick.
-        }
         if self.sub == 3 || self.sub == 4 {
             if cx.pawn.anim.ended {
                 cx.pawn.cmc.stop_movement();
                 cx.pawn.cmc.set_flying();
                 self.set_up(cx);
+                if let Some(g) = crate::magic::shotlocks::play_group(self) { cx.pawn.next_effect_group = Some(g); } // (SHOT-A)
                 cx.pawn.anim.play_with(fire, PlayArgs::mode(2, -1.0));
                 self.sub = 5;
             }
@@ -240,6 +254,7 @@ impl ShootFlow {
             self.formation(cx, dt);
             if cx.pawn.anim.ended {
                 // 0x14140E500(ctrl, 0); the end clip; m_bEnableChange = false.
+                if let Some(g) = crate::magic::shotlocks::play_group(self) { cx.pawn.next_effect_group = Some(g); } // (SHOT-A)
                 cx.pawn.anim.play_with(AnimId::ShootFlowEnd, PlayArgs::mode(2, -1.0));
                 cx.pawn.queue.flags.enable_change = false;
                 self.sub = 2;
@@ -251,26 +266,8 @@ impl ShootFlow {
         true
     }
 
-    /// (XSI) Kind 11, SPECTRAL RAYS (XS 2.8; KH3's update of kind 11 was not read): `M_1483` plays (in the air with
-    /// gravity off), the beams fire on the schedule of abilities/xs/spectral.rs, the state chains at the clip's end.
-    fn spectral_update(&mut self, cx: &mut Ctx) {
-        if self.sub == 0 {
-            let pawn = &mut *cx.pawn;
-            pawn.cmc.stop_movement();
-            if !on_ground(pawn) {
-                pawn.cmc.gravity_off = true;
-                pawn.cmc.set_flying();
-            }
-            pawn.anim.play_with(AnimId::M_1483, PlayArgs::mode(2, -1.0));
-            self.face_request = true;
-            self.sub = 5;
-            return;
-        }
-        self.beams = crate::abilities::xs::spectral::beams(cx, self.beams);
-        if cx.pawn.anim.ended {
-            cx.pawn.queue.do_chain();
-        }
-    }
+    // (SHOT-A laser) XSI's `spectral_update` of kind 11 (M_1483 and its own beam schedule) is gone: kind 11, from Ever
+    // After's MAX or the Customize screen's choice, runs KH3's update 0x1413B9600 (magic/shotlocks/laser.rs).
 
     /// Kind 36, Focus Syphon (update 0x1413B78B0; G 4).
     fn syphon_update(&mut self, cx: &mut Ctx, dt: f32) {
@@ -355,6 +352,8 @@ impl PlayerState for ShootFlow {
         if self.kind == KIND_KC_SHOT {
             cx.spawn_effect(EffectSpawn { id: EffectId(Sheet::Shot.int("kc2.state.kc_effect_group") as u32), name: "ead_shf_tame0", at: Attach::Sora { bone: Some("R_wep_skt"), offset: Vec3::ZERO }, rotation: Vec3::ZERO, scale: 1.0, persistent: false });
         }
+        // (SHOT-A) Begin's per-kind set-up (projectile name, effect group, voice) and the family's own part.
+        crate::magic::shotlocks::begin(self, cx);
     }
 
     /// `Tick` (0x1413B0D10; G 1.3).
@@ -362,11 +361,18 @@ impl PlayerState for ShootFlow {
         if self.finished {
             return;
         }
+        // (SHOT-A) the other Keyblades' shotlocks: their update (magic/shotlocks/<family>.rs), then PostTick.
+        match crate::magic::shotlocks::tick(self, cx, dt) {
+            Some(true) => {
+                self.post_tick(cx, dt);
+                return;
+            }
+            Some(false) => return,
+            None => {}
+        }
         if self.kind == KIND_FOCUS_ASPIR {
             self.syphon_update(cx, dt);
-        } else if self.kind == crate::abilities::xs::spectral::KIND {
-            self.spectral_update(cx); // (XSI)
-        } else if self.volley_update(cx, dt) {
+        } else if self.volley_update(cx, dt) { // (SHOT-A laser) kind 11 is magic/shotlocks/laser.rs's (above)
             self.spawner(cx);
         } else {
             return;
@@ -388,10 +394,15 @@ impl PlayerState for ShootFlow {
         s.status.damage_invalid = false;
         // The projectiles live on; the controller's release-pending flag is cleared (slot 809).
         s.magic.volley.clear();
+        crate::magic::shotlocks::end(self, cx); // (SHOT-A) the family's part of End
         shotlock::release_done(cx);
     }
 
     fn on_notifies(&mut self, cx: &mut Ctx, notifies: &Notifies) {
+        // (SHOT-A) the anim interface's handlers (Shot slot 69, TresAtk slot 64, OnTiming slot 105) for the other kinds.
+        if crate::magic::shotlocks::on_notifies(self, cx, notifies) {
+            return;
+        }
         if self.kind != KIND_FOCUS_ASPIR {
             return;
         }

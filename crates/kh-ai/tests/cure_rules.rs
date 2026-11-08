@@ -1,7 +1,6 @@
 //! The cure / item decision as transcribed from 0x141264E30 and its helpers (crate::cure).
 
-mod common;
-use common::*;
+use crate::common::*;
 use glam::Vec3;
 use kh_ai::cure::*;
 use kh_ai::*;

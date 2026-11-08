@@ -210,6 +210,9 @@ pub struct AnimRequest {
     /// Blend-space axis value after the blend space's own input filter; 0 for a sequence. Draw
     /// with [`AnimId::sample_weights`].
     pub axis: f32,
+    /// (F-LOCO) The second axis of a 2D blend space (`UBlendSpace`: Y, after its own input filter); 0 for every other
+    /// row. Draw with [`AnimId::sample_weights_2d`] (or [`AnimRequest::body_samples`], which already uses it).
+    pub axis_y: f32,
     /// True when the core moves and turns the actor by this animation's root track (stage 1:
     /// `RunStartN`). The pose must then have its root bone locked to the mesh reference root
     /// (change list A12), or the motion is applied twice.
@@ -238,12 +241,56 @@ impl AnimRequest {
     /// position, i.e. at `time x its length / length`; otherwise both at `time`.
     pub fn body_samples(&self) -> [(&'static str, f32, f32); 2] {
         let data = self.name.data();
-        let picked = sample_indices_2d(data, self.axis, 0.0);
+        let picked = sample_indices_2d(data, self.axis, self.axis_y); // (F-LOCO) both axes
         picked.map(|(index, weight)| {
             let sequence = &SEQUENCES[index];
             let time = if data.sample_lengths_differ && self.length > 0.0 { self.time * sequence.length / self.length } else { self.time };
             (sequence.name, weight, time)
         })
+    }
+
+    /// (AUDIT-A SHIELD) EVERY sample the play blends with a weight above 1e-5, each with the time to read it at (as
+    /// [`AnimRequest::body_samples`]): what a blend space of `NotifyTriggerMode` AllAnimations gathers its notifies from.
+    /// UBlendSpaceBase::TickAssetPlayer 0x143F79E00: with AllAnimations every SampleDataList entry whose weight is above 1e-5
+    /// queues its own notifies over its own time span; HighestWeightedAnimation the heaviest one; SQEX_AllAnimation every
+    /// sample of the asset whatever its weight. AllAnimations is the engine's default (ENotifyTriggerMode 0; the UBlendSpaceBase
+    /// ctor 0x143F5A5C0 leaves NotifyTriggerMode +0xC8 at its zeroed value). A plain sequence: itself, weight 1.
+    pub fn active_samples(&self) -> Vec<(&'static str, f32, f32)> {
+        let data = self.name.data();
+        let mut weights: Vec<(usize, f32)> = Vec::new();
+        if let Some(space) = data.space2d {
+            // stock UBlendSpace::GetSamplesFromBlendInput, as `sample_indices_2d`, without keeping the heaviest two only
+            let unit = |value: f32, min: f32, max: f32, grid: usize| if max > min { (value.clamp(min, max) - min) / (max - min) * grid as f32 } else { 0.0 };
+            let (gx, gy) = (unit(self.axis, space.x_min, space.x_max, space.x_grid), unit(self.axis_y, space.y_min, space.y_max, space.y_grid));
+            let (ix, iy) = ((gx.floor() as usize).min(space.x_grid.saturating_sub(1)), (gy.floor() as usize).min(space.y_grid.saturating_sub(1)));
+            let (fx, fy) = (gx - ix as f32, gy - iy as f32);
+            for (dx, dy, w) in [(0, 0, (1.0 - fx) * (1.0 - fy)), (1, 0, fx * (1.0 - fy)), (0, 1, (1.0 - fx) * fy), (1, 1, fx * fy)] {
+                let (x, y) = ((ix + dx).min(space.x_grid), (iy + dy).min(space.y_grid));
+                for &(sample, weight) in space.grid.get(x * (space.y_grid + 1) + y).copied().unwrap_or(&[]) {
+                    let Some(&(_, _, index)) = space.samples.get(sample) else { continue };
+                    match weights.iter_mut().find(|e| e.0 == index) {
+                        Some(e) => e.1 += w * weight,
+                        None => weights.push((index, w * weight)),
+                    }
+                }
+            }
+        } else {
+            for (index, weight) in sample_indices(data, self.axis) {
+                match weights.iter_mut().find(|e| e.0 == index) {
+                    Some(e) => e.1 += weight,
+                    None => weights.push((index, weight)),
+                }
+            }
+        }
+        weights
+            .into_iter()
+            .filter(|e| e.1 > 1.0e-5)
+            .map(|(index, weight)| {
+                let sequence = &SEQUENCES[index];
+                let time = if data.sample_lengths_differ && self.length > 0.0 { self.time * sequence.length / self.length } else { self.time };
+                (sequence.name, weight, time)
+            })
+            .collect()
     }
 }
 
@@ -305,7 +352,10 @@ struct Loco {
     phase: f32,
     run_weight: f32,
     rate: f32,
+    /// The pair that plays: `logical` through the held form's anim sets (F-LOCO; the same pair outside a form).
     set: LocoSet,
+    /// (F-LOCO) The pair the state asked for (what `locomotion_set` answers).
+    logical: LocoSet,
 }
 
 /// Notifies fired by one pose tick, for the states and the generic handlers (notify.rs).
@@ -323,13 +373,11 @@ pub(crate) struct Notifies {
 
 impl Notifies {
     /// The events of one class.
-    #[allow(dead_code)]
     pub fn of(&self, class: NotifyClass) -> impl Iterator<Item = &NotifyEvent> + '_ {
         self.events.iter().filter(move |e| e.class() == class)
     }
 
     /// An instant notify of this class fired, or a notify state of it began.
-    #[allow(dead_code)]
     pub fn fired(&self, class: NotifyClass) -> bool {
         self.of(class).any(|e| matches!(e.phase, NotifyPhase::Instant | NotifyPhase::Begin))
     }
@@ -360,7 +408,7 @@ impl FirFilter {
 
     fn update(&mut self, input: f32, dt: f32) -> f32 {
         self.clock += dt;
-        if !(self.window > 0.0) {
+        if self.window.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
             return input;
         }
         let (clock, window) = (self.clock, self.window);
@@ -399,7 +447,11 @@ pub(crate) struct PoseTick {
 /// The pawn's `FullBody` montage slot.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AnimPlayer {
+    /// The row that plays (after the held form's anim sets: F-LOCO).
     pub name: AnimId,
+    /// (F-LOCO) The name the state played (m_LastPlayedInfo's name, 0x14056E750): `name` before the held form's anim sets
+    /// replaced it; equal to `name` outside a form. The states compare this ("is my loop already playing?").
+    pub logical: AnimId,
     pub play_id: u32,
     /// The clock (montage position), seconds.
     pub time: f32,
@@ -419,6 +471,10 @@ pub(crate) struct AnimPlayer {
     axis_input: f32,
     axis: f32,
     filter: FirFilter,
+    /// (F-LOCO) The second axis of a 2D blend space (set, filtered) and its own filter (`y_smoothing`).
+    axis_y_input: f32,
+    axis_y: f32,
+    filter_y: FirFilter,
     /// `m_bReverseLeg`: the `TresReverseLeg` notify state was in this update's window.
     pub reverse_leg: bool,
     window: (f32, f32),
@@ -438,12 +494,16 @@ pub(crate) struct AnimPlayer {
     /// motion, no new notify): Diving Strike's dive pose (abilities/xs/dive.rs), Zantetsuken's draw stance. Cleared
     /// by every play call. Not a KH3 field.
     pub hold: bool,
+    /// (F-SHIELD) The held form's command (mirrored by the pawn's step, kh-core sora.rs): every play goes through its
+    /// m_ReplaceAnimSets (combat/forms `clip`), as KH3's anim set chain resolves a logical name; 0 = none.
+    pub form_cmd: i32,
 }
 
 impl AnimPlayer {
     pub fn new(name: AnimId) -> AnimPlayer {
         let mut player = AnimPlayer {
             name,
+            logical: name,
             play_id: 0,
             time: 0.0,
             blend_time: 0.0,
@@ -455,6 +515,9 @@ impl AnimPlayer {
             axis_input: 0.0,
             axis: 0.0,
             filter: FirFilter::default(),
+            axis_y_input: 0.0,
+            axis_y: 0.0,
+            filter_y: FirFilter::default(),
             reverse_leg: false,
             window: (0.0, 0.0),
             loco: None,
@@ -462,6 +525,7 @@ impl AnimPlayer {
             args: None,
             active_states: Vec::new(),
             hold: false,
+            form_cmd: 0,
         };
         player.play(name);
         player
@@ -511,12 +575,15 @@ impl AnimPlayer {
     }
 
     /// A notify state of this class was listed by the latest update (it is active).
-    #[allow(dead_code)]
     pub fn state_active(&self, class: NotifyClass) -> bool {
         self.active_states.iter().any(|&(s, k)| SEQUENCES[s as usize].notifies[k as usize].class == class)
     }
 
     fn start(&mut self, name: AnimId) {
+        // (F-SHIELD, F-LOCO) FindAnim 0x14056DE80: the held form's m_ReplaceAnimSets resolve the name for EVERY play, last
+        // set first (combat/forms `resolve`); the state's own name is kept as `logical`.
+        self.logical = name;
+        let name = if self.form_cmd != 0 { crate::combat::forms::resolve(self.form_cmd, name) } else { name };
         self.hold = false; // (XSI)
         self.loco = None;
         self.play_length = 0.0;
@@ -532,6 +599,10 @@ impl AnimPlayer {
         self.axis_input = 0.0;
         self.axis = 0.0;
         self.filter.reset(name.data().axis_smoothing, 0.0);
+        // (F-LOCO) the play-time parameter (0, 0, 0) of 0x14056F260 on the second axis too.
+        self.axis_y_input = 0.0;
+        self.axis_y = 0.0;
+        self.filter_y.reset(name.data().space2d.map_or(0.0, |s| s.y_smoothing), 0.0);
         // The stopped instance's notify states end.
         self.reverse_leg = false;
         self.window = (0.0, 0.0);
@@ -542,6 +613,15 @@ impl AnimPlayer {
     pub fn set_axis(&mut self, value: f32) {
         if self.loco.is_some() || self.name.data().blend_space {
             self.axis_input = value;
+        }
+    }
+
+    /// (F-LOCO) The same parameter with its Y (the blend parameter is a vector: 0x14056B030 / 0x14056F260's (x, y, z)):
+    /// X as [`AnimPlayer::set_axis`], Y for a 2D blend space (`UBlendSpace`, e.g. Counter Shield's M_B425: yaw, pitch).
+    pub fn set_axis_2d(&mut self, x: f32, y: f32) {
+        self.set_axis(x);
+        if self.name.data().space2d.is_some() {
+            self.axis_y_input = y;
         }
     }
 
@@ -571,6 +651,7 @@ impl AnimPlayer {
             looping: self.looping(),
             blend_in: self.blend_in(),
             axis: self.axis,
+            axis_y: self.axis_y,
             root_motion: self.root_motion(),
             notify_window: self.window,
             locomotion: self.loco.map(|l| Locomotion {
@@ -590,8 +671,13 @@ impl AnimPlayer {
     /// slot's weight and blend-in start as for the game's loop play; both loops blend in over
     /// 0.2 s), in the gait given. The lean filter is the run blend space's.
     pub fn play_locomotion(&mut self, set: LocoSet, run: bool) {
-        let dominant = if run { set.run } else { set.walk };
-        if set == LocoSet::N {
+        // (F-LOCO) the held form's anim sets replace the pair as they replace every play (Blizzard Blades' `RunLoopB` is
+        // the skating blend space RunLoopB7); the feet's phase constants stay the base set's [I: the form clips' phases are
+        // not measured; the speed-matched loop is a port option].
+        let logical = set;
+        let set = LocoSet { walk: crate::combat::forms::resolve(self.form_cmd, set.walk), run: crate::combat::forms::resolve(self.form_cmd, set.run), ..set };
+        let dominant = if run { logical.run } else { logical.walk };
+        if logical == LocoSet::N {
             // The stage-1 call (tests/golden.rs pins it).
             self.play(dominant);
         } else {
@@ -600,7 +686,8 @@ impl AnimPlayer {
             self.play_with(dominant, PlayArgs { looping: twin.looping, root_motion: twin.root_motion_bit, blend_in: twin.blend_in });
         }
         self.filter.reset(set.run.data().axis_smoothing, 0.0);
-        self.loco = Some(Loco { phase: 0.0, run_weight: if run { 1.0 } else { 0.0 }, rate: 1.0 / dominant.data().length, set });
+        let shown = if run { set.run } else { set.walk };
+        self.loco = Some(Loco { phase: 0.0, run_weight: if run { 1.0 } else { 0.0 }, rate: 1.0 / shown.data().length, set, logical });
     }
 
     /// The clip set changed under the running loop (the Keyblade was drawn or put away, the
@@ -613,7 +700,9 @@ impl AnimPlayer {
         self.play_locomotion(set, old.run_weight >= 0.5);
         (self.axis_input, self.axis, self.filter) = (axis_input, axis, filter);
         let phase = (old.phase + set.walk_phase - old.set.walk_phase).rem_euclid(1.0);
-        self.loco = Some(Loco { phase, set, ..old });
+        // (F-LOCO) the pair the new play resolved (`set` / `logical`), the old blend and rate
+        let new = self.loco.unwrap_or(old);
+        self.loco = Some(Loco { phase, set: new.set, logical: new.logical, ..old });
     }
 
     pub fn in_locomotion(&self) -> bool {
@@ -622,6 +711,11 @@ impl AnimPlayer {
 
     /// The clip set of the running locomotion loop.
     pub fn locomotion_set(&self) -> Option<LocoSet> {
+        self.loco.map(|l| l.logical) // (F-LOCO) the state's pair (the played one: `locomotion_played`)
+    }
+
+    /// (F-LOCO) The pair the running loop plays (the state's pair through the held form's anim sets).
+    pub fn locomotion_played(&self) -> Option<LocoSet> {
         self.loco.map(|l| l.set)
     }
 
@@ -642,6 +736,7 @@ impl AnimPlayer {
             l.run_weight = run_weight.clamp(0.0, 1.0);
             l.rate = rate.max(0.0);
             self.name = if l.run_weight >= 0.5 { l.set.run } else { l.set.walk };
+            self.logical = if l.run_weight >= 0.5 { l.logical.run } else { l.logical.walk }; // (F-LOCO)
         }
     }
 
@@ -670,7 +765,7 @@ impl AnimPlayer {
             out.notifies.enable_change |= instant(sequence.enable_change);
             self.reverse_leg |= state(sequence.reverse_leg);
         }
-        collect_events(&mut self.active_states, data, self.axis, &|_| 1.0, &instant, &state, &mut out.notifies.events);
+        collect_events(&mut self.active_states, data, (self.axis, 0.0), &|_| 1.0, &instant, &state, &mut out.notifies.events);
         out
     }
 
@@ -702,12 +797,15 @@ impl AnimPlayer {
         if data.blend_space {
             self.axis = self.filter.update(self.axis_input, step);
         }
+        if data.space2d.is_some() {
+            self.axis_y = self.filter_y.update(self.axis_y_input, step); // (F-LOCO) the second axis
+        }
         // A blend space whose samples differ in length (actions implementer; stock
         // `UBlendSpaceBase::TickAssetPlayer`): the clock's length is the weight-blended length of
         // the samples in use, the position is kept NORMALISED when that length changes, and
         // sample i is read at position x (its length / that length).
         let length = if data.sample_lengths_differ {
-            let blended: f32 = sample_indices_2d(data, self.axis, 0.0).iter().map(|&(index, weight)| weight * SEQUENCES[index].length).sum();
+            let blended: f32 = sample_indices_2d(data, self.axis, self.axis_y).iter().map(|&(index, weight)| weight * SEQUENCES[index].length).sum();
             let blended = if blended > 0.0 { blended } else { data.length };
             if self.play_length > 0.0 && self.play_length != blended {
                 self.time *= blended / self.play_length;
@@ -778,7 +876,7 @@ impl AnimPlayer {
             out.notifies.enable_change |= instant(if sequence.enable_change >= 0.0 { sequence.enable_change / k } else { sequence.enable_change });
             self.reverse_leg |= state(if sequence.reverse_leg.0 >= 0.0 { (sequence.reverse_leg.0 / k, sequence.reverse_leg.1 / k) } else { sequence.reverse_leg });
         }
-        collect_events(&mut self.active_states, data, self.axis, &scale, &instant, &state, &mut out.notifies.events);
+        collect_events(&mut self.active_states, data, (self.axis, self.axis_y), &scale, &instant, &state, &mut out.notifies.events);
         out
     }
 
@@ -788,7 +886,7 @@ impl AnimPlayer {
     /// pure-yaw tracks equals the engine's quaternion blend.
     fn root_delta(&self, data: &AnimData, from: f32, to: f32, scale: &dyn Fn(usize) -> f32) -> (f32, f32, f32, f32) {
         let (mut x, mut y, mut z, mut yaw) = (0.0, 0.0, 0.0, 0.0);
-        for (index, weight) in sample_indices(data, self.axis) {
+        for (index, weight) in sample_indices_2d(data, self.axis, self.axis_y) {
             if weight <= 0.0 {
                 continue;
             }
@@ -813,8 +911,8 @@ impl AnimPlayer {
 /// `instant` and `state` are the update's window tests (the 1e-4 shift is in them). A blend space
 /// in mode `SQEX_AllAnimation` queues the notifies of every sample; any other blend space those
 /// of its heaviest sample only (stock `ENotifyTriggerMode::HighestWeightedAnimation`).
-fn collect_events(active: &mut Vec<(u16, u16)>, data: &AnimData, axis: f32, scale: &dyn Fn(usize) -> f32, instant: &dyn Fn(f32) -> bool, state: &dyn Fn((f32, f32)) -> bool, events: &mut Vec<NotifyEvent>) {
-    let heaviest = if data.blend_space && !data.all_animation { Some(sample_indices_2d(data, axis, 0.0)[0].0) } else { None };
+fn collect_events(active: &mut Vec<(u16, u16)>, data: &AnimData, (axis, axis_y): (f32, f32), scale: &dyn Fn(usize) -> f32, instant: &dyn Fn(f32) -> bool, state: &dyn Fn((f32, f32)) -> bool, events: &mut Vec<NotifyEvent>) {
+    let heaviest = if data.blend_space && !data.all_animation { Some(sample_indices_2d(data, axis, axis_y)[0].0) } else { None };
     let mut listed: Vec<(u16, u16)> = Vec::new();
     for (n, &(_, index)) in data.samples.iter().enumerate() {
         if heaviest.is_some_and(|h| h != index) {

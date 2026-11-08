@@ -9,8 +9,8 @@
 //! - `fix` turns the target bone's reference direction (bone to its aim child) into the source bone's bind
 //!   direction, so that the two rigs' different reference poses (T against A, bent knees) do not matter: in every
 //!   pose the target bone points where the source bone points.
-//! The root bone's place is the source pelvis scaled about the floor point under it by the leg-length ratio, so the
-//! shorter figure's feet stay on the floor.
+//!   The root bone's place is the source pelvis scaled about the floor point under it by the leg-length ratio, so the
+//!   shorter figure's feet stay on the floor.
 
 use glam::{Mat3, Quat, Vec3};
 

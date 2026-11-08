@@ -133,7 +133,7 @@ fn session(tuning: Tuning, seed: u64) -> u64 {
         let mut pressed = false;
         if held_left > 0 {
             held_left -= 1;
-        } else if rng.next() % 70 == 0 {
+        } else if rng.next().is_multiple_of(70) {
             pressed = true;
             held_left = match rng.next() % 4 {
                 0 => 0,

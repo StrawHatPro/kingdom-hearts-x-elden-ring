@@ -1,0 +1,23 @@
+{
+ "about": "tools/packgen_recipe.js compile: what the replay recipes make and what they cannot",
+ "stats": {
+  "copy": 1,
+  "json": 14,
+  "unresolved": 1,
+  "json_refs": 226378,
+  "json_own_values": 52,
+  "v1_literals": 291856,
+  "v2_literals": 36,
+  "v2_tree_refs": 1037
+ },
+ "unresolved_by_reason": {
+  "keyblades (the pack tools make another version): Japanese text not found in the corpus": 1
+ },
+ "unresolved": [
+  {
+   "file": "keyblades/vfx/triggers.json",
+   "why": "Japanese text not found in the corpus",
+   "pack_tools_make_another_version": true
+  }
+ ]
+}

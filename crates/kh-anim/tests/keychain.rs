@@ -14,6 +14,9 @@ fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+/// The weapon's transform for one step, and the JS run's (hash, tip) for it when there is a dump.
+type SwingFrame = (Trs, Option<(u64, Vec<f32>)>);
+
 #[test]
 fn keychain_hangs_swings_and_equals_the_js() {
     let dir = root().join("build/sora_pack/weapon");
@@ -31,7 +34,7 @@ fn keychain_hangs_swings_and_equals_the_js() {
     // The weapon's ComponentToWorld per 60 Hz step: 2 s at rest blade up, then 180 degrees about
     // world Y in 0.4 s around a point 60 cm up the blade, then held (blade down).
     let dump = std::fs::read_to_string(root().join("build/sora_tmp/keychain/swing_crosscheck.json")).ok().map(|t| Json::parse(&t).expect("the dump parses"));
-    let frames: Vec<(Trs, Option<(u64, Vec<f32>)>)> = match &dump {
+    let frames: Vec<SwingFrame> = match &dump {
         Some(d) => d
             .get("frames")
             .items()

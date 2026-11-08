@@ -45,6 +45,13 @@ impl Targets for Dummies {
     fn defense(&self, _id: TargetId) -> Option<TargetDefense> {
         Some(TargetDefense { defense: 10, max_hp: 1_000_000, hp_percent: 100.0, enemy_kind: true, damage_min: 0, damage_max: 0, resist: [0; 8], bio_type: 0 })
     }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
+    }
 }
 
 /// Sora at level 99: every element at tier 3, his slot order of the level-99 loadout.
@@ -290,22 +297,25 @@ fn the_leader_has_no_friend_damage_halving_ai_friends_keep_it() {
 }
 
 #[test]
-fn goofy_leading_has_his_abilities_page_by_tier() {
+fn goofy_leading_has_his_arts_on_the_panel() {
     let mut rig = Rig::new(Chara::Goofy, Some(Vec3::new(400.0, 0.0, 0.0)), Some(feed([1, 2, 0, 0, 0, 1], false)));
     let menu = rig.party.pad_menu(rig.id).unwrap();
-    assert_eq!(menu.main[1].name, "Abilities");
-    assert_eq!(menu.lists[1].iter().map(|r| r.name).collect::<Vec<_>>(), ["Goofy Tornado II", "Goofy Turbo II", "Goofy Discus II"]);
-    assert_eq!(menu.shortcut.iter().map(|r| r.name).collect::<Vec<_>>(), ["Goofy Tornado II", "Goofy Turbo II", "Goofy Discus II", "Potion"]);
+    // (GF-ARTS, R1) slots B, Y, X, A: the second Art (none yet at his level), the item, Taunt, the first Art
+    assert_eq!(menu.shortcut.iter().map(|r| r.name).collect::<Vec<_>>(), ["", "Potion", "Taunt", "Goofy Charge"]);
+    // LB + B has no Art yet, and the old Tornado route is gone
     rig.shortcut(PadButton::FaceRight);
-    assert_eq!(rig.m().action.and_then(|r| r.def), Some(kh_party::ActionDef::GoofyTornado));
-    assert_eq!(rig.party.pad_state(rig.id).unwrap().x2.tier, 2);
-    // the set flips with LB + D-pad down (Sora's page step): set B is empty
+    assert_eq!(rig.m().action, None);
+    // LB + A: the first Art, through his buttons
+    rig.idle(30);
+    rig.shortcut(PadButton::FaceBottom);
+    assert_eq!(rig.m().state, kh_party::NpcStateId::Pad(kh_party::pad::goofy::ART));
+    // the panel's pages flip with LB + D-pad down (Sora's page step): the Arts stay, the item is the page's
     rig.idle(200);
     rig.step(Vec2::ZERO, &[PadButton::LeftShoulder]);
     rig.step(Vec2::ZERO, &[PadButton::LeftShoulder, PadButton::DPadDown]);
     let menu = rig.party.pad_menu(rig.id).unwrap();
-    assert_eq!((menu.shortcut_page, menu.shortcut[0].name), (1, ""));
-    assert!(goofy::is_goofy(goofy::id(1, 2)));
+    assert_eq!((menu.shortcut_page, menu.shortcut[1].name, menu.shortcut[3].name), (1, "", "Goofy Charge"));
+    assert!(goofy::is_art(goofy::CHARGE) && !goofy::is_art(goofy::TAUNT));
 }
 
 #[test]
@@ -326,7 +336,7 @@ fn a_friend_leader_sprints_after_one_second() {
         // (GOOFY-GK) Goofy leading runs / sprints slower than Sora and Donald (the user's request; goofy_kit K.move_*)
         let goofy = chara == Chara::Goofy;
         // (DON-KIT) Donald: run 680, sprint 900 (documentation/DONALD_OVERHAUL.md 8)
-        let (run, sprint) = if goofy { (kh_party::pad::goofy_kit::K.move_run, kh_party::pad::goofy_kit::K.move_sprint) } else { (kh_party::pad::donald::K.move_run, kh_party::pad::donald::K.move_sprint) };
+        let (run, sprint) = if goofy { (kh_party::goofy::K.move_run, kh_party::goofy::K.move_sprint) } else { (kh_party::pad::donald::K.move_run, kh_party::pad::donald::K.move_sprint) };
         assert_eq!(rig.m().cmc.max_walk_speed, run, "{chara:?}: not yet");
         for _ in 0..60 {
             rig.step(Vec2::new(0.0, 1.0), &[]);

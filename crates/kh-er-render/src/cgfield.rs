@@ -20,8 +20,8 @@
 //!    - the key comes from a key position in front of HIM (his eased facing; never the camera: ER86) as far as the sun
 //!      lights him from behind (`studio_min` .. `studio_max`), from the sun itself when it lights his front;
 //!    - the colours are moved toward neutral by `neutral_key` / `neutral_ambient` (the world's tint kept in part).
-//!    kh-er keys: `r.own_field` (1; 0 = the game's light as before), `r.own_field_ambient`, `r.own_field_studio`,
-//!    `r.own_field_neutral`.
+//!      kh-er keys: `r.own_field` (1; 0 = the game's light as before), `r.own_field_ambient`, `r.own_field_studio`,
+//!      `r.own_field_neutral`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -84,13 +84,64 @@ pub fn active() -> bool {
 }
 
 /// 3. AN OUTFIT'S OWN LOOK FILE (`PACK/outfits/<id>/materials/own_look.json`, NEW, beside its own set): material
-/// parameter values written over the instances' (by instance name), and the field light's settings for that outfit.
-/// Values a pass chose against a reference (the official render), NOT game data: each file says so per value. Applied
-/// only while the outfit is drawn with its own set and `boc.<id>.own_look` is on (absent = on).
+///    parameter values written over the instances' (by instance name), and the field light's settings for that outfit.
+///    Values a pass chose against a reference (the official render), NOT game data: each file says so per value. Applied
+///    only while the outfit is drawn with its own set and `boc.<id>.own_look` is on (absent = on).
 pub const LOOK_FILE: &str = "own_look.json";
 static LOOK_OFF: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// The field light of the outfit drawn (its own look file's `field`, else the defaults).
 static LOOK_FIELD: Mutex<Option<FieldShape>> = Mutex::new(None);
+
+/// (VERUMREX, 2026-11-03, the user: "verum rex Sora is still very broken looking, please make him look perfect and 1:1 to the
+/// game, using his own shader if he has to") THE REALISTIC FAMILY UNDER THE HYBRID: the look file's `hybrid` block. KH3 draws a
+/// CG world's characters through KHS_CG, which composes the light buffer AS RECEIVED (no colour table, no toon ramp), and lights
+/// them with the level's own lights (no studio key of ours). The hybrid's defaults are the KH World's (the soft staircase
+/// `r.hybrid_band_mix`, cgfield's studio key `r.hybrid_rig_own`), which flattened his normal maps into toon bands; and it gave
+/// his Subsurface materials (hair, irises, cloth) their scatter term for the sun alone (er_char.wgsl `kh_real_sss`). An outfit
+/// whose look file has the block gets, while it is drawn with its own set: the staircase's mix `band_mix`, the rig's share
+/// `rig`, and `sss` (handed to its materials as kh.look.w: the share of KH3's scatter term on the game's light less the sun's).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RealLook {
+    pub band_mix: f32,
+    pub rig: f32,
+    pub sss: f32,
+}
+
+impl Default for RealLook {
+    fn default() -> Self {
+        // the light as received, no rig of ours, KH3's scatter term whole
+        RealLook { band_mix: 0.0, rig: 0.0, sss: 1.0 }
+    }
+}
+
+static LOOK_REAL: Mutex<Option<RealLook>> = Mutex::new(None);
+
+fn real_of(v: &serde_json::Value) -> RealLook {
+    let d = RealLook::default();
+    let f = |k: &str, x: f32| v.get(k).and_then(|y| y.as_f64()).map_or(x, |y| y as f32).clamp(0.0, 4.0);
+    RealLook { band_mix: f("band_mix", d.band_mix).min(1.0), rig: f("rig", d.rig).min(1.0), sss: f("sss", d.sss) }
+}
+
+/// The realistic family of the outfit drawn (its look file's `hybrid` block), while it is drawn with its own set.
+pub fn real_now() -> Option<RealLook> {
+    if !active() {
+        return None;
+    }
+    LOOK_REAL.lock().ok().and_then(|r| *r)
+}
+
+/// (gfx.rs, the hybrid's frame block) The hybrid's settings for the outfit drawn: its realistic family's over the keys'.
+pub fn hybrid_for_own(s: &crate::hybrid::Settings) -> crate::hybrid::Settings {
+    match real_now() {
+        Some(r) => crate::hybrid::Settings { band_mix: r.band_mix, rig_own: r.rig, ..*s },
+        None => *s,
+    }
+}
+
+/// (gfx.rs, each of his material blocks: kh.look.w) The share of KH3's scatter term on the game's light (0 = none).
+pub fn real_sss() -> f32 {
+    real_now().map_or(0.0, |r| r.sss)
+}
 
 /// The host's keys: the outfits whose own look file is not wanted (`*` = all).
 pub fn set_look_off(off: Vec<String>) {
@@ -135,6 +186,9 @@ pub fn apply_look(look: &std::path::Path, outfit: &str, library: &mut kh_look::l
     if let Ok(mut f) = LOOK_FIELD.lock() {
         *f = None;
     }
+    if let Ok(mut r) = LOOK_REAL.lock() {
+        *r = None;
+    }
     let file = look.join("materials").join(LOOK_FILE);
     let Ok(text) = std::fs::read_to_string(&file) else { return 0 };
     if !look_wanted(outfit) {
@@ -169,7 +223,16 @@ pub fn apply_look(look: &std::path::Path, outfit: &str, library: &mut kh_look::l
             *f = Some(field_of(field, FieldShape::default()));
         }
     }
-    crate::rlog!("render: (ER85) {outfit}'s own look ({}): {written} material value(s){}", file.display(), if json.get("field").is_some() { ", its field light" } else { "" });
+    let real = json.get("hybrid").map(real_of);
+    if let Ok(mut r) = LOOK_REAL.lock() {
+        *r = real;
+    }
+    crate::rlog!(
+        "render: (ER85) {outfit}'s own look ({}): {written} material value(s){}{}",
+        file.display(),
+        if json.get("field").is_some() { ", its field light" } else { "" },
+        real.map_or(String::new(), |r| format!(", (VERUMREX) its realistic family under the hybrid: staircase mix {}, rig share {}, scatter term {}", r.band_mix, r.rig, r.sss))
+    );
     written
 }
 
@@ -184,7 +247,7 @@ pub fn lift_for(r: &RigLight, sun_lit: f32, s: &FieldShape) -> f32 {
     }
     let key = luma(r.key) / std::f32::consts::PI / sun_lit.clamp(0.05, 1.0);
     let white = key + luma(r.ambient + r.ambient_up * 0.5);
-    if !(white > 1.0e-9) {
+    if white.partial_cmp(&1.0e-9).is_none_or(std::cmp::Ordering::is_le) {
         return most;
     }
     let share = key / white;
@@ -369,7 +432,7 @@ pub fn parse_log_line(line: &str) -> Option<GameLight> {
     let m = numbers_after(line, "mask")?;
     l.mask = Vec4::new(m[0], *m.get(1).unwrap_or(&1.0), *m.get(2).unwrap_or(&1.0), *m.get(3).unwrap_or(&1.0));
     l.taps = 9.0;
-    let after = |key: &str| line.find(key).map(|k| line[k + key.len()..].trim_start().split([' ', '|']).next().unwrap_or("").parse::<f32>().ok()).flatten();
+    let after = |key: &str| line.find(key).and_then(|k| line[k + key.len()..].trim_start().split([' ', '|']).next().unwrap_or("").parse::<f32>().ok());
     l.exposure = after("exposure")?;
     l.pre_exposure = after(" pre").unwrap_or(1.0);
     if let Some(e) = numbers_after(line, "top of the picture").as_deref().and_then(vec3) {
@@ -423,6 +486,29 @@ mod tests {
         assert_eq!(eye(&lib), Some(25.0));
         let f = LOOK_FIELD.lock().unwrap().unwrap();
         assert!((f.lift - 1.9).abs() < 1e-6 && (f.lift_share - 0.6).abs() < 1e-6 && (f.lift_min - 1.4).abs() < 1e-6);
+    }
+
+    /// (VERUMREX) The realistic family's block: absent values are the light as received, no rig, KH3's scatter term whole;
+    /// values are held to their ranges; the staged Verum Rex file writes no material value and asks for exactly that.
+    #[test]
+    fn the_realistic_family_block_reads() {
+        assert_eq!(real_of(&serde_json::json!({})), RealLook::default());
+        assert_eq!(real_of(&serde_json::json!({ "band_mix": 3.0, "rig": -1.0, "sss": 0.5 })), RealLook { band_mix: 1.0, rig: 0.0, sss: 0.5 });
+        let s = crate::hybrid::Settings::default();
+        // (no own set drawn in a unit test: the keys' settings as they are)
+        if !active() {
+            assert_eq!(hybrid_for_own(&s), s);
+            assert_eq!(real_sss(), 0.0);
+        }
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+        let staged = root.join("build/sora_tmp/er/verumrex/pack/outfits/verumrex");
+        // (parsed here, not applied: apply_look writes the shared look state another test reads)
+        let Ok(text) = std::fs::read_to_string(staged.join("materials").join(LOOK_FILE)) else { return };
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(json.get("hybrid").map(real_of), Some(RealLook::default()));
+        let f = field_of(&json["field"], FieldShape::default());
+        assert!(!f.on && f.lift == 1.0 && f.lift_min == 1.0);
+        assert!(json["materials"].as_object().is_some_and(|m| m.is_empty()), "no value over the game's");
     }
 
     /// The reshaped light keeps the white and the level, holds the undirected share, and turns a key from behind him toward

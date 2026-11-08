@@ -17,7 +17,7 @@
 
 use super::abilities::DonAbility;
 use super::element::Element;
-use super::magic_fx::{self, magic, Aim, Ctx, FxLog, HitSpec, L1Targets, MagicFx};
+use super::magic_fx::{self, magic, CastAt, Ctx, FxLog, HitSpec, L1Parts, L1Targets, MagicFx};
 use super::spells::SpellRef;
 use super::tune::data;
 use crate::ids::MemberId;
@@ -48,8 +48,8 @@ pub fn hold_pose(p: &mut NpcPawn, spell: SpellRef) {
 }
 
 /// THE SHOT of a line-1 cast: aimed at its target as Sora's are, then Sora's actors.
-#[allow(clippy::too_many_arguments)]
-pub fn shoot(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, e: Element, tier: u8, aim: Aim, pos: Vec3, yaw: f32, mz: Vec3) {
+pub fn shoot(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, e: Element, tier: u8, shot: CastAt) {
+    let CastAt { aim, pos, yaw, .. } = shot;
     // facing the target at the shot (Sora's start turn is toward it; the clip's pose may have been turned since)
     let yaw = match aim.target().and_then(|t| cx.host.targets.info(t)) {
         Some(t) if crate::pawn::horizontal(t.center - pos).length() > 1.0 => crate::pawn::yaw_of(crate::pawn::horizontal(t.center - pos)),
@@ -58,7 +58,7 @@ pub fn shoot(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, e: Element, tier
     if let Some(p) = cx.party.member_mut(caster) {
         p.yaw = yaw;
     }
-    sora_line1(fxw, cx, caster, e, tier, aim, pos, yaw, mz);
+    sora_line1(fxw, cx, caster, e, tier, CastAt { yaw, ..shot });
 }
 
 const ALLY_SORA: TargetId = TargetId(0xA11E_00FF);
@@ -66,14 +66,14 @@ const fn ally_member(id: MemberId) -> TargetId {
     TargetId(0xA11E_0000 + id.0 as u32)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn sora_line1(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, e: Element, tier: u8, aim: Aim, pos: Vec3, yaw: f32, mz: Vec3) {
+fn sora_line1(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, e: Element, tier: u8, shot: CastAt) {
+    let CastAt { aim, pos, yaw, mz } = shot;
     let cmd = magic_fx::sora_cmd(e, tier);
     let Some((stats, own, full, abilities)) = cx.party.member(caster).and_then(|p| {
         let st = p.status.donald.as_ref()?;
         Some((
             CasterStats { strength: p.status.strength(), magic: p.status.magic(), game_level: p.status.game_level, battle_level: 1, mp_cost_scale: 1.0, mp_charging: p.status.mp_charge_left > 0.0 },
-            p.status.abilities.clone(),
+            p.status.abilities,
             st.full_flags(&data()),
             st.abilities,
         ))
@@ -89,15 +89,17 @@ fn sora_line1(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, e: Element, tie
     };
     let full_mp = cx.party.status(caster).is_some_and(|s| s.mp >= s.max_mp());
     let target = aim.target().unwrap_or(TargetId::NONE);
-    let shot = Shot { cmd, origin: pos, yaw, muzzle: Some(mz), target, finish: false, grand: tier >= 4, full_mp, combo: [1, 0, 0, 0] };
+    let fired = Shot { cmd, origin: pos, yaw, muzzle: Some(mz), target, finish: false, grand: tier >= 4, full_mp, combo: [1, 0, 0, 0] };
     let spell = SpellRef::Line1(e, tier);
     let c = &mut fxw.casters[k].1;
     c.set_stats(stats, &own, &kh_core::status::AbilitySet::default());
     c.place(pos, yaw);
+    let flag = cx.party.member(caster).map_or(0, |p| p.hit_flag()); // (PARTY-AI) an AI caster's spell passes through friendly NPCs
     let parts = {
         let host = &mut *cx.host;
         let mut t = L1Targets::new(&mut *host.targets, &mut cx.party.don.status, full, abilities, spell);
-        c.shoot(host.world, &mut t, &mut *host.audio, &mut *host.effects, &shot);
+        t.flag = flag;
+        c.shoot(host.world, &mut t, &mut *host.audio, &mut *host.effects, &fired);
         t.into_parts()
     };
     match fxw.caster_spell.iter_mut().find(|s| s.0 == caster) {
@@ -109,8 +111,7 @@ fn sora_line1(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, e: Element, tie
 }
 
 /// After Sora's actors hit: the caster's meters for the reactions, Conduct chains / Wildfire, the log.
-#[allow(clippy::type_complexity)]
-fn finish_l1(cx: &mut Ctx, caster: MemberId, spell: SpellRef, parts: (Vec<(u32, super::react::Reaction)>, Vec<(kh_core::host::TargetInfo, super::react::HitOutcome, f32)>, Vec<FxLog>)) {
+fn finish_l1(cx: &mut Ctx, caster: MemberId, spell: SpellRef, parts: L1Parts) {
     let d = data();
     let (rewards, outcomes, log) = parts;
     if let Some(st) = cx.party.status_mut(caster).and_then(|s| s.donald.as_mut()) {
@@ -147,9 +148,11 @@ pub fn step_casters(fxw: &mut MagicFx, cx: &mut Ctx, sora: Option<&SoraView>, dt
         }
         let Some((full, abilities)) = cx.party.status(*id).and_then(|s| s.donald.as_ref()).map(|st| (st.full_flags(&data()), st.abilities)) else { continue };
         let spell = fxw.caster_spell.iter().find(|s| s.0 == *id).map_or(SpellRef::Line1(Element::Fire, 1), |s| s.1);
+        let flag = cx.party.member(*id).map_or(0, |p| p.hit_flag()); // (PARTY-AI)
         let (step, parts) = {
             let host = &mut *cx.host;
             let mut t = L1Targets::new(&mut *host.targets, &mut cx.party.don.status, full, abilities, spell);
+            t.flag = flag;
             let s = c.step(host.world, &mut t, &mut *host.audio, &mut *host.effects, &allies, dt);
             (s, t.into_parts())
         };

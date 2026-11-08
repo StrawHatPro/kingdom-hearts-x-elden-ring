@@ -1,7 +1,7 @@
 //! Behaviour-tree semantics on small hand-made trees (stock UE 4.17 rules as the runtime models
 //! them), and one EQS query of the game scored by hand.
 
-mod common;
+use crate::common;
 use glam::Vec3;
 use kh_ai::bb::{BbValue, Blackboard};
 use kh_ai::bt::{BtComponent, Ctx, Library};

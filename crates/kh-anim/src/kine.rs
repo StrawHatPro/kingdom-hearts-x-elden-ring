@@ -100,7 +100,7 @@ fn atan2_fast(y: f32, x: f32) -> f32 {
     }
     let mut t3 = t1 / t0;
     let t4 = t3 * t3;
-    let mut p = 7.212_885_4e-3;
+    let mut p = 7.212_885e-3;
     p = p * t4 + -3.505_968e-2;
     p = p * t4 + 8.167_588e-2;
     p = p * t4 + -1.337_465_7e-1;
@@ -127,10 +127,10 @@ fn sin_cos_fast(v: f32) -> (f32, f32) {
     let mut y = v - 6.283_185_5 * q;
     let mut sign = 1.0;
     if y > 1.570_796_4 {
-        y = 3.141_592_7 - y;
+        y = std::f32::consts::PI - y;
         sign = -1.0;
     } else if y < -1.570_796_4 {
-        y = -3.141_592_7 - y;
+        y = -std::f32::consts::PI - y;
         sign = -1.0;
     }
     let y2 = y * y;
@@ -504,9 +504,9 @@ impl KineDriver {
                         2
                     };
                     let mut roll = 2.0 * atan2_fast([twist.x, twist.y, twist.z][k] / aim[k], twist.w);
-                    if roll < -3.141_592_7 {
+                    if roll < -std::f32::consts::PI {
                         roll += 6.283_185_5;
-                    } else if roll > 3.141_592_7 {
+                    } else if roll > std::f32::consts::PI {
                         roll -= 6.283_185_5;
                     }
                     p.values[ROLL] = roll;
@@ -524,11 +524,11 @@ impl KineDriver {
                     let a1 = ((o.py1a * 3.0 - o.py1) - o.py1b * 3.0) + o.py2;
                     let b1 = (o.py1 * 3.0 - o.py1a * 6.0) + o.py1b * 3.0;
                     let c1 = o.py1a * 3.0 - o.py1 * 3.0;
-                    let mut y = if !(d > 0.0) {
+                    let mut y = if d.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
                         d * o.grad0 + o.py0
                     } else {
                         let d2 = d - o.vx1_0;
-                        if !(d2 > 0.0) {
+                        if d2.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
                             let t = d / o.vx1_0;
                             ((t * a0 + b0) * t + c0) * t + o.py0
                         } else {

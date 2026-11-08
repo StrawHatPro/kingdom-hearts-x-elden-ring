@@ -59,11 +59,23 @@ pub struct Party {
     pub don_prog: crate::donald::ai::DonProgState,
     /// (ZETTA) the Zettaflares in progress (crate::donald::zettaflare: the KH3 cutscene's presentation, aimed at the target).
     pub don_zetta: crate::donald::zettaflare::ZettaWorld,
+    /// (GOOFY) the attacks the host sees coming this step (`set_telegraphs`).
+    telegraphs: Vec<crate::goofy::Telegraph>,
+    /// (GOOFY) what Goofy's rules did in the last step (crate::goofy::hooks).
+    pub gof: crate::goofy::PartyGoofy,
+    /// (PARTY-AI, AUDIT-A WORLDTIME) The host's `[FRIEND]` time rate (KH3's SetTypeRates on type 10, the shotlock aim's x0.4):
+    /// every member the player does not drive steps at it ([`Party::member_rate`]).
+    friend_rate: f32,
+}
+
+/// (PARTY-AI, AUDIT-A WORLDTIME) The one rule: a character the player drives keeps his time; any other is KH3's FRIEND type.
+pub fn time_rate(player_controlled: bool, friend_rate: f32) -> f32 {
+    if player_controlled { 1.0 } else { friend_rate }
 }
 
 impl Party {
     pub fn new(config: PartyConfig) -> Party {
-        Party { config, members: Vec::new(), projectiles: Vec::new(), ice_rails: Vec::new(), removed_loops: Vec::new(), x2: Default::default(), don: Default::default(), don_fx: Default::default() /* (DON-MAGIC) */, don_prog: Default::default() /* (DON-PROG) */, don_zetta: Default::default() /* (ZETTA) */ } // (party X2) x2; (DON1) don
+        Party { config, members: Vec::new(), projectiles: Vec::new(), ice_rails: Vec::new(), removed_loops: Vec::new(), x2: Default::default(), don: Default::default(), don_fx: Default::default() /* (DON-MAGIC) */, don_prog: Default::default() /* (DON-PROG) */, don_zetta: Default::default() /* (ZETTA) */, telegraphs: Vec::new() /* (GOOFY) */, gof: Default::default() /* (GOOFY) */, friend_rate: 1.0 /* (PARTY-AI) */ } // (party X2) x2; (DON1) don
     }
 
     /// (party P3) Stops what removed members' notify states left running (also called by `step`). Hosts that drop the
@@ -157,6 +169,24 @@ impl Party {
         self.member_mut(id).map(|m| &mut m.status)
     }
 
+    /// (GOOFY) The attacks the host sees coming, one list per step, BEFORE `Party::step`. An empty slice = none.
+    pub fn set_telegraphs(&mut self, list: &[crate::goofy::Telegraph]) {
+        self.telegraphs.clear();
+        self.telegraphs.extend_from_slice(list);
+    }
+
+    /// (GF-POLISH) The aims the host could read of the enemies, this step. An enemy not on the list is an unknown: AI Goofy's estimate
+    /// stands for it.
+    pub fn set_enemy_aims(&mut self, aims: &[crate::goofy::ai::EnemyAim]) {
+        self.gof.aims.clear();
+        self.gof.aims.extend_from_slice(aims);
+    }
+
+    /// (GOOFY) The list `set_telegraphs` last gave.
+    pub fn telegraphs(&self) -> &[crate::goofy::Telegraph] {
+        &self.telegraphs
+    }
+
     /// The AI settings bytes (F writes them through `status_mut`).
     pub fn ai_settings(&self, id: MemberId) -> Option<crate::status::AiSettings> {
         self.status(id).map(|s| s.ai)
@@ -171,6 +201,9 @@ impl Party {
         for (i, m) in self.members.iter_mut().enumerate() {
             let Some(m) = m.as_mut() else { continue };
             let busy = m.in_battle && (crate::pad::donald::cast_holds_still(m) || casting.contains(&MemberId(i as u8)) || m.don_zetta.down.is_some() /* (ZETTA 2026-10-23) down after it */);
+            // (GF-AI, THE USER 2026-11-03 follow-up) an AI Goofy walking to a BROKEN enemy or in his Breaker fights: out of battle his
+            // Move1 walk would take KH3's follow speed, the standing leader's (none), and he never got there
+            let busy = busy || crate::pad::goofy::ai_breaking(m);
             m.in_battle = on || busy;
         }
     }
@@ -208,7 +241,7 @@ impl Party {
             // C3 (contract C.2): pawn vt+0x14F0 with equipped = 1 (ValidateAction 0x14121E9F0 / 0x14121EBF0)
             n if n.starts_with("HasAbility:") => {
                 let k = kh_core::enums::ETresAbilityKind::from_game_name(&n["HasAbility:".len()..])?;
-                b(m.status.don_has_ability(k).unwrap_or(m.status.abilities.equipped(k) > 0)) // (DON-PROG) DONALD_*: his overhaul magic answers
+                b(m.status.don_has_ability(k).or(m.status.gof_has_ability(k)).unwrap_or(m.status.abilities.equipped(k) > 0)) // (DON-PROG) DONALD_*: his overhaul magic answers; (GOOFY) GOOFY_*: his learned Arts
             }
             // vt+0x1500: the count of an equipped ability (ITEM_UP: item amounts x (1 + 0.5 n), FUN_141263950)
             n if n.starts_with("GetAbilityNum:") => {
@@ -258,6 +291,13 @@ impl Party {
         }
         let mut h = *hit;
         h.damage *= crate::donald::allyfx::damage_mult(self, id);
+        crate::goofy::hooks::name_attacker(&self.telegraphs, &mut h); // (GOOFY)
+        if let Some(r) = crate::pad::goofy_arts::interpose(self, id, &h) {
+            return r; // (GF-ARTS, R14) Interpose's cover absorbs it
+        }
+        if let Some(r) = crate::goofy::hooks::ally_guard(self, id, &h) {
+            return r; // (GOOFY, R14) Ally Guard absorbs it
+        }
         let r = match self.member_mut(id) {
             Some(m) => m.receive_hit(&h),
             None => HitResult::default(),
@@ -404,6 +444,37 @@ impl Party {
         }
     }
 
+    /// (PARTY-AI, AUDIT-A WORLDTIME) The host's `[FRIEND]` rate for this step (1.0: none). KH3 ticks a FRIEND actor at
+    /// `dt x SQEX_ObjTypeTimeDilation[FRIEND]`; Sora's shotlock aim sets it to 0.4 (`SetTypeRates(CH_PLAYER, 0x4D9E, 0.4)`).
+    pub fn set_friend_rate(&mut self, rate: f32) {
+        self.friend_rate = if rate.is_finite() { rate.clamp(0.0, 1.0) } else { 1.0 };
+    }
+
+    /// (PARTY-AI) THE ONE RULE for every character: the time rate member `id` steps at. The member the player drives (a pad:
+    /// the leader) keeps the player's time; every AI member is KH3's FRIEND type and takes [`Party::set_friend_rate`].
+    pub fn member_rate(&self, id: MemberId) -> f32 {
+        time_rate(self.member(id).is_some_and(|m| m.pad.is_some()), self.friend_rate)
+    }
+
+    /// (FINAL-FIX, FINAL 12: "No log line exists") THE MEMBERS' TIME RATES IN WORDS, when one of them changed since `said` (the
+    /// host keeps `said` and logs the line, kh-partyhost runtime.rs): the proof of KH3's [FRIEND] x0.4 on the AI friends during
+    /// Sora's shotlock aim, and that the member the player drives keeps x1. None: nothing changed.
+    pub fn rate_note(&self, said: &mut Vec<(MemberId, f32)>) -> Option<String> {
+        let now: Vec<(MemberId, f32)> = self.members().map(|id| (id, self.member_rate(id))).collect();
+        if now == *said {
+            return None;
+        }
+        let parts: Vec<String> = now
+            .iter()
+            .filter_map(|(id, rate)| {
+                let m = self.member(*id)?;
+                Some(format!("{:?} x{rate:.3} ({})", m.chara, if m.pad.is_some() { "the player drives him: his own time" } else { "AI: KH3 [FRIEND]" }))
+            })
+            .collect();
+        *said = now;
+        Some(format!("(PARTY-AI) time rate: [FRIEND] x{:.3}; {}", self.friend_rate, if parts.is_empty() { "no member".to_string() } else { parts.join(", ") }))
+    }
+
     /// One fixed step (contract B.3).
     pub fn step(&mut self, dt: f32, sora: &SoraView, host: &mut PartyHost) -> PartyOutput {
         // (DON-MAGIC) EVERYONE'S hits on an Exposed enemy deal x1.25 (documentation/DONALD_OVERHAUL.md 4.5): the party's own
@@ -420,6 +491,7 @@ impl Party {
         crate::donald::zettaflare::hands_off_end(); // (ZETTA round 5c)
         let seen = std::mem::take(&mut wrapped.seen);
         crate::donald::magic_fx::after_party_hits(self, host, &seen);
+        crate::goofy::threat::friends_hits(self, &out, host); // (GF-THREAT) a friend's hits count in the threat book
         out
     }
 
@@ -427,14 +499,16 @@ impl Party {
     fn step_inner(&mut self, dt: f32, sora: &SoraView, host: &mut PartyHost) -> PartyOutput {
         self.stop_removed(host.audio, host.effects); // (party P3)
         crate::donald::hooks::step(self, dt); // (DON1) every Donald's clock, the refunds, the enemies' statuses
-        crate::donald::ai::party_pass(self, sora, host, dt); // (DON-PROG) the auras, the aggro clocks, AI Donald's choices
+        crate::donald::ai::party_pass(self, sora, host, dt); // (DON-PROG) (party-wide clocks: a led Donald's too, so not [FRIEND]) the auras, the aggro clocks, AI Donald's choices
+        crate::goofy::ai::party_pass(self, sora, host, dt * self.friend_rate); // (GF-AI) [AI members only: [FRIEND] (PARTY-AI)] AI Goofy's buttons
         crate::pad::donald::aura_to_members(self); // (DON-KIT) the Thunder / Aero auras onto each member's motions
         let positions: Vec<(MemberId, Vec3, u8)> = self.members.iter().flatten().map(|m| (m.id, m.position(), m.chara.uid())).collect();
         let zones = self.don_zetta_zones(); // (ZETTA) the allies keep out of Zettaflare's target and beam
         crate::donald::zettaflare::step_out(self, &zones);
-        let cx = StepCtx { sora, members: &positions, dt, ice_rails: &self.ice_rails, zones: &zones };
+        let cx = StepCtx { sora, members: &positions, dt, ice_rails: &self.ice_rails, zones: &zones, telegraphs: &self.telegraphs };
         let mut out = PartyOutput::default();
         let mut requests = Vec::new();
+        let friend_rate = self.friend_rate; // (PARTY-AI)
         for slot in self.members.iter_mut() {
             let Some(m) = slot.as_mut() else { continue };
             if m.status.game_level != sora.game_level {
@@ -443,7 +517,10 @@ impl Party {
                 m.status.hp = m.status.hp.min(m.status.max_hp());
                 m.status.mp = m.status.mp.min(m.status.max_mp());
             }
-            m.step(&cx, host);
+            // (PARTY-AI, AUDIT-A WORLDTIME) an AI member steps at KH3's [FRIEND] rate, the player's at his own (member_rate)
+            let rate = time_rate(m.pad.is_some(), friend_rate);
+            m.step(&StepCtx { dt: dt * rate, ..cx }, host);
+            crate::freeze_fx::flush(m, host, dt * rate); // (FREEZE-FX) KH3's frozen look while he is frozen, the break at its end
             for e in m.events.drain(..) {
                 out.events.push(PartyEvent { member: m.id, kind: e });
             }
@@ -457,7 +534,7 @@ impl Party {
                     // (ZETTA round 5c) no ally shot at or through Zettaflare's zones until the player has Donald back
                     let aim = p.target_point.or_else(|| host.targets.info(p.target).map(|i| i.center));
                     let off = host.targets.info(p.target).is_some_and(|i| self.don_zetta_off_limits(i.position, i.radius));
-                    if !off && aim.map_or(true, |to| self.don_zetta_path_clear(p.position, to, 50.0)) {
+                    if !off && aim.is_none_or(|to| self.don_zetta_path_clear(p.position, to, 50.0)) {
                         self.projectiles.push(p);
                     }
                 }
@@ -519,9 +596,16 @@ impl Party {
         crate::donald::zettaflare::party_step(self, dt, host); // (ZETTA) Zettaflare's cutscene sequence (after the casts' step)
         crate::pad::donald::party_step(self); // (party X3D) the kit's gauge points to the X2 caster
         crate::pad::donald::party_host_step(self, dt, sora, host); // (DON-KIT) Donald's missiles / areas: hits through Party::don_hit
-        self.goofy_party_step(dt); // (party X3G) Goofy's kit: Sora's Fusions / Glide, his own abilities by level
+        crate::goofy::hooks::step(self, dt, sora, host); // (GOOFY) every Goofy: the clocks, Hop and Slip, the cues, the seams
         crate::hurt::feed(self); // (GOOFY-HR) Sora's AIR_RECOVERY for the shared aerial recovery
         self.step_projectiles(dt, host, &mut out);
+        // (PARTY-WEAPONS) every member's weapon out / away after his step (KH3's NPC rule; crate::weapon_draw)
+        // (a weapon out of his hand - the thrown shield, the staff on the ground - is left as it is until it is back)
+        let off_hand: Vec<MemberId> = self.members.iter().flatten().map(|m| m.id).filter(|id| self.weapon_ground(*id).is_some() || self.weapon_hidden(*id)).collect();
+        for m in self.members.iter_mut().flatten() {
+            let dt = dt * time_rate(m.pad.is_some(), friend_rate);
+            crate::weapon_draw::step(m, dt, off_hand.contains(&m.id), host.effects);
+        }
         out
     }
 
@@ -553,9 +637,25 @@ impl Party {
         self.member(id)?.don_zetta.staff?.ground
     }
 
+    /// (PARTY-WEAPONS) Member `id`'s weapon in his hand: out or away, its `OpacityFade` now and its look (crate::weapon_draw:
+    /// KH3's rule; hidden out of combat). The thrown shield / the staff on the ground are drawn by their own paths.
+    pub fn weapon_view(&self, id: MemberId) -> Option<crate::weapon_draw::WeaponView> {
+        let m = self.member(id)?;
+        Some(m.weapon.view(m.status.weapon, m.chara))
+    }
+
+    /// (PARTY-WEAPONS) The host's hold on member `id`'s weapon (kh_core::weapon_gate::hold: the hero light's carrier, the
+    /// leader only): drawn with its appear effect at his next step and kept; released, put away out of battle.
+    pub fn set_weapon_hold(&mut self, id: MemberId, hold: bool) {
+        if let Some(m) = self.member_mut(id) {
+            m.weapon.hold = hold;
+        }
+    }
+
     /// (party P3) The thrown shield of member `id` (Goofy's Discus) while it is out of his hand.
     pub fn thrown_shield(&self, id: MemberId) -> Option<&Projectile> {
-        self.projectiles.iter().find(|p| p.owner == id && p.kind == ProjectileKind::Discus && p.alive)
+        let toss = self.member(id).and_then(|m| m.status.goofy.as_ref()).and_then(|s| s.run.arts.toss.as_ref()).map(|t| &t.body); // (GF-ARTS) Shield Toss
+        toss.or_else(|| self.projectiles.iter().find(|p| p.owner == id && p.kind == ProjectileKind::Discus && p.alive))
     }
 
     /// (party P3) Whether member `id`'s weapon is out of his hand: Discus thrown (ThrowWeapon) until the catch clip's
@@ -565,6 +665,9 @@ impl Party {
         // (ZETTA 2026-10-23) Donald's staff on its way back to his hand after Zettaflare's down (zettaflare::StaffAway)
         if m.don_zetta.staff.is_some_and(|s| s.ground.is_none()) {
             return true;
+        }
+        if m.status.goofy.as_ref().is_some_and(|s| s.run.arts.toss.is_some()) {
+            return true; // (GF-ARTS) Shield Toss
         }
         let Some(run) = m.action.filter(|r| r.def == Some(crate::ActionDef::GoofyDiscus) && m.state == crate::NpcStateId::Action) else { return false };
         if !run.shot {
@@ -587,11 +690,11 @@ impl Party {
             let owner_pos = self.member(p.owner).map(|m| m.capsule_centre()).unwrap_or(p.position);
             let aim = host.targets.info(p.target).map(|t| t.center);
             let prev = p.position;
-            p.advance(dt, aim, owner_pos);
+            p.advance(dt * self.member_rate(p.owner), aim, owner_pos); // (PARTY-AI) KH3: a projectile takes its owner's type
             if p.kind == ProjectileKind::Discus {
                 // the shield is the weapon: the catch clip of the definition (sub-step 4, 0x1411C7670) or the
                 // definition's end takes it back (FUN_1405BCAF0, the weapon in hand again)
-                let back = self.member(p.owner).map_or(true, |m| !(m.state == crate::NpcStateId::Action && m.action.is_some_and(|r| r.def == Some(crate::ActionDef::GoofyDiscus) && r.sub < 4)));
+                let back = self.member(p.owner).is_none_or(|m| !(m.state == crate::NpcStateId::Action && m.action.is_some_and(|r| r.def == Some(crate::ActionDef::GoofyDiscus) && r.sub < 4)));
                 // (party P3) a pad-driven Goofy's targeted shield whose target is gone in flight returns (free throw)
                 let pad_owned = self.member(p.owner).is_some_and(|m| m.pad.is_some());
                 if !back && pad_owned && p.free.is_none() && !p.caught && aim.is_none() {
@@ -633,7 +736,18 @@ impl Party {
                     }
                 }
             }
-            if p.alive && p.hitting() {
+            if let Some(b) = p.batted.filter(|_| p.alive) {
+                // (GF-POLISH, R18) a batted shot touches only its target
+                p.shapes(&mut own);
+                shapes.clear();
+                host.targets.hurt_shapes(p.target, &mut shapes);
+                if let Some(shape) = shapes.iter().find(|s| own.iter().any(|o| crate::actions::seg_seg_dist(o.a, o.b, s.a, s.b) <= s.radius + o.radius)).copied() {
+                    if let Some(m) = self.member_mut(p.owner) {
+                        crate::pad::goofy_counters::batted_landed(m, &b, p.target, shape.part, p.position, p.velocity, host);
+                    }
+                    p.alive = false;
+                }
+            } else if p.alive && p.hitting() {
                 p.shapes(&mut own);
                 list.clear();
                 host.targets.enumerate(&mut list);
@@ -658,9 +772,6 @@ impl Party {
                         hit.direction = (info.center - owner_pos).normalize_or_zero();
                     }
                     hit.damage = friend_damage(&m.status, row, &defender);
-                    if p.kind == ProjectileKind::Discus {
-                        hit.damage *= crate::pad::goofy::discus_scale(m); // (party X3G) the ricochets / Discus Barrage bounces
-                    }
                     hit.damage_kind = ETresDamageKind::from_game_name(row.damage_kind).unwrap_or(ETresDamageKind::Small);
                     hit.attribute = ETresDamageAttribute::from_game_name(row.attribute).unwrap_or(ETresDamageAttribute::Physical);
                     hit.attacker = HitAttacker { position: owner_pos, yaw: m.yaw, radius: m.params.capsule_radius, valid: true };
@@ -668,6 +779,7 @@ impl Party {
                     if p.kind != ProjectileKind::Discus {
                         hit.info.flags50 |= HitInfo::FLAG50_MAGIC;
                     }
+                    hit.flags |= m.hit_flag(); // (PARTY-AI) the thrower's rule for friendly NPCs
                     let res = host.targets.apply_hit(&hit);
                     if res.accepted {
                         out.events.push(PartyEvent { member: p.owner, kind: PartyEventKind::Hit { target: info.id, damage: res.damage_dealt, killed: res.killed, attack: row.name } });
@@ -681,10 +793,7 @@ impl Party {
                     if let (Some(class), Some(m)) = (p.kind.class(), self.member_mut(p.owner)) {
                         m.seam.play(host.audio, &kh_core::host::SoundPlay { id: kh_core::host::audio::ACTOR_PAWN_HIT, name: class, at: kh_core::host::Attach::World(p.position), volume: 1.0, pitch: 1.0, looping: false, spatial: true });
                     }
-                    // (party X3G) Goofy's ricochets / Discus Barrage: the shield is sent on to the next target
-                    let bounced = p.kind == ProjectileKind::Discus && res.accepted && self.member_mut(p.owner).is_some_and(|m| crate::pad::goofy::discus_bounce(m, &mut p, info.id, host));
-                    if bounced {
-                    } else if p.kind == ProjectileKind::Discus && p.free.is_some() {
+                    if p.kind == ProjectileKind::Discus && p.free.is_some() {
                         // (party P3) the free throw's first hit turns it back to him (it keeps hitting on its way)
                         p.returning = true;
                     } else if p.kind == ProjectileKind::Discus {
@@ -751,7 +860,7 @@ impl crate::team::TeamParty for Party {
         let Some(m) = self.member_mut(id) else { return false };
         let Some(r) = crate::tables::attack_row(m.chara, row) else { return false };
         let sora = crate::view::SoraView::default();
-        let cx = crate::pawn::StepCtx { sora: &sora, members: &[], dt: 0.0, ice_rails: &[], zones: &[] };
+        let cx = crate::pawn::StepCtx { sora: &sora, members: &[], dt: 0.0, ice_rails: &[], zones: &[], telegraphs: &[] };
         crate::actions::deliver(m, r, target, 0, at, &cx, host)
     }
 

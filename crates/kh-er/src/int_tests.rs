@@ -4,7 +4,7 @@
 //! as kh-er fx.rs `effect_step` steps it, KH3's camera rig (cam.rs's order), all on sora.rs's accumulator at 1/60 s,
 //! driven by Elden Ring-like frame times (JITTER: 16 - 33 ms, a 50 ms hitch 1 frame in 60; STEADY: 60 fps; SM's clock).
 //! Every frame the DRAWN state is read as kh-er draws it (interp.rs `sora_drawn`, cam.rs `post`'s lerp + `camera_cut`,
-//! fx.rs `draw_at` -> kh-vfx, sora.rs `int_snap_check`), under three rules:
+//! fx.rs `draw_drawn` -> kh-vfx, sora.rs `int_snap_check`), under three rules:
 //! - `live`  = `r.interp = 0` (the old default): everything at the latest step;
 //! - `mixed` = `r.interp = 1` BEFORE this stream: Sora and the camera between the steps, the effects at the latest step;
 //! - `interp`= the new default: everything at the frame's alpha.
@@ -30,9 +30,7 @@ use kh_host::vfx::{EffectHost, Scene};
 
 use crate::interp;
 
-#[path = "../../kh-partyhost/src/sm_metrics.rs"]
-#[allow(dead_code)]
-mod metrics;
+use crate::sm_metrics as metrics;
 use metrics::{DrawnSample, SimSample};
 
 fn project(p: &str) -> PathBuf {
@@ -198,7 +196,6 @@ pub struct RunOut {
     pub offsets: [Offsets; 3],
     /// frames that drew Sora or the trail BETWEEN the places before and after a teleport (per rule)
     pub teleport_between: [u32; 3],
-    pub snaps: u32,
     pub steps: u32,
     pub notes: Vec<String>,
 }
@@ -210,8 +207,20 @@ fn camera_basis(position: Vec3, rot: kh_camera::Rot) -> kh_vfx::Camera {
 }
 
 /// One frame's drawn geometry for the strips (KH3 cm).
-#[allow(clippy::too_many_arguments)]
-fn strip_frame(json: &mut String, t: f64, t_sim: f32, alpha: f32, rule: Rule, cam: (Vec3, kh_camera::Rot), bones: &[(Vec3, Vec3)], tip: Vec3, list: &kh_vfx::DrawList, firaga: Option<Vec3>, sora: Vec3) {
+struct StripFrame<'a> {
+    t: f64,
+    t_sim: f32,
+    alpha: f32,
+    rule: Rule,
+    cam: (Vec3, kh_camera::Rot),
+    bones: &'a [(Vec3, Vec3)],
+    tip: Vec3,
+    list: &'a kh_vfx::DrawList,
+    firaga: Option<Vec3>,
+    sora: Vec3,
+}
+
+fn strip_frame(json: &mut String, StripFrame { t, t_sim, alpha, rule, cam, bones, tip, list, firaga, sora }: StripFrame<'_>) {
     let v = |p: Vec3| if p.is_finite() { format!("[{:.1},{:.1},{:.1}]", p.x, p.y, p.z) } else { "null".to_string() };
     let _ = write!(json, "{{\"t\":{t:.4},\"t_sim\":{t_sim:.4},\"alpha\":{alpha:.3},\"rule\":\"{}\",\"cam\":{},\"pitch\":{:.3},\"yaw\":{:.3},\"tip\":{},\"sora\":{},", rule.name(), v(cam.0), cam.1.pitch, cam.1.yaw, v(tip), v(sora));
     let _ = write!(json, "\"bones\":[{}],", bones.iter().map(|(a, b)| format!("[{},{}]", v(*a), v(*b))).collect::<Vec<_>>().join(","));
@@ -281,7 +290,7 @@ pub fn run(s: &Scenario, clock: Clock, out_dir: Option<&std::path::Path>, strip:
                 _ => {}
             }
             if s.teleports.iter().any(|at| (t_sim - at).abs() < STEP * 0.5) {
-                let side = if jumps.len() % 2 == 0 { 2000.0 } else { -2000.0 };
+                let side = if jumps.len().is_multiple_of(2) { 2000.0 } else { -2000.0 };
                 let p = rig.out.position + Vec3::new(0.0, side, 0.0);
                 rig.sora.teleport(Pose { position: p, yaw: rig.out.yaw });
                 jumps.push((rig.out.position, p));
@@ -325,7 +334,7 @@ pub fn run(s: &Scenario, clock: Clock, out_dir: Option<&std::path::Path>, strip:
             effects.step(STEP, &commands, &Scene { out: &out, sora: &rig.sora, tap: &tap, target: &target, ground: Some(0.0), eye: view.map_or(out.position, |v| v.position) });
             if std::env::var_os("INT_DEBUG").is_some() && k % 6 == 0 {
                 let names: Vec<String> = effects.world.live().iter().map(|l| format!("{} {:.2}s", l.name, l.seconds)).collect();
-                eprintln!("DBG step {k} state {:?} trails {:?} live {names:?} log {:?}", out.state, effects.trail_ids(), effects.log.drain(..).collect::<Vec<_>>());
+                eprintln!("DBG step {k} state {:?} trails {:?} live {names:?} log {:?}", out.state, effects.trail_ids(), std::mem::take(&mut effects.log));
             }
             // ---- KH3's camera after the pawn (cam.rs `step`)
             let target_c = crate::cam::target_of(&out, &out_before, &rig.sora);
@@ -387,7 +396,7 @@ pub fn run(s: &Scenario, clock: Clock, out_dir: Option<&std::path::Path>, strip:
             // the camera as drawn (cam.rs `post`)
             let a_cam = if interp::camera_cut(&p, &v) { 1.0 } else { a_sora };
             let (cam_pos, cam_rot) = v.lerp(&p, a_cam);
-            // the effects as drawn (fx.rs `draw_at`)
+            // the effects as drawn (fx.rs `draw_drawn`)
             let head = effects.trail_ids().into_iter().find_map(|id| effects.world.drawn_trail_head(id, a_fx));
             if let Some(h) = head {
                 offsets[ri].trail.push(h.distance(tip_d));
@@ -456,7 +465,7 @@ pub fn run(s: &Scenario, clock: Clock, out_dir: Option<&std::path::Path>, strip:
                     let world: Vec<Vec3> = pose_d.component.iter().map(|b| c2w_d.transform_point(b.translation)).collect();
                     let bones: Vec<(Vec3, Vec3)> = sk.bones.iter().enumerate().filter_map(|(i, b)| Some((*world.get(i)?, *world.get(b.parent?)?))).filter(|(a, b)| a.distance(*b) < 80.0).collect();
                     let (list, _, _) = effects.draw(a_fx, &camera_basis(cam_pos, cam_rot));
-                    strip_frame(&mut json, t_disp, t_sim, true_alpha, rule, (cam_pos, cam_rot), &bones, tip_d, list, fir_d, c2w_d.translation);
+                    strip_frame(&mut json, StripFrame { t: t_disp, t_sim, alpha: true_alpha, rule, cam: (cam_pos, cam_rot), bones: &bones, tip: tip_d, list, firaga: fir_d, sora: c2w_d.translation });
                 }
             }
             effects.clear_drawn();
@@ -484,7 +493,7 @@ pub fn run(s: &Scenario, clock: Clock, out_dir: Option<&std::path::Path>, strip:
         }
     }
     notes.push(format!("{} teleport(s), {snaps} frame snap(s) (a frame whose latest step is the jump); blended across the jumps instead (the control), {unsnapped_between} frame(s) would show him between the two places", jumps.len()));
-    Some(RunOut { rows, judder, offsets, teleport_between, snaps, steps, notes })
+    Some(RunOut { rows, judder, offsets, teleport_between, steps, notes })
 }
 
 /// The Firaga's body effect: the live system whose component is at one of his spell actors.

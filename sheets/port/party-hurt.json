@@ -91,6 +91,46 @@
    "-",
    "inferred",
    "-"
+  ],
+  [
+   "repel.clip",
+   "AttackReflect",
+   "clip",
+   "KH3: ATresNpcPawnBase vt+0x1CA8 = 0x141264270 (the Reflect state's clip; anim-set row AttackReflect, sequence 1235 of n_ex001_Anim / n_ex002_Anim, party-assets rows n_ex00x/anims/1235.glb)",
+   "THE BOUNCE OFF A SHIELD / A REPELLED SWING (THE USER 2026-11-02: \"make the character who attacks a shield bounce off playing their animation from KH3 ... Sora, Donald, Goofy and whoever we add in the future\"): every party member plays THIS ROW OF ITS OWN ANIM SET in TresNpcState_Reflect (kh-party pawn.rs begin_reflect, hurt.rs repel_clip); a member added later needs no code, only the row in its set",
+   "0x141264270",
+   "confirmed",
+   "Sora plays the same row of his own set (kh-core states/reflect.rs, KH3's TresPlayerState_Reflect)"
+  ],
+  [
+   "repel.air_clip",
+   "AttackAirReflect",
+   "clip",
+   "KH3: 0x141264270 (AttackAirReflect in the air when the set has it; sequence 1236)",
+   "the bounce in the air; a set without it plays repel.clip",
+   "0x141264270",
+   "confirmed",
+   "-"
+  ],
+  [
+   "repel.fallback_clip",
+   "M_0201",
+   "clip",
+   "KH3: ATresNpcPawnBase Small damage 0x1412646C0 (M_0201 + index: index 0 = the small hit from the front)",
+   "PORT RULE (THE USER 2026-11-02: every character bounces off with its KH3 animation): a set that has neither repel.clip nor repel.air_clip plays this, the closest KH3 clip every NPC set has (the small flinch from the front); none of the sets in the pack needs it (n_ex001 / n_ex002 have 1235 / 1236)",
+   "0x1412646C0",
+   "inferred",
+   "-"
+  ],
+  [
+   "repel.hold",
+   0.05,
+   "s",
+   "KH3: MyHitStopTimeBig (pawn+0x1578 = 0.05 s, read by slot 1374 0x141444090; combat spec 8.5.3: no caller in the shipped game)",
+   "PORT RULE (THE USER 2026-11-02, the coordinator: keep hit-stop): a party member's bounce off a shield holds its first frame this long (the impact) before the clip and the push run; only the attacker's bounce (a hit on him that repels him plays at once, as KH3); Sora's recoil stays KH3's (no hit-stop, spec 8.5.3)",
+   "0x141444090",
+   "inferred",
+   "0 = none"
   ]
  ]
 }

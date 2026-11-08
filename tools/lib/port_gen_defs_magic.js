@@ -120,4 +120,11 @@ module.exports = {
     informational: {
     },
   },
+  // (SHOT-A) the Keyblades' shotlocks (tools/sora_shotlocks.js; kh-core magic/shotlocks, `Sheet::Shotlocks`)
+  'sora-shotlocks': {
+    file: 'sora_shotlocks.rs', prefix: 'SHOTLOCKS', from: 'port/sora-shotlocks', values: true,
+    doc: "The Keyblades' shotlocks: ShootFlow kinds, SelectKind's tables, projectile sets and classes, the families' rows (tools/sora_shotlocks.js, tools/shotlocks/*.js).",
+    informational: {
+    },
+  },
 };

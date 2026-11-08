@@ -11,7 +11,7 @@
 //! - dec016 speed-matched walk / run animation: the members' own `WalkRunN` / `WalkRunB` blend space (walk cycle
 //!   at 140, run cycle with its lean samples at 680) on one phase advancing at speed / stride
 //!   ([`LocoPose`], drawn by the host);
-//! all switched by the same `kh_core::Tuning` as Sora's (the host passes his).
+//!   all switched by the same `kh_core::Tuning` as Sora's (the host passes his).
 //!
 //! What their kits lack (left out, not invented): dodge roll, guard, air dodge, glide, flowmotion, shotlock and
 //! forms: X does nothing for them; there is no sprint (MySprintSpeed is a player-pawn field).
@@ -30,13 +30,17 @@ pub mod donald_kit;
 pub mod donald_shots;
 pub mod donald_combo; // (DON-KIT) Donald's missile combo, the Charged Missile, Wand Bonk
 pub mod donald_moves; // (DON-KIT) Donald's dodges, Magic Block, Aero Float / Glide, the attune cast
-// (party X3G) Goofy's playable kit: the shield guard and counters, X moves, finishers, tiers, mode, Discus Barrage
+// (GOOFY) Goofy's playable kit: the guard and the parry techniques, X moves, his string, the Breaker
 pub mod goofy;
-pub mod goofy_kit;
+pub mod goofy_arts; // (GOOFY) the Shield Arts and Taunt
+pub mod goofy_breaker; // (GF-BREAK) Goofy Breaker on Y, the party's side of its variants
+pub mod goofy_combo; // (GOOFY) his three shoves and the air bonk
+pub mod goofy_counters; // (GOOFY) the batted shot of Goofy Tornado (the counters are retired, THE USER 2026-11-02)
 pub mod goofy_shots;
-pub mod goofy_combo; // (GOOFY-GK) Goofy's own ground / air combo (the tank rework)
 #[cfg(test)]
 mod donald_tests;
+#[cfg(test)]
+mod nocombat_tests; // (NOCOMBAT) every friend under the no-combat rule
 
 use crate::command::{ActionDef, CommandTicket, MemberCommand, TargetRef};
 use crate::host::PartyHost;
@@ -158,10 +162,8 @@ pub struct PadState {
     last_state: NpcStateId,
     /// (party X2) Sora's magic for a leading Donald, Goofy's ability tiers, the sprint (crate::leader_magic).
     pub x2: crate::leader_magic::PadMagic,
-    /// (party X3D) Donald's kit (pad/donald.rs); unused for Goofy.
+    /// (party X3D) Donald's kit (pad/donald.rs); unused for Goofy. (GOOFY) Goofy's lives on `FriendStatus::goofy`.
     pub donald: donald::DonaldKit,
-    /// (party X3G) Goofy's kit (pad/goofy.rs); unused for Donald.
-    pub goofy: goofy::GoofyPad,
 }
 
 impl PadState {
@@ -190,7 +192,6 @@ impl PadState {
             last_state: NpcStateId::Idle,
             x2: Default::default(), // (party X2)
             donald: Default::default(), // (party X3D)
-            goofy: Default::default(), // (party X3G)
         }
     }
 
@@ -227,7 +228,6 @@ impl crate::party::Party {
                     pad.run.yaw = m.yaw;
                     pad.jump.yaw = m.yaw;
                     m.pad = Some(pad);
-                    m.status.set_leading(true); // (GOOFY-BAL) the leader's stats (crate::balance)
                     // whatever the AI was doing (a move, a turn) ends
                     if matches!(m.state, NpcStateId::Move | NpcStateId::Turn) {
                         m.command(MemberCommand::Stop);
@@ -237,7 +237,6 @@ impl crate::party::Party {
                 }
             }
             None => {
-                m.status.set_leading(false); // (GOOFY-BAL) back to KH3's status as an AI friend
                 if let Some(pad) = m.pad.take() {
                     if let Some(saved) = pad.saved {
                         m.params = saved;
@@ -279,9 +278,7 @@ impl crate::party::Party {
     pub fn pad_menu(&self, id: MemberId) -> Option<CommandSnapshot> {
         let m = self.member(id)?;
         let pad = m.pad.as_ref()?;
-        let mut snap = pad.menu.snapshot(m.chara, &m.status);
-        goofy::situation(m, &mut snap); // (party X3G) the Shield Guardian offer / its Finish on his situation slot
-        Some(snap)
+        Some(pad.menu.snapshot(m.chara, &m.status))
     }
 
     pub fn pad_state(&self, id: MemberId) -> Option<&PadState> {
@@ -343,10 +340,17 @@ fn issue(p: &mut NpcPawn, cmd: MemberCommand) -> bool {
 }
 
 /// The decisions of a step (before the party's step).
-fn decide(p: &mut NpcPawn, frame: PadFrame) {
+fn decide(p: &mut NpcPawn, mut frame: PadFrame) {
     let chara = p.chara;
     let dead = p.state == NpcStateId::Die;
     let Some(mut pad) = p.pad.take() else { return };
+    // (NOCOMBAT) the no-combat rule's pad gate for every pad-driven friend, before his menu and his kit read the pad (the
+    // kit's A / Y / RB / LB + face presses all read this frame): the offensive presses go, a greyed entry is refused aloud
+    let rule_refused = kh_core::nocombat::zone() && {
+        let shown = pad.menu.snapshot(chara, &p.status);
+        let y_offers = !shown.situations.is_empty();
+        kh_core::nocombat::gate_pad(&shown, &mut frame.pad, y_offers)
+    };
     pad.frame = frame;
     pad.x2.y_taken = false; // (party X2)
     pad.x2.queued = None; // (party X2) a cast parked last step was taken by that step's intake (or refused)
@@ -354,6 +358,9 @@ fn decide(p: &mut NpcPawn, frame: PadFrame) {
     pad.stick_yaw = yaw;
     pad.stick_magnitude = mag;
     let action = pad.menu.tick(chara, &p.status, &frame.pad, dead);
+    if rule_refused {
+        pad.menu.events.push(MenuEvent::Refused); // (NOCOMBAT) KH3's refused SE
+    }
     if action == Some(menu::MenuAction::Attack) {
         pad.buffered = BUFFER_TIME;
     }
@@ -387,20 +394,9 @@ fn decide(p: &mut NpcPawn, frame: PadFrame) {
             let _ = (target, serial, cmd);
             refused(p, false);
         }
-        // (party X2) a leading Goofy's ability at a tier (the action is his KH3 one; X3G reads `x2.tier`)
-        Some(menu::MenuAction::Tiered(def, tier)) => {
-            if let Some(pad) = p.pad.as_mut() {
-                pad.x2.tier = tier;
-            }
-            // (GOOFY-GK) a combo step's link point (or a bash's / Hop's cancel point) links into the ability
-            let link = chara == Chara::Goofy && goofy::link_for_ability(p);
-            let ok = (free(p) || p.state == NpcStateId::Pad(JUMP) || chain_open(p) || link) && issue(p, MemberCommand::Action { def, target });
-            refused(p, ok);
-        }
         _ => {}
     }
-    // (party X3G) Goofy's kit takes the A / Y presses that are its own (the guard's counters, the chain, the finisher,
-    // the Jump Strike with no target, Bombardier Dive, Shield Guardian)
+    // (GOOFY) Goofy's kit takes the A / Y presses that are its own (his string, the air bonk, Goofy Breaker on Y)
     if chara == Chara::Goofy && goofy::decide(p, target) {
         return;
     }
@@ -506,7 +502,6 @@ fn targeting(p: &mut NpcPawn, host: &mut PartyHost) {
     let me = p.position();
     let face = p.yaw;
     let is_donald = p.chara == Chara::Donald; // (party X3D)
-    let is_goofy = p.chara == Chara::Goofy; // (party X3G)
     let Some(pad) = p.pad.as_mut() else { return };
     pad.lock_changed = false;
     let want = if pad.stick_magnitude >= SORA_PARAMS.input_stick_active_min { pad.stick_yaw } else { face };
@@ -536,7 +531,7 @@ fn targeting(p: &mut NpcPawn, host: &mut PartyHost) {
     let pressed = pad.frame.pad.pressed;
     // (party X3D) Donald: RB held opens Spell Volley's aim, so the lock toggles on a SHORT TAP's release (Sora's rule,
     // aim2.input.tap_max_time 0.2667 s); Goofy keeps the press
-    let rb = if is_donald { pressed.has(PadButton::RightShoulder) /* (DON-KIT) no shotlock: RB is lock-on only */ } else if is_goofy { goofy::rb_tap(pad) /* (party X3G) RB held = Discus Barrage */ } else { pressed.has(PadButton::RightShoulder) };
+    let rb = pressed.has(PadButton::RightShoulder); // (DON-KIT, GOOFY) no shotlock for the friends: RB is lock-on only
     if rb {
         if pad.lock != TargetId::NONE {
             pad.lock = TargetId::NONE;
@@ -661,7 +656,7 @@ pub fn pre_move(p: &mut NpcPawn, cx: &StepCtx, host: &mut PartyHost) {
         }
         return;
     }
-    // (party X3G) Goofy's kit: its states, the X / A / RB moves, the cancels, Tornado Copter, Shield Guardian
+    // (GOOFY) Goofy's kit: its states, the X / A / LB moves, the cancels, Shield Guardian
     if p.chara == Chara::Goofy && goofy::pre_move(p, cx, host) {
         let state = p.state;
         if let Some(pad) = p.pad.as_mut() {
@@ -756,6 +751,19 @@ pub fn pre_move(p: &mut NpcPawn, cx: &StepCtx, host: &mut PartyHost) {
     }
 }
 
+/// (SPIRITSPRING, the user 2026-11-07: "jumping at a point where torrent would normally launch into the air would follow his
+/// jump height") PORT ADDITION: the host's lift of this step (`NpcPawn::spring_lift`, kh-er spiritspring.rs): the pad
+/// jump still rising (sub-steps 0 - 2, upward speed) tops out that far above its take-off, under its own gravity (kh-core
+/// `Cmc::lift_to`). Taken every step; nothing happens unless the host asked.
+pub fn spring_lift(p: &mut NpcPawn, dt: f32) {
+    let Some(height) = p.spring_lift.take() else { return };
+    let rising = p.state == NpcStateId::Pad(JUMP) && p.pad.as_ref().is_some_and(|d| d.jump.sub <= 2);
+    if rising && p.cmc.velocity.z > 0.0 && height.is_finite() {
+        let peak = p.cmc.launch_z + height;
+        p.cmc.lift_to(&p.params, peak, dt);
+    }
+}
+
 /// `TryRun` on the live Run state (run.rs `try_run`, RUN arm).
 fn try_run(p: &mut NpcPawn, yaw: f32, magnitude: f32, continuous: bool, start_window: f32) {
     let Some(pad) = p.pad.as_mut() else { return };
@@ -828,9 +836,63 @@ pub(crate) fn battle_set(p: &NpcPawn) -> bool {
     p.in_battle
 }
 
-/// The rows of the set in use (N weapon away / B battle pose).
+/// (PARTY-WEAPONS) THE LOCOMOTION SET (KH3's NPC name builders, `ATresNpcPawnBase` slot 910 0x141264520 `WalkRunN/W/B`, the
+/// start 0x1412645F0 `RunStartN/W/B`, the stops 0x141264350 `RunEnd*` / `WalkEnd*` with `W`): B with the battle pose; else W
+/// while the weapon is out and the pawn's +0xBAC flag is set (Donald's constructor 0x1411BA820 and Goofy's 0x1411BAB80 set it
+/// to 1; the base 0x141254FF0 clears it); else N. The idle has no W row (slot 909 0x1412637E0: `IdleN` / `IdleB` only).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Set {
+    N,
+    W,
+    B,
+}
+
+impl From<bool> for Set {
+    /// The two-set callers (battle or not).
+    fn from(battle: bool) -> Set {
+        if battle {
+            Set::B
+        } else {
+            Set::N
+        }
+    }
+}
+
+/// The friends whose pawn sets +0xBAC (the W rows are theirs).
+fn uses_weapon_set(chara: Chara) -> bool {
+    match chara {
+        Chara::Donald | Chara::Goofy => true,
+    }
+}
+
+/// (PARTY-WEAPONS) The member's locomotion set now (see [`Set`]).
+pub(crate) fn set_of(p: &NpcPawn) -> Set {
+    if battle_set(p) {
+        Set::B
+    } else if p.weapon.out && uses_weapon_set(p.chara) {
+        Set::W
+    } else {
+        Set::N
+    }
+}
+
+/// The W name of an N row (`RunLoopN` -> `RunLoopW`, `RunEndR` -> `RunEndRW`), when the set has it.
+fn w_row(p: &NpcPawn, n: &'static str) -> Option<&'static str> {
+    let set = tables::anim_set(p.chara);
+    let w = match n.strip_suffix('N') {
+        Some(stem) => format!("{stem}W"),
+        None => format!("{n}W"),
+    };
+    set.get(&w).map(|c| c.name)
+}
+
+/// The rows of the set in use (N weapon away / (PARTY-WEAPONS) W weapon out of battle / B battle pose).
 pub(crate) fn row(p: &NpcPawn, n: &'static str, b: &'static str) -> &'static str {
-    if battle_set(p) && tables::anim_set(p.chara).get(b).is_some() { b } else { n }
+    match set_of(p) {
+        Set::B if tables::anim_set(p.chara).get(b).is_some() => b,
+        Set::W => w_row(p, n).unwrap_or(n),
+        _ => n,
+    }
 }
 
 /// The start / turn-around clip without its first sample's root track (the table's RunStartN row carries the
@@ -843,10 +905,11 @@ pub(crate) fn row(p: &NpcPawn, n: &'static str, b: &'static str) -> &'static str
 /// axis (stock UBlendSpace1D: the weighted sum of the two neighbouring samples' lengths, [`start_length`]), so a
 /// start ends with its samples. Its blend-in is the player Run state's (Sora's RunStartN / RunStartB play: 0.067 s,
 /// kh-core run.rs `play_as`); the friends' rows have m_InterpolationTime 0, which snapped from the idle / walk pose.
-pub(crate) fn start_clip(chara: Chara, battle: bool, axis: f32) -> &'static crate::anim::ClipDef {
+pub(crate) fn start_clip(chara: Chara, set: impl Into<Set>, axis: f32) -> &'static crate::anim::ClipDef {
     use std::sync::Mutex;
-    static CLIPS: Mutex<Vec<(Chara, bool, u32, &'static crate::anim::ClipDef)>> = Mutex::new(Vec::new());
-    let base = tables::clip(chara, if battle { "RunStartB" } else { "RunStartN" });
+    static CLIPS: Mutex<Vec<(Chara, Set, u32, &'static crate::anim::ClipDef)>> = Mutex::new(Vec::new());
+    let battle = set.into();
+    let base = tables::clip(chara, match battle { Set::B => "RunStartB", Set::W => "RunStartW", Set::N => "RunStartN" });
     let length = start_length(chara, battle, axis).unwrap_or(base.length);
     // one clip per 1/120 s of length (the lengths lie between 0.233 and 0.300 s: a handful per set)
     let key = (length * 120.0).round().max(1.0) as u32;
@@ -862,8 +925,8 @@ pub(crate) fn start_clip(chara: Chara, battle: bool, axis: f32) -> &'static crat
 
 /// (party P3) The start blend space's play length at `axis`: the two neighbouring samples' lengths weighted as
 /// their poses are (stock UBlendSpace1D `TickAssetPlayer`: NewAnimLength = sum of weight x sample length).
-pub(crate) fn start_length(chara: Chara, battle: bool, axis: f32) -> Option<f32> {
-    let s = start_samples(battle);
+pub(crate) fn start_length(chara: Chara, set: impl Into<Set>, axis: f32) -> Option<f32> {
+    let s = start_samples(set.into());
     let a = axis.clamp(-180.0, 180.0);
     let i = s.iter().rposition(|x| x.1 <= a).unwrap_or(0).min(3);
     let f = ((a - s[i].1) / (s[i + 1].1 - s[i].1)).clamp(0.0, 1.0);
@@ -888,18 +951,19 @@ fn seq_length(_chara: Chara, _name: &str) -> Option<f32> {
 
 /// The samples of the start blend space (`RunStartN` / `RunStartB` BlendSpace1D, axis -180 .. 180, samples
 /// 0007BL -180, 0007L -90, 0007 0, 0007R 90, 0007BR 180; B: 1021*) [A: the pack manifest].
-fn start_samples(battle: bool) -> [(&'static str, f32); 5] {
-    if battle {
-        [("1021BL", -180.0), ("1021L", -90.0), ("1021", 0.0), ("1021R", 90.0), ("1021BR", 180.0)]
-    } else {
-        [("0007BL", -180.0), ("0007L", -90.0), ("0007", 0.0), ("0007R", 90.0), ("0007BR", 180.0)]
+/// (PARTY-WEAPONS) W: `RunStartW` 1007BL / 1007L / 1007 / 1007R / 1007BR at the same axis values [A: the pack manifest].
+fn start_samples(set: Set) -> [(&'static str, f32); 5] {
+    match set {
+        Set::B => [("1021BL", -180.0), ("1021L", -90.0), ("1021", 0.0), ("1021R", 90.0), ("1021BR", 180.0)],
+        Set::W => [("1007BL", -180.0), ("1007L", -90.0), ("1007", 0.0), ("1007R", 90.0), ("1007BR", 180.0)],
+        Set::N => [("0007BL", -180.0), ("0007L", -90.0), ("0007", 0.0), ("0007R", 90.0), ("0007BR", 180.0)],
     }
 }
 
 /// The root offset (x, y, yaw; frame-0 actor space) of the start blend space at `axis`, time `t` (stock
 /// BlendSpace1D weights between the two neighbouring samples on one normalised clock).
-pub(crate) fn start_root(chara: Chara, battle: bool, axis: f32, t_norm: f32) -> (f32, f32, f32) {
-    let s = start_samples(battle);
+pub(crate) fn start_root(chara: Chara, set: impl Into<Set>, axis: f32, t_norm: f32) -> (f32, f32, f32) {
+    let s = start_samples(set.into());
     let a = axis.clamp(-180.0, 180.0);
     let i = s.iter().rposition(|x| x.1 <= a).unwrap_or(0).min(3);
     let f = ((a - s[i].1) / (s[i + 1].1 - s[i].1)).clamp(0.0, 1.0);
@@ -943,7 +1007,7 @@ pub(crate) fn seq_root(_chara: Chara, _name: &str, _t_norm: f32) -> (f32, f32, f
 /// The cycles of the speed-matched loop: (walk sequence, its length, run samples (lean -, 0, +), run length, the
 /// lean axis' half range) of `WalkRunN` / `WalkRunB` [A: the pack manifest's samples].
 pub(crate) fn loco_set(p: &NpcPawn) -> (&'static str, f32, [&'static str; 3], f32, f32) {
-    let battle = battle_set(p);
+    let set = set_of(p); // (PARTY-WEAPONS) N / W / B
     let lean = match p.chara {
         Chara::Donald => 300.0,
         Chara::Goofy => 180.0,
@@ -952,16 +1016,19 @@ pub(crate) fn loco_set(p: &NpcPawn) -> (&'static str, f32, [&'static str; 3], f3
         let c = tables::clip(p.chara, row);
         if c.length > 0.0 { c.length } else { fallback }
     };
-    if battle {
-        // WalkRunB: walk 1016, run 1017 / 1017L / 1017R; Goofy's mid sample 1016a at speed 410 is added by
-        // `loco_mid` (party P2)
-        let walk_len = match p.chara {
-            Chara::Donald => 0.8666667,
-            Chara::Goofy => len("WalkLoopB", 1.2),
-        };
-        ("1016", walk_len, ["1017L", "1017", "1017R"], len("RunLoopB", 0.6), lean)
-    } else {
-        ("0002", len("WalkLoopN", 0.8), ["0003L", "0003", "0003R"], len("RunLoopN", 0.6), lean)
+    match set {
+        Set::B => {
+            // WalkRunB: walk 1016, run 1017 / 1017L / 1017R; Goofy's mid sample 1016a at speed 410 is added by
+            // `loco_mid` (party P2)
+            let walk_len = match p.chara {
+                Chara::Donald => 0.8666667,
+                Chara::Goofy => len("WalkLoopB", 1.2),
+            };
+            ("1016", walk_len, ["1017L", "1017", "1017R"], len("RunLoopB", 0.6), lean)
+        }
+        // (PARTY-WEAPONS) WalkRunW: walk 1002 (Donald 0.8 s: no WalkLoopW row; Goofy's WalkLoopW 1.0 s), run 1003 / 1003L / 1003R
+        Set::W => ("1002", len("WalkLoopW", 0.8), ["1003L", "1003", "1003R"], len("RunLoopW", 0.6), lean),
+        Set::N => ("0002", len("WalkLoopN", 0.8), ["0003L", "0003", "0003R"], len("RunLoopN", 0.6), lean),
     }
 }
 
@@ -1030,7 +1097,7 @@ fn run_tick(p: &mut NpcPawn, cx: &StepCtx) {
             r.ring_len += 1;
         }
     }
-    let battle = battle_set(p);
+    let battle = set_of(p); // (PARTY-WEAPONS) the start's set: N / W / B
     let yaw0 = p.yaw;
     let mut fresh = false;
     match r.sub {
@@ -1054,7 +1121,8 @@ fn run_tick(p: &mut NpcPawn, cx: &StepCtx) {
                 }
             }
             p.cmc.max_walk_speed = p.params.speed_run;
-            if r.sub == 0 && (!matches!(p.anim.clip.name, "WalkLoopN" | "RunLoopN" | "WalkLoopB" | "RunLoopB") || !tuning.speed_matched_anim) {
+            // (PARTY-WEAPONS) the W loops too, and KH3's RunBattleEnd plays out over the loop (weapon_draw::holds_clip)
+            if r.sub == 0 && (!matches!(p.anim.clip.name, "WalkLoopN" | "RunLoopN" | "WalkLoopB" | "RunLoopB" | "WalkLoopW" | "RunLoopW") || !tuning.speed_matched_anim) && !crate::weapon_draw::holds_clip(p, false) {
                 let want = if is_run { row(p, "RunLoopN", "RunLoopB") } else { row(p, "WalkLoopN", "WalkLoopB") };
                 if p.anim.clip.name != want {
                     p.play(want, -1.0);
@@ -1105,10 +1173,10 @@ fn run_tick(p: &mut NpcPawn, cx: &StepCtx) {
     // (party X2) decision 9: Sora's sprint on the friend leader (pad/sprint.rs): MaxWalkSpeed 980 after 1 s of running
     // (GOOFY-GK) Goofy leading runs / sprints slower than Sora and Donald (the user: "Make Goofy run slower than Donald and
     // Sora"; goofy_kit K.move_run / move_sprint). His speed-matched cycle keeps its own 680 samples (it plays slower).
-    let run_cap = if p.chara == Chara::Goofy { goofy_kit::K.move_run } else if p.chara == Chara::Donald { donald::K.move_run /* (DON-KIT) doc 8 */ } else { p.params.speed_run };
+    let run_cap = if p.chara == Chara::Goofy { crate::goofy::K.move_run } else if p.chara == Chara::Donald { donald::K.move_run /* (DON-KIT) doc 8 */ } else { p.params.speed_run };
     sprint::tick(&mut pad.x2, r.sub == 0 && !r.walk, p.state_time, dt, run_cap, &mut p.cmc.max_walk_speed);
     if p.chara == Chara::Goofy && pad.x2.sprinting {
-        p.cmc.max_walk_speed = goofy_kit::K.move_sprint; // (GOOFY-GK)
+        p.cmc.max_walk_speed = crate::goofy::K.move_sprint; // (GOOFY-GK)
     }
     if p.chara == Chara::Donald && pad.x2.sprinting {
         p.cmc.max_walk_speed = donald::K.move_sprint; // (DON-KIT) doc 8: sprint 900 after 1 s (Sora 980)
@@ -1165,7 +1233,7 @@ fn run_tick(p: &mut NpcPawn, cx: &StepCtx) {
     if r.sub == 0 {
         if tuning.speed_ramp {
             let target = if is_run { 1.0 } else { 0.0 };
-            if r.gait < 0.0 || !(tuning.speed_ramp_time > 0.0) {
+            if r.gait < 0.0 || tuning.speed_ramp_time.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
                 r.gait = target;
             } else if r.request {
                 let step = dt / tuning.speed_ramp_time;
@@ -1178,7 +1246,8 @@ fn run_tick(p: &mut NpcPawn, cx: &StepCtx) {
         }
     }
     // dec016 PORT OPTION `Tuning::speed_matched_anim`: the walk and run cycles of WalkRunN / WalkRunB on one phase
-    if r.sub == 0 && tuning.speed_matched_anim {
+    // (PARTY-WEAPONS) KH3's RunBattleEnd (the weapon's put-away after a battle) plays out before the speed-matched loop
+    if r.sub == 0 && tuning.speed_matched_anim && !crate::weapon_draw::holds_clip(p, false) {
         let (walk_seq, walk_len, runs, run_len, lean) = loco_set(p);
         let (walk_speed, run_speed) = (p.params.speed_run * sp.speed_walk_rate, p.params.speed_run);
         let v = p.cmc.velocity;
@@ -1264,7 +1333,7 @@ fn jump_tick(p: &mut NpcPawn, cx: &StepCtx) {
             if p.on_ground() {
                 p.cmc.stop_movement();
                 // LandName: LightLand (L / R by the leg) up to land.light_height_max, else Land
-                let clip = if !(j.fall_height > sp.land_light_height_max) { if p.anim.window_open("ReverseLeg") { "LightLandL" } else { "LightLandR" } } else { "Land" };
+                let clip = if j.fall_height.partial_cmp(&sp.land_light_height_max).is_none_or(std::cmp::Ordering::is_le) { if p.anim.window_open("ReverseLeg") { "LightLandL" } else { "LightLandR" } } else { "Land" };
                 // (party X3D) Donald from a high fall lands with RollLand (XD 1.4: the 800 / 2000 cm rule)
                 let clip = if p.chara == Chara::Donald && j.fall_height > donald::K.land_roll_height { "RollLand" } else { clip };
                 p.play(clip, -1.0);

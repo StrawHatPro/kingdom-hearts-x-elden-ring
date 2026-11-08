@@ -65,6 +65,33 @@ impl PartyChara {
 
 /// (GOOFY-GG) Goofy's GUARD bar: its values and look (kh_ui::hud_guard), for `Hud::set_guard`.
 pub use kh_ui::hud_guard::{GuardLook, GuardValues};
+/// (GF-UI) A reward line's text in KH3's panels (kh-partyhost's boss steps).
+pub use kh_ui::hud_side::{icon_line, LineIcon, SideStrings};
+/// (GOOFY) His other HUD pieces (kh_ui::hud_guard, hud_goofy).
+pub use kh_ui::hud_goofy::{PerilCue, PerilKind, PerilLook, PerilWord, StaggerLook, StaggerValues};
+pub use kh_ui::hud_guard::{ResolveLook, ResolveValues};
+
+/// (GOOFY) GOOFY'S HUD THIS FRAME (kh-partyhost `PartyRuntime::gof_hud_view`): only while he is the controlled leader.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct GoofyHudView {
+    /// The pips beside GUARD.
+    pub resolve: ResolveValues,
+    /// The enemies' Stagger books: the gauge shows the lock-on target's (an enemy with no entry: empty).
+    pub stagger: Vec<(kh_core::TargetId, StaggerValues)>,
+    /// The perilous attacks on their way: the red "!" (with Danger Sense, each names its kind).
+    pub peril: Vec<PerilCue>,
+    /// Danger Sense: how much earlier the "!" shows.
+    pub peril_extra: f32,
+    pub look: GoofyLook,
+}
+
+/// (GOOFY) The look of his HUD pieces (sheet `party-guard` rows `hud.resolve_*`, `hud.stagger_*`, `hud.peril_*`).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct GoofyLook {
+    pub resolve: ResolveLook,
+    pub stagger: StaggerLook,
+    pub peril: PerilLook,
+}
 
 /// One friend slot of the status HUD, as the native update reads the pawn (UI spec 4: the pawn virtuals).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -189,8 +216,9 @@ pub struct PartyMenuMember {
     /// the camp menu's Customize shows it while he LEADS. None = the host keeps none (Sora's page as before).
     pub custom: Option<kh_core::command::leader::LeaderCustom>,
     /// (party X2) The MP cost of each of his own list's entries that has one (Goofy's abilities: their `m_UseMP`), for
-    /// the Customize help text's "MP Cost: {0}".
-    pub custom_costs: Vec<(u8, i32)>,
+    /// the Customize help text's "MP Cost: {0}"; with each one's cooldown in seconds (0: none) for its "Cooldown: {1} s" (Goofy's
+    /// Arts, THE USER 2026-11-02: "...introduce a cooldown with a visible timer").
+    pub custom_costs: Vec<(u8, i32, f32)>,
     /// (party X2-b) His kit abilities (the port's own, XD_PLAYABLE_KITS.md 1.7 / 2.6 and the Unisons / Fusions he
     /// wears): owned ones, for his Abilities page.
     pub kit: Vec<KitRow>,
@@ -201,9 +229,15 @@ pub struct PartyMenuMember {
     /// refill (None otherwise): the Equipment screen shows it greyed as Sora's, the menu's close refills it.
     pub item_reload: Vec<bool>,
     pub item_spent: Vec<Option<kh_core::status::ItemKind>>,
+    /// (GOOFY, THE USER 2026-11-02) Goofy's Parry Techniques page from his live level and ranks (kh-partyhost
+    /// `parry_page`): his Abilities screen's "Show Next List". None for the others.
+    pub parry: Option<ParryPage>,
 }
 
-/// (party X2-b) One owned kit ability of a friend (kh-party `pad::donald_kit` / `pad::goofy_kit`).
+/// (GOOFY) The Parry Techniques page's feed (kh-ui camp_parry.rs), for the hosts that build it.
+pub use kh_ui::camp_parry::{ParryPage, ParryRow};
+
+/// (party X2-b) One owned kit ability of a friend (kh-party `pad::donald_kit` / `goofy::abilities`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct KitRow {
     /// The save name (`KIT_SPELL_WEAVER` ...): what `PartyMenuEdit::Kit` names.
@@ -245,12 +279,15 @@ pub enum PartyMenuEdit {
     Kit { chara: PartyChara, key: String, on: bool },
     /// (EQ) Equipment's Triangle on an item row: Auto-Reload of that item on every slot holding it (Sora's rule).
     AutoReload { chara: PartyChara, item: kh_core::status::ItemKind, on: bool },
+    /// (weapons P11) A boost item of the stock used on the friend from the Items screen (the stock count already
+    /// dropped): his stat `stat` (0 Strength, 1 Magic, 2 Defense, 3 AP; `kh_ui::camp_equip::BOOST_ITEMS`) + 1 for good.
+    Boost { chara: PartyChara, stat: u8 },
 }
 
 impl PartyMenuEdit {
     pub fn chara(&self) -> PartyChara {
         match self {
-            PartyMenuEdit::Weapon { chara, .. } | PartyMenuEdit::Armour { chara, .. } | PartyMenuEdit::Accessory { chara, .. } | PartyMenuEdit::ItemSlot { chara, .. } | PartyMenuEdit::Ability { chara, .. } | PartyMenuEdit::UseItem { chara, .. } | PartyMenuEdit::Ai { chara, .. } | PartyMenuEdit::Custom { chara, .. } | PartyMenuEdit::Kit { chara, .. } | PartyMenuEdit::AutoReload { chara, .. } /* (EQ) */ => *chara,
+            PartyMenuEdit::Weapon { chara, .. } | PartyMenuEdit::Armour { chara, .. } | PartyMenuEdit::Accessory { chara, .. } | PartyMenuEdit::ItemSlot { chara, .. } | PartyMenuEdit::Ability { chara, .. } | PartyMenuEdit::UseItem { chara, .. } | PartyMenuEdit::Ai { chara, .. } | PartyMenuEdit::Custom { chara, .. } | PartyMenuEdit::Kit { chara, .. } | PartyMenuEdit::AutoReload { chara, .. } /* (EQ) */ | PartyMenuEdit::Boost { chara, .. } /* (weapons P11) */ => *chara,
         }
     }
 }
@@ -295,7 +332,7 @@ pub use kh_ui::hud_resonance::{ResonanceLayout, ResonanceView, RingLook, UltLook
 /// Donald is the controlled leader.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct DonHudView {
-    /// The status HUD: the Resonance ring(s), pips, ultimate mark, the attune cast, the worn spells by the portraits.
+    /// The status HUD: the Resonance ring(s), pips, ultimate mark, the attune cast (the worn spells: [`AllyBuffsView`]).
     pub ring: ResonanceView,
     /// The command HUD: the Arcane Flow stars and the Zettaflare tracker.
     pub arcane: ArcaneView,
@@ -314,8 +351,6 @@ pub struct DonHudView {
     /// Which of his lists is open (kh-party `DonMenuView::list`): Magic's list changing in place (the elements <-> an
     /// element's spells) replays KH3's sub-list opening so the rows match their count.
     pub list: u8,
-    /// Members wearing Aero Barrier / Ball Lightning: (who, barrier, orbs left); the HUD puts each by his portrait's seat.
-    pub worn: Vec<(PartyChara, bool, u8)>,
     /// The look (sheet `party-don-hud`): applied when given.
     pub look: Option<DonLook>,
 }
@@ -325,4 +360,26 @@ pub struct DonHudView {
 pub struct DonLook {
     pub ring: ResonanceLayout,
     pub arcane: ArcaneLayout,
+}
+
+pub use kh_ui::hud_buffs::BuffLook;
+
+/// (ALLY-BUFF) One helpful status on one member (the user, 2026-11-03: "Donald's helpful spells like Aero shield should
+/// appear on whoever has it in the HUD regardless of who is party leader"): who has it, KH3's IconText icon it shows,
+/// and its seconds left of the whole (the HUD shows no timer: Donald's look).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AllyBuff {
+    pub chara: PartyChara,
+    pub icon: String,
+    pub left: f32,
+    pub total: f32,
+}
+
+/// (ALLY-BUFF) EVERY MEMBER'S HELPFUL STATUSES THIS FRAME, for `Hud::set_ally_buffs`, WHOEVER LEADS (kh-partyhost
+/// `PartyRuntime::ally_buffs_view`): the HUD puts each member's icons by the seat he sits in now (the leader's slot or a
+/// friend's), at Donald's place (`look`, sheet `party-don-hud` rows `worn.*`), in the order given.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct AllyBuffsView {
+    pub buffs: Vec<AllyBuff>,
+    pub look: Option<BuffLook>,
 }

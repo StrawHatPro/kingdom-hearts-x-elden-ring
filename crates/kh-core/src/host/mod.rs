@@ -35,13 +35,17 @@ pub mod time;
 pub mod ui;
 
 pub use audio::{Audio, NullAudio, SoundHandle, SoundId, SoundPlay};
-pub use effects::{EffectHandle, EffectId, EffectSpawn, Effects, NullEffects, Tint}; // (DON-MAGIC tint) Tint
+pub use effects::{EffectHandle, EffectId, EffectSpawn, EffectTiming, Effects, NullEffects, Tint}; // (DON-MAGIC tint) Tint; (AUDIT-B W-FIN) EffectTiming
 pub use events::{Event, EventKind};
 pub use party::PartyMember;
 pub use recording::{Call, RecordingHost};
 pub use targets::{Friend, FriendLinkRequest, FriendLinkView, TeamShot};
 pub use targets::{Ally, AttackShape, BodyReaction, FinishKind, HitAttacker, HitInfo,PushBody, ReactionResult, TargetBody, HitRecord, HitResult, HurtShape, NullTargets, TargetDefense, TargetFlags, TargetId, TargetInfo, Targets};
 pub use targets::{ScriptFinale, ScriptHold, HIT_FLAG_FORCE}; // (ZETTA)
+pub use targets::Shield; // (THE USER 2026-11-02: shields guard, the attacker bounces off)
+pub use targets::{BonePose, TargetBone}; // (AUDIT-B W-FIN) a hit's bone and its transform
+pub use targets::{ai_hit_flag, may_hit_friendly, HIT_FLAG_AI}; // (PARTY-AI) friendly NPCs: the player's leader only
+pub use targets::{AttackClass, AttackInfo, StaggerAsk, HIT_FLAG_BREAKER, HIT_FLAG_KNOCKDOWN}; // (GOOFY)
 pub use ui::{NullUi, UiSink};
 
 use crate::world::World;

@@ -11,6 +11,7 @@
 //     verify   after the replay steps (the bake): every recipe's file in build/sora_pack is the recorded one
 //     --check  apply without writing the pack: report what would differ
 //     --overlays  apply the overlay recipes (overlays_<root>.json) instead of the file recipes
+//     --late      apply the keyblades' effect root recipes (late_<root>.json): after the replay's keyblades-effects step
 //   default: prepare, then apply.
 //
 // A recipe holds no game data: `copy` names a file the build made before (the pack, the scratch packs), `json` is our
@@ -32,8 +33,10 @@ const SCRATCH = path.join(ROOT, 'build', 'packgen', 'scratch');
 // (--overlays: the effect tables' overlay recipes, overlays_<root>.json, made after the overlay translator runs:
 // tools/packgen_overlays.js)
 const OVERLAYS = process.argv.includes('--overlays');
-const RECIPES = OVERLAYS ? /^overlays_.*\.json$/ : /^files_.*\.json$/;
-const OUT = path.join(ROOT, 'build', 'packgen', OVERLAYS ? 'replay_out_overlays' : 'replay_out');
+// (SETUP-TOOLS) --late: the keyblades' effect root recipes (late_<root>.json), after the replay's keyblades-effects step
+const LATE = process.argv.includes('--late');
+const RECIPES = LATE ? /^late_.*\.json$/ : OVERLAYS ? /^overlays_.*\.json$/ : /^files_.*\.json$/;
+const OUT = path.join(ROOT, 'build', 'packgen', LATE ? 'replay_out_late' : OVERLAYS ? 'replay_out_overlays' : 'replay_out');
 const args = process.argv.slice(2);
 const check = args.includes('--check');
 const doVerify = args.includes('verify');
@@ -116,7 +119,7 @@ if (doApply) {
 
 if (doVerify) {
   let ok = 0, bad = 0; const list = [];
-  for (const f of fs.readdirSync(DIR).filter((x) => /^(files|overlays)_.*\.json$/.test(x)).sort()) {
+  for (const f of fs.readdirSync(DIR).filter((x) => /^(files|overlays|late)_.*\.json$/.test(x)).sort()) {
     const { root: recRoot, files: recs } = JSON.parse(fs.readFileSync(path.join(DIR, f), 'utf8'));
     for (const [rel, rec] of Object.entries(recs)) {
       const want = rec.final_sha256 || rec.sha256; const p = recRoot === 'aux' ? path.join(ROOT, rel) : path.join(PACK, rel);

@@ -25,9 +25,11 @@
 
 pub mod caster; // (party X2) Sora's spells cast by a friend leader
 pub mod grand;
+pub mod hm_set; // (HM-MAGIC) the formchanges' turn-type magic set p_ex001_hm_MagicSet
 pub mod items;
 pub mod projectile;
 pub mod shotlock;
+pub mod shotlocks; // (SHOT-A) the other Keyblades' shotlocks (ShootFlow kinds 3 ..)
 pub mod spells;
 pub mod tables;
 
@@ -203,6 +205,26 @@ pub struct PawnMagic {
     pub volley: Vec<u32>,
     /// Hits on Sora that were refused because he is invincible (for tests and the debug text).
     pub hits_refused: u32,
+    /// (SHOT-C) The weapon form a shotlock put on (pawn vt+0x13C8 from ShootFlow: Infinity Circle's 9 = Ultimate Form's
+    /// weapon w_so192, magic/shotlocks/ultima.rs); 0 = none. The hosts draw that form's weapon parts meanwhile.
+    pub shot_weapon_form: u8,
+    /// (SHOT-C rush) Noise Flux (kind 0x1A) hides Sora's mesh during its dashes (pawn vt+0xB58 SetVisibility(false),
+    /// 0x144042970; true again when M_6483 starts, magic/shotlocks/rush.rs): the hosts skip drawing his body meanwhile.
+    pub shot_body_hidden: bool,
+    /// (SHOT-A pellet) The units of the equip set a shotlock put on when it is not the form's LV1 m_Equips (`unit@part:
+    /// socket=blueprint`, sora-keyblade-forms' format): Atomic Deluge's transform set (pawn vt+0x1400) and its LV3 parts
+    /// (ChangeWeapon grow 2), magic/shotlocks/pellet.rs. Empty = the form's own parts. The hosts draw these meanwhile.
+    pub shot_weapon_units: &'static [&'static str],
+    /// (SHOT-A drain) Drain Shock / Shimmering Drops' orb list (ShootFlow +0x148, magic/shotlocks/drain.rs): kept here as
+    /// `volley` is (a state struct is `Copy`).
+    pub(crate) drain_orbs: Vec<shotlocks::drain::Orb>,
+    /// (SHOT-A cannon) The actors the last projectile tick shut down: (id, location, forward) at their Shutdown (slot 532
+    /// 0x141475670 -> the owner's notify interface +0x98 -> the running state's OnProjectileShutdown: Cluster Cannonade's
+    /// cluster 0x1413B3BF0, magic/shotlocks/cannon.rs). Every projectile tick starts it afresh.
+    pub(crate) shut_down: Vec<(u32, Vec3, Vec3)>,
+    /// (SHOT-C avatar) Ghost Horde / Phantom Rush's avatars (ShootFlow +0x148, magic/shotlocks/avatar.rs): kept here as
+    /// `volley` is (a state struct is `Copy`); the hosts move each one's persistent effect to its position.
+    pub shot_avatars: Vec<shotlocks::avatar::Avatar>,
 }
 
 impl Default for PawnMagic {
@@ -225,6 +247,12 @@ impl Default for PawnMagic {
             rng: 0x2545_F491,
             volley: Vec::new(),
             hits_refused: 0,
+            shot_weapon_form: 0, // (SHOT-C)
+            shot_body_hidden: false, // (SHOT-C rush)
+            shot_weapon_units: &[], // (SHOT-A pellet)
+            drain_orbs: Vec::new(), // (SHOT-A drain)
+            shut_down: Vec::new(), // (SHOT-A cannon)
+            shot_avatars: Vec::new(), // (SHOT-C avatar)
         }
     }
 }

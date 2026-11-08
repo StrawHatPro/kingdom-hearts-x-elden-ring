@@ -11,7 +11,7 @@
 //! - it is given back only once ground has answered the cast under THE GAME'S OWN POSITION for `CONFIRM_S` without a break;
 //! - no blind release: without ground it is held on, told every `TELL_S`; only after `GIVE_UP_S` (a place whose floor our
 //!   casts can never see: never a stall for good) is it let go, with the level floor kept under it.
-//! The game's own actions (a door, a ladder, a pickup) and grabs end as before: given back as soon as ground answers.
+//!   The game's own actions (a door, a ladder, a pickup) and grabs end as before: given back as soon as ground answers.
 
 /// Seconds the body is held at least after a cutscene's end or a warp.
 pub const SETTLE_S: f32 = 2.0;
@@ -69,9 +69,9 @@ impl Wait {
     pub fn start(strict: bool) -> Wait {
         Wait { strict, since: 0.0, since_rebase: REBASE_S, ground_for: 0.0, told: 0.0 }
     }
-
     /// One frame: `rebased` (the origin shifted, or the game moved the player, this frame), `ground` (the cast under the
     /// game's own position answered).
+    #[cfg(test)]
     pub fn frame(&mut self, dt: f32, rebased: bool, ground: bool) -> Verdict {
         self.frame_with(dt, rebased, ground, false)
     }
@@ -195,7 +195,7 @@ mod tests {
         assert_eq!(game_jump(w, w + Vec3::new(-88.0, -56.0, -544.0)), Some(true));
         assert_eq!(game_jump(Vec3::new(74.137, 52.708, 507.687), Vec3::new(0.976, 4.712, 6.001)), Some(false));
         assert_eq!(game_jump(w, w + Vec3::new(0.3, 0.0, -2.0)), None, "a push is ours to overrule");
-        assert!(GIVE_UP_S <= 12.0, "never a half-minute hold");
+        const { assert!(GIVE_UP_S <= 12.0, "never a half-minute hold") };
     }
 
     /// The user's log: the cutscene over (346.06), ground answering at once (the old place's), the origin shifted at 348.01,

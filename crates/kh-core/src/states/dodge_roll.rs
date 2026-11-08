@@ -27,22 +27,32 @@ pub(crate) struct DodgeRoll {
     /// Bits 1 and 0: the 0.1 s and 0.4 s marks (no reader inside the state).
     mark_early: bool,
     mark_late: bool,
+    /// (F-HAMMER) Bit 4: MoleDodge (Begin 0x141368880: in battle with weapon form 6 / 0x15, Drill Punch / Clock Drill).
+    mole: bool,
 }
 
 impl DodgeRoll {
     /// The state object after `Reset` (0x14136E4A0).
-    pub const RESET: DodgeRoll = DodgeRoll { sub: 0, snap: false, yaw: 0.0, invincible: false, mark_early: false, mark_late: false };
+    pub const RESET: DodgeRoll = DodgeRoll { sub: 0, snap: false, yaw: 0.0, invincible: false, mark_early: false, mark_late: false, mole: false };
 }
 
 /// `CanDodge` (slot 57 0x141427CC0), the rows of the states this port has. `CanAct`, the
 /// restriction bits and the controller mode are constant in field play.
 fn can_dodge(state: &StateData, s: &Pawn) -> bool {
     // Weapon kind 1, in battle or not: HasAbility(22 DODGE) (0x141427DA5 / 0x141427DD2).
-    if !actions::has(s, Ability::Dodge) {
+    // (F-LIGHTDARK) 0x141427D98: in battle, weapon forms 0x16 / 0x17 (Light / Dark Form: Sonic Dodge) need no DODGE, and weapon
+    // form 0x18 (Double Form) is in the switch's default: no dodge roll.
+    let ld = crate::combat::forms::lightdark::class_of(s.combat.form.cmd).filter(|_| s.actions.battle);
+    if ld == Some(crate::combat::forms::lightdark::Class::Tf) {
         return false;
     }
-    // Next queued: nothing, or an attack state (table 0x141428448).
-    if !matches!(s.queue.queued_id(), None | Some(StateId::Attack)) {
+    // (F-LIGHTDARK for F-HAMMER) ... and weapon forms 6 / 0x15 (Drill Punch, Clock Drill: the same case of the switch).
+    let drill = s.actions.battle && crate::combat::form::row_of(s.combat.form.cmd).is_some_and(|r| matches!(r.weapon_form_value, 6 | 0x15));
+    if !actions::has(s, Ability::Dodge) && ld.is_none() && !drill {
+        return false;
+    }
+    // Next queued: nothing, or an attack state (table 0x141428448; (F-LIGHTDARK) 0x9F .. 0xA1 the Re Mind classes).
+    if !matches!(s.queue.queued_id(), None | Some(StateId::Attack) | Some(StateId::ComboLf) | Some(StateId::ComboDf) | Some(StateId::ComboTf)) {
         return false;
     }
     match state {
@@ -51,6 +61,12 @@ fn can_dodge(state: &StateData, s: &Pawn) -> bool {
         StateData::Jump(_) => false,
         // Attack states: OnGround && Attack+0x234 bit 7, the cancel bit (0x141428190).
         StateData::Attack(a) => on_ground(s) && a.cancel,
+        // (F-HAMMER) COMBO_HM / COMBO_DR: the Attack class's row.
+        StateData::ComboHm(c) => on_ground(s) && c.0.a.cancel,
+        StateData::ComboDr(c) => on_ground(s) && c.0.a.cancel,
+        // (F-LIGHTDARK) COMBO_LF / COMBO_DF (COMBO_TF never gets here: no dodge in weapon form 0x18).
+        StateData::ComboLf(c) => on_ground(s) && c.a.cancel,
+        StateData::ComboDf(c) => on_ground(s) && c.0.a.cancel,
         // GUARD: OnGround && entered by a guarded hit && m_bEnableInput (0x141427FEA).
         StateData::Guard(g) => on_ground(s) && g.hit_entry && g.enable_input,
         // DODGEROLL: only pawn kind 0x11: never for Sora.
@@ -64,7 +80,6 @@ fn can_dodge(state: &StateData, s: &Pawn) -> bool {
         // the combo is not over; USE_ITEM 111: m_bEnableChange && OnGround (II.1 table).
         StateData::FireMagic(m) => on_ground(s) && m.can_dodge(s),
         StateData::UseItem(_) => s.queue.flags.enable_change && on_ground(s),
-        #[allow(unreachable_patterns)]
         _ => false,
     }
 }
@@ -95,6 +110,8 @@ impl PlayerState for DodgeRoll {
     fn begin(&mut self, cx: &mut Ctx) {
         cx.pawn.cmc.stop_movement();
         if cx.pawn.actions.battle {
+            // (F-HAMMER) weapon form 6 / 0x15: flags |= 0x10 (pawn vt+0x19E0(1): the char-push switches, no seam in the core).
+            self.mole = crate::combat::forms::hammer::is_drill(cx.pawn.combat.form.cmd);
             actions::draw(cx, true);
         } else {
             actions::sheathe(cx);
@@ -114,6 +131,23 @@ impl PlayerState for DodgeRoll {
         if self.sub == 0 {
             // "DodgeRollB" when the weapon is out (the same sequence 0051), blend-in -1, mode 2.
             let name = if s.actions.weapon_out { AnimId::DodgeRollB } else { AnimId::DodgeRoll };
+            // (F-NANO) through the form's anim set (Nano Arms' Offensive Dodge 8051: its SCGM_DODGE window).
+            let name = crate::combat::forms::anim(s.combat.form.cmd, name);
+            // (F-HAMMER) Tick 0x141373EE0: bit 4 -> "MoleDodge" (the form's set: 6407 / L407) with the effect group +0x90 (0x76C in
+            // weapon form 0x15).
+            let name = match crate::combat::forms::hammer::mole_dodge(s.combat.form.cmd).filter(|_| self.mole) {
+                Some((clip, group)) => {
+                    if group != 0 {
+                        s.next_effect_group = Some(group);
+                    }
+                    clip
+                }
+                None => name,
+            };
+            // (F-LIGHTDARK) 0x141368880: +0x90 = 0x834 in form 0xDD, 0x898 in 0xDE (Sonic Dodge's effects, M051 of AnimSet22).
+            if let Some(group) = crate::combat::forms::lightdark::dodge_group(s.combat.form.cmd) {
+                s.next_effect_group = Some(group);
+            }
             s.anim.play_with(name, PlayArgs::mode(2, -1.0));
             self.sub = 1;
             self.snap = false;

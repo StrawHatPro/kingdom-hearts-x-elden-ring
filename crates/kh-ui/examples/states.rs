@@ -28,7 +28,7 @@ fn values(hp: i32, mp: i32, focus: i32) -> StatusValues {
 
 fn write(dir: &Path, name: &str, movies: &[(&str, &Movie)], fonts: &Fonts) {
     let mut canvas = Canvas::new(1920, 1080);
-    for p in canvas.px.chunks_exact_mut(4) {
+    for p in canvas.px.as_chunks_mut::<4>().0 {
         p.copy_from_slice(&[BG[0], BG[1], BG[2], 1.0]);
     }
     let mut renderer = Renderer::new(fonts.clone());
@@ -57,7 +57,7 @@ fn compare(dir: &Path) {
         };
         let (mut max, mut sum, mut over8, mut over32) = (0u32, 0u64, 0usize, 0usize);
         let mut img = Vec::with_capacity(a.len());
-        for (p, q) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+        for (p, q) in a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0) {
             let m = (0..3).map(|i| (p[i] as i32 - q[i] as i32).unsigned_abs()).max().unwrap();
             max = max.max(m);
             sum += m as u64;

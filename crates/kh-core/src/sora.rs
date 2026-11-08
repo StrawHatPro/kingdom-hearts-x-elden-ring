@@ -143,6 +143,10 @@ pub struct Output {
     pub capsule_center: Vec3,
     /// Facing, degrees, in (-180, 180].
     pub yaw: f32,
+    /// (F-LOCO) The actor's pitch, degrees, nose up positive (UE `FRotator::Pitch`), about the CAPSULE CENTRE (the actor
+    /// location of UE): 0 except in the attacks that pitch toward their target (Agile Claws' M_C418, Anchor Shot M_4415,
+    /// Blizzard Blades' M_7417, Nano Arms' M_8423: Attack Facing 0x14134D0E0). Hosts tilt the body by it.
+    pub pitch: f32,
     /// The movement component's velocity, cm/s. During `RunStartN` the displacement comes from
     /// the animation's root motion and is not in here.
     pub velocity: Vec3,
@@ -395,6 +399,14 @@ impl Sora {
         pawn.step += 1;
         pawn.events.clear();
         pawn.popups.clear();
+        // (NOCOMBAT) the no-combat rule's pad gate, before anything reads the pad: the presses that would start something
+        // offensive from the menu he sees (last step's snapshot) are taken off; a press on a greyed entry is refused
+        let mut gated = *input;
+        let rule_refused = crate::nocombat::zone() && {
+            let y_offers = !pawn.command_shown.situations.is_empty() || !crate::combat::situation::hud(pawn).list.is_empty();
+            crate::nocombat::gate_pad(&pawn.command_shown, &mut gated.pad, y_offers)
+        };
+        let input = &gated;
         pawn.input = *input;
         let mut cx = Ctx::new(pawn, host);
         // Debug emissions asked for since the last step (not gameplay: see `DebugEmit`).
@@ -422,6 +434,8 @@ impl Sora {
         // PORT ADDITION (IMPL_ER44): the host's hold on the Keyblade.
         crate::actions::host_hold(&mut cx);
         // C(N): the Sora input update (0x1413F1AB0), spec 2.
+        // (F-SHIELD) the held form for the anim set chain (anim.rs `form_cmd`).
+        cx.pawn.anim.form_cmd = cx.pawn.combat.form.cmd;
         controller::controller_update(state, &mut cx, input, dt_controller);
         // pawn+0xE60 bit 17, the latch of a command that armed the command lock in the UI phase:
         // cleared by every pawn tick, after it made this frame's requests refuse (strand A 1.3).
@@ -434,6 +448,18 @@ impl Sora {
         // (DON-KIT) the Aero aura's added invincible time runs down (none without the aura)
         if cx.pawn.aura_ghost > 0.0 {
             cx.pawn.aura_ghost = (cx.pawn.aura_ghost - dt).max(0.0);
+        }
+        // (KILLPLANE) a kill plane's death the host asked for comes first: HP 0 and the Die state, past every survival rule
+        // (the hits of the same step then find him at 0 HP and do nothing)
+        if let Some(from) = cx.pawn.combat.kill_plane.take() {
+            states::damage::kill_unconditional(state, &mut cx, from);
+        } else if cx.pawn.combat.kill_plane_held {
+            // and it stays: no Recover / Cure / item of this step lifts his HP while he lies in the Die state
+            if matches!(state, states::StateData::Die(_)) {
+                cx.pawn.status.hp = 0;
+            } else if cx.pawn.status.hp > 0 {
+                cx.pawn.combat.kill_plane_held = false;
+            }
         }
         for hit in std::mem::take(&mut cx.pawn.combat.incoming) {
             // ACTIONS (spec II.1 "Body-collision reaction types"): what the hit meets first: his
@@ -460,6 +486,15 @@ impl Sora {
         }
         // M(N): the movement component tick (0x140598190).
         cx.pawn.cmc.tick_head(world, &p, dt);
+        // (SPIRITSPRING) PORT ADDITION: the host's spiritspring lift (kh-er spiritspring.rs), asked for this step only:
+        // a jump still rising tops out that far above its take-off. After the release cut and DoJump, before the physics.
+        // Nothing happens unless a host asked (KH3's jump and the golden traces are untouched).
+        if let Some(height) = cx.pawn.spring_lift.take() {
+            if states::jump::before_the_fall(state) && cx.pawn.cmc.velocity.z > 0.0 && height.is_finite() {
+                let peak = cx.pawn.cmc.launch_z + height;
+                cx.pawn.cmc.lift_to(&p, peak, dt);
+            }
+        }
         // d. The pose tick (0x140595730), every frame, in every movement mode: clock, root
         //    motion, notifies -> handlers (the launch latch is seen by CheckJumpInput next frame).
         // (combat implementer, 2026-10-12) Frozen (the bad status FREEZE, pawn+0x868 bit 1): the mesh's
@@ -475,6 +510,24 @@ impl Sora {
         crate::combat::hit::on_notifies(&mut cx, &tick.notifies);
         // The generic handlers of the same notifies: sounds, voices, effects (notify.rs).
         crate::notify::dispatch(&mut cx, &tick.notifies);
+        // (AUDIT-B F-NANO) Nano Gear's clips: their BpEvent notifies to the camera blueprint (AnimBpEvent)
+        crate::combat::forms::nano::on_notifies(&mut cx, &tick.notifies);
+        // (AUDIT-B F-SHIP) Wheel of Fate's clips: their BpEvents to the ca_key camera; the weapons' / Kraken's own clip notifies
+        crate::combat::forms::ship::on_notifies(&mut cx, &tick.notifies, dt); // (AUDIT-A THROW) dt: the thrown flag's own clip clock
+        // (AUDIT-B F-HAMMER) the hammer forms' weapons' / transform units' / the Clock's own clip notifies (F-SHIP's shared pass)
+        crate::combat::forms::hammer::on_notifies(&mut cx);
+        // (AUDIT-B F-CLAWS) Happy Gear's / Crystal Snow's weapons' own clip notifies (effects, sounds) and the Chandelier's
+        crate::combat::forms::claws::on_notifies(&mut cx, &tick.notifies);
+        // (AUDIT-A SHIELD) Counter Shield's / Frying Pan's weapon actors' and finisher pawns' own clip notifies (pnotify rows)
+        crate::combat::forms::shield::pawn_notifies(&mut cx, dt); // (AUDIT-A SHIELD) dt: the thrown parts' own clip clocks
+        // (AUDIT-C SW) Ultima Weapon's transform unit's own clip notifies (wnotify rows)
+        crate::combat::forms::ultimate::on_notifies(&mut cx);
+        // (AUDIT-A STAFF) Mirage Staff's staff / transform unit / tower own clip notifies (wnotify rows, F-SHIP's shared pass)
+        crate::combat::forms::staff::on_notifies(&mut cx);
+        // (AUDIT-A ARROWGUN) the gun forms' weapons' / transform units' own clip notifies (wnotify rows, F-SHIP's shared pass)
+        crate::combat::forms::arrowgun::on_notifies(&mut cx);
+        // (AUDIT-A PLACEMENT) TresAnimNotify_ThrowWeapon: the form's parts thrown (FreeMove), their flight, the recall
+        crate::combat::forms::placement::on_pose_tick(state, &mut cx, &tick.notifies, dt);
         // The root motion of this update, from the actor's frame into the world (it is consumed
         // by this same frame's move; its rotation is applied after the physics).
         let this = &mut *cx.pawn;
@@ -503,6 +556,12 @@ impl Sora {
         // (magic implementer) The spell actors and shotlock projectiles (object type PROJECTILE:
         // real time), the Aero jump pads, and the queued item effects (on the pawn's clock).
         crate::magic::projectile::tick(&mut cx, real_dt);
+        // (weapons F-ARROWGUN) the gun formchanges' bullets (projectiles too: real time; they hit in hit::tick below)
+        crate::combat::forms::arrowgun::tick(&mut cx, real_dt);
+        // (F-NANO) Nano Arms' Rocket Fists (projectiles: real time; they hit in hit::tick below)
+        crate::combat::forms::nano::tick(&mut cx, real_dt);
+        // (F-STAFF) Mirage Staff's mirror images (the controller's clock: dt) and projectiles (real time)
+        crate::combat::forms::staff::tick(&mut cx, dt, real_dt);
         crate::magic::pads_tick(state, &mut cx);
         crate::magic::items::tick(&mut cx, dt);
         // The status part of the pawn tick (docs/sora-stats-spec.md 6.4, magic spec C 3): walk
@@ -515,7 +574,10 @@ impl Sora {
         crate::combat::badstat::tick(state, &mut cx, dt, real_dt);
         // S(N): the pawn tick -> state queue MainProc (0x14150A7E0), last.
         let main_dt = dt * aura_recovery_rate(state, cx.pawn); // (DON-KIT) x 1 without the aura
+        cx.pawn.anim.form_cmd = cx.pawn.combat.form.cmd; // (F-SHIELD)
         states::main_proc(state, &mut cx, main_dt);
+        // (AUDIT-A PLACEMENT) the thrown parts' recall comes in the state's own tick (slot 125 before M_B415 / M_F414, End)
+        crate::combat::forms::placement::recall(state, &mut cx);
         // (combat implementer, fourth pass 2026-10-12; combat spec 8.2.2) The attack-collision
         // manager's tick: the active hit windows sweep and hit. `ATresAtkCollManager` ticks in group
         // 8 = `TG_SQEX_PostUpdateTransform` of this engine fork (`ETickingGroup`: ... PrePhysics 3 ...
@@ -524,8 +586,13 @@ impl Sora {
         // a window opened by a notify of M(N) sweeps in frame N, AFTER the pawn's whole tick
         // (controller, movement, MainProc). The state sees a landed hit in its next Tick.
         crate::combat::hit::tick(&mut cx, dt);
+        // (F-POLISH) the on-contact handlers of the claw / yo-yo / blade classes run on this pass's contacts (iface slot 15).
+        states::combo_cl::after_hits(state, &mut cx);
         // U(N): the UI tick, after the state tick: the command menu's attack decide (strand A 1.1).
         controller::ui_attack_request(state, &mut cx, input, dt);
+        if rule_refused {
+            cx.pawn.command.events.push(crate::command::MenuEvent::Refused); // (NOCOMBAT) KH3's refused SE
+        }
         // The HUD after this step.
         hud.step(real_dt, &cx.pawn.status, &cx.pawn.popups);
         let mut snapshot = hud.snapshot(cx.pawn.step, &cx.pawn.status, cx.pawn.popups.clone());
@@ -549,6 +616,7 @@ impl Sora {
             position: pawn.cmc.location,
             capsule_center: pawn.cmc.capsule_centre(p),
             yaw: pawn.yaw,
+            pitch: pawn.pitch, // (F-LOCO)
             velocity: pawn.cmc.velocity,
             state: self.state.id(),
             sub_step: self.state.sub_step(),
@@ -576,6 +644,9 @@ impl Sora {
         // open with its pending release (shotlock.rs `close_dropped`), a state's invincibility (every setter of
         // `damage_invalid` is a state's; the new Sora stands in Idle)
         fresh.pawn.magic.aim.close_dropped();
+        fresh.pawn.magic.shot_weapon_form = 0; // (SHOT-C) a shotlock's weapon form (ShootFlow End gives it back)
+        fresh.pawn.magic.shot_body_hidden = false; // (SHOT-C rush) Noise Flux's hidden mesh (its End shows it again)
+        fresh.pawn.magic.shot_weapon_units = &[]; // (SHOT-A pellet) ... and its equip set
         fresh.pawn.status.damage_invalid = false;
         // (CHESTFIX, the user 2026-10-27: "Sora was also stuck in a pseudo-second form after transforming into it as an
         // ally") A FORM GOES ON THROUGH A WARP: the formchange gauge, the situation commands (the form's finish rows) and
@@ -634,6 +705,14 @@ impl Sora {
         self.pawn.follow_cap = cap.filter(|c| c.is_finite());
     }
 
+    /// (SPIRITSPRING, the user 2026-11-07: "jumping at a point where torrent would normally launch into the air would follow
+    /// his jump height") PORT ADDITION: for the NEXT step only, a jump of his that is still rising (the Jump state before
+    /// its fall, rising) tops out `height` cm above where it took off (its own gravity, his own air control; the release
+    /// cut cannot shorten it). The host asks every step while it wants the rise; nothing else changes.
+    pub fn spring_lift(&mut self, height: f32) {
+        self.pawn.spring_lift = Some(height).filter(|h| h.is_finite() && *h > 0.0);
+    }
+
     /// (CHESTFIX) The follow speed cap in force (`set_follow_cap`).
     pub fn follow_cap(&self) -> Option<f32> {
         self.pawn.follow_cap
@@ -653,6 +732,14 @@ impl Sora {
     /// (DON-KIT) The aura shares in force (evasion, recovery).
     pub fn aura(&self) -> (f32, f32) {
         (self.pawn.aura_evasion, self.pawn.aura_recovery)
+    }
+
+    /// (F-ARROWGUN) PORT ADDITION: THE RIGHT STICK for the gun forms' ShooterMode (state 40), which `Input` does not carry:
+    /// raw axes (x right, y up), every step before `step` (KH3's shooter camera reads it, camera slot 258 0x1405CD3F0 mode 2;
+    /// the core applies the dead zones). Zero = the aim follows the screen-centre pick (and the left stick). The aim and the
+    /// camera's values: `combat().arrowgun.aim.view`.
+    pub fn set_shooter_look(&mut self, stick: Vec2) {
+        self.pawn.combat.arrowgun.aim.look = if stick.is_finite() { stick } else { Vec2::ZERO };
     }
 
     /// (ER69, the user: KH1 Sora is shorter) THE BODY'S SIZE FOR AN OUTFIT OF OTHER PROPORTIONS: the collision capsule
@@ -714,6 +801,12 @@ impl Sora {
         states::style_finish::view(&self.state)
     }
 
+    /// (AUDIT-B F-HAMMER) The effect group of the running play (notify.rs: an AttachEffect row spawns when its GroupID is this
+    /// group or -1): for a host's / an audit's check of which rows were due.
+    pub fn effect_group(&self) -> i32 {
+        self.pawn.effect_group
+    }
+
     /// The time dilation of object type `obj` (host/time.rs; 1.0 = normal).
     pub fn time_dilation(&self, obj: u32) -> f32 {
         self.pawn.time_dilation(obj)
@@ -727,9 +820,26 @@ impl Sora {
         self.pawn.combat.xs.debug_finisher = Some(kind);
     }
 
+    /// (REVENGE) A HOST-ASKED COUNTER (abilities/xs/counter.rs): `kinds` played one after the other at `target` as soon as
+    /// Sora is free (idle, moving, guarding, recovering in the air), each through KH3's own attack request with the kind
+    /// forced. `own_form`: the kinds are the held form's own (its attack class plays them); false: blade kinds of the plain
+    /// attack state (Sonic Blade 0xE0 / 0xE1, Zantetsuken 0xE4). A new ask replaces a waiting one; an empty one cancels.
+    pub fn request_counter(&mut self, kinds: &[u8], target: crate::host::TargetId, own_form: bool) {
+        self.pawn.combat.xs.counter = (!kinds.is_empty()).then(|| crate::abilities::xs::counter::CounterAsk { kinds: kinds.to_vec(), target, own_form, waited: 0.0, played: 0 });
+    }
+
+    /// (REVENGE) The host-asked counter's kinds still to play and the kinds started so far (None: no counter runs).
+    pub fn counter_state(&self) -> Option<(usize, u32)> {
+        self.pawn.combat.xs.counter.as_ref().map(|c| (c.kinds.len(), c.played))
+    }
+
     /// (XW-b) Chandelier's chandelier (KH3's StylePawn w_so088) this step, for the hosts to draw: where it stands, its turn
     /// and its clip time (abilities/xs/chandelier.rs `pawn`). None outside the move.
     pub fn xs_chandelier_pawn(&self) -> Option<crate::abilities::xs::chandelier::ChandelierPawn> {
+        // (F-CLAWS) ... and Blizzard Blades' FINISH_SK (the same pawn on the finish's own clock: combat/forms/claws.rs)
+        if let Some(p) = crate::combat::forms::claws::finish_sk_pawn(self.finish(), self.pawn.combat.xs.chandelier.as_ref()) {
+            return Some(p);
+        }
         if self.attack().map(|a| a.kind) != Some(crate::abilities::xs::chandelier::CHANDELIER) {
             return None;
         }
@@ -829,6 +939,49 @@ impl Sora {
         self.pawn.combat.incoming.push(hit);
     }
 
+    /// (KILLPLANE, THE USER 2026-11-06: "kill planes in Elden Ring need to ISNTANTLY kill the party leader or party members, it
+    /// should ignore any abilities you have") HIS DEATH NOW, UNCONDITIONAL: at the start of the next step his HP is 0 and he is
+    /// in the Die state (KH3's knockdown, `PlayerDied`), whatever would have saved him from a hit: Second Chance, Withstand
+    /// Combo, the HP-limit hold, invincibility (Leaf Bracer, finishers, shotlocks, the i-frame timer, the Aero aura), a dodge
+    /// or a guard, the no-damage time after an auto-revive, and the auto-revive item itself (not taken). `from`: where the
+    /// death came from (he is thrown away from it). Nothing when he is down already.
+    pub fn kill_unconditional(&mut self, from: Vec3) {
+        if self.pawn.status.hp > 0 || self.state.id() != StateId::Die {
+            self.pawn.combat.kill_plane = Some(from);
+        }
+    }
+
+    /// (MIMIC-STANCE) HIS STANCE IS BROKEN for `seconds` (combat/stance.rs: a Goofy's Stagger book filled his gauge): KH3's STUN
+    /// state (`BadStatStunStart` / `Loop` / `End`, no action) from the next step on the ground, for the window, whatever hits
+    /// him meanwhile. False: refused (no time, or he is down: HP 0 or the Die state).
+    pub fn stance_break(&mut self, seconds: f32) -> bool {
+        if !self.stance_breakable() {
+            return false;
+        }
+        self.pawn.combat.bad.stance.open(seconds)
+    }
+
+    /// (MIMIC-STANCE) A break may start now: he is up (HP above 0, not in the Die state).
+    pub fn stance_breakable(&self) -> bool {
+        self.pawn.status.hp > 0 && self.state.id() != StateId::Die
+    }
+
+    /// (MIMIC-STANCE) A running break lasts at least `seconds` more (a Breaker winds up on him).
+    pub fn stance_hold(&mut self, seconds: f32) {
+        self.pawn.combat.bad.stance.hold(seconds);
+    }
+
+    /// (MIMIC-STANCE) The break ends now (its window ran out, or a Breaker's slam is about to land): the STUN state's end clip
+    /// plays, or the slam's own reaction replaces it. True: he was broken.
+    pub fn stance_release(&mut self) -> bool {
+        self.pawn.combat.bad.stance.release()
+    }
+
+    /// (MIMIC-STANCE) The break now (`left` 0: not broken).
+    pub fn stance(&self) -> crate::combat::stance::StanceBreak {
+        self.pawn.combat.bad.stance
+    }
+
     /// The running damage reaction, when the state is `Damage`.
     pub fn damage_reaction(&self) -> Option<states::DamageView> {
         states::damage::view(&self.state)
@@ -919,6 +1072,13 @@ impl Sora {
     /// DEBUG (a host's `play-anim NAME`): plays an animation on the FullBody slot as a one-shot
     /// without root motion, whatever the state; the running state goes on and may replace it.
     pub fn debug_play_anim(&mut self, anim: AnimId, args: crate::anim::PlayArgs) {
+        self.pawn.anim.play_with(anim, args);
+    }
+
+    /// (AUDIT-B W-DATA) DEBUG: [`Sora::debug_play_anim`] with the effect group the state's play would pass (PlayAttack's
+    /// +0x198: Clock Drill's 1900 ...), so a sweep judges a clip's rows under the group they are authored for.
+    pub fn debug_play_anim_group(&mut self, anim: AnimId, args: crate::anim::PlayArgs, group: i32) {
+        self.pawn.next_effect_group = Some(group);
         self.pawn.anim.play_with(anim, args);
     }
 

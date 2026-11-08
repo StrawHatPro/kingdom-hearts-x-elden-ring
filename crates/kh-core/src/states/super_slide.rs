@@ -81,7 +81,6 @@ pub(crate) fn try_flow(state: &mut StateData, cx: &mut Ctx) -> bool {
 /// `PushSuperSlide(kind 1, pYaw)` (iface slot 73 0x141445B90): `PushState(21)`; with a yaw: flag 2 and
 /// +0x8C (Begin then snaps to it). THE ENTRY CALL for other states (wall kick; the airstep arrival of
 /// the magic side, pole, rail); the caller clears the queue or chains as its own code says.
-#[allow(dead_code)]
 pub(crate) fn push(s: &mut Pawn, yaw: Option<f32>) {
     s.queue.push_state(SuperSlide { yaw: yaw.unwrap_or(0.0), yaw_given: yaw.is_some(), ..SuperSlide::RESET });
 }
@@ -141,7 +140,7 @@ impl PlayerState for SuperSlide {
                 }
                 s.queue.do_chain();
             }
-        } else if !(self.time_left > 0.0) {
+        } else if self.time_left.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
             s.cmc.stop_movement();
             s.anim.play_with(AnimId::SlideEnd, PlayArgs::mode(2, 0.05));
             self.sub = 2;

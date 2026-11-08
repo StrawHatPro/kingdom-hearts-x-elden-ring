@@ -137,6 +137,10 @@ impl Dist {
                 }
             }
         }
+        // (VFX-RING) a stock instance-parameter distribution: its unset value (crate::param_dist)
+        if let Some(p) = crate::param_dist::parse(d) {
+            return Some(p);
+        }
         // No usable table (the Square Enix distribution classes): constant or uniform bounds.
         let nums = |v: &Value| -> Option<Vec<f32>> {
             match v {
@@ -239,6 +243,18 @@ impl Dist {
             }
         }
         Vec3::new(self.component(a, b, alpha, 0, r[0]), self.component(a, b, alpha, 1, r[1]), self.component(a, b, alpha, 2, r[2]))
+    }
+
+    /// (AUDIT-B W-VFX2) A vector with stock `FRawDistribution::GetValue3`'s Extreme: only an extremes table (op 3) takes it
+    /// (> 0 the maximum set, < 0 the minimum set); every other table, and Extreme 0, samples as [`Dist::vec3`].
+    pub fn vec3_extreme(&self, t: f32, rng: &mut Rng, extreme: i32) -> Vec3 {
+        if self.op != 3 || extreme == 0 || self.dims() < 3 {
+            return self.vec3(t, rng);
+        }
+        let (a, b, alpha) = self.entry(t);
+        let _ = self.draw(rng); // GetValue3Extreme draws its random value whatever the extreme
+        let r = if extreme > 0 { 1.0 } else { 0.0 };
+        Vec3::new(self.component(a, b, alpha, 0, r), self.component(a, b, alpha, 1, r), self.component(a, b, alpha, 2, r))
     }
 
     /// The largest value of component 0 over the table (bounds for hosts and tests).

@@ -75,7 +75,8 @@ fn options() -> hlsl::Options {
     }
     // (IMPL_ER59) 17..20: an outfit's extra material textures (er_char.wgsl KH_TEX_EXTRA)
     // (IMPL_ER78) 21 / 22: the game's diffuse light and shadow mask (er_char.wgsl KH_HYBRID)
-    for binding in 0..23 {
+    // (PARTY-NATIVE-LIGHT) 18..29: the effects' lit variants' copy of the game's light inputs (er_vfx.wgsl KH_FXLIT)
+    for binding in 0..30 {
         binding_map.insert(naga::ResourceBinding { group: 1, binding }, target(0, binding));
     }
     // Group 3: the GAME's own registers (passes that bind its descriptor tables): binding n = b<n> / t<n>.
@@ -172,6 +173,34 @@ fn copy_textures(project: &Path, materials_dir: &Path, out_dir: &Path) -> Result
     Ok((files, bytes))
 }
 
+/// (MIMIC SORA) The file stem of a variant's Mimic Tear G-buffer writer (`own`: an own set's `_<suffix>`, "" for the pack's).
+fn mimic_name(variant: &str, own: &str) -> String {
+    format!("{variant}{own}_gb3_mm")
+}
+
+/// (MIMIC SORA) The file stem of a variant's FORMING writer (his arrival / dissolve: KH_MIMIC_FORM).
+fn mimic_form_name(variant: &str, own: &str) -> String {
+    format!("{variant}{own}_gb3_mf")
+}
+
+/// (MIMIC SORA) Its definitions: exactly the `_gb3` writer's (`--only hy3`) + KH_MIMIC.
+fn mimic_defines(id: u16, masked: bool, subsurface: bool, party: bool) -> BTreeSet<String> {
+    let mut defines = BTreeSet::from(["ER_FRAGMENT".to_string(), "KH_EXTRA_LIGHTS".to_string(), "KH_BLOOD".to_string(), "KH_HYBRID".to_string(), "KH_HY3".to_string(), format!("KH_C{id}"), "KH_GBUFFER".to_string(), "KH_MIMIC".to_string()]);
+    if !party {
+        defines.insert("KH_INTERIOR".to_string());
+    }
+    for (on, define) in [(masked, "KH_MASKED"), (subsurface, "KH_SUBSURFACE")] {
+        if on {
+            defines.insert(define.to_string());
+        }
+    }
+    defines
+}
+
+/// (PARTY-NATIVE-LIGHT) The light copy's shaders (`--only fxlit`): file stem, HLSL entry point, profile, stage extension.
+// (PARTY-NATIVE-LIGHT round 3) + fxlit_dspass: a tessellated lit particle's DSCommonBuffer into the pass rows
+const FXLIT_ENTRIES: [(&str, &str, &str, &str); 7] = [("fxlit", "vs_lit", "vs_6_0", "vs"), ("fxlit_scene", "ps_scene", "ps_6_0", "ps"), ("fxlit_pass", "ps_pass", "ps_6_0", "ps"), ("fxlit_dspass", "ps_dspass", "ps_6_0", "ps"), ("fxlit_region", "ps_region", "ps_6_0", "ps"), ("fxlit_vol", "ps_vol", "ps_6_0", "ps"), ("fxlit_lists", "ps_lists", "ps_6_0", "ps")];
+
 fn main() {
     if let Err(e) = run() {
         eprintln!("kh-shaderc: FAILED: {e}");
@@ -209,7 +238,59 @@ fn run() -> Result<(), String> {
         }
         return Ok(());
     }
+    // (FREEZE-FX) the ice shell of a frozen Elden Ring body (kh-er-render shaders/er_iceshell.wgsl, src/iceshell.rs): NEW files
+    // iceshell.vs / iceshell.ps, built with `--only iceshell` only, into `--out DIR` (default build/sora_tmp/freeze_fx/pack/
+    // materials/er: never the live pack)
+    if only == Some("iceshell") {
+        const ICESHELL: &str = include_str!("../../kh-er-render/shaders/er_iceshell.wgsl");
+        let out_dir = value("--out").map(PathBuf::from).unwrap_or_else(|| project.join("build").join("sora_tmp").join("freeze_fx").join("pack").join("materials").join("er"));
+        std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&hlsl_dir).map_err(|e| e.to_string())?;
+        for (stage, entry, profile, ext) in [(naga::ShaderStage::Vertex, "iceshell_vs", "vs_6_0", "vs"), (naga::ShaderStage::Fragment, "iceshell_ps", "ps_6_0", "ps")] {
+            let (text, name) = to_hlsl(ICESHELL, stage, entry).map_err(|e| format!("iceshell: {e}"))?;
+            let hlsl_file = hlsl_dir.join(format!("iceshell.{ext}.hlsl"));
+            std::fs::write(&hlsl_file, &text).map_err(|e| e.to_string())?;
+            run_dxc(&dxc, profile, &name, &hlsl_file, &out_dir.join(format!("iceshell.{ext}.dxil")))?;
+            println!("  iceshell.{ext}.dxil -> {}", out_dir.display());
+        }
+        return Ok(());
+    }
+    // (PARTY-NATIVE) the copy of the game's fog for the KH translucent effects (kh-er-render shaders/er_fxfog.wgsl, vfx.rs
+    // `fog_copy`): NEW files fxfog.vs / fxfog_rows.ps / fxfog_vol.ps, built with `--only fxfog` only, into `--out DIR` (default
+    // build/sora_tmp/weapons/PARTY-NATIVE/stage/fxfog/vfx/er: never the live pack)
+    if only == Some("fxfog") {
+        const FXFOG: &str = include_str!("../../kh-er-render/shaders/er_fxfog.wgsl");
+        let out_dir = value("--out").map(PathBuf::from).unwrap_or_else(|| project.join("build").join("sora_tmp").join("weapons").join("PARTY-NATIVE").join("stage").join("fxfog").join("vfx").join("er"));
+        std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&hlsl_dir).map_err(|e| e.to_string())?;
+        for (file, stage, entry, profile, ext) in [("fxfog", naga::ShaderStage::Vertex, "vs_fog", "vs_6_0", "vs"), ("fxfog_rows", naga::ShaderStage::Fragment, "fs_rows", "ps_6_0", "ps"), ("fxfog_vol", naga::ShaderStage::Fragment, "fs_vol", "ps_6_0", "ps")] {
+            let (text, name) = to_hlsl(FXFOG, stage, entry).map_err(|e| format!("fxfog: {e}"))?;
+            let hlsl_file = hlsl_dir.join(format!("{file}.{ext}.hlsl"));
+            std::fs::write(&hlsl_file, &text).map_err(|e| e.to_string())?;
+            run_dxc(&dxc, profile, &name, &hlsl_file, &out_dir.join(format!("{file}.{ext}.dxil")))?;
+            println!("  {file}.{ext}.dxil -> {}", out_dir.display());
+        }
+        return Ok(());
+    }
+    // (PARTY-NATIVE-LIGHT) the copy of the game's light inputs for the KH lit translucent effects (kh-er-render shaders/er_fxlit.hlsl,
+    // vfxlight.rs `LitKit`): NEW files fxlit.vs / fxlit_scene.ps / fxlit_pass.ps / fxlit_region.ps / fxlit_vol.ps / fxlit_lists.ps,
+    // built with `--only fxlit` only, straight from HLSL with dxc (the game's light buffers are structured buffers, which naga
+    // cannot declare), into `--out DIR` (default build/sora_tmp/weapons/PARTY-NATIVE/stage/fxlit/vfx/er: never the live pack)
+    if only == Some("fxlit") {
+        const FXLIT: &str = include_str!("../../kh-er-render/shaders/er_fxlit.hlsl");
+        let out_dir = value("--out").map(PathBuf::from).unwrap_or_else(|| project.join("build").join("sora_tmp").join("weapons").join("PARTY-NATIVE").join("stage").join("fxlit").join("vfx").join("er"));
+        std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&hlsl_dir).map_err(|e| e.to_string())?;
+        let hlsl_file = hlsl_dir.join("er_fxlit.hlsl");
+        std::fs::write(&hlsl_file, FXLIT).map_err(|e| e.to_string())?;
+        for (file, entry, profile, ext) in FXLIT_ENTRIES {
+            run_dxc(&dxc, profile, entry, &hlsl_file, &out_dir.join(format!("{file}.{ext}.dxil")))?;
+            println!("  {file}.{ext}.dxil -> {}", out_dir.display());
+        }
+        return Ok(());
+    }
     let library = kh_look::library::Library::load(&pack)?;
+
     // (ER81) an outfit's OWN SET: `--materials FILE` (the outfit's materials.wgsl with another post-process material:
     // tools/sora_material_pack.js --own-khs), `--suffix S` (every material variant written as `<variant>_S[_pl|_bl|_hy2|_gb2]`,
     // nothing else built; `--only bli` adds `_S_bli`) and `--out DIR` (default PACK/materials/er). Without them: as before.
@@ -260,7 +341,28 @@ fn run() -> Result<(), String> {
     let tex_extra = generated.contains("kh_t14");
     // (ER69) an outfit's pack (PACK/outfits/<id>: its model.glb beside materials/): the skin has room for 320 joints
     let joints_extra = pack.join("model.glb").is_file() || party;
+    // (FREEZE-FX) the owners WITHOUT KH3's "Ice" parameter (kh-look `needs_ice_extra`): every fragment shader of theirs gets the
+    // host's ice term (er_char.wgsl KH_ICE_EXTRA) and, when the material binds KH3's LibraryTiling16a_Mask, its texture slot
+    // (KH_ICE_M<k>): the frozen look's "Ice" drive reaches them as it reaches KH3's own materials
+    let ice_owners: Vec<(u16, Option<usize>)> = {
+        let owners: serde_json::Value = std::fs::read_to_string(library.dir.join("materials.json")).ok().and_then(|t| serde_json::from_str(t.trim_start_matches('﻿')).ok()).unwrap_or_default();
+        owners["owners"].as_object().into_iter().flatten().map(|(_, o)| o).filter(|o| kh_look::needs_ice_extra(o)).filter_map(|o| {
+            let mask = o["slots"].as_array().and_then(|slots| slots.iter().position(|s| s["root_default"].as_str().is_some_and(|r| r.contains("LibraryTiling16a_Mask"))));
+            Some((o["id"].as_u64()? as u16, mask))
+        }).collect()
+    };
+    if !ice_owners.is_empty() {
+        println!("kh-shaderc: (FREEZE-FX) owners without KH3's Ice parameter, given the host's ice term: {ice_owners:?}");
+    }
     let mut build = |name: &str, stage: naga::ShaderStage, entry: &str, mut defines: BTreeSet<String>| -> Result<(), String> {
+        if stage == naga::ShaderStage::Fragment {
+            if let Some((_, mask)) = ice_owners.iter().find(|(id, _)| defines.contains(&format!("KH_C{id}"))) {
+                defines.insert("KH_ICE_EXTRA".to_string());
+                if let Some(k) = mask {
+                    defines.insert(format!("KH_ICE_M{k}"));
+                }
+            }
+        }
         if tex_extra {
             defines.insert("KH_TEX_EXTRA".to_string());
         }
@@ -535,6 +637,11 @@ fn run() -> Result<(), String> {
     }
     // (ZFIN) Zettaflare's finale on an Elden Ring character (er_char.wgsl ER_FINALE, kh-er-render finale.rs): a NEW file,
     // built with `--only finale` only
+    // (AUDIT-C TF) Double Form's Ultimate Finish: the Blue Hour's map hide (er_char.wgsl ER_BLUEHOUR, kh-er-render bluehour.rs):
+    // a NEW file, built with `--only bluehour` only
+    if only == Some("bluehour") {
+        build("bluehour", naga::ShaderStage::Fragment, "bluehour_ps", BTreeSet::from(["ER_BLUEHOUR".to_string()]))?;
+    }
     if only == Some("finale") {
         build("finale", naga::ShaderStage::Fragment, "finale_ps", BTreeSet::from(["ER_FINALE".to_string()]))?;
         // its stencil value learnt at run time (the probe), the white shape kept for its fade (g) and the fade
@@ -555,8 +662,13 @@ fn run() -> Result<(), String> {
     if only == Some("hycap") {
         // (RSF2 round 5) with the frame block's hybrid rows (KH_HY3 follows the extra lights and the blood, as in the *_hy3 set)
         build("hycap", naga::ShaderStage::Fragment, "hycap_ps", ["ER_HYCAP", "KH_EXTRA_LIGHTS", "KH_BLOOD", "KH_HYBRID", "KH_HY3"].iter().map(|d| d.to_string()).collect())?;
+        // (ER-NATIVE) the same capture under a NEW name: its presence tells the renderer (gfx.rs `spec_ok`) that the pack's shaders
+        // know the native layout with the game's specular (er_char.wgsl er_oct_encode, hc_spec at t10, kh_hybrid_after)
+        build("hycap2", naga::ShaderStage::Fragment, "hycap_ps", ["ER_HYCAP", "KH_EXTRA_LIGHTS", "KH_BLOOD", "KH_HYBRID", "KH_HY3"].iter().map(|d| d.to_string()).collect())?;
         // (RSF2 round 11) the G-buffer's targets 3 and 4 cleared under the KH characters (er_char.wgsl hygb_ps): a NEW file
         build("hygb", naga::ShaderStage::Fragment, "hygb_ps", ["ER_HYCAP", "KH_EXTRA_LIGHTS", "KH_BLOOD", "KH_HYBRID", "KH_HY3"].iter().map(|d| d.to_string()).collect())?;
+        // (HAIR-BLEED) the safety net's count (er_char.wgsl hycensus_ps, gfx.rs census_count): a NEW file
+        build("hycensus", naga::ShaderStage::Fragment, "hycensus_ps", ["ER_HYCAP", "KH_EXTRA_LIGHTS", "KH_BLOOD", "KH_HYBRID", "KH_HY3"].iter().map(|d| d.to_string()).collect())?;
         // (RSF2 round 14) the KH characters' depth into the game's half-size effect depth (er_char.wgsl hdmerge_ps / hdfill_ps)
         build("hdmerge", naga::ShaderStage::Fragment, "hdmerge_ps", ["ER_HYCAP", "KH_EXTRA_LIGHTS", "KH_BLOOD", "KH_HYBRID", "KH_HY3"].iter().map(|d| d.to_string()).collect())?;
         build("hdfill", naga::ShaderStage::Fragment, "hdfill_ps", ["ER_HYCAP", "KH_EXTRA_LIGHTS", "KH_BLOOD", "KH_HYBRID", "KH_HY3"].iter().map(|d| d.to_string()).collect())?;
@@ -599,6 +711,7 @@ fn run() -> Result<(), String> {
     let variants_bl = variants.clone();
     let variants_hy = variants.clone();
     let variants_hy3 = variants.clone();
+    let variants_mimic = variants.clone();
     let variants_bli = variants.clone();
     for (id, masked, translucent, subsurface) in variants {
         let name = format!("{}{own}", kh_look::library::variant_name(id, masked, translucent, subsurface));
@@ -702,10 +815,50 @@ fn run() -> Result<(), String> {
                 }
             }
             build(&format!("{base}_hy3"), naga::ShaderStage::Fragment, "fs_main", defines.clone())?;
-            let mut defines = defines;
             defines.insert("KH_GBUFFER".to_string());
             build(&format!("{base}_gb3"), naga::ShaderStage::Fragment, "gb_main", defines)?;
         }
+    }
+    // (MIMIC SORA, THE USER 2026-11-02: "Make sure mimic Sora uses the shaders that mimic should use from Elden Ring.") THE
+    // MIMIC TEAR'S G-BUFFER WRITERS: `<variant>[_S]_gb3_mm` (gb_main with the `_gb3` definitions + KH_MIMIC: WetAspectParam 18
+    // over the material's base colour, five targets), one per opaque / masked variant (the translucent ones write no G-buffer).
+    // NEW names, built only with `--only mimic`; the index is `shaders_mimic[_<suffix>].json` (no existing file is rewritten).
+    // (MIMIC SORA, THE USER 2026-11-03: the Mimic Tear's arrival "transforming into Sora" and its dissolve) `--only mimicform`:
+    // `<variant>[_S]_gb3_mf` (the writers + KH_MIMIC_FORM: nothing above the cut, the liquid band under it), NEW names, index
+    // `shaders_mimicform[_<suffix>].json`. `--only mimicpool` (the main pack): the liquid pool's `mmpool.vs` / `mmpool.ps`.
+    if only == Some("mimicpool") {
+        let defines = BTreeSet::from(["ER_MIMIC_POOL", "KH_EXTRA_LIGHTS", "KH_BLOOD", "KH_HYBRID", "KH_HY3"].map(str::to_string));
+        build("mmpool", naga::ShaderStage::Vertex, "mmpool_vs", defines.clone())?;
+        build("mmpool", naga::ShaderStage::Fragment, "mmpool_ps", defines)?;
+        return Ok(());
+    }
+    if only == Some("mimic") || only == Some("mimicform") {
+        let form = only == Some("mimicform");
+        for (id, masked, translucent, subsurface) in variants_mimic {
+            if translucent {
+                continue;
+            }
+            let variant = kh_look::library::variant_name(id, masked, translucent, subsurface);
+            if form {
+                let mut defines = mimic_defines(id, masked, subsurface, party);
+                defines.insert("KH_MIMIC_FORM".to_string());
+                build(&mimic_form_name(&variant, &own), naga::ShaderStage::Fragment, "gb_main", defines)?;
+            } else {
+                build(&mimic_name(&variant, &own), naga::ShaderStage::Fragment, "gb_main", mimic_defines(id, masked, subsurface, party))?;
+            }
+        }
+        let manifest = serde_json::json!({
+            "format": "kh3-er-shaders/1",
+            "generator": concat!("crates/kh-shaderc ", env!("CARGO_PKG_VERSION")),
+            "note": "(MIMIC SORA) the Mimic Tear's G-buffer writers: <variant>[_suffix]_gb3_mm (gb_main, the _gb3 definitions + KH_MIMIC: WetAspectParam 18, five targets)",
+            "source": { "materials": library.generator, "naga": "29 (wgsl-in -> hlsl-out, shader model 6.0)", "compiler": dxc.display().to_string() },
+            "shaders": written,
+        });
+        let stem = if form { "shaders_mimicform" } else { "shaders_mimic" };
+        let index = suffix.map_or(format!("{stem}.json"), |s| format!("{stem}_{s}.json"));
+        std::fs::write(out_dir.join(&index), serde_json::to_string_pretty(&manifest).unwrap()).map_err(|e| e.to_string())?;
+        println!("kh-shaderc: (MIMIC SORA) wrote {}", out_dir.join(&index).display());
+        return Ok(());
     }
     // The textures as the game cooked them (block compressed, its own mips), beside the PNGs:
     // the Elden Ring renderer takes these when they are there (a quarter of the memory).
@@ -813,6 +966,54 @@ mod tests {
         let (gbclear, _) = to_hlsl(&preprocess(&spliced, &["ER_HYCAP", "KH_EXTRA_LIGHTS", "KH_BLOOD", "KH_HYBRID", "KH_HY3"].iter().map(|d| d.to_string()).collect()).unwrap(), naga::ShaderStage::Fragment, "hygb_ps").unwrap();
         let hygb_out = out_struct(&gbclear, "HyGbOut"); // (PORT30 housekeeping) its own output struct, as hycap_ps's
         assert!(gbclear.contains("register(t4)") && hygb_out.contains("SV_Target1") && !hygb_out.contains("SV_Target2") && gbclear.contains("discard"), "hygb_ps: {hygb_out}");
+    }
+
+    /// (MIMIC SORA, THE USER 2026-11-02: "Make sure mimic Sora uses the shaders that mimic should use from Elden Ring.") The
+    /// Mimic Tear's G-buffer writer translates for every opaque / masked variant of the main pack with the `_gb3` definitions +
+    /// KH_MIMIC: five targets (the subsurface and emissive ones too), WetAspectParam 18's numbers in it, the plain `_gb3` writer
+    /// unchanged (three targets, white). Skipped without the pack.
+    #[test]
+    fn mimic_the_gbuffer_writers_translate() {
+        assert_eq!(mimic_name("c12m", ""), "c12m_gb3_mm");
+        assert_eq!(mimic_name("c12m", "_cg"), "c12m_cg_gb3_mm");
+        assert_eq!(mimic_form_name("c12m", "_cg"), "c12m_cg_gb3_mf");
+        // (his arrival / dissolve) the liquid pool's pair translates: a vertex stage of its own, five G-buffer targets
+        let pool = BTreeSet::from(["ER_MIMIC_POOL", "KH_EXTRA_LIGHTS", "KH_BLOOD", "KH_HYBRID", "KH_HY3"].map(str::to_string));
+        let spliced_pool = preprocess(HARNESS, &pool).unwrap();
+        to_hlsl(&spliced_pool, naga::ShaderStage::Vertex, "mmpool_vs").unwrap();
+        let (pool_ps, _) = to_hlsl(&spliced_pool, naga::ShaderStage::Fragment, "mmpool_ps").unwrap();
+        assert!(pool_ps.contains("SV_Target4") && pool_ps.contains("discard"));
+        let d = mimic_defines(12, true, false, false);
+        assert!(["KH_GBUFFER", "KH_MIMIC", "KH_HY3", "KH_HYBRID", "KH_INTERIOR", "KH_MASKED", "KH_C12"].iter().all(|n| d.contains(*n)) && !d.contains("KH_TRANSLUCENT"));
+        assert!(!mimic_defines(12, false, false, true).contains("KH_INTERIOR"), "party mode: no inside, as `--only hy3`");
+        // the KH_MIMIC path carries the row (WetAspectParam 18: grey 200 at 0.8, metallic 255 at 1, shininess 255 at 0.85)
+        let block = preprocess(HARNESS, &BTreeSet::from(["KH_GBUFFER".to_string(), "KH_MIMIC".to_string(), "ER_FRAGMENT".to_string()])).unwrap();
+        for needle in ["200.0 / 255.0", "MM_WET_BASE_RATE: f32 = 0.8", "MM_WET_METAL_RATE: f32 = 1.0", "MM_WET_SHINE_RATE: f32 = 0.85", "@location(4) emissive"] {
+            assert!(block.contains(needle), "the KH_MIMIC path lacks {needle}");
+        }
+        let pack = PathBuf::from(PROJECT).join("build").join("sora_pack");
+        let Ok(library) = kh_look::library::Library::load(&pack) else { return };
+        let Ok(generated) = std::fs::read_to_string(library.dir.join("materials.wgsl")) else { return };
+        let spliced = HARNESS.replace("//KH_COMMON", kh_look::CHAR_COMMON_WGSL).replace("//KH_GENERATED", &generated);
+        let mut seen = BTreeSet::new();
+        for slot in library.slots.iter().filter(|s| !s.translucent) {
+            if !seen.insert((slot.owner_id, slot.masked, slot.subsurface)) {
+                continue;
+            }
+            let defines = mimic_defines(slot.owner_id, slot.masked, slot.subsurface, false);
+            let (mimic, _) = to_hlsl(&preprocess(&spliced, &defines).unwrap(), naga::ShaderStage::Fragment, "gb_main").unwrap_or_else(|e| panic!("{} mimic: {e}", slot.variant()));
+            assert!(mimic.contains("SV_Target4") && !mimic.contains("SV_Target5"), "variant {}: five targets", slot.variant());
+            // (his forming) the same writer with the cut and the liquid band: five targets, a discard on the cut
+            let mut form = defines.clone();
+            form.insert("KH_MIMIC_FORM".to_string());
+            let (formed, _) = to_hlsl(&preprocess(&spliced, &form).unwrap(), naga::ShaderStage::Fragment, "gb_main").unwrap_or_else(|e| panic!("{} mimic form: {e}", slot.variant()));
+            assert!(formed.contains("SV_Target4") && formed.contains("discard"), "variant {}: the forming writer", slot.variant());
+            let mut plain = defines.clone();
+            plain.remove("KH_MIMIC");
+            let (gb3, _) = to_hlsl(&preprocess(&spliced, &plain).unwrap(), naga::ShaderStage::Fragment, "gb_main").unwrap();
+            assert!(gb3.contains("SV_Target2") && !gb3.contains("SV_Target3"), "variant {}: the plain writer keeps three", slot.variant());
+        }
+        assert!(!seen.is_empty());
     }
 
     /// (ER79) The outfit skin with the leg guard translates (KH_JOINTS_EXTRA + KH_CLOTH_GUARD), reads the palette's last

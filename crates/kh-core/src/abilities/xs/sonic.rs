@@ -50,6 +50,9 @@ pub(crate) fn tick(_state: &StateData, cx: &mut Ctx) {
 /// THE REQUEST (the GUARD button in the controller update, before `TryAirSlide`): true when the press became a
 /// Sonic Dash.
 pub(crate) fn try_sonic_dash(state: &mut StateData, cx: &mut Ctx, stick_yaw: f32, magnitude: f32) -> bool {
+    if !crate::nocombat::allows(crate::nocombat::Fighter::Sora, crate::nocombat::Act::Xs) {
+        return false; // (NOCOMBAT) the press stays the air slide / dodge it would otherwise be
+    }
     let s = &*cx.pawn;
     if !has(s, A::SonicDash) || on_ground(s) || magnitude < X.sonic_stick_min || !crate::states::air_slide::gate(state, s, magnitude) {
         return false;

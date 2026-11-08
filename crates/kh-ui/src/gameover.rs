@@ -180,11 +180,14 @@ pub struct GameOverMenu {
     decided: Option<(GameOverButton, u32)>,
     /// The light cursor's place (stage pixels) and its slide: (from, to, frames done).
     light: (f32, f32),
-    slide: Option<((f32, f32), (f32, f32), u32)>,
+    slide: Option<LightSlide>,
 }
 
 /// The older name of [`GameOverMenu`].
 pub type GameOverScreen = GameOverMenu;
+
+/// The light cursor's slide: (from, to, frames done).
+type LightSlide = ((f32, f32), (f32, f32), u32);
 
 impl GameOverMenu {
     pub fn load(pack: &mut Pack, fonts: Fonts) -> Result<GameOverMenu, PackError> {

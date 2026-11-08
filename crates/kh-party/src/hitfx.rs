@@ -96,7 +96,7 @@ mod tests {
 
     #[test]
     fn every_friend_weapon_has_its_hit_effect_and_the_elements_theirs() {
-        for w in crate::tables::PARTY_WEAPONS {
+        for w in crate::tables::PARTY_WEAPONS.iter() { // (PACKGEN) a run-time table in the release build (kh-gendata)
             assert!(weapon_hit_effect(w.7).is_some(), "weapon {} ({}) has no hit effect", w.1, w.7);
         }
         assert_eq!(effect_of("TRES_DMG_ATTR_PHYSICAL", "w_do010"), "vw_do010_hit0");

@@ -20,10 +20,10 @@
 //!   test GREATER and no depth write: at the game's velocity split (after its forward stage, whose depth-tested sky and
 //!   far field would otherwise cover it; before its TAA) while he is nearer than `r.hair_late_far` m, else right after him.
 //!   Also out of the game's glow source x (1 - alpha).
-//! Nothing changes from frame to frame, so Elden Ring's TAA (our draws carry its jitter) resolves a stable edge.
-//! `r.hair = 0` (kh-er): the files are not used (exactly the draws as before); a change reloads the drawn outfit.
-//! `r.hair_late = 0`: the fringe right after him always. The fur of Monstropolis (a mod-6 dither without the phase input):
-//! KH_HAIR6, six screen phases.
+//!   Nothing changes from frame to frame, so Elden Ring's TAA (our draws carry its jitter) resolves a stable edge.
+//!   `r.hair = 0` (kh-er): the files are not used (exactly the draws as before); a change reloads the drawn outfit.
+//!   `r.hair_late = 0`: the fringe right after him always. The fur of Monstropolis (a mod-6 dither without the phase input):
+//!   KH_HAIR6, six screen phases.
 //!
 //! (ER91, the user: "the tips of Sora's hair is also still broken, it needs to look like this image") ER91's FILES
 //! (`<name>_h91` core, `_h91f` fringe, `_h91m` / `_h91n` the 4x pass's halves, `_gb2_h91` the hybrid's G-buffer; built by
@@ -174,8 +174,11 @@ pub(crate) fn pick(dir: &Path, stem: &str, masked: bool) -> Option<(String, Stri
     (masked && dir.join(&core).is_file() && dir.join(&edge).is_file()).then_some((core, edge))
 }
 
+/// Two shader files of one hair path.
+type FilePair = (String, String);
+
 /// (ER91) ER91's hair files beside `stem`: (core, fringe) and, when both are there too, the 4x pass's (solid, thin) ones.
-pub(crate) fn pick91(dir: &Path, stem: &str, masked: bool) -> Option<((String, String), Option<(String, String)>)> {
+pub(crate) fn pick91(dir: &Path, stem: &str, masked: bool) -> Option<(FilePair, Option<FilePair>)> {
     let core = format!("{stem}_h91.ps.dxil");
     let edge = format!("{stem}_h91f.ps.dxil");
     if !(masked && dir.join(&core).is_file() && dir.join(&edge).is_file()) {
@@ -218,6 +221,15 @@ pub(crate) struct Target {
     pub alpha: bool,
 }
 
+/// What every set of hair states of an outfit is made from: its slots (variant, two-sided, translucent, masked), the vertex
+/// shader and its input layout.
+#[derive(Clone, Copy)]
+pub(crate) struct Inputs<'a> {
+    pub slots: &'a [(String, bool, bool, bool)],
+    pub vertex: &'a [u8],
+    pub elements: &'a [D3D12_INPUT_ELEMENT_DESC],
+}
+
 /// The fringe's states, one per slot (None: a slot without a fringe shader): the slot's vertex shader input, its fringe
 /// pixel shader and rasteriser; depth tested GREATER (reversed Z: strictly in front of what his opaque / masked draws left),
 /// not written. Colour: alpha blended over what is there (the target's alpha as the colour draws treat it). `glow`: the
@@ -225,8 +237,8 @@ pub(crate) struct Target {
 ///
 /// # Safety
 /// Direct3D object creation with a live device and root signature.
-#[allow(clippy::too_many_arguments)]
-pub(crate) unsafe fn fringe_pipelines(device: &ID3D12Device, root: &ID3D12RootSignature, key: Target, glow: bool, slots: &[(String, bool, bool, bool)], vertex: &[u8], fringe: &HashMap<String, Vec<u8>>, elements: &[D3D12_INPUT_ELEMENT_DESC]) -> Result<Vec<Option<ID3D12PipelineState>>, String> {
+pub(crate) unsafe fn fringe_pipelines(device: &ID3D12Device, root: &ID3D12RootSignature, key: Target, glow: bool, inputs: Inputs, fringe: &HashMap<String, Vec<u8>>) -> Result<Vec<Option<ID3D12PipelineState>>, String> {
+    let Inputs { slots, vertex, elements } = inputs;
     let mut out = Vec::with_capacity(slots.len());
     for (variant, two_sided, translucent, masked) in slots {
         let Some(pixel) = fringe.get(variant).filter(|_| *masked && !*translucent) else {

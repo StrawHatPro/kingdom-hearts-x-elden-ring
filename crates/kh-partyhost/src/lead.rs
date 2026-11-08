@@ -29,7 +29,7 @@ use kh_host::party::{FriendAiSettings, PartyChara};
 use kh_party::pad::PadFrame;
 use kh_party::MemberView;
 
-use crate::aiworld::{EnemyFeed, LeaderAiWorld, PartyTargets, SORA_ACTOR, STRAIGHT_NAV};
+use crate::aiworld::{EnemyFeed, LeaderAiWorld, PartyTargets, SoraAiWorld, SORA_ACTOR, STRAIGHT_NAV};
 use crate::runtime::{chara_of, PartyRuntime};
 use crate::say;
 
@@ -72,6 +72,9 @@ pub struct Leadership {
     /// (FX1) A "yes" the pad was given (D.6) and not yet seen through: the leader, Sora's unison count at the yes, the
     /// seconds since (`team_wait_step`).
     pub(crate) team_wait: Option<TeamWait>,
+    /// (MIMIC-BOSS) THE SOLO FIGHT of a Mimic Tear boss (crate::mimicboss): the party as it was at the fog gate; while it is held
+    /// no formation change is taken ([`Leadership::set_formation`]) and a save keeps `before`.
+    pub solo: Option<crate::mimicboss::SoloHold>,
 }
 
 /// (FX1) The team move a friend leader's pad was told "yes" to, waiting for AI Sora's core to start it.
@@ -110,6 +113,7 @@ impl Default for Leadership {
             party_battle: false,
             battle_linger: 0.0,
             team_wait: None,
+            solo: None, // (MIMIC-BOSS)
         }
     }
 }
@@ -137,6 +141,11 @@ impl Leadership {
 
     /// The formation changed (the menu, a word, a load): applied at the next step.
     pub fn set_formation(&mut self, f: Formation) {
+        // (MIMIC-BOSS) the solo fight: nobody is switched in or out until it ends (mimicboss.rs `solo_end`)
+        if let Some(h) = self.solo.as_ref().filter(|h| f != h.solo_formation()) {
+            say!("party-play: formation {:?}, leader {}: REFUSED: the {} fight is solo until it ends", f.active().iter().map(|c| c.name()).collect::<Vec<_>>(), f.leader().name(), h.boss);
+            return;
+        }
         if f != self.formation {
             say!("party-play: formation {:?}, leader {}", f.active().iter().map(|c| c.name()).collect::<Vec<_>>(), f.leader().name());
             self.formation = f;
@@ -248,6 +257,41 @@ impl PartyRuntime {
         say!("party-play: AI Sora settings: {}", s.describe());
     }
 
+    /// (HUD-REVIVE SORAKO) AI SORA IS KNOCKED OUT: a friend leads and Sora's core is at 0 HP (in the Die state he lies in his
+    /// down pose on the ground: kh-core states/die.rs, a party member's KO). False while Sora leads (his death is the
+    /// game over: kh-er death.rs) and once he has HP again (his get-up plays, then Idle).
+    pub fn ai_sora_down(&self, sora: &kh_core::Sora) -> bool {
+        self.leader.is_some() && (sora_ko(sora.status()) || (sora.status().hp < 1 && sora.output().state == kh_core::StateId::Die))
+    }
+
+    /// (HUD-REVIVE SORAKO) THE REVIVE OF AI SORA (the revive policy's mechanism; KH3's friends' `UTresNpcState_Die` rule: HP
+    /// above 0 ends the down): his HP set to `hp` (1 ..= his maximum); his core's Die state then plays the get-up (the blow
+    /// family's 0213 / 0216, invincible) at his next step and finishes into Idle; his AI (stopped while he is down) starts
+    /// afresh. A kill plane's KO (`combat.kill_plane_held`: he lies in the barrier, his HP held at 0) is lifted and he is put
+    /// behind the leader standing (`Sora::teleport`: a fresh core in Idle, the friends' warp spot), as the friends' kill-plane
+    /// KO ends only by the host's stand-up. Any HP gain revives him the same way (a Recover / FullRecover request on his core,
+    /// a Cure): nothing else is needed for a save point's Recover. False: he was not down (or no friend leads).
+    pub fn revive_ai_sora(&mut self, sora: &mut kh_core::Sora, hp: i32) -> bool {
+        if !self.ai_sora_down(sora) {
+            return false;
+        }
+        let hp = hp.clamp(1, sora.status().max_hp().max(1));
+        if sora.combat().kill_plane_held {
+            sora.combat_mut().kill_plane_held = false;
+            let at = self.leader.and_then(|l| self.party.view(l)).map(|v| {
+                let a = (v.yaw + 180.0).to_radians();
+                (v.position + Vec3::new(a.cos(), a.sin(), 0.0) * 250.0 + Vec3::Z * 5.0, v.yaw)
+            });
+            let (position, yaw) = at.unwrap_or((sora.output().position, sora.output().yaw));
+            sora.teleport(kh_core::Pose { position, yaw });
+            say!("party-play: AI Sora revived from a kill plane's KO: put behind the leader, standing, {hp} HP");
+        } else {
+            say!("party-play: AI Sora revived: {hp} HP, his get-up plays");
+        }
+        sora.status_mut().hp = hp;
+        true
+    }
+
     /// (party P) THE MEMBERS THE AI RUNS NOW (Customize's dynamic friends list, the user's rule): Sora while a friend
     /// leads and he is in the party, every active friend but the leader; party order, with their settings.
     pub fn ai_members(&self) -> Vec<(PartyChara, FriendAiSettings)> {
@@ -304,6 +348,7 @@ impl PartyRuntime {
         // (stream D, D.6) the team attacks with a friend leading: the leader for the link points, AI Sora rolls no unison
         self.team.set_leader(self.leader);
         sora.combat_mut().friend.sora_is_ai = self.leader.is_some();
+        sora.combat_mut().friend.ko_game_over_pose = self.leader.is_some(); // (HUD-REVIVE) his KO: the game-over pose, hovering
         // (FX1) the safety net: a "yes" whose team move never started becomes a late "no"
         self.team_wait_step(sora, dt, now);
         let Some(leader) = self.leader else {
@@ -314,7 +359,7 @@ impl PartyRuntime {
         // (D.6) the leader's combo wants its finisher: the unison / fusion roll (Sora in the party only)
         let leader_at = self.party.view(leader).map(|v| (v.position, v.chara.uid()));
         let sora_at = sora.output().position;
-        let abilities = sora.status().abilities.clone();
+        let abilities = sora.status().abilities;
         let sora_active = self.lead.sora_active;
         // (FX1) AI Sora's shotlock sequence (RB held, A at 1 s) is his own action in progress
         let ai_shooting = self.lead.sora_ai.as_ref().is_some_and(|ai| ai.shot.is_some());
@@ -393,7 +438,19 @@ impl PartyRuntime {
             feed.reserve(&self.party.don_zetta_off_limit_targets(targets)); // (ZETTA round 5c) Zettaflare's target and every enemy near its zones
             feed
         };
-        let mut out = ai.input(self, sora, dt, &enemies, camera, input.camera_yaw, nav.unwrap_or(&STRAIGHT_NAV), now);
+        // (GRABS) AI Sora caught by a throw or getting up (caught.rs): his tree stopped, nothing pressed, no step; it starts
+        // afresh when he is up
+        let caught = self.caught.stops(PartyChara::Sora);
+        // (HUD-REVIVE SORAKO) KO'd (or getting up: the Die state) his tree is stopped too, as caught: it starts afresh when
+        // he stands (`SoraAi::drive` presses nothing and never warps him meanwhile)
+        let down = sora_down(sora);
+        if let Some(ctl) = ai.ctl.as_mut() {
+            ctl.set_stop_ai(caught || down);
+        }
+        let mut out = ai.input(self, sora, AiStep { dt, now }, AiScene { enemies: &enemies, camera, camera_yaw: input.camera_yaw, nav: nav.unwrap_or(&STRAIGHT_NAV) });
+        if caught {
+            (out.move_stick, out.jump_pressed, out.jump_held, out.pad) = (kh_core::Vec2::ZERO, false, false, kh_core::PadState::default());
+        }
         // (DON-PROG fix of team/tests s7) THE PLAYER'S Y ON A TEAM COMMAND WINS OVER AI SORA'S OWN PRESSES: while the leader
         // presses or holds Y and a team attack is Sora's current situation command, AI Sora presses nothing of his own (an
         // attack, a spell, a shotlock queued in Sora's core makes the executor refuse the team command: `try_team_attack`
@@ -453,7 +510,7 @@ impl PartyRuntime {
     }
 
     /// The formation into the simulation: friends spawned / removed, the pad on the leader, Sora active or parked.
-    fn apply_formation(&mut self, sora: &mut kh_core::Sora, now: f64) {
+    pub(crate) fn apply_formation(&mut self, sora: &mut kh_core::Sora, now: f64) {
         let f = self.lead.formation.clone();
         // the friends of the formation (the runtime's spawn takes `active_friends`)
         for (i, c) in PartyChara::FRIENDS.into_iter().enumerate() {
@@ -594,7 +651,8 @@ impl PartyRuntime {
         s.command = menu;
         s.lock_on = pad.lock;
         s.soft_target = if pad.lock == TargetId::NONE { pad.soft } else { TargetId::NONE };
-        s.prompt = None;
+        // (PROMPT-UI) the one gate of the Y owner's prompts: HIS button notice and style-point gauge, never Sora's
+        kh_party::yhud::y_prompts(&self.party, id).apply(&mut s);
         // (party X2-b) his own aim (Discus Barrage / Spell Volley) as Sora's shotlock scope and lock marks
         s.aim = crate::custom::leader_aim(&self.party, id).unwrap_or_default();
         s.sneeze = false;
@@ -605,15 +663,8 @@ impl PartyRuntime {
     /// MaxWalkSpeed, at least his actual speed, x the in-view rate beyond m_RangeSamePlayerSpeed, x distance / range
     /// within it) over his sprint speed, at least 1; 1 in battle. Port design (KH3 has no AI Sora; the friends' rule).
     pub fn ai_sora_speed_scale(&self, leader: kh_party::MemberId, out: &kh_core::Output, in_battle: bool) -> f32 {
-        let k = kh_party::locomotion::K;
         let (Some(m), false) = (self.party.member(leader), in_battle) else { return 1.0 };
-        let d = m.position() - out.position;
-        let dist = (d.x * d.x + d.y * d.y).sqrt();
-        let range = k.follow_same_speed_range;
-        let rate = if dist <= range { dist / range } else { k.follow_in_view_rate };
-        let v = m.cmc.velocity;
-        let reference = m.cmc.max_walk_speed.max(m.params.speed_run).max((v.x * v.x + v.y * v.y).sqrt());
-        (reference * rate).min(k.k1_speed_cap) / kh_core::SORA_PARAMS.speed_sprint.max(1.0)
+        follow_speed_scale(m.position(), m.cmc.velocity, m.cmc.max_walk_speed.max(m.params.speed_run), out)
     }
 
     /// The party's view of "the player" while a friend leads: the leader's (the friends follow, warp to and cure him).
@@ -637,6 +688,20 @@ impl PartyRuntime {
     }
 }
 
+/// (party K1) THE FRIENDS' FOLLOW SPEED RULE for an AI Sora (kh-party locomotion, KH3 0x1412196C0) as a scale on his sprint:
+/// the leader's reference speed (his run, at least his actual speed) x the in-view rate beyond m_RangeSamePlayerSpeed, x
+/// distance / range within it, capped. (MIMIC SORA) shared by AI Sora and Mimic Sora (whose leader may be the player's Sora).
+pub(crate) fn follow_speed_scale(leader: Vec3, leader_velocity: Vec3, reference: f32, out: &kh_core::Output) -> f32 {
+    let k = kh_party::locomotion::K;
+    let d = leader - out.position;
+    let dist = (d.x * d.x + d.y * d.y).sqrt();
+    let range = k.follow_same_speed_range;
+    let rate = if dist <= range { dist / range } else { k.follow_in_view_rate };
+    let v = leader_velocity;
+    let reference = reference.max((v.x * v.x + v.y * v.y).sqrt());
+    (reference * rate).min(k.k1_speed_cap) / kh_core::SORA_PARAMS.speed_sprint.max(1.0)
+}
+
 // ---------------------------------------------------------------------------------------------- AI Sora
 
 /// The command AI Sora's tree is running, and how far it is.
@@ -651,6 +716,8 @@ struct SoraCmd {
 
 /// AI SORA's body: what his tree sees of him and what it asked for.
 struct SoraBody<'a> {
+    /// His actor id among the allies: `SORA_ACTOR` for AI Sora, (MIMIC SORA) `MIMIC_ACTOR` for Mimic Sora.
+    actor: u8,
     out: &'a Output,
     status: &'a kh_core::Status,
     in_battle: bool,
@@ -679,6 +746,18 @@ fn sora_free(s: kh_core::StateId) -> bool {
     matches!(s, kh_core::StateId::Idle | kh_core::StateId::Run)
 }
 
+/// (HUD-REVIVE SORAKO) An AI Sora core is DOWN for his AI: HP 0, or still in the Die state (his down pose, or the get-up after
+/// a revive: kh-core states/die.rs, a party member's KO). A placeholder status (no loadout given: test hosts) reads 0 HP and is
+/// no KO.
+fn sora_down(sora: &kh_core::Sora) -> bool {
+    sora.output().state == kh_core::StateId::Die || sora_ko(sora.status())
+}
+
+/// (HUD-REVIVE SORAKO) 0 HP on a real status (the placeholder's 0 is no KO).
+fn sora_ko(st: &kh_core::Status) -> bool {
+    st.hp < 1 && !st.placeholder
+}
+
 /// (CHESTFIX) AI Sora's way behind a running friend leader: where his stick points and his speed cap (cm/s).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct FollowWay {
@@ -704,7 +783,7 @@ pub(crate) struct FollowWay {
 /// - farther behind: toward the goal at KH3's follow speed (the leader's x 1.1 seen / 2.5 not, distance / range within
 ///   it) and at most the leader's speed plus what FOL2_CLOSE_DECEL takes off before the follow distance (the friends'
 ///   catch-up that eases off), at most k1.speed_cap. `seen`: the camera sees him (the friends' frustum test).
-/// None: the rule does not apply (in battle, the leader slow or standing): the tree's own way and his own speeds.
+///   None: the rule does not apply (in battle, the leader slow or standing): the tree's own way and his own speeds.
 pub(crate) fn sora_follow_way(sora: Vec3, goal: Option<Vec3>, leader: Vec3, leader_velocity: Vec3, in_battle: bool, seen: bool) -> Option<FollowWay> {
     use kh_party::locomotion::{FOL2_ALONG_AHEAD, FOL2_CLOSE_DECEL, FOL2_GAP_TIME, FOL2_LATERAL_CM, FOL2_LIVE_BEHIND, K};
     let flat = |v: Vec3| Vec3::new(v.x, v.y, 0.0);
@@ -743,7 +822,7 @@ pub(crate) fn sora_follow_way(sora: Vec3, goal: Option<Vec3>, leader: Vec3, lead
 impl kh_ai::AiBody for SoraBody<'_> {
     fn view(&self) -> kh_ai::BodyView {
         kh_ai::BodyView {
-            member: SORA_ACTOR,
+            member: self.actor,
             uid: 0,
             position: self.out.position,
             yaw: self.out.yaw,
@@ -761,7 +840,7 @@ impl kh_ai::AiBody for SoraBody<'_> {
             in_battle: self.in_battle,
             can_battle: self.in_battle,
             in_damage_reaction: self.out.state == kh_core::StateId::Damage,
-            items: [None; 4],
+            items: [None; kh_ai::ITEM_SLOTS],
             ..kh_ai::BodyView::default()
         }
     }
@@ -806,6 +885,28 @@ impl kh_ai::AiBody for SoraBody<'_> {
     }
 }
 
+/// AI Sora's step: the fixed step (s) and the run's time (s).
+#[derive(Clone, Copy)]
+struct AiStep {
+    dt: f32,
+    now: f64,
+}
+
+/// What AI Sora's step sees: the enemies, the drawn camera (`camera_yaw`: what his stick is relative to), the navigation.
+#[derive(Clone, Copy)]
+struct AiScene<'a> {
+    enemies: &'a EnemyFeed,
+    camera: &'a kh_camera::CameraView,
+    camera_yaw: f32,
+    nav: &'a dyn kh_ai::Nav,
+}
+
+/// The pad AI Sora's tools write this step.
+struct ToolPad<'a> {
+    stick: &'a mut Vec2,
+    buttons: &'a mut PadButtons,
+}
+
 /// AI Sora: stream C's controller on Goofy's tree, and the input it makes.
 struct SoraAi {
     ctl: Option<kh_ai::AiController>,
@@ -829,24 +930,241 @@ struct SoraAi {
     tool_busy: Option<f32>,
     /// (party K1) the hold after an arrival behind a running leader (s left), as the friends' (kh-party locomotion).
     k1_hold: f32,
+    /// (MIMIC SORA) his actor id (`SORA_ACTOR`, `MIMIC_ACTOR`) and his name in the log ("AI Sora", "Mimic Sora").
+    actor: u8,
+    name: &'static str,
+    /// (MIMIC-BOSS-KIT) THE LEADER SORA'S FULL KIT ([`full_kit_of`]: the copies, Mimic Sora and the Mimic Tear boss's Sora):
+    /// every Y command of his own (reaction commands too) with L2 to reach one behind a row he may not use, the Keyblade
+    /// switch, Aerial Recovery. AI Sora keeps the kit the user chose for him (2026-10-15).
+    full_kit: bool,
+    /// (MIMIC-BOSS-KIT) seconds until the next Keyblade switch is tried; the switch count before the press in flight and the
+    /// seconds it has been tried.
+    switch_wait: f32,
+    switch_try: Option<(u32, f32)>,
+    /// (MIMIC-BOSS-KIT) the jump of an Aerial Recovery was pressed in this damage reaction.
+    recovered: bool,
+    /// (MIMIC-BOSS hotfix 3, MB3-AGGRO) A boss copy's hostile tuning (mimicboss.rs `CopyAggro`; None or off: as before), its own
+    /// combo chain (seconds since its first press) and the wait of an Aerial Recovery it decided to take.
+    aggro: Option<crate::mimicboss::CopyAggro>,
+    chain: Option<f32>,
+    recover_wait: Option<f32>,
+}
+
+/// (MIMIC-BOSS-KIT, the coordinator's rule: "a COPY has the copied leader's FULL kit, under the same requirements the real
+/// character has") The AI Soras who are COPIES of the leader Sora: Mimic Sora ([`MIMIC_ACTOR`]) and the Mimic Tear boss's
+/// Sora ([`BOSS_ACTOR`]). The party's own AI Sora ([`SORA_ACTOR`]) keeps the kit of the user's decision of 2026-10-15
+/// ("his full kit except team attacks": the formchange / finish / grand magic Y, magic, the shotlock, Cure / Potion).
+pub(crate) fn full_kit_of(actor: u8) -> bool {
+    actor == MIMIC_ACTOR || actor == BOSS_ACTOR
+}
+
+/// (MIMIC-BOSS-KIT) THE Y ROWS A COPY MAY USE: every situation command of the leader Sora's own kit (reaction commands such as
+/// Aerial Recovery's counter, formchanges, finishes and their extras, grand magic, Rage / XS commands, a shotlock row), never
+/// a team attack (it needs the party: classes TEAM and SINGLE_B's team finishes SFinish 211 / FrFinish 214 /
+/// FrLinkofhearts 241), an attraction (excluded by the user forever: class ATTRACTION and its finish AfFinish 192) or a Link
+/// (KH3's summons: class LINK; the copies never summon). An ex entry (a prompt's reaction command) is always his own.
+pub(crate) fn copy_may_use(queue: &kh_core::combat::situation::Queue, kind: i32) -> bool {
+    use kh_core::combat::situation::{class, class_of};
+    if queue.find(kind).is_some_and(|(_, e)| e.ex) {
+        return true;
+    }
+    !matches!(class_of(kind), class::ATTRACTION | class::TEAM | class::LINK) && !matches!(kind, 186..=192 | 193..=210 | 211 | 214 | 237..=242)
+}
+
+/// (MIMIC-BOSS-KIT) OUR DESIGN (KH3 has no AI Sora): a copy switches Keyblades every [`COPY_SWITCH_EVERY`] s (the low end,
+/// plus up to [`COPY_SWITCH_SPREAD`] at random) in battle, KH3's own way (D-pad right on Attack, kh-core
+/// `status::keyblade::request_switch`, its whole gate); a refused press is tried again every [`COPY_SWITCH_RETRY`] s for at
+/// most [`COPY_SWITCH_GIVE_UP`] s.
+pub const COPY_SWITCH_EVERY: f32 = 12.0;
+pub const COPY_SWITCH_SPREAD: f32 = 8.0;
+pub const COPY_SWITCH_RETRY: f32 = 0.25;
+pub const COPY_SWITCH_GIVE_UP: f32 = 3.0;
+
+/// (MIMIC SORA) Mimic Sora's actor id among the allies (AI Sora's is `SORA_ACTOR`): his own tree controller, never AI Sora's.
+pub const MIMIC_ACTOR: u8 = 8;
+
+/// (MIMIC SORA) WHOM AN AI SORA FOLLOWS: where the leader stands, how he moves, his fight (AI Sora: the friend leader; Mimic
+/// Sora: the player's Sora while he leads, else the friend leader).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Lead {
+    pub position: Vec3,
+    pub yaw: f32,
+    pub velocity: Vec3,
+    pub in_battle: bool,
+    pub name: &'static str,
+}
+
+impl Lead {
+    fn of_member(v: &MemberView) -> Lead {
+        Lead { position: v.position, yaw: v.yaw, velocity: v.velocity, in_battle: v.in_battle, name: v.chara.name() }
+    }
+}
+
+/// (MIMIC SORA) The leader, the trees' world, the allies and the AI settings of one AI Sora step.
+#[derive(Clone, Copy)]
+struct AiLeadWorld<'a> {
+    lead: Lead,
+    world: &'a dyn kh_ai::AiWorld,
+    members: &'a [MemberView],
+    settings: FriendAiSettings,
 }
 
 impl SoraAi {
     fn new(rt: &PartyRuntime) -> SoraAi {
-        let ctl = rt.ai_pack.clone().map(|pack| kh_ai::AiController::new(pack, "n_ex002", SORA_ACTOR, 0x50_7A_A1));
-        if ctl.is_none() {
-            say!("party-play: no AI pack: AI Sora only follows the leader");
-        }
-        SoraAi { ctl, shared: kh_ai::AiShared::new(), cmd: None, history: Vec::new(), next: 1, held: PadButtons::NONE, press_wait: 0.0, far_time: 0.0, cure_wait: 0.0, magic_wait: 3.0, shot_wait: 6.0, situation_wait: 0.0, shot: None, applied: None, random: 0x50_7A_A1, tool_busy: None, k1_hold: 0.0 }
+        SoraAi::with_actor(rt, SORA_ACTOR, "AI Sora", 0x50_7A_A1)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn input(&mut self, rt: &PartyRuntime, sora: &mut kh_core::Sora, dt: f32, enemies: &EnemyFeed, camera: &kh_camera::CameraView, camera_yaw: f32, nav: &dyn kh_ai::Nav, now: f64) -> Input {
+    fn with_actor(rt: &PartyRuntime, actor: u8, name: &'static str, seed: u32) -> SoraAi {
+        let ctl = rt.ai_pack.clone().map(|pack| kh_ai::AiController::new(pack, "n_ex002", actor, seed as u64));
+        if ctl.is_none() {
+            say!("party-play: no AI pack: {name} only follows the leader");
+        }
+        // (MIMIC-BOSS-KIT) the copies' full kit; the first Keyblade switch after the first quarter of the interval
+        let full_kit = full_kit_of(actor);
+        SoraAi { ctl, shared: kh_ai::AiShared::new(), cmd: None, history: Vec::new(), next: 1, held: PadButtons::NONE, press_wait: 0.0, far_time: 0.0, cure_wait: 0.0, magic_wait: 3.0, shot_wait: 6.0, situation_wait: 0.0, shot: None, applied: None, random: seed, tool_busy: None, k1_hold: 0.0, actor, name, full_kit, switch_wait: COPY_SWITCH_EVERY * 0.25, switch_try: None, recovered: false, aggro: None, chain: None, recover_wait: None }
+    }
+
+    /// (MIMIC-BOSS-KIT) AERIAL RECOVERY, the copies' (his ability AirRecovery; KH3's jump press in the recoverable window of a
+    /// blow, toss, launch or parabola, kh-core states/jump.rs `jump_request` -> AIR_SLIDE with its reaction command, Blow
+    /// Counter): once a reaction, as soon as the window opens (`Sora::damage_reaction().recoverable`, 0.2 s after the hit).
+    /// (MIMIC-BOSS hotfix 3, MB3-AGGRO) A boss copy takes it out of `sora_recover_chance` of the blows (one roll a blow), and
+    /// `sora_recover_delay` s into the window (a window that closes first: none).
+    fn air_recovery(&mut self, sora: &kh_core::Sora, dt: f32) -> bool {
+        match sora.damage_reaction() {
+            Some(d) if d.recoverable && !self.recovered && sora.status().abilities.count(kh_core::enums::ETresAbilityKind::AirRecovery) > 0 => {
+                let Some(a) = self.aggro.filter(|a| a.on) else {
+                    self.recovered = true;
+                    return true;
+                };
+                let waited = match self.recover_wait {
+                    Some(w) => w + dt,
+                    None => {
+                        if self.unit() >= a.sora_recover_chance {
+                            self.recovered = true;
+                            return false;
+                        }
+                        0.0
+                    }
+                };
+                if waited >= a.sora_recover_delay {
+                    self.recovered = true;
+                    self.recover_wait = None;
+                    return true;
+                }
+                self.recover_wait = Some(waited);
+                false
+            }
+            Some(_) => false,
+            None => {
+                self.recovered = false;
+                self.recover_wait = None;
+                false
+            }
+        }
+    }
+
+    /// (MB3-AGGRO) Its tuning when on.
+    fn hostile(&self) -> Option<crate::mimicboss::CopyAggro> {
+        self.aggro.filter(|a| a.on)
+    }
+
+    /// (MB3-AGGRO) The low end of its Keyblade switch interval (a boss copy's own; the spread scaled with it).
+    fn switch_every(&self) -> (f32, f32) {
+        self.hostile().map_or((COPY_SWITCH_EVERY, COPY_SWITCH_SPREAD), |a| (a.sora_switch_every, COPY_SWITCH_SPREAD * a.sora_switch_every / COPY_SWITCH_EVERY))
+    }
+
+    /// (MIMIC-BOSS hotfix 3, MB3-AGGRO; THE USER 2026-11-06: "the boss mimic tear needs to be way way more aggressive") A BOSS
+    /// COPY PRESSES: whenever its tree has no attack of its own running (an Idle, a TurnTo, a walk to a formation spot) and no
+    /// tool of its runs, it runs at the nearest enemy and, from `sora_gap_close` (the core's own soft target and dashes) or in
+    /// reach, chains Attack presses for `sora_combo_for` s, every `sora_press_every` s, into its next combo as soon as the core
+    /// lets it (the combo's end lag, a flinch, a recovery are the core's). Off: nothing.
+    fn press(&mut self, out: &kh_core::Output, nearest: Option<(Vec3, f32)>, dt: f32, camera_yaw: f32, pad: ToolPad<'_>) {
+        let ToolPad { stick, buttons } = pad;
+        let Some(a) = self.hostile().filter(|a| a.sora_press) else { return };
+        let tree_attacks = matches!(self.cmd.as_ref().map(|c| &c.cmd), Some(kh_ai::AiCommand::Action { .. }));
+        if tree_attacks || self.tool_busy.is_some() || self.shot.is_some() {
+            self.chain = None;
+            return;
+        }
+        let Some((at, radius)) = nearest else {
+            self.chain = None;
+            return;
+        };
+        if let Some(t) = self.chain.as_mut() {
+            *t += dt;
+            if *t > a.sora_combo_for && sora_free(out.state) {
+                self.chain = None;
+            }
+        }
+        let gap = Vec2::new(at.x - out.position.x, at.y - out.position.y).length() - 34.0 - radius;
+        let press_now = self.press_wait <= 0.0 && !self.held.has(PadButton::ATTACK);
+        match self.chain {
+            Some(t) => {
+                if t <= a.sora_combo_for && press_now {
+                    buttons.set(PadButton::ATTACK, true);
+                    self.press_wait = a.sora_press_every;
+                }
+            }
+            None if !sora_free(out.state) => {}
+            None if gap <= a.sora_gap_close.max(140.0) => {
+                if press_now {
+                    buttons.set(PadButton::ATTACK, true);
+                    self.press_wait = a.sora_press_every;
+                    self.chain = Some(0.0);
+                }
+            }
+            None => {
+                let d = Vec3::new(at.x - out.position.x, at.y - out.position.y, 0.0);
+                let yaw = d.y.atan2(d.x).to_degrees() - camera_yaw;
+                let (sn, cs) = yaw.to_radians().sin_cos();
+                *stick = Vec2::new(sn, cs);
+            }
+        }
+    }
+
+    /// (MIMIC-BOSS-KIT) THE KEYBLADE SWITCH of a copy (see [`COPY_SWITCH_EVERY`]): D-pad right while his command menu is on
+    /// Attack (no other press this step), with two Keyblades or more, in battle. True: pressed now.
+    fn keyblade_switch(&mut self, sora: &kh_core::Sora, dt: f32, now: f64) -> bool {
+        let switches = sora.status().keyblade_switches;
+        if let Some((before, age)) = self.switch_try.as_mut() {
+            *age += dt;
+            if switches != *before {
+                say!("party-play: t={now:.3}s {}: Keyblade switch to {:?} (D-pad right on Attack)", self.name, sora.status().current_keyblade().map(|k| k.key()));
+                self.switch_try = None;
+                let (every, spread) = self.switch_every(); // (MB3-AGGRO)
+                self.switch_wait = every + spread * self.unit();
+                return false;
+            }
+            if *age > COPY_SWITCH_GIVE_UP {
+                self.switch_try = None;
+                self.switch_wait = COPY_SWITCH_EVERY;
+                return false;
+            }
+        }
+        self.switch_wait = (self.switch_wait - dt).max(0.0);
+        let c = sora.command();
+        let on_attack = c.state == kh_core::command::MenuState::MainSel && c.main_cursor == 0;
+        if self.switch_wait > 0.0 || sora.status().keyblades().filled() < 2 || !on_attack || self.held.has(PadButton::DPadRight) {
+            return false;
+        }
+        let age = self.switch_try.map_or(0.0, |t| t.1);
+        self.switch_try = Some((switches, age));
+        self.switch_wait = COPY_SWITCH_RETRY;
+        true
+    }
+
+    /// (MIMIC-BOSS-KIT) His RNG's next number in 0..1 (the tools' xorshift).
+    fn unit(&mut self) -> f32 {
+        self.random ^= self.random << 13;
+        self.random ^= self.random >> 17;
+        self.random ^= self.random << 5;
+        (self.random >> 8) as f32 / (1u32 << 24) as f32
+    }
+
+    fn input(&mut self, rt: &PartyRuntime, sora: &mut kh_core::Sora, step: AiStep, scene: AiScene<'_>) -> Input {
         let out = sora.output();
         let status = sora.status().clone();
         let Some(leader) = rt.leader.and_then(|l| rt.current.iter().find(|v| v.id == l)) else { return Input::default() };
-        // (ZETTA round 5c) no enemy left to him through Zettaflare: he waits at the nearest spot off its zones
-        let waiting = if rt.zetta_wait_spots(leader.position, enemies, nav).is_empty() { None } else { kh_party::donald::zettaflare::wait_place(&rt.party, None, out.position) };
         let in_battle = sora.actions().battle;
         let mps = rt.member_mps();
         let world = LeaderAiWorld {
@@ -855,12 +1173,26 @@ impl SoraAi {
             in_battle: in_battle || leader.in_battle,
             members: &rt.current,
             sora: Some((&out, &status)),
-            enemies,
-            camera: rt.ai_camera(camera), // (party I2) the drawn view
-            nav,
+            enemies: scene.enemies,
+            camera: rt.ai_camera(scene.camera), // (party I2) the drawn view
+            nav: scene.nav,
             game_level: status.game_level as u8,
             mps: &mps, // (party I2)
         };
+        let lead = Lead::of_member(leader);
+        self.drive(rt, sora, step, scene, AiLeadWorld { lead, world: &world, members: &rt.current, settings: rt.lead.sora_settings })
+    }
+
+    /// THE ONE BODY OF AN AI SORA'S STEP, whoever he follows (AI Sora behind a friend leader; (MIMIC SORA) Mimic Sora behind
+    /// the player's Sora or a friend leader): the tree's tick, the warp, the command into the pad, the follow and his tools.
+    fn drive(&mut self, rt: &PartyRuntime, sora: &mut kh_core::Sora, step: AiStep, scene: AiScene<'_>, AiLeadWorld { lead, world, members, settings }: AiLeadWorld<'_>) -> Input {
+        let AiStep { dt, now } = step;
+        let AiScene { enemies, camera_yaw, nav, .. } = scene;
+        let out = sora.output();
+        let status = sora.status().clone();
+        // (ZETTA round 5c) no enemy left to him through Zettaflare: he waits at the nearest spot off its zones
+        let waiting = if rt.zetta_wait_spots(lead.position, enemies, nav).is_empty() { None } else { kh_party::donald::zettaflare::wait_place(&rt.party, None, out.position) };
+        let in_battle = sora.actions().battle;
         // (party AIX, OUR DESIGN) WHILE ONE OF HIS OWN TOOLS RUNS (a spell, the shotlock, a situation command: actions the
         // tree did not ask for) the tree waits, as a friend's tree waits on its Action task: ticked meanwhile, it saw him
         // "in an action" with no task of its own, its lock-on query filtered him out (IsCharacterState AI_ACTION) and the
@@ -871,15 +1203,26 @@ impl SoraAi {
                 self.tool_busy = None;
             }
         }
+        // (HUD-REVIVE SORAKO) DOWN (HP 0, or the Die state's down pose / get-up): no tree, no tool, nothing pressed and NO WARP
+        // (a warp is `Sora::teleport`: a fresh core in Idle, which stood a KO'd Sora up at 0 HP); his running command fails,
+        // a shotlock sequence in flight is over
+        if sora_down(sora) {
+            self.finish(false);
+            self.shot = None;
+            self.tool_busy = None;
+            self.far_time = 0.0;
+            self.held = PadButtons::NONE;
+            return Input { camera_yaw, ..Input::default() };
+        }
         if let (Some(ctl), None) = (self.ctl.as_mut(), self.tool_busy) {
-            let mut body = SoraBody { out: &out, status: &status, in_battle: in_battle || leader.in_battle, cmd: &mut self.cmd, history: &mut self.history, next: &mut self.next };
-            ctl.tick(dt, &mut body, &world, &mut self.shared);
+            let mut body = SoraBody { actor: self.actor, out: &out, status: &status, in_battle: in_battle || lead.in_battle, cmd: &mut self.cmd, history: &mut self.history, next: &mut self.next };
+            ctl.tick(dt, &mut body, world, &mut self.shared);
         }
         // Warp (the friends' rule, kh-ai warp decision): far from the leader for a while -> next to him
-        let far = out.position.distance(leader.position);
+        let far = out.position.distance(lead.position);
         // (party AIX) only while the camera does not see him (the friends' warp rule, FUN_141258790's frustum test): the
         // put-behind is never seen
-        let seen = kh_ai::controller::in_view(&world.camera, out.capsule_center, 90.0);
+        let seen = kh_ai::controller::in_view(&world.camera(), out.capsule_center, 90.0);
         self.far_time = if far > 2500.0 && !seen { self.far_time + dt } else { 0.0 };
         // the tree's own warp (kh-ai's warp decision with EQSQuery_NpcWarp's point), else far for a second: behind him
         let tree_warp = match self.cmd.as_ref().map(|c| &c.cmd) {
@@ -888,11 +1231,11 @@ impl SoraAi {
         };
         if tree_warp.is_some() || self.far_time > 1.0 {
             let (p, yaw) = tree_warp.unwrap_or_else(|| {
-                let a = (leader.yaw + 180.0).to_radians();
-                (leader.position + Vec3::new(a.cos(), a.sin(), 0.0) * 250.0, leader.yaw)
+                let a = (lead.yaw + 180.0).to_radians();
+                (lead.position + Vec3::new(a.cos(), a.sin(), 0.0) * 250.0, lead.yaw)
             });
             sora.teleport(kh_core::Pose { position: p + Vec3::Z * 5.0, yaw });
-            say!("party-play: t={now:.3}s AI Sora warps next to {}", leader.chara.name());
+            say!("party-play: t={now:.3}s {} warps next to {}", self.name, lead.name);
             self.far_time = 0.0;
             self.finish(true);
             return Input { camera_yaw, ..Input::default() };
@@ -903,7 +1246,7 @@ impl SoraAi {
         let goal_of = |g: &kh_ai::AiGoal| -> Option<Vec3> {
             match g {
                 kh_ai::AiGoal::Point(p) => Some(*p),
-                kh_ai::AiGoal::Actor(a) => kh_ai::AiWorld::actor(&world, *a).map(|v| v.position),
+                kh_ai::AiGoal::Actor(a) => world.actor(*a).map(|v| v.position),
             }
         };
         let towards = |p: Vec3, magnitude: f32| -> Vec2 {
@@ -916,6 +1259,8 @@ impl SoraAi {
             Vec2::new(s, c) * magnitude
         };
         let mut done: Option<bool> = None;
+        // (MB3-AGGRO) a boss copy: its chain, its press rate, its reach for the first press (gap-close), the longest Idle
+        let (chain_for, press_every, first_reach, idle_max) = self.hostile().map_or((1.2, 0.2, 140.0, f32::INFINITY), |a| (a.sora_combo_for, a.sora_press_every, a.sora_gap_close.max(140.0), a.sora_idle_max));
         if let Some(c) = self.cmd.as_mut() {
             c.age += dt;
             match &c.cmd {
@@ -934,19 +1279,19 @@ impl SoraAi {
                     None => done = Some(false),
                 },
                 kh_ai::AiCommand::Action { target, location, .. } => {
-                    let at = kh_ai::AiWorld::actor(&world, *target).map(|v| (v.position, v.radius)).or(location.map(|p| (p, 0.0)));
+                    let at = world.actor(*target).map(|v| (v.position, v.radius)).or(location.map(|p| (p, 0.0)));
                     match at {
                         Some((p, r)) => {
                             let d = Vec2::new(p.x - out.position.x, p.y - out.position.y).length();
                             // (party AIX) in reach of the target's EDGE (his capsule 34 + 140 of the first swing; the old
                             // 220 cm to the centre was the same for a dummy of radius 50 but never reached an Elden Ring
                             // boss's capsule: he ran into it for 4 s and the command failed)
-                            if d > 140.0 + 34.0 + r && !c.attacked {
+                            if d > first_reach + 34.0 + r && !c.attacked {
                                 stick = towards(p, 1.0);
-                            } else if (!c.attacked || c.age - c.pressed_at <= 1.2) && self.press_wait <= 0.0 && !self.held.has(PadButton::ATTACK) {
+                            } else if (!c.attacked || c.age - c.pressed_at <= chain_for) && self.press_wait <= 0.0 && !self.held.has(PadButton::ATTACK) {
                                 // a chain of up to ~4 presses in the 1.2 s from the first, then the combo plays out
                                 buttons.set(PadButton::ATTACK, true);
-                                self.press_wait = 0.2;
+                                self.press_wait = press_every;
                                 if !c.attacked {
                                     c.pressed_at = c.age;
                                 }
@@ -956,7 +1301,7 @@ impl SoraAi {
                             // Action task waits for the end message, 0x1404A2370): before, any state but Attack (a
                             // finisher's air part, a style change, magic) ended the command and the tree re-planned
                             // while he was busy (its lock-on query filters out a querier in an action: fail, restart)
-                            if c.attacked && c.age - c.pressed_at > 1.2 && sora_free(out.state) {
+                            if c.attacked && c.age - c.pressed_at > chain_for && sora_free(out.state) {
                                 done = Some(true);
                             }
                         }
@@ -984,7 +1329,7 @@ impl SoraAi {
                     None => done = Some(false),
                 },
                 kh_ai::AiCommand::Idle { time } => {
-                    if c.age >= time.max(0.0) {
+                    if c.age >= time.max(0.0).min(idle_max) {
                         done = Some(true);
                     }
                 }
@@ -995,7 +1340,7 @@ impl SoraAi {
         // k1.hold_leader_speed, a MoveTo that arrives does not stop him (every arrival was a RunStop and a new start at the
         // formation distance): the stick stays on along the leader's way for k1.hold_time or until the next command
         let was_move = matches!(self.cmd.as_ref().map(|c| &c.cmd), Some(kh_ai::AiCommand::MoveTo { .. }));
-        let lead_v = Vec3::new(leader.velocity.x, leader.velocity.y, 0.0);
+        let lead_v = Vec3::new(lead.velocity.x, lead.velocity.y, 0.0);
         let k = kh_party::locomotion::K;
         if done == Some(true) && was_move && lead_v.length() > k.k1_hold_leader_speed && !in_battle {
             self.k1_hold = k.k1_sora_hold_time;
@@ -1021,7 +1366,7 @@ impl SoraAi {
             None | Some(kh_ai::AiCommand::TurnTo { .. }) | Some(kh_ai::AiCommand::Idle { .. }) if self.k1_hold > 0.0 => Some(None),
             _ => None,
         };
-        match follow_goal.and_then(|g| sora_follow_way(out.position, g, leader.position, leader.velocity, in_battle, seen)) {
+        match follow_goal.and_then(|g| sora_follow_way(out.position, g, lead.position, lead.velocity, in_battle, seen)) {
             Some(way) => {
                 stick = towards(way.aim, 1.0);
                 sora.set_follow_cap(Some(way.cap));
@@ -1033,7 +1378,7 @@ impl SoraAi {
         // enemy in one is dropped (he disengages)
         let zones = rt.party.don_zetta_zones();
         if !zones.is_empty() {
-            let in_zone_attack = matches!(self.cmd.as_ref().map(|c| &c.cmd), Some(kh_ai::AiCommand::Action { target, .. }) if kh_ai::AiWorld::actor(&world, *target).is_some_and(|v| zones.iter().any(|z| z.inside(v.position))));
+            let in_zone_attack = matches!(self.cmd.as_ref().map(|c| &c.cmd), Some(kh_ai::AiCommand::Action { target, .. }) if world.actor(*target).is_some_and(|v| zones.iter().any(|z| z.inside(v.position))));
             if in_zone_attack {
                 self.finish(false);
                 buttons = PadButtons::NONE;
@@ -1058,12 +1403,21 @@ impl SoraAi {
             buttons = PadButtons::NONE;
             stick = if (out.position - spot).truncate().length() > 120.0 { towards(kh_party::donald::zettaflare::zone_goal(&zones, out.position, spot), 1.0) } else { Vec2::ZERO };
         } else {
-            self.tools(sora, &status, &world, rt.lead.sora_settings, dt, now, &mut stick, &mut buttons);
+            // (MB3-AGGRO) a boss copy presses the nearest enemy (its tools may still take the step after)
+            if self.hostile().is_some() {
+                let mut seen = Vec::new();
+                world.enemies(&mut seen);
+                let nearest = seen.iter().filter(|e| e.alive && e.hostile).min_by(|a, b| a.position.distance(out.position).total_cmp(&b.position.distance(out.position))).map(|e| (e.position, e.radius));
+                self.press(&out, nearest, dt, camera_yaw, ToolPad { stick: &mut stick, buttons: &mut buttons });
+            }
+            self.tools(sora, &status, AiLeadWorld { lead, world, members, settings }, step, ToolPad { stick: &mut stick, buttons: &mut buttons });
         }
         self.press_wait = (self.press_wait - dt).max(0.0);
         let pad = kh_core::PadState { held: buttons, pressed: PadButtons(buttons.0 & !self.held.0), released: PadButtons(self.held.0 & !buttons.0) };
         self.held = buttons;
-        Input { move_stick: stick, jump_pressed: false, jump_held: false, camera_yaw, pad, view: None }
+        // (MIMIC-BOSS-KIT) a copy's Aerial Recovery (his jump in a blow's recoverable window)
+        let recover = self.full_kit && self.air_recovery(sora, dt);
+        Input { move_stick: stick, jump_pressed: recover, jump_held: recover, camera_yaw, pad, view: None }
     }
 
     /// AI SORA'S OWN TOOLS on top of the tree (OUR DESIGN, the user's decision 2026-10-15: his full kit except team
@@ -1078,11 +1432,17 @@ impl SoraAi {
     ///   at least half the focus gauge (his gauge rules gate it: the core opens no aim without focus);
     /// - the situation command on offer when it is a formchange (Second Form), a finish or a grand magic, in battle
     ///   with an enemy within 800 cm: Y. NEVER a team attack (class TEAM) or an attraction.
-    /// Every command goes through his own core (`Sora::command_request`, the pad), so his gates and costs apply.
-    #[allow(clippy::too_many_arguments)]
-    fn tools(&mut self, sora: &mut kh_core::Sora, status: &kh_core::Status, world: &LeaderAiWorld, s: FriendAiSettings, dt: f32, now: f64, stick: &mut Vec2, buttons: &mut PadButtons) {
+    ///   Every command goes through his own core (`Sora::command_request`, the pad), so his gates and costs apply.
+    /// - (MIMIC-BOSS-KIT) THE COPIES ([`full_kit_of`]: Mimic Sora, the boss's Sora) besides: every Y row of Sora's own kit
+    ///   ([`copy_may_use`]: reaction commands too), L2 past a row that is not theirs, the Keyblade switch
+    ///   ([`COPY_SWITCH_EVERY`]) and, in `drive`, Aerial Recovery. Never Summon (their cores' Summon rules are kept shut).
+    fn tools(&mut self, sora: &mut kh_core::Sora, status: &kh_core::Status, AiLeadWorld { lead, world, members, settings: s }: AiLeadWorld<'_>, step: AiStep, pad: ToolPad<'_>) {
         use kh_core::command::CommandRequest;
         use kh_core::magic::spells;
+        let AiStep { dt, now } = step;
+        let who = self.name;
+        let ToolPad { stick, buttons } = pad;
+        let hostile = self.hostile(); // (MB3-AGGRO)
         if let (Some(ctl), true) = (self.ctl.as_mut(), self.applied != Some(s)) {
             ctl.set_settings(crate::runtime::ai_settings_of(s));
             self.applied = Some(s);
@@ -1098,10 +1458,15 @@ impl SoraAi {
         }
         let out = sora.output();
         let me = out.position;
-        let in_battle = sora.actions().battle || world.leader.in_battle;
+        let in_battle = sora.actions().battle || lead.in_battle;
         let mut enemies = Vec::new();
-        kh_ai::AiWorld::enemies(world, &mut enemies);
+        world.enemies(&mut enemies);
         let nearest = enemies.iter().filter(|e| e.alive && e.hostile).map(|e| (e.position.distance(me), e.position)).min_by(|a, b| a.0.total_cmp(&b.0));
+        // (MIMIC-BOSS-KIT) a hit broke a copy's shotlock (its damage reaction, its Aerial Recovery): the sequence is over (RB held
+        // on would block its reaction command's Y: kh-core takes Y only with LB and RB up)
+        if self.full_kit && self.shot.is_some() && matches!(out.state, kh_core::StateId::Damage | kh_core::StateId::AirSlide | kh_core::StateId::Die) {
+            self.shot = None;
+        }
         // the shotlock in progress: RB held, A after a second, released after the volley starts
         if let Some(t) = self.shot.as_mut() {
             *t += dt;
@@ -1112,6 +1477,11 @@ impl SoraAi {
                 self.shot = None;
             }
             return;
+        }
+        // (MIMIC-BOSS-KIT) a copy's Keyblade switch in battle (KH3's D-pad right on Attack; no A press with it)
+        if self.full_kit && in_battle && nearest.is_some() && self.keyblade_switch(sora, dt, now) {
+            buttons.set(PadButton::DPadRight, true);
+            buttons.set(PadButton::ATTACK, false);
         }
         let mut rng = || {
             self.random ^= self.random << 13;
@@ -1132,13 +1502,13 @@ impl SoraAi {
             needs.push("himself".to_string());
         }
         if s.cure_targets & 4 != 0 {
-            for v in world.members.iter().filter(|v| !v.ko && v.position.distance(me) < 900.0 && low(v.hp, v.hp_max)) {
+            for v in members.iter().filter(|v| !v.ko && v.position.distance(me) < 900.0 && low(v.hp, v.hp_max)) {
                 needs.push(v.chara.name().to_string());
             }
         }
         // (party AIX) the friends' field deferral (kh-ai params::FIELD_CURE_DEFER_SPEED): no heal out of battle while the
         // leader runs
-        let leader_runs = world.leader.velocity.truncate().length() > kh_ai::controller::params::FIELD_CURE_DEFER_SPEED;
+        let leader_runs = lead.velocity.truncate().length() > kh_ai::controller::params::FIELD_CURE_DEFER_SPEED;
         if !needs.is_empty() && self.cure_wait <= 0.0 && !(leader_runs && !in_battle) {
             let cure = sora.command().magic_slots.iter().copied().find(|k| spells::is_cure(*k) && !spells::is_grand(*k));
             let potion = kh_core::magic::items::command_of_item(kh_core::status::ItemKind::Potion).filter(|_| sora.magic().pouch.count(kh_core::status::ItemKind::Potion) > 0);
@@ -1149,46 +1519,65 @@ impl SoraAi {
             if let Some(kind) = kind {
                 sora.command_request(CommandRequest::Execute(kind));
                 self.tool_busy = Some(0.0); // (party AIX)
-                say!("party-play: t={now:.3}s AI Sora: {} for {} (Recovery setting {})", spells::command_name(kind), needs.join(", "), s.cure);
+                say!("party-play: t={now:.3}s {who}: {} for {} (Recovery setting {})", spells::command_name(kind), needs.join(", "), s.cure);
             }
             self.cure_wait = 4.0;
             return;
         }
         let Some((dist, _at)) = nearest.filter(|_| in_battle) else { return };
         // the situation command on offer: Second Form, a finish, a grand magic (never a team attack)
-        if self.situation_wait <= 0.0 && dist < 800.0 {
-            if let Some((_, kind)) = sora.combat().situation.current() {
+        // (MIMIC-BOSS-KIT) a copy's reaction command (a prompt's ex entry: Blow Counter after Aerial Recovery, Rage Raid) is
+        // taken wherever the fight threw it (the counter goes at its attacker), within its own short window
+        let reaction = self.full_kit && sora.combat().situation.current().is_some_and(|(_, kind)| sora.combat().situation.find(kind).is_some_and(|(_, e)| e.ex));
+        if (self.situation_wait <= 0.0 || reaction) && (dist < 800.0 || reaction) {
+            let q = &sora.combat().situation;
+            if let Some((_, kind)) = q.current() {
                 use kh_core::combat::situation::{class, class_of};
-                if matches!(class_of(kind), class::FORMCHANGE | class::FINISH | class::GRAND_MAGIC) {
+                // (MIMIC-BOSS-KIT) a copy: every Y command of the leader Sora's own kit (`copy_may_use`)
+                let usable = if self.full_kit { copy_may_use(q, kind) } else { matches!(class_of(kind), class::FORMCHANGE | class::FINISH | class::GRAND_MAGIC) };
+                if usable {
+                    // (MB3-AGGRO) a boss copy lets go of Y for a step after holding it: a held Y is no new press (a reaction command
+                    // offered step after step was held, never pressed again)
+                    if hostile.is_some() && self.held.has(PadButton::FaceTop) {
+                        return;
+                    }
                     buttons.set(PadButton::FaceTop, true);
-                    self.situation_wait = 1.0;
+                    self.situation_wait = hostile.map_or(1.0, |a| a.sora_situation_every); // (MB3-AGGRO)
                     self.tool_busy = Some(0.0); // (party AIX)
-                    say!("party-play: t={now:.3}s AI Sora: situation command {kind} (Y)");
+                    say!("party-play: t={now:.3}s {who}: situation command {kind} (Y)");
+                    return;
+                }
+                // (MIMIC-BOSS-KIT) a copy's L2 (KH3's own cycle, kh-core situation.rs `cycle`): the selected row is not his to use
+                // (a team row) and another one is: the next row, Y at a later step
+                let ready = |e: &kh_core::combat::situation::Entry| e.selectable && e.appear <= 0.0 && copy_may_use(q, e.kind);
+                if self.full_kit && (q.list.iter().any(ready) || q.slot_a.iter().chain(q.slot_b.iter()).any(ready)) && !self.held.has(PadButton::SITUATION_NEXT) {
+                    buttons.set(PadButton::SITUATION_NEXT, true);
+                    say!("party-play: t={now:.3}s {who}: L2 past situation command {kind} (not his to use)");
                     return;
                 }
             }
         }
         let mp_rate = if status.max_mp() > 0 { status.mp as f32 / status.max_mp() as f32 } else { 0.0 };
         // shotlock
-        let shot_every = [Some(15.0), Some(25.0), None][s.ability.min(2) as usize];
+        let shot_every = hostile.map_or([Some(15.0), Some(25.0), None][s.ability.min(2) as usize], |a| Some(a.sora_shot_every)); // (MB3-AGGRO)
         if let Some(every) = shot_every {
             if self.shot_wait <= 0.0 && (300.0..1500.0).contains(&dist) && status.focus * 2 >= status.focus_max && status.focus_max > 0 {
                 self.shot = Some(0.0);
                 self.tool_busy = Some(0.0); // (party AIX)
                 self.shot_wait = every;
-                say!("party-play: t={now:.3}s AI Sora: shotlock (focus {}/{})", status.focus, status.focus_max);
+                say!("party-play: t={now:.3}s {who}: shotlock (focus {}/{})", status.focus, status.focus_max);
                 return;
             }
         }
         // attack magic
-        let (every, mp_min) = [((4.0, 6.0), 0.0), ((7.0, 10.0), 0.5), ((14.0, 18.0), 0.75)][s.ability.min(2) as usize];
+        let (every, mp_min) = hostile.map_or([((4.0, 6.0), 0.0), ((7.0, 10.0), 0.5), ((14.0, 18.0), 0.75)][s.ability.min(2) as usize], |a| (a.sora_magic_every, 0.0)); // (MB3-AGGRO)
         if self.magic_wait <= 0.0 && dist < 1200.0 && !status.mp_charging && mp_rate >= mp_min {
             let list: Vec<u8> = sora.command().magic_slots.iter().copied().filter(|k| *k != 0 && spells::is_magic(*k) && !spells::is_cure(*k) && !spells::is_grand(*k)).collect();
             if !list.is_empty() {
                 let kind = list[((rng() * list.len() as f32) as usize).min(list.len() - 1)];
                 sora.command_request(CommandRequest::Execute(kind));
                 self.tool_busy = Some(0.0); // (party AIX)
-                say!("party-play: t={now:.3}s AI Sora: casts {} at {:.0} cm", spells::command_name(kind), dist);
+                say!("party-play: t={now:.3}s {who}: casts {} at {:.0} cm", spells::command_name(kind), dist);
             }
             self.magic_wait = every.0 + (every.1 - every.0) * rng();
         }
@@ -1198,6 +1587,228 @@ impl SoraAi {
         if let Some(c) = self.cmd.take() {
             self.history.push((c.ticket, if ok { kh_ai::AiCommandStatus::Succeeded } else { kh_ai::AiCommandStatus::Failed }));
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------- (MIMIC SORA) Mimic Sora
+
+/// (MIMIC SORA) What one step of Mimic Sora's AI sees (the host's, every fixed step he is out).
+pub struct MimicScene<'a> {
+    /// The party's one Sora core: the player's Sora (the leader while no friend leads; AI Sora while one does).
+    pub sora: &'a kh_core::Sora,
+    /// The player's lock-on target while Sora leads (the HUD's), else NONE.
+    pub lock_on: TargetId,
+    /// The enemies (Elden Ring's characters: what ER's own lock-on accepts, the party's rule).
+    pub targets: &'a dyn PartyTargets,
+    pub camera: &'a kh_camera::CameraView,
+    pub camera_yaw: f32,
+    pub nav: Option<&'a dyn kh_ai::Nav>,
+    pub dt: f32,
+    pub now: f64,
+}
+
+/// (MIMIC SORA, THE USER 2026-11-03: "the mimic Sora can just use Sora's party member AI ... (mimic sora is unable to use
+/// Summon)") MIMIC SORA'S AI: AI SORA'S OWN (Goofy's tree `n_ex002` on stream C's controller, his tools, his warp, the friends'
+/// follow behind a running leader) on a second Sora core, with its own actor id ([`MIMIC_ACTOR`]) and controller. His leader
+/// is whoever leads: the player's Sora (the trees see him as "the player", `SoraAiWorld`, as the friends' do while Sora leads)
+/// or the friend leader (`LeaderAiWorld`, AI Sora an ally then). He is out of the formation: no camp-menu entry, no team
+/// attacks (only the controlled leader starts those), never Summon (his core's Summon rules are kept shut every step). His AI
+/// settings are AI Sora's (Customize's "Sora" entry).
+pub struct MimicAi {
+    ai: SoraAi,
+    caught: CopyCaught, // (GRABS)
+}
+
+/// (GRABS) A SORA COPY'S CAUGHT GATE (Mimic Sora, the boss's copy): the party's own gate (caught.rs) on his core: while an
+/// Elden Ring throw holds his body and while his core plays KH3's `CatchEnd` his tree is stopped and nothing is pressed;
+/// the guards (a stale hold, a get-up past its time) are the same. The host says `set_caught` once a step.
+#[derive(Clone, Debug, Default)]
+pub struct CopyCaught(crate::caught::CaughtGate);
+
+impl CopyCaught {
+    pub fn note(&mut self, held: bool) {
+        self.0.note(PartyChara::Sora, held, None);
+    }
+
+    /// One step of the gate; true = he does not act this step (his tree is stopped meanwhile, restarted when he is up).
+    fn gate(&mut self, ai: &mut SoraAi, dt: f32) -> bool {
+        self.0.tick(dt, |_| crate::caught::Now { id: None, ko: false, in_motion: false });
+        let caught = self.0.stops(PartyChara::Sora);
+        if let Some(ctl) = ai.ctl.as_mut() {
+            ctl.set_stop_ai(caught);
+        }
+        caught
+    }
+
+    pub fn stops(&self) -> bool {
+        self.0.stops(PartyChara::Sora)
+    }
+}
+
+/// (GRABS) A caught core's step input: nothing pressed, no step (the camera's yaw kept).
+fn caught_input(input: Input) -> Input {
+    Input { move_stick: Vec2::ZERO, jump_pressed: false, jump_held: false, pad: kh_core::PadState::default(), ..input }
+}
+
+impl MimicAi {
+    pub fn new(rt: &PartyRuntime) -> MimicAi {
+        MimicAi { ai: SoraAi::with_actor(rt, MIMIC_ACTOR, "Mimic Sora", 0x3D_1A_7E), caught: CopyCaught::default() }
+    }
+
+    /// (GRABS) Once a step, before `input`: his Elden Ring body is held by a throw now.
+    pub fn set_caught(&mut self, held: bool) {
+        self.caught.note(held);
+    }
+
+    /// (GRABS) Caught or getting up.
+    pub fn caught(&self) -> bool {
+        self.caught.stops()
+    }
+
+    /// His AI has the tree pack (false: he only follows and warps, as AI Sora without one).
+    pub fn has_tree(&self) -> bool {
+        self.ai.ctl.is_some()
+    }
+
+    /// ONE STEP: the input of the mimic's core (`mimic`) for this fixed step; his follow cap and speed scale set on it.
+    pub fn input(&mut self, rt: &PartyRuntime, mimic: &mut kh_core::Sora, scene: MimicScene<'_>) -> Input {
+        let MimicScene { sora, lock_on, targets, camera, camera_yaw, nav, dt, now } = scene;
+        let caught = self.caught.gate(&mut self.ai, dt); // (GRABS)
+        mimic.set_follow_cap(None);
+        mimic.combat_mut().friend.sora_is_ai = true; // (no unison of his own: the team attacks are the leader's)
+        if crate::mimic::keep_summon_shut(mimic) {
+            say!("party-play: t={now:.3}s Mimic Sora's Summon rules were opened by someone: shut again (the user's rule: no Summon)");
+        }
+        let sora_out = sora.output();
+        let sora_status = sora.status().clone();
+        let out = mimic.output();
+        let status = mimic.status().clone();
+        let friend = rt.leader.and_then(|l| rt.current.iter().find(|v| v.id == l));
+        let lock = friend.map_or(lock_on, |_| rt.leader_lock().unwrap_or(TargetId::NONE));
+        let lead_pos = friend.map_or(sora_out.position, |v| v.position);
+        let enemies = {
+            let mut points = rt.threat_points(lead_pos, &sora_out);
+            points.push(out.position);
+            let mut feed = EnemyFeed::of_party(targets, &points, lock);
+            feed.reserve(&rt.party.don_zetta_off_limit_targets(targets)); // (ZETTA round 5c) as AI Sora's
+            feed
+        };
+        let nav = nav.unwrap_or(&STRAIGHT_NAV);
+        let scene = AiScene { enemies: &enemies, camera, camera_yaw, nav };
+        let step = AiStep { dt, now };
+        let mps = rt.member_mps();
+        let in_battle = mimic.actions().battle;
+        let settings = rt.lead.sora_settings;
+        let (input, lead) = match friend {
+            Some(leader) => {
+                let world = LeaderAiWorld { leader, lock_on: lock, in_battle: in_battle || leader.in_battle, members: &rt.current, sora: rt.lead.sora_active.then_some((&sora_out, &sora_status)), enemies: &enemies, camera: rt.ai_camera(camera), nav, game_level: status.game_level as u8, mps: &mps };
+                let lead = Lead::of_member(leader);
+                (self.ai.drive(rt, mimic, step, scene, AiLeadWorld { lead, world: &world, members: &rt.current, settings }), lead)
+            }
+            None => {
+                let battle = sora.actions().battle;
+                let world = SoraAiWorld { sora: &sora_out, status: &sora_status, in_battle: battle || in_battle, attacking: sora_out.state == kh_core::StateId::Attack, lock_on: lock, enemies: &enemies, members: &rt.current, camera: rt.ai_camera(camera), nav, game_level: status.game_level as u8, mps: &mps };
+                let lead = Lead { position: sora_out.position, yaw: sora_out.yaw, velocity: sora_out.velocity, in_battle: battle, name: "Sora" };
+                (self.ai.drive(rt, mimic, step, scene, AiLeadWorld { lead, world: &world, members: &rt.current, settings }), lead)
+            }
+        };
+        // (party K1) the friends' catch-up speed behind the leader (1 in battle), x Donald's Thunder aura as AI Sora's
+        let reference = friend.and_then(|v| rt.party.member(v.id)).map_or(kh_core::SORA_PARAMS.speed_run, |m| m.cmc.max_walk_speed.max(m.params.speed_run));
+        let scale = if mimic.actions().battle { 1.0 } else { follow_speed_scale(lead.position, lead.velocity, reference, &out) };
+        mimic.set_speed_scale(scale * kh_party::pad::donald::sora_move_mult(&rt.party, out.position));
+        // never a team attack of his (the leader starts them): (MIMIC-BOSS-KIT) his own Y for every command of Sora's own kit
+        // (tools, `copy_may_use`), the Keyblade switch, Aerial Recovery
+        let input = Input { view: None, camera_yaw, ..input };
+        if caught { caught_input(input) } else { input } // (GRABS)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------- (MIMIC-BOSS) the boss's Sora
+
+/// (MIMIC-BOSS) The boss copy's actor id among the trees' actors (its own controller, never AI Sora's or Mimic Sora's).
+pub const BOSS_ACTOR: u8 = 9;
+
+/// (MIMIC-BOSS) What one step of a boss copy's AI sees: the party as its enemies (crate::mimicboss::BossTargets), the drawn
+/// camera, the navigation.
+pub struct BossScene<'a> {
+    pub targets: &'a dyn PartyTargets,
+    pub camera: &'a kh_camera::CameraView,
+    pub camera_yaw: f32,
+    pub nav: Option<&'a dyn kh_ai::Nav>,
+    pub dt: f32,
+    pub now: f64,
+}
+
+/// (MIMIC-BOSS, THE USER 2026-11-05: "it needs to mimic whoever is party leader and actually fight the party") A SORA COPY'S
+/// HOSTILE AI: AI SORA'S OWN (Goofy's tree `n_ex002` on stream C's controller, his tools: combos, magic, shotlock, the
+/// situation commands of his kit, guard and dodge as the tree drives them) on the boss's core with its own actor id
+/// ([`BOSS_ACTOR`]), turned round: the party is its only enemy list, it is its own "player" (nobody to follow: the tree's
+/// formation goals are its own feet, its warp never fires), always in battle. Its settings: AI Sora's own (Customize's
+/// "Sora" entry) with the battle style Free and its cures on itself only. Never Summon (its core's rules are kept shut; the
+/// boss's summon is the host's, mimicboss.rs `summon_due`), never a team attack.
+pub struct BossAi {
+    ai: SoraAi,
+    caught: CopyCaught, // (GRABS)
+}
+
+impl BossAi {
+    pub fn new(rt: &PartyRuntime) -> BossAi {
+        BossAi { ai: SoraAi::with_actor(rt, BOSS_ACTOR, "the Mimic Tear", 0x4D_42_05), caught: CopyCaught::default() }
+    }
+
+    /// (GRABS) Once a step, before `input`: the copy's Elden Ring body is held by a throw now.
+    pub fn set_caught(&mut self, held: bool) {
+        self.caught.note(held);
+    }
+
+    /// (GRABS) Caught or getting up.
+    pub fn caught(&self) -> bool {
+        self.caught.stops()
+    }
+
+    /// Its AI has the tree pack (false: it stands; the host logs it).
+    pub fn has_tree(&self) -> bool {
+        self.ai.ctl.is_some()
+    }
+
+    /// ONE STEP: the input of the boss's core for this fixed step.
+    pub fn input(&mut self, rt: &PartyRuntime, boss: &mut kh_core::Sora, scene: BossScene<'_>) -> Input {
+        let BossScene { targets, camera, camera_yaw, nav, dt, now } = scene;
+        let caught = self.caught.gate(&mut self.ai, dt); // (GRABS)
+        boss.set_follow_cap(None);
+        boss.set_speed_scale(1.0);
+        boss.combat_mut().friend.sora_is_ai = true;
+        if crate::mimic::keep_summon_shut(boss) {
+            say!("party-play: t={now:.3}s the Mimic Tear's own Summon rules were opened by someone: shut again (its summon is the host's)");
+        }
+        boss.actions_mut().battle = true;
+        boss.actions_mut().battle_forced = true;
+        let out = boss.output();
+        let status = boss.status().clone();
+        let enemies = EnemyFeed::of(targets);
+        let nav = nav.unwrap_or(&STRAIGHT_NAV);
+        let world = SoraAiWorld { sora: &out, status: &status, in_battle: true, attacking: out.state == kh_core::StateId::Attack, lock_on: TargetId::NONE, enemies: &enemies, members: &[], camera: rt.ai_camera(camera), nav, game_level: status.game_level as u8, mps: &[] };
+        let lead = Lead { position: out.position, yaw: out.yaw, velocity: out.velocity, in_battle: true, name: "the Mimic Tear" };
+        let settings = FriendAiSettings { battle: 1, cure_targets: 3, ..rt.lead.sora_settings };
+        // (MB3-AGGRO) a hostile boss copy's Abilities setting: Go Wild (the real setting that fights hardest)
+        let settings = if self.ai.hostile().is_some() { FriendAiSettings { ability: 0, ..settings } } else { settings };
+        let input = self.ai.drive(rt, boss, AiStep { dt, now }, AiScene { enemies: &enemies, camera, camera_yaw, nav }, AiLeadWorld { lead, world: &world, members: &[], settings });
+        let input = Input { view: None, camera_yaw, ..input };
+        if caught { caught_input(input) } else { input } // (GRABS)
+    }
+}
+
+impl BossAi {
+    /// (MIMIC-BOSS hotfix 3, MB3-AGGRO) Its hostile tuning (mimicboss.rs `CopyAggro`, the sheet's `aggro.*` rows).
+    pub fn with_aggro(mut self, a: crate::mimicboss::CopyAggro) -> BossAi {
+        self.set_aggro(a);
+        self
+    }
+
+    /// (MB3-AGGRO) The same on a running copy.
+    pub fn set_aggro(&mut self, a: crate::mimicboss::CopyAggro) {
+        self.ai.aggro = Some(a);
+        self.ai.switch_wait = self.ai.switch_wait.min(self.ai.switch_every().0);
     }
 }
 

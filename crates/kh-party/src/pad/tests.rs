@@ -38,6 +38,13 @@ impl Targets for Dummies {
     fn defense(&self, _id: TargetId) -> Option<TargetDefense> {
         Some(TargetDefense { defense: 10, max_hp: 1_000_000, hp_percent: 100.0, enemy_kind: true, damage_min: 0, damage_max: 0, resist: [0; 8], bio_type: 0 })
     }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
+    }
 }
 
 struct Rig {
@@ -115,14 +122,14 @@ fn start_lunge_then_run_with_the_speed_matched_loop() {
         rig.step(Vec2::new(0.0, 1.0), &[]);
         assert_eq!(rig.m().state, NpcStateId::Pad(RUN), "{chara:?}");
         rig.step(Vec2::new(0.0, 1.0), &[]);
-        assert_eq!(rig.m().anim.clip.name, if chara == Chara::Donald { "RunStartN" } else { "RunStartN" }, "the start lunge (the members' RunStartN)");
+        assert_eq!(rig.m().anim.clip.name, "RunStartN", "the start lunge (the members' RunStartN)");
         assert!(!rig.m().anim.clip.root_motion, "the start clip's root motion is the pad's (blended samples)");
         for _ in 0..60 {
             rig.step(Vec2::new(0.0, 1.0), &[]);
         }
         let s = rig.speed();
         // (GOOFY-GK) Goofy leading runs slower (goofy_kit K.move_run, the user's request)
-        let want = if chara == Chara::Goofy { super::goofy_kit::K.move_run } else { 680.0 };
+        let want = if chara == Chara::Goofy { crate::goofy::K.move_run } else { 680.0 };
         assert!((s - want).abs() < 5.0, "{chara:?} run speed {s}");
         let loco = rig.m().pad.as_ref().unwrap().loco.expect("speed-matched pose");
         assert!(loco.run_weight > if chara == Chara::Goofy { 0.7 } else { 0.95 } /* (GOOFY-GK) his slower run sits in his own blend space */, "{loco:?}");
@@ -179,6 +186,42 @@ fn rolling_the_stick_round_keeps_running_a_flick_plays_the_reversal() {
         }
     }
     assert!(reversed, "the reversal clip on the flick");
+}
+
+/// (SPIRITSPRING) The host's lift (`NpcPawn::spring_lift`, asked every step of the rise as kh-er does) takes Donald's and
+/// Goofy's pad jump to the spring's height above the take-off within 1 cm, even on a tap (the release cut cannot shorten
+/// it); without it the tap is the plain jump. Their own gravity and the fall after the top are untouched.
+#[test]
+fn spring_lift_takes_the_pad_jump_to_the_springs_height() {
+    for chara in [Chara::Donald, Chara::Goofy] {
+        for height in [1500.0f32, 4200.0, 10700.0] {
+            for lifted in [false, true] {
+                let mut rig = Rig::new(chara, None);
+                rig.party.member_mut(rig.id).unwrap().status.kit.take(crate::pad::donald_kit::KitAbility::AeroFloat);
+                let floor = rig.m().position().z;
+                let (mut top, mut left) = (floor, false);
+                for i in 0..900 {
+                    if lifted {
+                        rig.party.member_mut(rig.id).unwrap().spring_lift = Some(height);
+                    }
+                    let held: &[PadButton] = if i < 1 { &[PadButton::JUMP] } else { &[] };
+                    rig.step(Vec2::ZERO, held);
+                    let m = rig.m();
+                    top = top.max(m.position().z);
+                    left |= !m.on_ground();
+                    if left && m.on_ground() {
+                        break;
+                    }
+                }
+                let risen = top - floor;
+                if lifted {
+                    assert!((risen - height).abs() <= 1.0, "{chara:?} lifted to {height}: risen {risen:.2}");
+                } else {
+                    assert!(risen < 300.0, "{chara:?}: the plain tap jump ({risen:.1})");
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -240,26 +283,6 @@ fn donald_magic_menu_lists_his_elements_then_their_spells() {
 }
 
 #[test]
-fn goofy_lists_abilities_and_turbo_runs_from_the_menu() {
-    let mut rig = Rig::new(Chara::Goofy, Some(Vec3::new(700.0, 0.0, 0.0)));
-    let snap = rig.party.pad_menu(rig.id).unwrap();
-    assert_eq!(snap.main[1].name, "Abilities", "the user's request: Abilities replaces Magic for Goofy");
-    assert_eq!(snap.lists[1].iter().map(|r| r.name).collect::<Vec<_>>(), ["Goofy Tornado", "Goofy Turbo", "Goofy Discus"]);
-    rig.step(Vec2::ZERO, &[PadButton::DPadRight]);
-    rig.idle(1);
-    // cursor is on the main row 0 (Attack): D-pad right does not open it; go down first
-    rig.step(Vec2::ZERO, &[PadButton::DPadDown]);
-    rig.idle(1);
-    rig.step(Vec2::ZERO, &[PadButton::DPadRight]);
-    rig.idle(1);
-    rig.step(Vec2::ZERO, &[PadButton::DPadDown]);
-    rig.idle(1);
-    rig.step(Vec2::ZERO, &[PadButton::ATTACK]);
-    rig.idle(2);
-    assert_eq!(rig.m().action.and_then(|r| r.def), Some(ActionDef::GoofyTurbo));
-}
-
-#[test]
 fn lock_on_toggles_on_rb() {
     // (party X3D) Donald holds RB for Spell Volley (XD 2.8), so his lock toggles on a short tap's RELEASE (Sora's rule,
     // aim2.input.tap_max_time); Goofy keeps the press
@@ -294,13 +317,12 @@ fn a_unison_on_the_leaders_combo_replaces_the_finisher() {
         let held: &[PadButton] = if i % 8 == 0 { &[PadButton::ATTACK] } else { &[] };
         rig.step(Vec2::ZERO, held);
     }
-    // (GOOFY-GK) a pad Goofy's combo is his kit's own (pad/goofy_combo.rs): Push, Sweep, then the unison instead of
-    // his finisher
-    let log = rig.m().pad.as_ref().unwrap().goofy.log.clone();
-    let steps: Vec<&str> = log.iter().copied().filter(|w| w.starts_with("combo_") || w.starts_with("fin_") || *w == "team_finisher").collect();
-    assert_eq!(&steps[..2], &["combo_push", "combo_sweep"], "{log:?}");
+    // (GOOFY) a pad Goofy's string is his own (pad/goofy_combo.rs): two shoves, then the unison instead of his third (R13)
+    let log = rig.m().status.goofy.as_ref().unwrap().run.log.clone();
+    let steps: Vec<&str> = log.iter().copied().filter(|w| w.starts_with("shove") || *w == "team_finisher").collect();
+    assert_eq!(&steps[..2], &["shove1", "shove2"], "{log:?}");
     assert!(steps.contains(&"team_finisher"), "the roll's yes ends the string in the team move: {log:?}");
-    assert!(!steps.contains(&"fin_big_bash"), "the unison (Sora's core) replaces the finisher: {log:?}");
+    assert!(!steps.contains(&"shove3"), "the unison (Sora's core) replaces the third hit: {log:?}");
 }
 
 /// (party P2) Goofy's battle walk / run blend through his mid sample 1016a (WalkRunB: 1016 at 140, 1016a at 410, 1017 at
@@ -370,23 +392,22 @@ fn mashing_a_carries_goofys_combo() {
         let held: &[PadButton] = if i % 20 == 0 { &[PadButton::ATTACK] } else { &[] };
         rig.step(Vec2::ZERO, held);
     }
-    // (GOOFY-GK) a pad Goofy's combo is his kit's own (pad/goofy_combo.rs): mashing carries it to its finisher
-    let log = rig.m().pad.as_ref().unwrap().goofy.log.clone();
-    let steps: Vec<&str> = log.iter().copied().filter(|w| w.starts_with("combo_") || w.starts_with("fin_") || w.starts_with("fusion_")).collect();
-    assert!(steps.len() >= 3 && steps[..2] == ["combo_push", "combo_sweep"], "{log:?}");
+    // (GOOFY) a pad Goofy's string is his own (pad/goofy_combo.rs): mashing carries it to its third shove
+    let log = rig.m().status.goofy.as_ref().unwrap().run.log.clone();
+    let steps: Vec<&str> = log.iter().copied().filter(|w| w.starts_with("shove")).collect();
+    assert!(steps.len() >= 3 && steps[..3] == ["shove1", "shove2", "shove3"], "{log:?}");
 }
 
-/// (party P3) Two air strikes from a short hop: the strike hovers (gravity off) until its EnableChange, the second
-/// press finds its chain point, then he falls and lands.
+/// (GOOFY) His one air bonk from a short hop: it hovers (gravity off) until its link point, then he falls and lands.
 #[test]
-fn two_air_strikes_hover_and_chain() {
+fn the_air_bonk_hovers_and_lands() {
     let mut rig = Rig::new(Chara::Goofy, None);
     let mut clips = Vec::new();
     let mut hovered = false;
     for i in 0..200 {
         let held: &[PadButton] = match i {
             0..=3 => &[PadButton::JUMP],
-            12 | 30 => &[PadButton::ATTACK],
+            12 => &[PadButton::ATTACK],
             _ => &[],
         };
         rig.step(Vec2::ZERO, held);
@@ -398,82 +419,9 @@ fn two_air_strikes_hover_and_chain() {
         hovered |= matches!(rig.m().state, NpcStateId::Pad(AIR_ATTACK) | NpcStateId::Pad(super::goofy_combo::AIR_COMBO)) && rig.m().cmc.gravity_off && !rig.m().on_ground();
     }
     assert!(hovered, "the strike hovers");
-    let i1 = clips.iter().position(|c| *c == "M_1312").expect("first strike");
-    let i2 = clips.iter().position(|c| *c == "M_1311").expect("second strike");
-    assert!(i2 > i1, "{clips:?}");
+    assert!(clips.contains(&"M_1311"), "{clips:?}");
+    assert!(!clips.contains(&"M_1312"), "one bonk: {clips:?}");
     assert_eq!(rig.m().state, NpcStateId::Idle, "landed: {clips:?}");
     assert!(!rig.m().cmc.gravity_off);
 }
 
-/// (party P3) The free Discus: no target, the stick held to the right: he turns to it, the shield flies out along
-/// it, comes back and he catches it; the hand weapon is hidden while it is out.
-#[test]
-fn a_free_discus_flies_out_along_the_stick_and_comes_back() {
-    let mut rig = Rig::new(Chara::Goofy, None);
-    // Abilities -> Goofy Discus (third row)
-    for b in [PadButton::DPadDown, PadButton::DPadRight, PadButton::DPadDown, PadButton::DPadDown] {
-        rig.step(Vec2::ZERO, &[b]);
-        rig.idle(1);
-    }
-    rig.step(Vec2::new(1.0, 0.0), &[PadButton::ATTACK]);
-    let mut far = 0.0f32;
-    let mut out_at = None;
-    let mut caught = false;
-    let mut hidden = false;
-    for i in 0..400 {
-        rig.step(Vec2::new(1.0, 0.0), &[]);
-        if let Some(s) = rig.party.thrown_shield(rig.id) {
-            out_at.get_or_insert(i);
-            let d = s.position - rig.m().capsule_centre();
-            far = far.max(d.length());
-            if d.length() > 200.0 {
-                assert!(d.y > d.x.abs() * 2.0, "along the stick (+Y = the camera's right): {d:?}");
-            }
-            hidden |= rig.party.weapon_hidden(rig.id);
-        }
-        if rig.m().anim.clip.name == "M_1329" {
-            caught = true;
-            assert!(rig.party.thrown_shield(rig.id).is_none(), "back in his hand at the catch");
-        }
-        if caught && rig.m().state == NpcStateId::Idle {
-            break;
-        }
-    }
-    assert!(out_at.is_some(), "thrown");
-    assert!(far > 1000.0 && far < 2200.0, "out about half the attack time at its speed: {far}");
-    assert!(caught, "caught");
-    assert!(hidden, "the hand weapon is hidden while the shield is out");
-    assert!(!rig.party.weapon_hidden(rig.id));
-    assert_eq!(rig.m().state, NpcStateId::Idle);
-}
-
-/// (party P3) Turbo steered by the stick: held to the right, his heading turns to +Y within a second; let go, it holds.
-#[test]
-fn the_stick_steers_goofys_turbo() {
-    // a target to his left: its TurnToTarget window must not pull him there against the stick
-    let mut rig = Rig::new(Chara::Goofy, Some(Vec3::new(300.0, -600.0, 0.0)));
-    for b in [PadButton::DPadDown, PadButton::DPadRight, PadButton::DPadDown] {
-        rig.step(Vec2::ZERO, &[b]);
-        rig.idle(1);
-    }
-    rig.step(Vec2::ZERO, &[PadButton::ATTACK]);
-    let mut riding = 0;
-    for _ in 0..400 {
-        rig.step(Vec2::new(1.0, 0.0), &[]);
-        if rig.m().anim.clip.name == "M_1325" {
-            riding += 1;
-            if riding == 70 {
-                assert!((wrap180(rig.m().yaw - 90.0)).abs() < 2.0, "turned to the stick: yaw {}", rig.m().yaw);
-                let v = rig.m().cmc.velocity;
-                assert!(v.y > 800.0, "sliding along it at the game's speed: {v:?}");
-                break;
-            }
-        }
-    }
-    assert_eq!(riding, 70, "rode the shield");
-    let yaw = rig.m().yaw;
-    for _ in 0..30 {
-        rig.step(Vec2::ZERO, &[]);
-    }
-    assert!((wrap180(rig.m().yaw - yaw)).abs() < 0.5, "no weave without the stick: {} -> {}", yaw, rig.m().yaw);
-}

@@ -14,7 +14,10 @@
 const fs = require('fs'), path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const bc = require('./lib/bcdec');
-const PACK = path.join(ROOT, 'build', 'sora_pack', 'vfx');
+// (KBFX) `--pack DIR`: another effect root (PACK/keyblades/vfx: its materials sample the same engine textures), then
+// `node tools/sora_vfx_shaders.js --root DIR`. Default: the main effect pack, as before.
+const PACK_ARG = process.argv.indexOf('--pack');
+const PACK = PACK_ARG > 0 ? path.resolve(process.argv[PACK_ARG + 1]) : path.join(ROOT, 'build', 'sora_pack', 'vfx');
 const TEX = path.join(ROOT, 'assets_converted', 'textures');
 
 // asset path -> converted texture (relative to assets_converted/textures, without extension)

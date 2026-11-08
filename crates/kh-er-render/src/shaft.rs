@@ -317,10 +317,17 @@ type CreateRtvFn = unsafe extern "system" fn(*mut c_void, *mut c_void, *const D3
 type LoadGraphicsFn = unsafe extern "system" fn(*mut c_void, PCWSTR, *const D3D12_GRAPHICS_PIPELINE_STATE_DESC, *const GUID, *mut *mut c_void) -> HRESULT;
 type LoadStreamFn = unsafe extern "system" fn(*mut c_void, PCWSTR, *const D3D12_PIPELINE_STATE_STREAM_DESC, *const GUID, *mut *mut c_void) -> HRESULT;
 type StencilRefFn = unsafe extern "system" fn(*mut c_void, u32);
+// (PARTY-NATIVE-LIGHT round 2)
+type CreateComputeFn = unsafe extern "system" fn(*mut c_void, *const D3D12_COMPUTE_PIPELINE_STATE_DESC, *const GUID, *mut *mut c_void) -> HRESULT;
+type LoadComputeFn = unsafe extern "system" fn(*mut c_void, PCWSTR, *const D3D12_COMPUTE_PIPELINE_STATE_DESC, *const GUID, *mut *mut c_void) -> HRESULT;
+static O_CREATE_COMPUTE: AtomicUsize = AtomicUsize::new(0);
+static O_LOAD_COMPUTE: AtomicUsize = AtomicUsize::new(0);
 
 /// The game made a pipeline state `made` from `desc` (a graphics description) on `device`: a light-shaft composite gets its
 /// twins (made through the ORIGINAL entry, not through our hook).
 unsafe fn consider(device: *mut c_void, desc: &D3D12_GRAPHICS_PIPELINE_STATE_DESC, made: *mut c_void, how: &str) {
+    // (PARTY-NATIVE) the game's lit / fogged effect pipelines and its fog composite, by their shaders' DXIL hash (ffx.rs)
+    crate::ffx::note(made as usize, bytecode(&desc.PS), bytecode(&desc.GS), bytecode(&desc.DS));
     if made.is_null() || !is_shaft(bytecode(&desc.PS)) {
         return;
     }
@@ -382,6 +389,10 @@ unsafe extern "system" fn load_graphics_hook(this: *mut c_void, name: PCWSTR, de
 
 /// A pipeline-state stream as a graphics description, when every sub-object is one a graphics description has (`None`
 /// otherwise: mesh shaders, view instancing, newer sub-objects). Absent sub-objects take the D3D12 defaults.
+///
+/// # Safety
+/// `stream` must describe a pipeline-state stream the Direct3D runtime would accept: `pPipelineStateSubobjectStream` readable
+/// for `SizeInBytes` bytes, holding well-formed sub-objects.
 pub unsafe fn stream_as_graphics(stream: &D3D12_PIPELINE_STATE_STREAM_DESC) -> Option<D3D12_GRAPHICS_PIPELINE_STATE_DESC> {
     let base = stream.pPipelineStateSubobjectStream as *const u8;
     let size = stream.SizeInBytes;
@@ -404,21 +415,7 @@ pub unsafe fn stream_as_graphics(stream: &D3D12_PIPELINE_STATE_STREAM_DESC) -> O
     while at + 4 <= size {
         let kind = std::ptr::read_unaligned(base.add(at) as *const u32);
         // (inner size, inner alignment)
-        let (inner, ia): (usize, usize) = match kind {
-            0 => (8, 8),
-            1..=6 => (16, 8),
-            7 => (32, 8),
-            8 => (std::mem::size_of::<D3D12_BLEND_DESC>(), 4),
-            9 | 13 | 14 | 16 | 18 | 20 => (4, 4),
-            10 => (std::mem::size_of::<D3D12_RASTERIZER_DESC>(), 4),
-            11 => (std::mem::size_of::<D3D12_DEPTH_STENCIL_DESC>(), 4),
-            12 => (16, 8),
-            15 => (std::mem::size_of::<D3D12_RT_FORMAT_ARRAY>(), 4),
-            17 => (8, 4),
-            19 => (16, 8),
-            21 => (std::mem::size_of::<D3D12_DEPTH_STENCIL_DESC1>(), 4),
-            _ => return None,
-        };
+        let (inner, ia) = subobject_size(kind)?; // (PARTY-NATIVE-LIGHT round 2: the table shared with stream_cs)
         let p = at + align(4, ia);
         if p + inner > size {
             return None;
@@ -461,6 +458,53 @@ pub unsafe fn stream_as_graphics(stream: &D3D12_PIPELINE_STATE_STREAM_DESC) -> O
     (!d.PS.pShaderBytecode.is_null()).then_some(d)
 }
 
+/// A pipeline-state stream sub-object's (inner size, inner alignment) by its type (None: one not read here).
+fn subobject_size(kind: u32) -> Option<(usize, usize)> {
+    Some(match kind {
+        0 => (8, 8),
+        1..=6 => (16, 8),
+        7 => (32, 8),
+        8 => (std::mem::size_of::<D3D12_BLEND_DESC>(), 4),
+        9 | 13 | 14 | 16 | 18 | 20 => (4, 4),
+        10 => (std::mem::size_of::<D3D12_RASTERIZER_DESC>(), 4),
+        11 => (std::mem::size_of::<D3D12_DEPTH_STENCIL_DESC>(), 4),
+        12 => (16, 8),
+        15 => (std::mem::size_of::<D3D12_RT_FORMAT_ARRAY>(), 4),
+        17 => (8, 4),
+        19 => (16, 8),
+        21 => (std::mem::size_of::<D3D12_DEPTH_STENCIL_DESC1>(), 4),
+        _ => return None,
+    })
+}
+
+/// (PARTY-NATIVE-LIGHT round 2) A stream's compute shader (sub-object 6), when the stream has one and is read to its end.
+///
+/// # Safety
+/// As `stream_as_graphics`.
+unsafe fn stream_cs(stream: &D3D12_PIPELINE_STATE_STREAM_DESC) -> Option<D3D12_SHADER_BYTECODE> {
+    let base = stream.pPipelineStateSubobjectStream as *const u8;
+    let size = stream.SizeInBytes;
+    if base.is_null() || size == 0 || size > 1 << 20 {
+        return None;
+    }
+    let align = |x: usize, a: usize| (x + a - 1) & !(a - 1);
+    let mut at = 0usize;
+    let mut cs = None;
+    while at + 4 <= size {
+        let kind = std::ptr::read_unaligned(base.add(at) as *const u32);
+        let (inner, ia) = subobject_size(kind)?;
+        let p = at + align(4, ia);
+        if p + inner > size {
+            return None;
+        }
+        if kind == 6 {
+            cs = Some(std::ptr::read_unaligned(base.add(p) as *const D3D12_SHADER_BYTECODE));
+        }
+        at = align(p + inner, 8);
+    }
+    cs
+}
+
 unsafe fn consider_stream(device: *mut c_void, stream: *const D3D12_PIPELINE_STATE_STREAM_DESC, made: *mut c_void, how: &str) {
     if stream.is_null() || made.is_null() {
         return;
@@ -469,9 +513,13 @@ unsafe fn consider_stream(device: *mut c_void, stream: *const D3D12_PIPELINE_STA
         Some(d) => {
             consider(device, &d, made, how);
             // (the description borrowed the stream's root signature pointer without a reference of its own)
-            std::mem::forget(d);
+            let _ = d;
         }
         None => {
+            // (PARTY-NATIVE-LIGHT round 2) a compute stream: the volume builders by their hash (ffx.rs)
+            if let Some(cs) = stream_cs(&*stream) {
+                crate::ffx::note_compute(made as usize, bytecode(&cs));
+            }
             // (a stream we cannot read: if its pixel shader is the shafts', say so)
             let base = (*stream).pPipelineStateSubobjectStream as *const u8;
             if !base.is_null() {
@@ -506,6 +554,25 @@ unsafe extern "system" fn load_stream_hook(this: *mut c_void, name: PCWSTR, desc
                 }
             }
         });
+    }
+    hr
+}
+
+/// (PARTY-NATIVE-LIGHT round 2) the game's compute pipelines, for ffx.rs's discovery roles (the irradiance-volume builders)
+unsafe extern "system" fn create_compute_hook(this: *mut c_void, desc: *const D3D12_COMPUTE_PIPELINE_STATE_DESC, riid: *const GUID, out: *mut *mut c_void) -> HRESULT {
+    let original: CreateComputeFn = std::mem::transmute(O_CREATE_COMPUTE.load(Ordering::Relaxed));
+    let hr = original(this, desc, riid, out);
+    if hr.is_ok() && !desc.is_null() && !out.is_null() && !is_ours() && !DEAD.load(Ordering::Relaxed) {
+        let _ = std::panic::catch_unwind(|| crate::ffx::note_compute(*out as usize, bytecode(&(*desc).CS)));
+    }
+    hr
+}
+
+unsafe extern "system" fn load_compute_hook(this: *mut c_void, name: PCWSTR, desc: *const D3D12_COMPUTE_PIPELINE_STATE_DESC, riid: *const GUID, out: *mut *mut c_void) -> HRESULT {
+    let original: LoadComputeFn = std::mem::transmute(O_LOAD_COMPUTE.load(Ordering::Relaxed));
+    let hr = original(this, name, desc, riid, out);
+    if hr.is_ok() && !desc.is_null() && !out.is_null() && !is_ours() && !DEAD.load(Ordering::Relaxed) {
+        let _ = std::panic::catch_unwind(|| crate::ffx::note_compute(*out as usize, bytecode(&(*desc).CS)));
     }
     hr
 }
@@ -556,6 +623,9 @@ pub fn install() -> Result<(), String> {
         patch(vtable, entry!(ID3D12Device_Vtbl, CreateGraphicsPipelineState), create_graphics_hook as *const () as usize, &O_CREATE_GRAPHICS, "ID3D12Device::CreateGraphicsPipelineState")?;
         patch(vtable, entry!(ID3D12Device_Vtbl, CreateRenderTargetView), create_rtv_hook as *const () as usize, &O_CREATE_RTV, "ID3D12Device::CreateRenderTargetView")?;
         let mut extra = Vec::new();
+        // (PARTY-NATIVE-LIGHT round 2) the compute pipelines (ffx.rs discovery: the irradiance-volume builders)
+        patch(vtable, entry!(ID3D12Device_Vtbl, CreateComputePipelineState), create_compute_hook as *const () as usize, &O_CREATE_COMPUTE, "ID3D12Device::CreateComputePipelineState")?;
+        extra.push("CreateComputePipelineState");
         if device.cast::<ID3D12Device2>().is_ok() {
             patch(vtable, entry!(ID3D12Device2_Vtbl, CreatePipelineState), create_stream_hook as *const () as usize, &O_CREATE_STREAM, "ID3D12Device2::CreatePipelineState")?;
             extra.push("CreatePipelineState");
@@ -565,6 +635,9 @@ pub fn install() -> Result<(), String> {
                 let lv = *(library.as_raw() as *const usize);
                 patch(lv, entry!(ID3D12PipelineLibrary_Vtbl, LoadGraphicsPipeline), load_graphics_hook as *const () as usize, &O_LOAD_GRAPHICS, "ID3D12PipelineLibrary::LoadGraphicsPipeline")?;
                 extra.push("LoadGraphicsPipeline");
+                // (PARTY-NATIVE-LIGHT round 2)
+                patch(lv, entry!(ID3D12PipelineLibrary_Vtbl, LoadComputePipeline), load_compute_hook as *const () as usize, &O_LOAD_COMPUTE, "ID3D12PipelineLibrary::LoadComputePipeline")?;
+                extra.push("LoadComputePipeline");
                 if library.cast::<ID3D12PipelineLibrary1>().is_ok() {
                     patch(lv, entry!(ID3D12PipelineLibrary1_Vtbl, LoadPipeline), load_stream_hook as *const () as usize, &O_LOAD_STREAM, "ID3D12PipelineLibrary1::LoadPipeline")?;
                     extra.push("LoadPipeline");
@@ -621,7 +694,5 @@ mod tests {
         assert_eq!(t.DepthStencilState.FrontFace.StencilFunc, D3D12_COMPARISON_FUNC_EQUAL);
         assert_eq!(t.RTVFormats[0], DXGI_FORMAT_R11G11B10_FLOAT);
         assert!(t.BlendState.RenderTarget[0].BlendEnable.as_bool());
-        std::mem::forget(t);
-        std::mem::forget(d);
     }
 }

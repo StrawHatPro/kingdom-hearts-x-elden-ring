@@ -59,6 +59,7 @@ pub mod host;
 pub mod input;
 pub mod leap; // (LADDER2) the ladder jump's arc (port design: the hosts with ladders)
 pub mod magic;
+pub mod nocombat; // (NOCOMBAT) the no-combat rule (the Roundtable Hold): every character's menu and attack path asks it
 pub mod notify;
 pub mod params;
 mod pawn;
@@ -68,6 +69,7 @@ pub mod status;
 pub mod test_world;
 pub mod ui_model;
 pub mod world;
+pub mod weapon_gate; // (PARTY-WEAPONS) the weapon-draw gate every character shares: the hero light's hold, the no-combat zone, the appear sequence
 
 pub use anim::{AnimId, AnimRequest, Locomotion, NotifyClass, NotifyData, NotifyDef, NotifyEvent, NotifyPhase, PlayArgs};
 pub use glam::{Vec2, Vec3};

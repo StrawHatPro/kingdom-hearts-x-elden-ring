@@ -119,7 +119,7 @@ impl FaceSlot {
 
     /// Ends the clip now (if `sequence` is given, only when that clip is the one playing): the host blends back.
     pub fn stop(&mut self, sequence: Option<&str>, blend_out: f32) {
-        if self.clip.is_some_and(|c| sequence.map_or(true, |s| s == c.sequence)) {
+        if self.clip.is_some_and(|c| sequence.is_none_or(|s| s == c.sequence)) {
             self.clip = None;
             self.blend_out = blend_out.max(0.0);
         }

@@ -1383,6 +1383,16 @@
    "-"
   ],
   [
+   "revive.in_combat_time",
+   60,
+   "s",
+   "THE USER 2026-11-07: \"allies revive when combat ends. They revive in combat after 60 seconds as a baseline\" (HUD-REVIVE; OUR DESIGN over KH3: its Die timer is 30 s, Donald 40 s, Goofy 35 s = rows revive.default_time / n_ex00x.revive_time, UTresNpcState_Die Begin 0x1412413C0, and KH3 has no battle-end revive: Die Tick 0x141249F80 ends only on the timer running out or HP > 0)",
+   "KO timer IN PARTY COMBAT of every member (Donald, Goofy, AI Sora, any later one), divided by 1 + min(count HYPER_HEALING, 3) as KH3 divides its own; out of party combat a downed member revives at once; HP back = KH3 revive.hp_percent rule; the save point revives to full",
+   "0x1412413C0",
+   "inferred",
+   "-"
+  ],
+  [
    "revive.cure_half",
    1,
    "flag",

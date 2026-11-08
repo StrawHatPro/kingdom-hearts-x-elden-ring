@@ -347,7 +347,7 @@ pub fn ledge_probe_radius(pw: &NpcPawn) -> f32 {
 /// yaw toward the target; up 275 - offset.Z - 150, down 50); the search ends when the arc falls to 3 half
 /// heights below the target. A ledge whose top is within a half height of the target's Z: the jump to (target
 /// - half height) with h0 = h_min = 0, +0x132 = 1, MaxWalkSpeed |v.xy|, JumpZVelocity v.z, DoJump (+0xA6 =
-/// its answer). `None`: the plain launch.
+///   its answer). `None`: the plain launch.
 pub fn ledge_arc(pw: &mut NpcPawn, target: Vec3, w: &dyn World) -> Option<bool> {
     let l = pw.position();
     let half = pw.params.capsule_half_height;
@@ -355,7 +355,7 @@ pub fn ledge_arc(pw: &mut NpcPawn, target: Vec3, w: &dyn World) -> Option<bool> 
     let g = pw.cmc.gravity_z(&pw.params);
     let (s_up, s_dur, t_dur) = (pw.params.gravity_jump_up_scale, pw.params.gravity_jump_duration_scale, pw.params.gravity_jump_duration_time);
     let aim = target - Vec3::Z * half;
-    let v = crate::actions::jump_velocity(l, aim, 0.0, 0.0, g, s_up, s_dur, t_dur);
+    let v = crate::actions::jump_velocity(l, aim, 0.0, 0.0, crate::actions::JumpGravity { g, s_up, s_dur, t_dur });
     let d = horizontal(target - l);
     let yaw = if d.length_squared() >= 1.0e-8 { yaw_of(d) } else { 0.0 };
     let up = dangle_probe_up(pw.chara);
@@ -393,7 +393,7 @@ pub fn ledge_arc(pw: &mut NpcPawn, target: Vec3, w: &dyn World) -> Option<bool> 
     if (target.z - (ledge.position.z - dangle_offset(pw.chara).z)).abs() >= half {
         return None;
     }
-    let v2 = crate::actions::jump_velocity(l, aim, 0.0, 0.0, g, s_up, s_dur, t_dur);
+    let v2 = crate::actions::jump_velocity(l, aim, 0.0, 0.0, crate::actions::JumpGravity { g, s_up, s_dur, t_dur });
     pw.trav.jump.dangle_ok = true;
     pw.cmc.max_walk_speed = Vec2::new(v2.x, v2.y).length();
     pw.cmc.jump_z_velocity = v2.z;

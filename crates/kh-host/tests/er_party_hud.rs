@@ -8,7 +8,7 @@
 
 use kh_core::{PadButtons, Sora, TargetId, Vec3};
 use kh_host::hud::{Frame, Hud, HudTargets, TargetView};
-use kh_host::hud_layers::{draw_movie_in, stage_root, Draw, Drawn, Perf};
+use kh_host::hud_layers::{draw_movie_in, stage_root, Draw, DrawArea, Drawn, Perf};
 use kh_host::party::{PartyChara, PartyHudSlot};
 
 struct NoTargets;
@@ -62,7 +62,7 @@ fn the_party_hud_scales_with_the_stage_at_every_output_size() {
             let mut renderer = kh_ui::render::Renderer::new(fonts.clone());
             eprintln!("{phase} {w}x{h}: bounds {:?}", renderer.bounds(movie, &stage));
             // the Elden Ring host clips the cockpit to the stage (Layers::clip): KH3's ExactFit 16:9 viewport
-            let rect = match draw_movie_in(&mut draw, &mut renderer, movie, &stage, (w, h), true, Perf::default(), Some(view)) {
+            let rect = match draw_movie_in(&mut draw, &mut renderer, movie, &stage, DrawArea { size: (w, h), clip: Some(view) }, true, Perf::default()) {
                 Drawn::Picture(rect, _) => rect,
                 _ => panic!("{phase} {w}x{h}: the status HUD drew nothing"),
             };

@@ -58,7 +58,7 @@ fn hud2_a_one_line_caption_keeps_kh3s_box() {
 
 #[test]
 fn hud2_a_very_long_caption_steps_down_and_still_fits() {
-    let long = std::iter::repeat(LIMGRAVE).take(5).collect::<Vec<_>>().join(" ");
+    let long = std::iter::repeat_n(LIMGRAVE, 5).collect::<Vec<_>>().join(" ");
     let Some((l, d, y)) = open(&long) else { return };
     assert!(l.scale < 1.0 && l.scale >= MIN_TEXT_SCALE, "{l:?}");
     assert!(l.box_h <= PLATE_MAX_H + 0.5, "{l:?}");

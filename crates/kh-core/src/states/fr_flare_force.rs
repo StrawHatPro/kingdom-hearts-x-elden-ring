@@ -51,12 +51,11 @@ impl PlayerState for FrFlareForce {
                 self.link.play_end(cx, "M_1501", 0.0);
                 self.link.sub = 4;
             }
-            4 => {
-                if cx.pawn.anim.ended {
+            4
+                if cx.pawn.anim.ended => {
                     self.link.sub = 2;
                     cx.pawn.queue.do_finish();
                 }
-            }
             _ => {}
         }
     }

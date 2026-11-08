@@ -182,6 +182,17 @@ impl TeamProj {
     }
 }
 
+/// The arguments of `FUN_1412E82B0` past dt: see [`TeamProj::flare_homing`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FlareHoming {
+    pub rate: f32,
+    pub turn: f32,
+    pub min: f32,
+    pub max: f32,
+    pub cos_min: f32,
+    pub slow: f32,
+}
+
 impl TeamProj {
     /// `FUN_1412E82B0(info, missile, dt, rate, turn, min, max, cos_min, slow)` [C]: the Flare Force
     /// missile's homing velocity toward `target_point` (the info's aim, +0x2C). The wanted direction
@@ -193,8 +204,8 @@ impl TeamProj {
     /// (cos - cos_min)(max - min) / (1 - cos_min) + 2 min as decompiled), clamped to min..max; the
     /// direction turns at most `turn x dt` toward the wanted one. Returns the distance of the
     /// explosion test: d x ((1 - cos) / 2 + 1), or 0 within 100 cm (and one step) of a lost target.
-    #[allow(clippy::too_many_arguments)]
-    pub fn flare_homing(&mut self, dt: f32, rate: f32, turn: f32, min: f32, max: f32, cos_min: f32, slow: f32) -> f32 {
+    pub fn flare_homing(&mut self, dt: f32, homing: FlareHoming) -> f32 {
+        let FlareHoming { rate, turn, min, max, cos_min, slow } = homing;
         let aim = self.target_point.unwrap_or(self.position);
         let to = aim - self.position;
         let dist = to.length();

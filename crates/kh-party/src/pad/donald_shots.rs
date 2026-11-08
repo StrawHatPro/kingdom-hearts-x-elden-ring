@@ -170,11 +170,26 @@ pub fn next(rng: &mut u32) -> u32 {
     x
 }
 
+/// Where one hit of the kit lands: the target and its part, the point, the blow's direction, a combo finisher or not.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Strike {
+    pub target: TargetId,
+    pub part: u32,
+    pub at: Vec3,
+    pub dir: Vec3,
+    pub finisher: bool,
+}
+
 /// One hit of the kit on `target`: the HitRecord from the row with Donald's own Strength / Magic (the friends' damage
 /// function), the bad-status roll of the shared collision, the victim classification. Returns the HP dealt when the host
 /// accepted it.
-#[allow(clippy::too_many_arguments)]
-pub fn deliver(p: &mut NpcPawn, row: &SoloRow, target: TargetId, part: u32, at: Vec3, dir: Vec3, finisher: bool, host: &mut PartyHost, rng: &mut u32) -> Option<f32> {
+pub fn deliver(p: &mut NpcPawn, row: &SoloRow, strike: Strike, host: &mut PartyHost, rng: &mut u32) -> Option<f32> {
+    deliver_seen(p, row, strike, host, rng).map(|l| l.dealt)
+}
+
+/// (THE USER 2026-11-02: shields guard, the attacker bounces off) `deliver`, telling what KH3's classification made of it.
+pub fn deliver_seen(p: &mut NpcPawn, row: &SoloRow, strike: Strike, host: &mut PartyHost, rng: &mut u32) -> Option<super::goofy_shots::Landed> {
+    let Strike { target, part, at, dir, finisher } = strike;
     let defender = Defender::of_target(host.targets.defense(target).as_ref());
     let magic = row.magic || row.attribute != Attr::Physical;
     let attack = if magic { DamageAttack::magic(row.power, row.attribute) } else { DamageAttack::physical(row.power) };
@@ -222,11 +237,14 @@ pub fn deliver(p: &mut NpcPawn, row: &SoloRow, target: TargetId, part: u32, at: 
         info.clear_bad_status();
     }
     hit.info = info;
-    let body = host.targets.body(target, part);
+    // (THE USER 2026-11-02: "Shields don't count as guarding") the body as the blow meets it: his kit's shapes strike along
+    // `dir` (a missile's flight, the Bonk's swing), so the blow comes from that side (kh-core `TargetBody::seen_from`)
+    let to = host.targets.info(target).map_or(at, |i| i.position);
+    let body = host.targets.body(target, part).seen_from(to - hit.direction * 100.0, to);
     let shape = kh_core::combat::classify::Shape { no_clash: true, ..Default::default() };
     let (mut armor, mut endurance) = (None, None);
     let mut info = hit.info;
-    kh_core::combat::classify::classify(&body, kh_core::combat::classify::MapResponse::Other, &shape, hit.damage_kind, hit.attribute, &mut info, &mut |pw, weak| {
+    let mut c = kh_core::combat::classify::classify(&body, kh_core::combat::classify::MapResponse::Other, &shape, kh_core::combat::classify::DamageClass { kind: hit.damage_kind, attribute: hit.attribute }, &mut info, &mut |pw, weak| {
         armor = Some((pw, weak));
         i32::MIN
     }, &mut |pw| {
@@ -237,15 +255,17 @@ pub fn deliver(p: &mut NpcPawn, row: &SoloRow, target: TargetId, part: u32, at: 
         let armor_left = armor.map(|(pw, weak)| host.targets.take_armor(target, pw, weak));
         let endurance_left = endurance.map(|pw| host.targets.take_reaction_power(target, pw));
         info = hit.info;
-        kh_core::combat::classify::classify(&body, kh_core::combat::classify::MapResponse::Other, &shape, hit.damage_kind, hit.attribute, &mut info, &mut |_, _| armor_left.unwrap_or(0), &mut |_| endurance_left.unwrap_or(0));
+        c = kh_core::combat::classify::classify(&body, kh_core::combat::classify::MapResponse::Other, &shape, kh_core::combat::classify::DamageClass { kind: hit.damage_kind, attribute: hit.attribute }, &mut info, &mut |_, _| armor_left.unwrap_or(0), &mut |_| endurance_left.unwrap_or(0));
     }
     hit.info = info;
+    hit.flags |= p.hit_flag(); // (PARTY-AI) an AI's shot passes through friendly NPCs
     let res = host.targets.apply_hit(&hit);
     if !res.accepted {
         return None;
     }
     p.events.push(PartyEventKind::Hit { target, damage: res.damage_dealt, killed: res.killed, attack: row.name });
-    Some(res.damage_dealt)
+    let guarded = res.guarded || matches!(c.victim, kh_core::host::ReactionResult::Guard | kh_core::host::ReactionResult::GuardReflect);
+    Some(super::goofy_shots::Landed { dealt: res.damage_dealt, guarded, attacker: c.attacker })
 }
 
 /// Sora's targeting rule (ALIVE | LOCKABLE): what the missiles CHOOSE (home on, chain to). Pots / friendly NPCs never.
@@ -733,9 +753,28 @@ fn heal(party: &mut crate::party::Party, from: MemberId, to: MemberId, member: b
     }
 }
 
+/// What one hit of the kit carries ([`land`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct KitHit {
+    part: u32,
+    at: Vec3,
+    dir: Vec3,
+    element: Option<Element>,
+    power: f32,
+    kind: Kind,
+    breaker: bool,
+    double: bool,
+    finisher: bool,
+    missile: bool,
+    push: f32,
+    launch: bool,
+    physical: bool,
+    name: &'static str,
+}
+
 /// One hit of the kit's (missile, splash, chain, area) on `t`: the reaction rule, the statuses, the damage, the meters.
-#[allow(clippy::too_many_arguments)]
-fn land(party: &mut crate::party::Party, id: MemberId, bag: &mut Shots, host: &mut PartyHost, t: &TargetInfo, part: u32, at: Vec3, dir: Vec3, element: Option<Element>, power: f32, kind: Kind, breaker: bool, double: bool, finisher: bool, missile: bool, push: f32, launch: bool, physical: bool, name: &'static str) -> Option<f32> {
+fn land(party: &mut crate::party::Party, id: MemberId, bag: &mut Shots, host: &mut PartyHost, t: &TargetInfo, hit: KitHit) -> Option<super::goofy_shots::Landed> {
+    let KitHit { part, at, dir, element, power, kind, breaker, double, finisher, missile, push, launch, physical, name } = hit;
     let d = don_data();
     let size = size_of(t);
     let tag = HitTag { elements: element.map(ElemSet::one).unwrap_or_default(), breaker };
@@ -766,17 +805,30 @@ fn land(party: &mut crate::party::Party, id: MemberId, bag: &mut Shots, host: &m
         (row.attribute, row.magic) = (Attr::Physical, false);
     }
     let mut rng = bag.rng.max(1);
-    let dealt = {
+    let landed = {
         let m = party.member_mut(id)?;
-        let dealt = deliver(m, &row, t.id, part, at, dir, finisher, host, &mut rng);
-        if dealt.is_some() {
-            let (fx, se) = hit_look(element);
-            effect_at(m, host, fx, at, Vec3::ZERO, 1.0, false);
-            sound(m, host, se, at);
+        let landed = deliver_seen(m, &row, Strike { target: t.id, part, at, dir, finisher }, host, &mut rng);
+        match landed {
+            // (THE USER 2026-11-02: "Shields don't count as guarding ... make the character who attacks a shield bounce off")
+            // a guarded hit: KH3's guard spark (its own clang), not the element's look; his own swing (the kit's physical
+            // shape, the Wand Bonk) bounces him off the shield (repel.rs, one path for every member); a missile never does
+            Some(l) if l.guarded => {
+                effect_at(m, host, kh_core::combat::hit::EFFECT_GUARD_REFLECT, at, Vec3::ZERO, 1.0, false);
+                if physical && !missile {
+                    let _ = crate::repel::after_swing(m, l.attacker, t.position);
+                }
+            }
+            Some(_) => {
+                let (fx, se) = hit_look(element);
+                effect_at(m, host, fx, at, Vec3::ZERO, 1.0, false);
+                sound(m, host, se, at);
+            }
+            None => {}
         }
-        dealt
+        landed
     };
     bag.rng = rng;
+    let dealt = landed.map(|l| l.dealt);
     if let Some(dmg) = dealt {
         bag.landed.push((row.name, element, dmg as i32));
         if let Some(s) = party.status_mut(id) {
@@ -791,7 +843,7 @@ fn land(party: &mut crate::party::Party, id: MemberId, bag: &mut Shots, host: &m
             }
         }
     }
-    dealt
+    landed
 }
 
 fn hurt_touch(host: &PartyHost, t: &TargetInfo, a: Vec3, b: Vec3, r: f32) -> Option<HurtShape> {
@@ -883,7 +935,7 @@ fn step_missiles(party: &mut crate::party::Party, id: MemberId, bag: &mut Shots,
             let at = m.position;
             let dir = m.velocity;
             let e = m.spec.element;
-            land(party, id, bag, host, t, s.part, at, dir, e, power, m.spec.kind_dmg, m.spec.breaker, m.spec.double, m.spec.kind.finisher(), true, 0.0, false, false, m.spec.kind.row_name());
+            land(party, id, bag, host, t, KitHit { part: s.part, at, dir, element: e, power, kind: m.spec.kind_dmg, breaker: m.spec.breaker, double: m.spec.double, finisher: m.spec.kind.finisher(), missile: true, push: 0.0, launch: false, physical: false, name: m.spec.kind.row_name() });
             // Fire: the splash (and the ground fire at full power)
             if e == Some(Element::Fire) {
                 let r = K.missile_fire_splash * if m.spec.double { 2.0 } else { 1.0 };
@@ -892,7 +944,7 @@ fn step_missiles(party: &mut crate::party::Party, id: MemberId, bag: &mut Shots,
                         continue;
                     }
                     if let Some(os) = hurt_touch(host, o, at, at, r) {
-                        land(party, id, bag, host, o, os.part, o.center, o.center - at, e, power * K.missile_fire_splash_mult, Kind::Small, false, m.spec.double, false, false, 0.0, false, false, "DON_SPLASH");
+                        land(party, id, bag, host, o, KitHit { part: os.part, at: o.center, dir: o.center - at, element: e, power: power * K.missile_fire_splash_mult, kind: Kind::Small, breaker: false, double: m.spec.double, finisher: false, missile: false, push: 0.0, launch: false, physical: false, name: "DON_SPLASH" });
                     }
                 }
                 if full(party, Element::Fire) {
@@ -920,7 +972,7 @@ fn step_missiles(party: &mut crate::party::Party, id: MemberId, bag: &mut Shots,
                     if let Some(pm) = party.member_mut(id) {
                         effect_at(pm, host, K.missile_thunder_chain_fx, o.center, Vec3::ZERO, 1.0, false);
                     }
-                    land(party, id, bag, host, &o, 0, o.center, o.center - from.center, e, power * K.missile_thunder_chain_mult, Kind::Small, false, m.spec.double, false, true, 0.0, false, false, "DON_CHAIN");
+                    land(party, id, bag, host, &o, KitHit { part: 0, at: o.center, dir: o.center - from.center, element: e, power: power * K.missile_thunder_chain_mult, kind: Kind::Small, breaker: false, double: m.spec.double, finisher: false, missile: true, push: 0.0, launch: false, physical: false, name: "DON_CHAIN" });
                     from = o;
                 }
             }
@@ -983,8 +1035,9 @@ fn step_areas(party: &mut crate::party::Party, id: MemberId, bag: &mut Shots, dt
                     a.hit.retain(|h| h.0 != t.id.0);
                     a.hit.push((t.id.0, a.age));
                     let dir = t.center - a.centre;
-                    land(party, id, bag, host, t, 0, t.center, dir, a.element, a.power, a.kind_dmg, false, false, a.tag.starts_with("DON_SLAM"), false, a.push, a.launch, a.physical, a.tag);
-                    if !a.hit_fx.is_empty() {
+                    let landed = land(party, id, bag, host, t, KitHit { part: 0, at: t.center, dir, element: a.element, power: a.power, kind: a.kind_dmg, breaker: false, double: false, finisher: a.tag.starts_with("DON_SLAM"), missile: false, push: a.push, launch: a.launch, physical: a.physical, name: a.tag });
+                    // (2026-11-02) a guarded hit shows the guard spark alone (`land`)
+                    if !a.hit_fx.is_empty() && !landed.is_some_and(|l| l.guarded) {
                         if let Some(pm) = party.member_mut(id) {
                             effect_at(pm, host, a.hit_fx, t.center, Vec3::ZERO, 1.0, false);
                             sound(pm, host, a.hit_se, t.center);

@@ -338,7 +338,7 @@ mod tests {
         // a cover that never ends: pressed before 10 s = nothing; after = the press and the lift
         let mut g = Guard::default();
         let stuck = Facts { view_hidden: true, cover: true, ..field() };
-        assert_eq!(g.frame(true, stuck, true, DT).0, false);
+        assert!(!g.frame(true, stuck, true, DT).0);
         for _ in 0..600 {
             g.frame(false, stuck, true, DT);
         }

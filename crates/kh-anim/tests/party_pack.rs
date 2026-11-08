@@ -6,27 +6,23 @@
 
 use std::path::PathBuf;
 
-use glam::{Quat, Vec3};
+use glam::Quat;
 use kh_anim::json::Json;
 use kh_anim::{Animator, BodySlot, Frame, NoIkWorld, Pack, Settings, Trs};
 
-#[allow(dead_code)]
 mod types {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../build/gen/rust/party_anim_types.rs"));
 }
-#[allow(dead_code)]
 mod donald {
     use super::types::*;
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../build/gen/rust/party_anim_n_ex001.rs"));
 }
-#[allow(dead_code)]
 mod goofy {
     use super::types::*;
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../build/gen/rust/party_anim_n_ex002.rs"));
 }
 
 /// party_clips_n_ex00x.rs (B's request, contract B.7) against a copy of kh-party's types (kh-party/src/anim.rs).
-#[allow(dead_code)]
 mod bclips {
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub enum Chara {
@@ -63,6 +59,8 @@ mod bclips {
         pub x: f32,
         pub y: f32,
         pub z: f32,
+        // (COMBAT-FIX) the socket's rotation
+        pub q: [f32; 4],
     }
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub struct ClipDef {
@@ -119,7 +117,7 @@ fn angle(a: Quat, b: Quat) -> f32 {
 /// serialized: several names repeat, a few rows have no AnimData).
 #[test]
 fn every_row_resolves() {
-    for (npc, body_rows, face_rows) in [("n_ex001", 216usize, 80usize), ("n_ex002", 222, 80)] {
+    for (npc, body_rows, face_rows) in [("n_ex001", 218usize, 80usize), ("n_ex002", 222, 80)] {
         let Some(dir) = pack_dir(npc) else { return };
         let m = manifest(&dir);
         let pack = Pack::load(&dir).unwrap();
@@ -301,5 +299,44 @@ fn generated_tables_agree() {
         println!("{npc}: {} rows, {} sequences, {} with socket tracks, {} notify assets", tables.anims.len(), tables.sequences.len(), socketed, tables.notify_assets.len());
     }
     assert_eq!(donald::NpcAnimId::from_name("IdleN"), Some(donald::NpcAnimId::IdleN));
-    let _ = Vec3::ZERO;
+}
+
+/// Each id names its own row of `ANIMS`, and the row's name finds a row of that name again (names may repeat).
+macro_rules! check_ids {
+    ($npc:ident) => {
+        assert_eq!($npc::NpcAnimId::ALL.len(), $npc::ANIMS.len());
+        for id in $npc::NpcAnimId::ALL {
+            assert_eq!(id.name(), $npc::ANIMS[id as usize].name);
+            assert_eq!(id.data().name, id.name());
+            assert_eq!($npc::NpcAnimId::from_name(id.name()).map(|found| found.name()), Some(id.name()));
+        }
+    };
+}
+
+/// The tables' own index needs no pack on disk: the generators they name, the rows by id, the sequences by name, the
+/// notify classes.
+#[test]
+fn generated_tables_index_themselves() {
+    assert_eq!(types::PARTY_ANIM_SOURCES, [format!("{}: {}", donald::NPC, donald::ANIM_SOURCE), format!("{}: {}", goofy::NPC, goofy::ANIM_SOURCE)]);
+    check_ids!(donald);
+    check_ids!(goofy);
+    let names: std::collections::HashSet<_> = types::NotifyClass::ALL.iter().map(|c| c.game_name()).collect();
+    assert_eq!(names.len(), types::NotifyClass::ALL.len(), "two notify classes share a game name");
+    for (npc, tables) in [(donald::NPC, &donald::TABLES), (goofy::NPC, &goofy::TABLES)] {
+        assert_eq!(tables.npc, npc);
+        assert!(!tables.camp_rows.is_empty() && tables.camp_rows.iter().all(|(row, _)| row.contains(npc)), "{npc}: camp rows");
+        for s in tables.sequences {
+            assert_eq!(tables.sequence(s.name).map(|found| found.name), Some(s.name));
+            assert!(s.notifies.iter().all(|n| types::NotifyClass::ALL.contains(&n.class)), "{}: a notify class outside ALL", s.name);
+        }
+    }
+}
+
+/// Variants no packed row decodes to today stay in the types: tools/gen_party.js writes them as soon as a row of their
+/// class appears, and the copy of kh-party's types stays whole.
+#[test]
+fn variants_without_a_row_stay_in_the_types() {
+    assert_ne!(types::NotifyData::LandAnimPose { pose: None }, types::NotifyData::AutoSe { motion: None, source: None, fade_out: 0.0 });
+    let clip = [bclips::ClipNotifyData::None, bclips::ClipNotifyData::Sound { cue: "" }, bclips::ClipNotifyData::Effect { asset: "", socket: "" }];
+    assert!(clip.iter().enumerate().all(|(i, a)| clip[i + 1..].iter().all(|b| a != b)));
 }

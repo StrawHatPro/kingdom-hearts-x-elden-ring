@@ -24,7 +24,7 @@ use crate::erlog;
 
 /// `len` bytes at `addr` into `out`; false when any of it could not be read.
 pub fn read(addr: usize, out: &mut [u8]) -> bool {
-    if addr < 0x1_0000 || addr > 0x7FFF_FFFF_0000 || out.is_empty() {
+    if !(0x1_0000..=0x7FFF_FFFF_0000).contains(&addr) || out.is_empty() {
         return false;
     }
     let mut got = 0usize;
@@ -48,7 +48,7 @@ pub fn floats<const N: usize>(addr: usize) -> Option<[f32; N]> {
         return None;
     }
     let mut out = [0f32; N];
-    for (k, c) in b.chunks_exact(4).enumerate() {
+    for (k, c) in b.as_chunks::<4>().0.iter().enumerate() {
         out[k] = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
     }
     Some(out)
@@ -66,7 +66,7 @@ fn exe_range() -> (usize, usize) {
 
 /// The RTTI class name behind a vtable address (inside the executable), read safely.
 pub fn vtable_class(vt: usize, exe: (usize, usize)) -> Option<String> {
-    if vt % 8 != 0 || vt < exe.0 + 0x1000 || vt >= exe.1 {
+    if !vt.is_multiple_of(8) || vt < exe.0 + 0x1000 || vt >= exe.1 {
         return None;
     }
     let col = word(vt - 8)?;
@@ -102,7 +102,7 @@ pub fn dl_string(at: usize) -> Option<String> {
     if !read(text, &mut b) {
         return None;
     }
-    let units: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
     let s = String::from_utf16(&units).ok()?;
     s.chars().all(|c| c.is_ascii_graphic() || c == ' ').then_some(s)
 }
@@ -147,7 +147,7 @@ pub fn geom_facts(geom: usize, anchor: Anchor) -> String {
     let name = word(part).map(|n| {
         let mut b = [0u8; 80];
         if !read(n, &mut b) { return String::new(); }
-        let units: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|u| *u != 0).collect();
+        let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|u| *u != 0).collect();
         String::from_utf16_lossy(&units)
     }).unwrap_or_default();
     let _ = write!(s, " name {name} block m{:02}_{:02}_{:02}_{:02}", block >> 24, block >> 16 & 255, block >> 8 & 255, block & 255);
@@ -208,7 +208,7 @@ pub fn census(texts: Vec<String>, peek_words: usize, anchor: Anchor) {
                     let len = (next - p).min(buf.len());
                     if read(p, &mut buf[..len]) {
                         scanned += len;
-                        for (k, c) in buf[..len].chunks_exact(8).enumerate() {
+                        for (k, c) in buf[..len].as_chunks::<8>().0.iter().enumerate() {
                             let w = usize::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]);
                             if w >= exe.0 && w < exe.1 && w % 8 == 0 {
                                 let known = cache.entry(w).or_insert_with(|| vtable_class(w, exe).filter(|name| texts.iter().any(|t| name.contains(t.as_str()))));
@@ -314,7 +314,7 @@ pub fn find_floats(want: [f32; 3], tol: f32, tol_y: f32) {
             let start = (addr & !7).saturating_sub(0x600);
             let mut b = vec![0u8; (addr & !7) - start + 8];
             if read(start, &mut b) {
-                for (k, c) in b.chunks_exact(8).enumerate().rev() {
+                for (k, c) in b.as_chunks::<8>().0.iter().enumerate().rev() {
                     let w = usize::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]);
                     if let Some(name) = vtable_class(w, exe) {
                         owner = format!("{name} at {:#x} (+{:#x})", start + k * 8, addr - (start + k * 8));
@@ -349,7 +349,9 @@ pub fn sfx_ins(addr: usize) -> Option<(u32, u32, usize)> {
 
 /// (`dbg.sfxlist = 1`, `dbg.sfxbit = ID[,ID..]:0|1`) Every live effect instance (a scan on a worker thread: seconds); with ids, bit 6 of
 /// their flags is written afterwards ON THE GAME THREAD, each instance checked again (class and id) right before its write.
-static SFX_FOUND: Mutex<Option<(Vec<usize>, Vec<u32>, bool)>> = Mutex::new(None);
+static SFX_FOUND: Mutex<Option<SfxFound>> = Mutex::new(None);
+/// (instances, ids, the bit's value)
+type SfxFound = (Vec<usize>, Vec<u32>, bool);
 pub fn sfx_scan(ids: Vec<u32>, show: bool, list: bool) {
     if CENSUS_BUSY.swap(true, Relaxed) {
         erlog!("sfx: a scan is running");
@@ -399,7 +401,9 @@ pub fn fx_record(addr: usize, system: usize) -> Option<u32> {
     let id = u32::from_le_bytes(b[0..4].try_into().unwrap());
     (f32::from_le_bytes(b[4..8].try_into().unwrap()).is_finite() && id > 0 && id < 2_000_000_000).then_some(id)
 }
-static FX_FOUND: Mutex<Option<(Vec<usize>, Vec<u32>, f32, usize)>> = Mutex::new(None);
+static FX_FOUND: Mutex<Option<FxFound>> = Mutex::new(None);
+/// (records, ids, the value, the first float)
+type FxFound = (Vec<usize>, Vec<u32>, f32, usize);
 /// (`dbg.fxlist = 1` / `dbg.fxset = ID[,ID..]:value[:first float[:count]]`) A scan for the records (worker thread); with ids, floats of theirs are written
 /// afterwards on the game thread, each record checked again right before.
 pub fn fx_scan(ids: Vec<u32>, value: f32, which: usize, list: bool) {
@@ -431,7 +435,7 @@ pub fn fx_scan(ids: Vec<u32>, value: f32, which: usize, list: bool) {
                 while p < next {
                     let len = (next - p).min(buf.len());
                     if read(p, &mut buf[..len]) {
-                        for (k, c) in buf[..len].chunks_exact(8).enumerate() {
+                        for (k, c) in buf[..len].as_chunks::<8>().0.iter().enumerate() {
                             if usize::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) == system && p + k * 8 >= 0x38 {
                                 let rec = p + k * 8 - 0x38;
                                 if fx_record(rec, system).is_some() {
@@ -494,8 +498,8 @@ pub fn peek_text(addr: usize, words: usize, exe: (usize, usize)) -> String {
                 if read(w, &mut b) {
                     if b.iter().take_while(|c| c.is_ascii_graphic()).count() >= 4 {
                         let _ = write!(note, " \"{}\"", String::from_utf8_lossy(&b[..b.iter().position(|c| !c.is_ascii_graphic()).unwrap_or(24)]));
-                    } else if b.chunks_exact(2).take_while(|c| c[1] == 0 && c[0].is_ascii_graphic()).count() >= 3 {
-                        let _ = write!(note, " L\"{}\"", b.chunks_exact(2).take_while(|c| c[1] == 0 && c[0].is_ascii_graphic()).map(|c| c[0] as char).collect::<String>());
+                    } else if b.as_chunks::<2>().0.iter().take_while(|c| c[1] == 0 && c[0].is_ascii_graphic()).count() >= 3 {
+                        let _ = write!(note, " L\"{}\"", b.as_chunks::<2>().0.iter().take_while(|c| c[1] == 0 && c[0].is_ascii_graphic()).map(|c| c[0] as char).collect::<String>());
                     }
                 }
             }
@@ -529,7 +533,7 @@ pub fn objects_of(class: &str) -> Vec<usize> {
             while p < next {
                 let len = (next - p).min(buf.len());
                 if read(p, &mut buf[..len]) {
-                    for (k, c) in buf[..len].chunks_exact(8).enumerate() {
+                    for (k, c) in buf[..len].as_chunks::<8>().0.iter().enumerate() {
                         let w = usize::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]);
                         if w >= exe.0 && w < exe.1 && w % 8 == 0 && *cache.entry(w).or_insert_with(|| vtable_class(w, exe).is_some_and(|n| n == class)) {
                             hits.push(p + k * 8);
@@ -546,7 +550,7 @@ pub fn objects_of(class: &str) -> Vec<usize> {
 
 /// The scene's own model of the player and its assembled parts, by a scan (testing aid): (viewer model, parts assembly).
 pub fn scan_scene_player() -> (Option<usize>, Option<usize>) {
-    let viewer = objects_of("CSViewerModelIns@CS").into_iter().find(|m| word(m + 0x10).and_then(|item| dl_string(item + 0x6C0)).is_some_and(|n| n == "c0000") && word(m + 0x18).and_then(|d| class_of(d)).is_some());
+    let viewer = objects_of("CSViewerModelIns@CS").into_iter().find(|m| word(m + 0x10).and_then(|item| dl_string(item + 0x6C0)).is_some_and(|n| n == "c0000") && word(m + 0x18).and_then(class_of).is_some());
     let asm = viewer.and_then(|v| objects_of("CSChrAsmModelIns@CS").into_iter().find(|a| word(a + 8) == Some(v)));
     (viewer, asm)
 }
@@ -572,9 +576,9 @@ pub fn path(root: usize, targets: Vec<usize>, depth: usize, span: usize) {
                 if len < 8 {
                     continue;
                 }
-                for (k, c) in buf[..len].chunks_exact(8).enumerate() {
+                for (k, c) in buf[..len].as_chunks::<8>().0.iter().enumerate() {
                     let w = usize::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]);
-                    if w < 0x1_0000_0000 || w > 0x7FFF_FFFF_0000 || w % 8 != 0 || (w >= exe.0 && w < exe.1) || seen.contains_key(&w) {
+                    if !(0x1_0000_0000..=0x7FFF_FFFF_0000).contains(&w) || w % 8 != 0 || (w >= exe.0 && w < exe.1) || seen.contains_key(&w) {
                         continue;
                     }
                     seen.insert(w, (*node, k * 8));
@@ -678,7 +682,9 @@ struct Shots {
 
 static SHOTS: Mutex<Option<Shots>> = Mutex::new(None);
 static SNAPS: Mutex<Vec<(String, usize, Vec<u8>)>> = Mutex::new(Vec::new());
-static HOLD: Mutex<(String, Vec<(usize, u32, u32)>)> = Mutex::new((String::new(), Vec::new()));
+static HOLD: Mutex<Hold> = Mutex::new((String::new(), Vec::new()));
+/// (the text, the held words)
+type Hold = (String, Vec<(usize, u32, u32)>);
 
 /// FRAME_BEGIN: the one-shot keys.
 pub fn frame(control: &Control) {
@@ -836,7 +842,7 @@ pub fn frame(control: &Control) {
                 }
                 let mut text = String::new();
                 let mut n = 0;
-                for (k, (a, b)) in old.chunks_exact(4).zip(now.chunks_exact(4)).enumerate() {
+                for (k, (a, b)) in old.as_chunks::<4>().0.iter().zip(now.as_chunks::<4>().0).enumerate() {
                     if a != b {
                         n += 1;
                         if n <= 200 {

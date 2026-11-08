@@ -1,6 +1,6 @@
 # Donald Duck — Playable Kit Overhaul (design)
 
-Status: **built** (streams DON-KIT, DON-MAGIC, DON-PROG, DON-UI, ZETTA and later, from 2026-10-22); the numbers below are the game's as of 2026-10-28 (the sheets under `sheets/port` win where they differ). This document **replaces Donald's whole former kit**: the XD_PLAYABLE_KITS Donald sections, the X2/X3D work, BAL's Donald ratios and anything else already in game. Section 13 lists what gets removed.
+Status: **built** (streams DON-KIT, DON-MAGIC, DON-PROG, DON-UI, ZETTA and later, from 2026-10-22); the numbers below are the game's as of 2026-10-28 (the sheets under `sheets/port` win where they differ), including section 2's own stats and boss rewards, built with Goofy's overhaul on 2026-11-02. This document **replaces Donald's whole former kit**: the XD_PLAYABLE_KITS Donald sections, the X2/X3D work, BAL's Donald ratios and anything else already in game. Section 13 lists what gets removed.
 
 Pad layout used throughout: KH3 on an Xbox pad. **A** attack/confirm, **B** jump/cancel, **X** dodge/block, **Y** situation command, **LB** shortcuts, **RB** lock-on, **D-pad** command menu. Keyboard is extra, never required.
 
@@ -21,16 +21,46 @@ Design pillars:
 
 ## 2. Stats (overrides BAL for Donald)
 
-| | vs Sora | Notes |
-|---|---|---|
-| Magic | **1.2×** | Highest in the game: **18 at level 1** on the status screen (his row 14 + the starting staff's 4), 49 at level 50, 80 at level 99 (2026-10-27, the user: "make Donald's starting magic 18 at level 1"; was 1.25×, 19 at level 1). KH3's growth curve kept. |
-| Max MP | **1.25×** | 1.25× **Sora's max MP now**, plus his own MP victory bonuses and his Max MP +3 boss steps (9). Sora's MP does not grow with levels, only from bosses, so Donald's grows with it. Sora's opening choice (100 / 110 / 120 MP for Vitality / Balance / Wisdom) gives Donald **125 / 138 / 150** at the start (2026-10-27, the user: "make Donald have x1.25 MP"; was 1.5×). |
-| Strength | **0.667×** | About **10 at level 1** on the status screen with the starting staff (2026-10-27, the user: "lower Donald's physical damage as well, it should be something like 10 at level 1", "I mean the KH3 attack stat in the status screen"; was 0.55×). Only matters for his close-range Wand Bonk (5.3); his missiles are magic. |
-| Max HP | **0.85×** | 0.85× Sora's max HP now, plus his own HP bonuses. Glass cannon. |
-| Defense | **0.80×** | Glass cannon. |
-| MP regen / MP Charge | KH3 rules, plus attunement refunds (4.4) | MP Charge length scales with Magic, as in KH3. |
+Status-screen values, with his starting staff. Sora's are shown for comparison only.
 
-**One set of stats, leading or not** (ONESTAT, 2026-10-27, the user: "there should be no party ally/leader seperation, their stats should be their stats same for Goofy and every KH character added later"): the ratios above are his stats whether he leads or follows as an AI ally.
+| | Level 1 | Level 50 | Level 99 | Sora | Notes |
+|---|---|---|---|---|---|
+| Magic | **18** | **52** | **86** | 15 / 41 / 67 | Highest in the game (2026-10-27, the user: "make Donald's starting magic 18 at level 1"; 2026-11-01, the user: "Donald Level 99 magic should be 86"). |
+| Strength | **5** | **12** | **19** | 15 / 40 / 66 | Only matters for his close-range Wand Bonk (5.3); his missiles are magic (2026-10-30, the user: "make Donald's physical weaker, something like 0.3x of Sora"). |
+| Defense | **6** | **25** | **44** | 8 / 34 / 59 | Glass cannon. |
+
+| | Start | With every reward | Sora (Balance start) |
+|---|---|---|---|
+| Max HP | **89** | **232** | 105 → 265 |
+| Max MP | **138** | **218**, plus his Max MP +3 boss steps (9) | 110 → 174 |
+
+| Reward | Amount | Bosses |
+|---|---|---|
+| Max HP | **+9** each | Tree Sentinel, Flying Dragon Agheel, Leonine Misbegotten, Magma Wyrm Makar, Godskin Noble, Morgott, the Omen King, Fire Giant, Malenia, Blade of Miquella, Sir Gideon Ofnir, the All-Knowing, Godfrey, First Elden Lord / Hoarah Loux, Messmer the Impaler, Commander Gaius, Promised Consort Radahn, Romina, Saint of the Bud, Metyr, Mother of Fingers |
+| Max HP | **+4** each | Mimic Tear, Regal Ancestor Spirit |
+| Max MP | **+7** each | Glintstone Dragon Smarag, Red Wolf of Radagon, Dragonkin Soldier of Nokstella, Starscourge Radahn, Astel Naturalborn of the Void, Loretta Knight of the Haligtree, Sir Gideon Ofnir, Hoarah Loux |
+| Max MP | **+3** each | Divine Beast Dancing Lion, Rellana, Golden Hippopotamus, Putrescent Knight, Scadutree Avatar, Metyr, Midra, Romina |
+
+**Equipment and item slots.** A caster's spread: the most accessories, plenty of items for his MP, and almost no armour.
+
+| Slots | Start | With every reward | Bosses | Sora |
+|---|---|---|---|---|
+| Item | 2 | **5** | Magma Wyrm Makar, Morgott, Messmer | 3 → 8 |
+| Armour | 1 | **2** | Elemer of the Briar | 1 → 3 |
+| Accessory | 2 | **5** | Godrick, Rennala, Maliketh | 1 → 3 |
+
+The party's limit of 4 of each slot rises to 5 when this is built.
+
+MP regen and MP Charge follow KH3's rules, plus attunement refunds (4.4). MP Charge length scales with Magic, as in KH3.
+
+**His own stats, independent of Sora** (2026-11-01, the user: "Donald and Goofy need to have independent stats from Sora, those multipliers are just for reference from level 1"): nothing here follows Sora. His stats don't change with Sora's rewards or Sora's opening choice. The old ×Sora ratios only picked his level-1 values.
+
+- **Growth:** each stat grows steadily from level 1 to 99 at Donald's own rate, as KH3's own party tables do.
+- **HP and MP:** fixed starting values, plus his own boss rewards below. The bosses are the ones that give Sora HP or MP, with his own amounts. These replace his four old Max HP +10 rewards.
+- **Damage taken:** one rule for every friend, leading or not, described in GOOFY_OVERHAUL.md section 2: a sheet curve times a reference Defense over his status-screen Defense, held between ×0.5 and ×2. His Defense and armour count. The old 24-damage cap on a friend leader is gone. In hits of 10 % of Sora's bar he lasts 6.4 at level 1, 2.5 at level 99 with no rewards and about 6.5 with every reward (Sora: 10).
+- **Existing saves:** he gets the rewards for bosses already beaten, once. His totals may shift a little on the first load.
+
+**One set of stats, leading or not** (ONESTAT, 2026-10-27, the user: "there should be no party ally/leader seperation, their stats should be their stats same for Goofy and every KH character added later"): the stats above are his whether he leads or follows as an AI ally.
 
 Every stat is a sheet row (`sheets/port/party-balance.json`, the level table `party-balance-levels.json` built from it by `tools/party_balance_sheet.js`), so it can be tuned without touching the code.
 
@@ -116,6 +146,12 @@ A Release also starts the new element at 1 pip instead of 0. So the expert loop 
 - Each Resonance pip **refunds 2 % of max MP** when it fills.
 - **Off-element casting** (a spell not of the attuned element) costs full MP and gives no Resonance, but it is how Reactions are set up.
 - **MP Charge:** KH3 rules, and Donald keeps firing missiles during it. Landing missiles during MP Charge shortens it.
+- **The last MP** (2026-11-02, the user: "let Goofy use his last MP and go into MP reserve, make sure Donald and his spells (including Zettaflare) have this as well. Zettaflare should instantly put Donald into MP reserve"; MP reserve is MP Charge). Donald follows the party's MP rule (`crates/kh-party/src/mp_rule.rs`), the same one Goofy uses, built on Sora's:
+  - any MP above 0 casts any spell or Y spell; the price stays the same;
+  - a spell that costs as much as he has left, or more, takes all of it: MP 0, and MP Charge starts as the cast starts;
+  - MP Charge lasts his own length (the friends' 30 s × his Magic ratio, R7, sped up by MP Haste), then the bar is full;
+  - so the menus show a spell as short of MP, and a press plays the refused sound, only in MP Charge or at 0 MP;
+  - the HUD shows MP Charge the way KH3 does: the pink charge gauge refills over the MP bar on his leader bar and on his small party gauge.
 
 ### 4.5 Elemental Reactions (why the menu matters)
 
@@ -214,7 +250,7 @@ When he plays alone (no party), none of these apply.
 
 **Spells cost a fixed amount of MP, exactly like Sora's.** The Y spells (6.3) cost set amounts too. Line 1's first three tiers cost what Sora's KH3 spells cost; attuned, about a quarter less. There is no difficulty select: like Sora's, every cost below is multiplied by **1.5**, which is simply the game's base cost (user, 2026-10-22). As his max MP grows from bosses, more casts fit in a bar, as with Sora.
 
-The -za tier is the expensive one: **41 MP** a cast (27 × 1.5), with no discount. At his starting max MP (138 with Sora's Balance start; 125 / 150 with Vitality / Wisdom) **a full MP bar holds three -za casts**. (It was four at the old 1.5× start of 165; with the MP ratio at 1.25× the user chose to keep the -za cost, 2026-10-27.) For the line-3 ultimates, reaching Resonance 3 is the real price, not the MP.
+The -za tier is the expensive one: **41 MP** a cast (27 × 1.5), with no discount. At his starting max MP of 138 **a full MP bar holds three -za casts**. (It was four at the old 1.5× start of 165; with the MP ratio at 1.25× the user chose to keep the -za cost, 2026-10-27.) For the line-3 ultimates, reaching Resonance 3 is the real price, not the MP.
 
 | Spell (MP, before the ×1.5) | Not attuned | Attuned |
 |---|---|---|
@@ -224,7 +260,7 @@ The -za tier is the expensive one: **41 MP** a cast (27 × 1.5), with no discoun
 | Water / Watera / Waterga | 12 / 15 / 22 | 9 / 11 / 17 |
 | Aero / Aerora / Aeroga | 13 / 18 / 26 | 10 / 14 / 20 |
 | Cure / Cura / Curaga | 13 / 17 / 23 | 10 / 12 / 17 |
-| **-za tier** (full-power attunement only; Curaza too) | — | **27** (41 after ×1.5: three per starting bar of 125 / 138 / 150) |
+| **-za tier** (full-power attunement only; Curaza too) | — | **27** (41 after ×1.5: three per starting bar of 138) |
 | Line 2 (Flare, Freeze, Ball Lightning, Flood, Aero Barrier, Banish), Lv 1 / 2 / 3 | 10 / 13 / 17 | 7 / 10 / 12 |
 | **Line 3 ultimates** (full-power attunement, once per attunement period) | — | **20**, and only 13 if cast within 3 s of reaching Resonance 3 |
 | Hybrids (6.4) | — | 15 |
@@ -233,7 +269,7 @@ Each Resonance pip also refunds 2 % of max MP (4.4), so a good attunement loop w
 
 ### 6.3 Non-elemental magic on Y (replaces Resonance Magic)
 
-KH3's Grand Magic slot becomes Donald's **non-elemental Arcane magic**, cast with **Y** as a situation command, each with **its own set MP cost**, like the rest of his magic. Y is only offered while he has at least that much MP; below it the Y command shows greyed with the MP it needs. The charges still run out on their normal timer, so he has to manage MP to be ready.
+KH3's Grand Magic slot becomes Donald's **non-elemental Arcane magic**, cast with **Y** as a situation command, each with **its own set MP cost**, like the rest of his magic. Y is offered while he has any MP above 0 and no MP Charge runs (4.4, since 2026-11-02); a Y spell dearer than his MP takes the last of it into MP Charge. At 0 MP the Y command shows greyed with the MP it needs. The charges still run out on their normal timer, so he has to manage MP to be ready.
 
 **The trigger is Arcane Flow**, a **4-charge** meter. It fills from **playing the attunement system well**, not from spamming one spell:
 
@@ -247,7 +283,7 @@ KH3's Grand Magic slot becomes Donald's **non-elemental Arcane magic**, cast wit
 - **Decay:** charges last 20 s in combat and empty out of combat.
 - **What Y offers: every Y spell he can afford, all at once.** Each spell has a **cost in charges**. Y lists every learned spell whose cost is at or below his current charges, stacked like KH3's situation commands and cycled the same way. Nothing overwrites anything: the player selects which one to cast.
 - **Casting spends only that spell's cost.** With 2 charges, casting Gravity (1) leaves 1 charge; with 3, casting Comet (2) leaves 1 (user, 2026-10-23: "make gravity cost 1 star and comet cost 2 stars"). So he chooses between spending a little now or saving up for Meteor or Ultima (which also needs full-power attunement).
-- **MP:** each Y spell has a set MP cost (before the ×1.5 of 6.2): Comet 40, Comet II 45; Gravity 45, Gravira 55, Graviga 65; Meteor 55 / 60 / 65; Ultima 70. Zettaflare: **a FULL MP bar, all of it spent; he goes into MP Charge (the red bar, as after Cure), recharging 30 % slower** (`zetta.regen_mult` 0.7; user, 2026-10-23, revised: "it needs all of your current MP to be useable ... unlike heal needs all of your MP and recharge takes 30% longer", confirmed as "Requires a full MP bar"). The Y list offers it only at full MP. The Y list shows only what he can cast right now (charges, MP, on the ground): each row is just the name and its star cost, with no reasons or MP shown.
+- **MP:** each Y spell has a set MP cost (before the ×1.5 of 6.2): Comet 40, Comet II 45; Gravity 45, Gravira 55, Graviga 65; Meteor 55 / 60 / 65; Ultima 70. Zettaflare: **a FULL MP bar, all of it spent; he goes into MP Charge (the red bar, as after Cure), recharging 30 % slower** (`zetta.regen_mult` 0.7; user, 2026-10-23, revised: "it needs all of your current MP to be useable ... unlike heal needs all of your MP and recharge takes 30% longer", confirmed as "Requires a full MP bar"). Since 2026-11-02 (the user: "make sure Donald and his spells (including Zettaflare) have this as well. Zettaflare should instantly put Donald into MP reserve") the full bar is no longer needed: any MP above 0 casts it, all that is left goes, and MP Charge starts at once as the cast starts (4.4). The Y list shows only what he can cast right now (charges, MP, on the ground): each row is just the name and its star cost, with no reasons or MP shown.
 
 | Cost (charges) | Y spell | Levels | Effect |
 |---|---|---|---|
@@ -288,7 +324,7 @@ Every pair of elements has its own hybrid spell (15 in all). A hybrid appears in
 
 ### 6.5 The capstone: Zettaflare (on Y)
 
-**Zettaflare** is his ultimate magic, from a boss mid-way into the DLC (section 9), and the top of the Y Arcane magic. Y lists it alongside the other Y spells when he has **4 Arcane Flow charges** (a full meter) and **every element he has learned has reached Resonance 3 at least once in the current fight**. Small HUD icons track the elements. It needs **a FULL MP bar** (MP = max MP) and spends all of it: he goes into MP Charge (the red bar, as after Cure), which recharges **30 % slower** (`zetta.regen_mult` 0.7) (user, 2026-10-23, revised: "Zettaflare needs to use up all of your magic (it needs all of your current MP to be useable) and then put you into the red MP bar mode with a 30% slower recharge rate"; confirmed as "Requires a full MP bar"). The F7 / L3+R3 test aid tops MP up to full, and it empties his Resonance and Arcane Flow. **Presentation:** it plays KH3's own Zettaflare cutscene (Keyblade Graveyard, kg702b) aimed at the target: a 5 s channel, his cast and "Zettaflare!", with a cinematic camera that mimics the cutscene's shots. While it is cast (channel to hit), **the target is frozen in place and turns to look at Donald**, then **reacts to the beam exactly as Terra-Xehanort does in the cutscene**, held for the whole beam, and **immersed in the white light**: **if Zettaflare kills it, it becomes a black silhouette that crumbles away leaving only the light** (any enemy); if it survives, it is **held in place until the wide shot of the beam shrinking, then thrown straight back along the beam's direction** (user, 2026-10-23); the return to gameplay is seamless; **Donald is invincible for the whole sequence** and **no enemy targets him**, so nothing can interrupt it; **every enemy caught in the blast takes damage**; its damage **scales with Donald's Magic** (its power × his Magic, nothing else; user, 2026-10-23: "make sure Zettaflare scales with your magic stat", "make level 99 Zettaflare do 20,000 damage"): at first **20,000 Elden Ring HP at level 99** (Magic 71, the x7 conversion); since 2026-10-27 it scales with the host's conversion (the user: "allow Zettaflare to be scaled up"); with the x8 conversion of 2026-10-28 (the user: "lower the scale to 8") and his balanced Magic (Magic 1.2×, 80 at level 99) it does **about 25,760 at level 99**, about 15,800 at level 50 and 5,800 at level 1 (its power unchanged), landing in full; it **ignores all armour, defence and resistances and overrides everything** (super armour, poise, boss states) so it always works; and **AI allies attack other enemies and keep away from Zettaflare's target and the beam line**. The beam and the camera are aimed **at the target**.
+**Zettaflare** is his ultimate magic, from the Elden Beast (section 9), and the top of the Y Arcane magic. Y lists it alongside the other Y spells when he has **4 Arcane Flow charges** (a full meter) and **every element he has learned has reached Resonance 3 at least once in the current fight**. Small HUD icons track the elements. It needs **MP above 0** (until 2026-11-02 a full bar; see 4.4) and spends all he has: he goes into MP Charge at once (the red bar, as after Cure), which recharges **30 % slower** (`zetta.regen_mult` 0.7) (user, 2026-10-23, revised: "Zettaflare needs to use up all of your magic (it needs all of your current MP to be useable) and then put you into the red MP bar mode with a 30% slower recharge rate"; confirmed as "Requires a full MP bar"). The F7 / L3+R3 test aid tops MP up to full, and it empties his Resonance and Arcane Flow. **Presentation:** it plays KH3's own Zettaflare cutscene (Keyblade Graveyard, kg702b) aimed at the target: a 5 s channel, his cast and "Zettaflare!", with a cinematic camera that mimics the cutscene's shots. While it is cast (channel to hit), **the target is frozen in place and turns to look at Donald**, then **reacts to the beam exactly as Terra-Xehanort does in the cutscene**, held for the whole beam, and **immersed in the white light**: **if Zettaflare kills it, it becomes a black silhouette that crumbles away leaving only the light** (any enemy); if it survives, it is **held in place until the wide shot of the beam shrinking, then thrown straight back along the beam's direction** (user, 2026-10-23); the return to gameplay is seamless; **Donald is invincible for the whole sequence** and **no enemy targets him**, so nothing can interrupt it; **every enemy caught in the blast takes damage**; its damage **scales with Donald's Magic** (its power × his Magic, nothing else; user, 2026-10-23: "make sure Zettaflare scales with your magic stat", "make level 99 Zettaflare do 20,000 damage"): at first **20,000 Elden Ring HP at level 99** (Magic 71, the x7 conversion); since 2026-10-27 it scales with the host's conversion (the user: "allow Zettaflare to be scaled up"); with the x8 conversion of 2026-10-28 (the user: "lower the scale to 8") and his Magic (86 at level 99, section 2) it does **about 27,700 at level 99**, about 16,700 at level 50 and 5,800 at level 1 (its power unchanged), landing in full; it **ignores all armour, defence and resistances and overrides everything** (super armour, poise, boss states) so it always works; and **AI allies attack other enemies and keep away from Zettaflare's target and the beam line**. The beam and the camera are aimed **at the target**.
 
 (ZETTA, 2026-10-23) **The beam and its framing.** Every enemy shot is the user's PERFECT frame (the test level's Sora in the beam) scaled about the target: the body's full bounds (height and width with reach) fill the reference's region, 45 % of the height and 63 % of the width (sheet `zetta.frame_body_*`, `zetta.frame_share_*`), never cropped; the beam fills that frame. **The beam always starts at Donald's wand and never reaches behind him** (the user: "the beam MUST start at Donald's wand, and NEVER show the end of it"; "the beam must NEVER extend behind Donald"): the ending beam grows only across its line; its far end is out of every shot's frame from the hit on. **The one exemption: the launch.** Its head travels from the wand to the target before the hit, with its end in view (the user: "keep the travelling head"); the tests (`kh-host/tests/zetta_beam_lines.rs`, kh-party `the_ending_beams_far_end_is_never_in_the_long_shot`) check the far end from the hit on only.
 
@@ -424,7 +460,7 @@ The bosses of each line are **paced like the element's line 1** (2026-10-28, the
 | Thunder | Ball Lightning | Dragonkin Soldier of Nokstella (Ainsel River) | Elemer of the Briar (Altus Plateau) | Godfrey / Hoarah Loux (Leyndell, Ashen Capital) | Margit (Limgrave), Draconic Tree Sentinel (Capital Outskirts), Lichdragon Fortissax (Deeproot Depths) |
 | Blizzard | Freeze | Red Wolf of Radagon (Liurnia, Raya Lucaria) | Mimic Tear (Nokron) | Loretta, Knight of the Haligtree (Haligtree) | Royal Knight Loretta (Liurnia), Rennala (Liurnia), Commander Niall (Mountaintops) |
 | Aero | Aero Barrier | Godskin Noble (Mt. Gelmir, Volcano Manor) | Malenia (Haligtree, Elphael) | Sir Gideon Ofnir (Leyndell, Ashen Capital) | Starscourge Radahn (Caelid), Godskin Duo (Farum Azula), Dragonlord Placidusax (Farum Azula) |
-| Light | Banish | **Tree Sentinel** (Limgrave) | Morgott (Leyndell) | Radagon / Elden Beast (the Erdtree, the last boss) | Godrick (Stormveil), Godfrey's golden shade (Leyndell), Maliketh (Farum Azula) |
+| Light | Banish | **Tree Sentinel** (Limgrave) | Morgott (Leyndell) | Golden Hippopotamus (Shadow Keep, DLC) | Godrick (Stormveil), Godfrey's golden shade (Leyndell), Maliketh (Farum Azula) |
 
 Since the steps are "one level more, any order", the columns are the usual route's order, not a rule. Banish Lv 3 comes from the last boss (after it the world can still be explored) and Aero's last two are late, as are Aero's own tiers 2 and 3.
 
@@ -447,11 +483,79 @@ Since the steps are "one level more, any order", the columns are the usual route
 | Y line | Levels | Its bosses (any order; suggestions) |
 |---|---|---|
 | Comet | Comet → Comet II | *Glintstone Dragon Smarag, Fallingstar Beast* |
-| Gravity | Gravity (start) → Gravira → Graviga | *Onyx Lord, Alabaster Lord* |
+| Gravity | Gravity (start) → Gravira → Graviga | *Onyx Lord (Sealed Tunnel), Onyx Lord (Liurnia)* (2026-10-30: Alabaster Lord has no boss defeat in the game) |
 | Meteor | Lv 1 → 2 → 3 | *Full-Grown Fallingstar Beast, Astel, Stars of Darkness, Glintstone Dragon Adula* |
 | Ultima | one level | *Astel, Naturalborn of the Void* |
 
-- **Zettaflare** comes from a boss **mid-way into the Shadow of the Erdtree DLC**. Suggested: **Messmer the Impaler**.
+- **Zettaflare** comes from **the Elden Beast**, the last boss (2026-11-01, the user: "Donald should unlock Zettaflare from Elden Beast").
+
+### Donald's boss rewards, boss by boss
+
+**Built** (2026-11-01, the user: "Donald and Goofy both should get more equipment and item and accessory slots, but they don't need to be equal make them suit the character's playstyle. Create the detailed Sora-styled boss reward lists"). Each row gives once per character when the boss's defeat flag is seen. (2026-11-01, the user: "Donald should unlock Zettaflare from Elden Beast, move next banish level to another boss and spread out Donald and Goofy's rewards across other bosses including DLC, and give Sora more stat rewards from the DLC. Make sure it ALL follows natural progression")
+
+- **HP, MP and slots** are raw steps on his `don.` rows, with their own once-record `donstat:<row>`. Their totals are worked out from the record, never added to saved values, so nothing counts twice.
+- **Magic steps** give the next tier or level, whichever boss comes first (rules above). A step past the top of a line gives Max MP +3.
+- **Abilities** are given once.
+- **Slots** suit a caster: he leans on accessories, and on items for MP, and carries little armour (section 2).
+- **Natural progression:** his rewards build through the game, and **Zettaflare** comes last of all, from the Elden Beast.
+- **No Donald reward:** none.
+
+| # | Boss | Region | Path | Donald's reward |
+|---|---|---|---|---|
+| 1 | Tree Sentinel | Limgrave | optional | **Banish**, next level; MP Haste (3 AP); Max HP +9 |
+| 2 | Flying Dragon Agheel | Limgrave | optional | **Flare**, next level; Max HP +9 |
+| 3 | Margit, the Fell Omen | Limgrave (Stormveil gate) | main | **Thunder**, next tier |
+| 4 | Leonine Misbegotten | Weeping Peninsula (Castle Morne) | optional | **Flood**, next level; Fire Boost (4 AP); Max HP +9 |
+| 5 | Godrick the Grafted | Limgrave (Stormveil Castle) | main | **Cure**, next tier; Accessory slot +1 |
+| 6 | Royal Knight Loretta | Liurnia (Caria Manor) | optional | **Blizzard**, next tier |
+| 7 | Glintstone Dragon Smarag | Liurnia | optional | **Comet**, next level; Team Attack Extender (3 AP); Max MP +7 |
+| 8 | Red Wolf of Radagon | Liurnia (Raya Lucaria) | main | **Freeze**, next level; Aero Float; Max MP +7 |
+| 9 | Rennala, Queen of the Full Moon | Liurnia (Raya Lucaria) | main | **Blizzard**, next tier; Accessory slot +1 |
+| 10 | Magma Wyrm Makar | Liurnia (Ruin-Strewn Precipice) | optional | **Flare**, next level; Max HP +9; Item slot +1 |
+| 11 | Ancestor Spirit | Siofra River | optional | **Water**, next tier |
+| 12 | Dragonkin Soldier of Nokstella | Ainsel River | optional | **Ball Lightning**, next level; Max MP +7 |
+| 13 | Starscourge Radahn | Caelid | main | **Aero**, next tier; Damage Syphon (3 AP); Max MP +7 |
+| 14 | Mimic Tear | Nokron | optional | **Freeze**, next level; Max HP +4 |
+| 15 | Regal Ancestor Spirit | Nokron | optional | **Flood**, next level; Max HP +4 |
+| 16 | Valiant Gargoyles | Siofra Aqueduct | optional | **Water**, next tier |
+| 17 | Astel, Naturalborn of the Void | Lake of Rot (Grand Cloister) | optional | **Ultima**; Max MP +7 |
+| 18 | Lichdragon Fortissax | Deeproot Depths | optional | **Thunder**, next tier |
+| 19 | Elemer of the Briar | Altus Plateau (Shaded Castle) | optional | **Ball Lightning**, next level; Thunder Boost (4 AP); Armour slot +1 |
+| 20 | Godskin Noble | Mt. Gelmir (Volcano Manor) | optional | **Aero Barrier**, next level; Max HP +9 |
+| 21 | Rykard, Lord of Blasphemy | Mt. Gelmir (Volcano Manor) | optional | **Fire**, next tier |
+| 22 | Draconic Tree Sentinel | Capital Outskirts | main | **Thunder**, next tier |
+| 23 | Godfrey, First Elden Lord (golden shade) | Leyndell | required | **Cure**, next tier |
+| 24 | Morgott, the Omen King | Leyndell | required | **Banish**, next level; Blizzard Boost (4 AP); Max HP +9; Item slot +1 |
+| 25 | Mohg, the Omen | Leyndell (Shunning-Grounds) | optional | **Flood**, next level |
+| 26 | Commander Niall | Mountaintops (Castle Sol) | optional | **Blizzard**, next tier |
+| 27 | Fire Giant | Mountaintops | required | **Fire**, next tier; Hyper Healing (3 AP); Max HP +9 |
+| 28 | Mohg, Lord of Blood | Mohgwyn Palace | optional | **Flare**, next level |
+| 29 | Loretta, Knight of the Haligtree | Haligtree | optional | **Freeze**, next level; Max MP +7 |
+| 30 | Malenia, Blade of Miquella | Haligtree (Elphael) | optional | **Aero Barrier**, next level; Max HP +9 |
+| 31 | Godskin Duo | Farum Azula | required | **Aero**, next tier |
+| 32 | Dragonlord Placidusax | Farum Azula | optional | **Aero**, next tier |
+| 33 | Maliketh, the Black Blade | Farum Azula | required | **Cure**, next tier; More Team Attacks (5 AP); Accessory slot +1 |
+| 34 | Sir Gideon Ofnir, the All-Knowing | Leyndell, Ashen Capital | required | **Aero Barrier**, next level; Max HP +9; Max MP +7 |
+| 35 | Godfrey, First Elden Lord / Hoarah Loux | Leyndell, Ashen Capital | required | **Ball Lightning**, next level; Max HP +9; Max MP +7 |
+| 36 | Radagon of the Golden Order / Elden Beast | Erdtree | required | **Zettaflare**; Aero Boost (4 AP) |
+| 37 | Divine Beast Dancing Lion | Shadow of the Erdtree (Belurat) | main | **Aero, -za tier + Aerial Blast**; Max MP +3 |
+| 38 | Rellana, Twin Moon Knight | Shadow of the Erdtree (Castle Ensis) | main | **Blizzard, -za tier + Diamond Dust**; Max MP +3 |
+| 39 | Golden Hippopotamus | Shadow of the Erdtree (Shadow Keep) | main | **Banish**, next level; Max MP +3 |
+| 40 | Messmer the Impaler | Shadow of the Erdtree (Shadow Keep) | required | Max HP +9; Item slot +1 |
+| 41 | Commander Gaius | Shadow of the Erdtree | optional | Max HP +9 |
+| 42 | Putrescent Knight | Shadow of the Erdtree (Stone Coffin Fissure) | optional | **Water, -za tier + Tsunami**; Max MP +3 |
+| 43 | Scadutree Avatar | Shadow of the Erdtree | optional | **Cure, -za tier + Holy**; Max MP +3 |
+| 44 | Metyr, Mother of Fingers | Shadow of the Erdtree | optional | Max HP +9; Max MP +3 |
+| 45 | Midra, Lord of Frenzied Flame | Shadow of the Erdtree (Midra's Manse) | optional | **Fire, -za tier + Inferno**; Max MP +3 |
+| 46 | Romina, Saint of the Bud | Shadow of the Erdtree | required | Max HP +9; Max MP +3 |
+| 47 | Bayle the Dread | Shadow of the Erdtree (Jagged Peak) | optional | **Thunder, -za tier + Judgment Bolt** |
+| 48 | Promised Consort Radahn | Shadow of the Erdtree (Enir-Ilim) | required | Max HP +9 |
+| 49 | Fallingstar Beast | Altus Plateau (South Altus crater) | optional | **Comet**, next level |
+| 50 | Onyx Lord | Altus Plateau (Sealed Tunnel) | optional | **Gravity**, next level |
+| 51 | Onyx Lord (Liurnia) | Liurnia | optional | **Gravity**, next level |
+| 52 | Full-Grown Fallingstar Beast | Mt. Gelmir | optional | **Meteor**, next level |
+| 53 | Astel, Stars of Darkness | Consecrated Snowfield (Yelough Anix Tunnel) | optional | **Meteor**, next level |
+| 54 | Glintstone Dragon Adula | Liurnia (Three Sisters / Cathedral of Manus Celes) | optional | **Meteor**, next level |
 
 ---
 
@@ -477,7 +581,8 @@ Since the steps are "one level more, any order", the columns are the usual route
   - Light when the party is low on HP.
 - **Heals:** uses Cure-line spells with KH3's healing rules, and Reactions when easy.
 - **Aero Barrier:** as in KH1, casts it on the leader or another friend who is being attacked or is low on HP, and on himself when an enemy closes in. He renews it before it runs out during a fight.
-- **Ball Lightning:** casts it on the friend fighting up close (often Goofy or the leader), or on himself when he is cornered.
+- **Ball Lightning:** casts it on the friend fighting up close (often Goofy or the leader), or on himself when he is cornered. He casts it only on someone who has no ball left, no set still running (a Lv 2 or 3 set recharges its balls while it lasts) and none from him in the last 8 s (`ai.orbs_gap`). In melee the balls are used up within a second, and before this rule (the 2026-11-03 in-game round) he put a new set on the fighter at every turn, so he never got to his attack spells.
+- **The last MP** (4.4, 2026-11-02): AI Donald uses it only where it counts. A heal may take his last MP into MP Charge. A protection spell (Aero Barrier, Ball Lightning) may too, unless someone is low and he knows the Cure line, because that MP is kept for the heal. An attack never empties him: he pays it in full, and below 15 % of his MP (`ai.mp_keep`) he casts no attacks at all.
 - **Team role:** the aggro rules (5.4) apply to AI Donald too, so Goofy or Sora draws attention.
 - **Release and ultimates:** never uses Release on purpose (too player-skill-heavy). **AI Donald can never cast Zettaflare**; only the player can. He may use an ultimate at full power, once per attunement period like the player.
 
@@ -491,7 +596,7 @@ Since the steps are "one level more, any order", the columns are the usual route
 
 ---
 
-## 13. What this replaces (removed when built)
+## 13. What this replaced
 
 - His current combo (staff Beat/Swing melee hits) and the **Fire-bolt finisher**.
 - **Unison Fire, Meteor Drop and Flare Force as combo finishers.** Their team-attack versions with friends stay.
@@ -506,3 +611,6 @@ Since the steps are "one level more, any order", the columns are the usual route
 These stay: shared systems (hit reactions, items, menus, conversations, saves, party pickup, the death flow), his look, his voice, and his team attacks with friends.
 
 ---
+## 14. As built
+
+**Enemy shields (the user, 2026-11-02: "Shields don't count as guarding ... make the character who attacks a shield bounce off playing their animation from KH3").** An Elden Ring enemy whose own guard is up guards his hits from its front, by KH3's guard rules (the same ones as Sora's): KH3's guard spark (`vs_com_haj00`, its own clang), no hit sound, no KH3 reaction. His own swings (the AI's staff Beat / Swing, the pad's Wand Bonk) then bounce him off with his own KH3 recoil clip, `AttackReflect` (`AttackAirReflect` in the air), after a 0.05 s hold, and his combo or command ends. His spells and missiles are guarded too but never bounce him. From behind, a hit is a plain hit. The damage and the pressure on the guard are Elden Ring's own (its guard's cut, its stamina, its guard break). See `crates/kh-party/src/repel.rs`, the `repel.*` rows of `sheets/port/party-hurt.json`, `crates/kh-er/src/shieldguard.rs`. Untested in game.

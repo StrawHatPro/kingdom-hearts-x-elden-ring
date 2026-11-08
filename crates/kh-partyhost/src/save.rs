@@ -12,6 +12,7 @@ use kh_core::enums::ETresAbilityKind;
 use kh_core::status::ItemKind;
 use kh_host::formation::Formation;
 use kh_host::party::{FriendAiSettings, PartyChara};
+use kh_party::status::MAX_SLOTS;
 use serde_json::{json, Value};
 
 use crate::runtime::PartyRuntime;
@@ -25,7 +26,7 @@ pub struct FriendRecord {
     /// Equipment row ids, one per owned slot (None = empty).
     pub armour: Vec<Option<String>>,
     pub accessories: Vec<Option<String>>,
-    /// The four item slots: (item pouch name, still there).
+    /// The item slots, all of them: (item pouch name, still there). An older save has four.
     pub items: Vec<(Option<String>, bool)>,
     pub item_slots: u8,
     pub armour_slots: u8,
@@ -38,7 +39,7 @@ pub struct FriendRecord {
     /// change: a v5 save without it reads as None = full GUARD; an older build ignores the key). Its max is not stored:
     /// it follows the level (sheet party-guard-levels).
     pub guard: Option<(f32, bool)>,
-    /// (EQ) Auto-Reload per item slot (the four, as `items`). ADDITIVE key `reload` (no version change: a save without it
+    /// (EQ) Auto-Reload per item slot (as `items`). ADDITIVE key `reload` (no version change: a save without it
     /// reads as all off, the behaviour before; an older build ignores the key).
     pub reload: Vec<bool>,
 }
@@ -55,9 +56,9 @@ pub struct PartySave {
 
 pub const FRIENDS_RECORD_VERSION: u32 = 5;
 
-/// (EQ) The Auto-Reload flags as the record keeps them: exactly one per item slot (the four), missing ones off.
+/// (EQ) The Auto-Reload flags as the record keeps them: exactly one per item slot, missing ones off (an older save has four).
 fn normal_reload(r: &[bool]) -> Vec<bool> {
-    (0..4).map(|k| r.get(k).copied().unwrap_or(false)).collect()
+    (0..MAX_SLOTS).map(|k| r.get(k).copied().unwrap_or(false)).collect()
 }
 
 impl FriendRecord {
@@ -71,25 +72,27 @@ impl FriendRecord {
             item_slots: s.item_slots,
             armour_slots: s.armour_slots,
             accessory_slots: s.accessory_slots,
-            abilities: ETresAbilityKind::ALL.iter().filter(|k| s.abilities.owned(**k) > 0).map(|k| (k.name().to_string(), s.abilities.owned(*k), s.abilities.equipped_mask(*k))).chain(s.kit.record() /* (party X3D) KIT_* */).chain(s.goofy_kit.record() /* (party X3G) Goofy's KIT_* */).chain(s.donald.as_ref().map(|d| d.abilities.record()).unwrap_or_default() /* (DON1) Donald's DON_* */).collect(),
+            abilities: ETresAbilityKind::ALL.iter().filter(|k| s.abilities.owned(**k) > 0).map(|k| (k.name().to_string(), s.abilities.owned(*k), s.abilities.equipped_mask(*k))).chain(s.kit.record() /* (party X3D) KIT_* */).chain(s.goofy.as_ref().map(|g| g.abilities.record()).unwrap_or_default() /* (GOOFY) Goofy's GOF_* */).chain(s.donald.as_ref().map(|d| d.abilities.record()).unwrap_or_default() /* (DON1) Donald's DON_* */).collect(),
             bonuses: s.bonuses.0,
             guard: s.guard.map(|g| (g.value, g.broken)), // (GOOFY-GG)
             reload: normal_reload(&s.item_reload), // (EQ)
         }
     }
 
-    /// The record onto a friend's status (unknown names are skipped, counts clamped to the 4 slots).
+    /// The record onto a friend's status (unknown names are skipped, counts clamped to the party's limit). (GF-STATS) The saved
+    /// slot counts only stand until `growth` reaches them (`FriendStatus::set_growth`), so an old save's gear stays on and
+    /// nothing counts twice; the saved `bonuses` count for nothing, the roster's record is the truth.
     pub fn apply(&self, s: &mut kh_party::FriendStatus) {
         let _ = s.equip_weapon(&self.weapon);
         s.bonuses = kh_core::status::BonusCounts(self.bonuses);
-        s.item_slots = self.item_slots.min(4);
-        s.armour_slots = self.armour_slots.min(4);
-        s.accessory_slots = self.accessory_slots.min(4);
-        for slot in 0..4 {
+        s.item_slots = self.item_slots.min(MAX_SLOTS as u8);
+        s.armour_slots = self.armour_slots.min(MAX_SLOTS as u8);
+        s.accessory_slots = self.accessory_slots.min(MAX_SLOTS as u8);
+        for slot in 0..MAX_SLOTS {
             s.set_armour(slot, self.armour.get(slot).cloned().flatten().as_deref());
             s.set_accessory(slot, self.accessories.get(slot).cloned().flatten().as_deref());
         }
-        for (slot, (item, present)) in self.items.iter().enumerate().take(4) {
+        for (slot, (item, present)) in self.items.iter().enumerate().take(MAX_SLOTS) {
             let item = item.as_deref().and_then(ItemKind::from_name);
             s.items[slot] = kh_party::ItemSlot { item, present: *present && item.is_some() };
             s.item_reload[slot] = item.is_some() && self.reload.get(slot).copied().unwrap_or(false); // (EQ)
@@ -122,11 +125,12 @@ impl FriendRecord {
                 }
             } else {
                 if s.donald.as_mut().is_some_and(|d| d.abilities.apply_record(name, *owned, *mask)) /* (DON1) Donald's DON_* */ {
-                } else if !s.goofy_kit.apply_record(name, *owned, *mask) /* (party X3G) Goofy's kit abilities */ {
+                } else if !s.goofy.as_mut().is_some_and(|g| g.abilities.apply_record(name, *owned, *mask)) /* (GOOFY) Goofy's GOF_*; his old KIT_* names are dropped here, which frees their AP */ {
                     s.kit.apply_record(name, *owned, *mask); // (party X3D) Donald's kit abilities (KIT_*)
                 }
             }
         }
+        s.gof_drop_kh3(); // (GOOFY, R11) an old save's KH3 seeds
     }
 
     /// The v5 JSON shape (stream S6 embeds it as `party.friends[]`).
@@ -144,14 +148,14 @@ impl FriendRecord {
         if let Some((value, broken)) = self.guard {
             v["guard"] = json!([value, broken]); // (GOOFY-GG) additive
         }
-        v["reload"] = json!(normal_reload(&self.reload)); // (EQ) additive: always the four slots
+        v["reload"] = json!(normal_reload(&self.reload)); // (EQ) additive: always every slot
         v
     }
 
     pub fn from_json(v: &Value) -> Option<FriendRecord> {
         let chara = PartyChara::from_name(v["chara"].as_str()?).filter(|c| *c != PartyChara::Sora)?;
         let strings = |k: &str| v[k].as_array().map(|a| a.iter().map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>()).unwrap_or_default();
-        let slot = |i: usize, d: u8| v["slots"].get(i).and_then(Value::as_u64).map_or(d, |x| x.min(4) as u8);
+        let slot = |i: usize, d: u8| v["slots"].get(i).and_then(Value::as_u64).map_or(d, |x| x.min(MAX_SLOTS as u64) as u8);
         let mut bonuses = [0u8; 32];
         for (i, b) in v["bonuses"].as_array().into_iter().flatten().enumerate().take(32) {
             bonuses[i] = b.as_u64().unwrap_or(0).min(255) as u8;
@@ -185,12 +189,15 @@ impl PartyRuntime {
             }
         }
         let ai = std::iter::once((PartyChara::Sora, self.lead.sora_settings)).chain(PartyChara::FRIENDS.into_iter().map(|c| (c, self.ai_settings(c)))).collect();
-        PartySave { formation: self.lead.current_formation(), ai, friends }
+        // (MIMIC-BOSS) a save during a solo fight keeps the party from before the fog gate (never a stranded party)
+        let formation = self.lead.solo.as_ref().map_or_else(|| self.lead.current_formation(), |h| h.before.clone());
+        PartySave { formation, ai, friends }
     }
 
     /// A loaded party record: the formation and the AI settings at the next step (as the HUD's requests), the friends'
     /// records onto the spawned friends now and kept for the others until they spawn.
     pub fn from_save(&mut self, save: &PartySave) {
+        self.solo_drop("a save is loaded"); // (MIMIC-BOSS) the loaded formation is the party
         self.set_formation(save.formation.clone());
         for (c, s) in &save.ai {
             if *c == PartyChara::Sora {

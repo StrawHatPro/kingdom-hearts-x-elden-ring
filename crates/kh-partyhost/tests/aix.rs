@@ -138,6 +138,13 @@ impl kh_core::Targets for Foes {
         let recent = |at: u64| at > 0 && self.step.saturating_sub(at) <= 120;
         self.list.iter().filter(|f| f.hp > 0.0 && ((!self.strict && (f.pos - self.engage_at).truncate().length() <= self.engage_range) || recent(f.last_hit_step) || recent(f.last_attack_step))).count() as u32
     }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
+    }
 }
 
 impl PartyTargets for Foes {
@@ -276,7 +283,7 @@ impl Sim {
         for (id, pos, yaw, radius, victim) in strikes {
             let kind = kh_core::enums::ETresDamageKind::from_value(1).unwrap();
             match victim {
-                Some(c) => self.rt.hit_friend(c, TargetId(id), pos, kind, 1.0, self.t),
+                Some(c) => self.rt.hit_friend(c, TargetId(id), pos, kh_partyhost::goofy::FixtureHit { kind, power: 1.0, class: kh_core::host::AttackClass::Normal }, self.t),
                 None => {
                     let amount = ((60 - self.sora.status().stats.defense).max(1) as f32).ceil();
                     let direction = (self.out.position - pos).normalize_or_zero();
@@ -615,7 +622,7 @@ fn s05_ko_revive() {
     s.idle(3.0);
     let g = s.rt.id(PartyChara::Goofy).unwrap();
     s.rt.party.status_mut(g).unwrap().hp = 1;
-    s.rt.hit_friend(PartyChara::Goofy, TargetId(1), Vec3::new(500.0, 0.0, 0.0), kh_core::enums::ETresDamageKind::from_value(1).unwrap(), 1.0, s.t);
+    s.rt.hit_friend(PartyChara::Goofy, TargetId(1), Vec3::new(500.0, 0.0, 0.0), kh_partyhost::goofy::FixtureHit { kind: kh_core::enums::ETresDamageKind::from_value(1).unwrap(), power: 1.0, class: kh_core::host::AttackClass::Normal }, s.t);
     let from = s.foes.step;
     s.idle(30.0);
     println!("{}", s.report("s05 Goofy KO'd in battle", from));
@@ -901,7 +908,7 @@ fn s19_ability_styles_long() {
         s.idle(60.0);
         let d = s.metrics("Donald", 60);
         let g = s.metrics("Goofy", 60);
-        let gab = s.events.iter().filter(|e| e.1 == "Goofy" && matches!(e.2, PartyEventKind::Hit { attack, .. } if attack.contains("Tornado") || attack.contains("Turbo") || attack.contains("Rocket") || attack.contains("Bash") || attack.contains("Charge"))).count();
+        let gab = s.events.iter().filter(|e| e.1 == "Goofy" && matches!(e.2, PartyEventKind::Hit { attack, .. } if attack.starts_with("GOOFY_ART_"))).count(); // (GF-AI) his Arts: the tree's requests go through the kit
         println!("s19 {label}: Donald spells {} (actions {}), Goofy ability hits {} (actions {})", d.spells, d.actions, gab, g.actions);
     }
 }
@@ -1040,7 +1047,7 @@ fn s25_field_run_default_sora() {
 }
 
 /// 26. (K1 -> AIX) Where the follow query puts Destination while the leader runs straight: its offset along the
-/// leader's motion (+ ahead), and the intent keys.
+///     leader's motion (+ ahead), and the intent keys.
 #[test]
 fn s26_follow_destination_while_running() {
     for lead in ["sora", "goofy"] {
@@ -1102,7 +1109,7 @@ fn s27_field_cure_while_running() {
 }
 
 /// 28. (TR -> AIX) Goofy leads among passive dummies under the test level's engaged rule (3 s after a blow): he
-/// walks 1 s away, then stands 10 s: does the party stay in battle and does AI Sora keep attacking the dummies beside him?
+///     walks 1 s away, then stands 10 s: does the party stay in battle and does AI Sora keep attacking the dummies beside him?
 #[test]
 fn s28_passive_dummies_friend_leads() {
     let mut s = sim!(TestWorld::floor(), vec![Foe::dummy(1, 250.0, 0.0), Foe::dummy(2, 300.0, 250.0), Foe::dummy(3, 350.0, -250.0)]);
@@ -1179,4 +1186,441 @@ fn fx5_before_the_rule_the_camp_was_taken() {
     println!("before FX5 (near dummy too): {far_targeted} steps with a camp target, {far_hits} hits on the camp");
     let Some((far_targeted, far_hits, _, _)) = fx5_far_camp(true, false) else { return };
     println!("before FX5 (the camp alone): {far_targeted} steps with a camp target, {far_hits} hits on the camp");
+}
+
+// ------------------------------------------------------------------------------------------------ (GF-AI) AI Goofy on the real trees
+
+fn goofy_at(s: &Sim) -> Vec3 {
+    s.rt.id(PartyChara::Goofy).and_then(|id| s.rt.party.view(id)).map_or(Vec3::ZERO, |v| v.position)
+}
+
+/// The largest gap between Goofy and the leader over `seconds`.
+fn goofy_watch(s: &mut Sim, seconds: f32) -> f32 {
+    let mut far = 0.0f32;
+    for _ in 0..(seconds / STEP) as usize {
+        s.step(Input::default());
+        let l = s.leader_pos().0;
+        let g = goofy_at(s);
+        far = far.max(Vec3::new(g.x - l.x, g.y - l.y, 0.0).length());
+    }
+    far
+}
+
+fn goofy_log(s: &Sim) -> Vec<&'static str> {
+    s.rt.id(PartyChara::Goofy).and_then(|id| s.rt.party.status(id)).and_then(|st| st.goofy.as_ref()).map_or(Vec::new(), |g| g.run.log.clone())
+}
+
+/// A fight near the party and a camp beyond it: he fights what is near, and the camp does not draw him off the leader.
+#[test]
+fn s60_ai_goofy_stays_near_the_leader() {
+    let mut s = sim!(TestWorld::floor(), vec![Foe::chaser(1, 500.0, 200.0, 200.0, 2.5), Foe::dummy(2, 1800.0, -900.0), Foe::dummy(3, 2000.0, 900.0)]);
+    s.idle(2.0);
+    let far = goofy_watch(&mut s, 30.0);
+    let leash = kh_party::goofy::K.ai_leash;
+    let m = s.metrics("Goofy", 120);
+    println!("s60 AI Goofy: {far:.0} cm at most from the leader (leash {leash:.0}), hits {}, idle near {:.1} s, fails {}, aborts {}, log {:?}", m.hits, m.idle_near_s, m.fails, m.aborts, goofy_log(&s));
+    assert!(far <= leash + 300.0, "he walked {far:.0} cm from the leader");
+}
+
+/// Nothing to parry, enemies by the party: he is not standing there.
+#[test]
+fn s61_ai_goofy_is_not_idle_by_an_enemy() {
+    let mut s = sim!(TestWorld::floor(), vec![Foe::dummy(1, 450.0, -150.0), Foe::dummy(2, 500.0, 250.0)]);
+    s.idle(2.0);
+    let from = s.foes.step;
+    s.foes.list[0].timer = 0.0;
+    let far = goofy_watch(&mut s, 20.0);
+    let m = s.metrics("Goofy", from);
+    println!("s61 AI Goofy by two dummies: {far:.0} cm at most from the leader, battle {:.1} s, idle near {:.1} s, log {:?}", m.battle_s, m.idle_near_s, goofy_log(&s));
+    let shoves = s.foes.hits.iter().filter(|h| h.0 >= from && h.2.contains("Attack1_Push")).count() + s.foes.hits.iter().filter(|h| h.0 >= from && h.2.contains("Attack2_Sweep")).count();
+    println!("s61 hits by his shoves: {shoves}");
+}
+
+/// The script words of the test level through the real trees: he breaks off his following to answer, and the tree gets him back.
+#[test]
+fn s62_ai_goofy_answers_a_telegraph_and_his_tree_gets_him_back() {
+    let mut s = sim!(TestWorld::floor(), vec![Foe::dummy(1, 450.0, -150.0)]);
+    s.idle(3.0);
+    let id = s.rt.id(PartyChara::Goofy).unwrap();
+    let hp = s.rt.party.status(id).unwrap().hp;
+    let mut parries = 0;
+    for _ in 0..8 {
+        s.rt.gof_fake_word(&["dummy-telegraph", "1", "normal", "0.8", "0.1"]);
+        let at = s.foes.list[0].pos;
+        for _ in 0..(1.2 / STEP) as usize {
+            s.rt.gof_fake_step(STEP, s.t, &|_| Some(at));
+            s.step(Input::default());
+            parries += s.rt.party.gof.events.iter().filter(|e| matches!(e.1, kh_party::goofy::GoofyEvent::Parried { .. })).count();
+        }
+        s.rt.party.set_telegraphs(&[]);
+        s.idle(1.5);
+    }
+    let v = s.rt.party.view(id).unwrap();
+    println!("s62 AI Goofy: {parries} parries of 8, HP {hp} -> {}, state {:?}, {:.0} cm from the leader, log {:?}", v.hp, v.state, s.leader_pos().0.distance(v.position), goofy_log(&s));
+    assert!(parries >= 1, "{:?}", goofy_log(&s));
+    assert!(s.leader_pos().0.distance(v.position) <= kh_party::goofy::K.ai_leash + 300.0);
+}
+
+/// Two enemies on the leader, then the leader low: the Taunt and Interpose come through the kit's own moves.
+#[test]
+fn s64_ai_goofy_taunts_and_interposes() {
+    let mut s = sim!(TestWorld::floor(), vec![Foe::chaser(1, 500.0, 200.0, 150.0, 4.0), Foe::chaser(2, 500.0, -200.0, 150.0, 4.0)]);
+    s.idle(2.0);
+    let far = goofy_watch(&mut s, 12.0);
+    let log = goofy_log(&s);
+    let max = s.sora.status().max_hp();
+    s.sora.status_mut().hp = max / 5;
+    let until = s.foes.step + 600;
+    let mut interposed = false;
+    while s.foes.step < until && !interposed {
+        s.step(Input::default());
+        s.sora.status_mut().hp = max / 5;
+        interposed |= goofy_log(&s).contains(&"art_interpose");
+    }
+    println!("s64 AI Goofy: {far:.0} cm at most, Taunt {}, Interpose {interposed}, log {:?}", log.contains(&"art_taunt"), goofy_log(&s));
+    assert!(log.contains(&"art_taunt"), "{log:?}");
+    assert!(interposed, "{:?}", goofy_log(&s));
+}
+
+/// A friend leads: AI Goofy keeps to him, not to Sora.
+#[test]
+fn s63_ai_goofy_follows_a_friend_leader() {
+    let mut s = sim!(TestWorld::floor(), vec![Foe::chaser(1, 500.0, 200.0, 200.0, 3.0)]);
+    s.word(&["leader", "donald"]);
+    s.idle(2.0);
+    let far = goofy_watch(&mut s, 15.0);
+    println!("s63 Donald leads: AI Goofy {far:.0} cm at most from him, log {:?}", goofy_log(&s));
+    assert!(far <= kh_party::goofy::K.ai_leash + 300.0);
+}
+
+/// (PARTY-AI 2026-11-03, the coordinator: with Sora leading, Goofy's trace flips between BT_n_Common_BattleStyle_Together and
+/// BT_n_ex002_BattleFlow every other step in game) KH3'S OWN POLL, HARMLESS: while the Attack tag cooldown that WaitPhase set
+/// runs (10 s), BattleFlow skips WaitPhase and every attack branch fails its range / angle / enemy checks, so it returns at
+/// once and Together's infinite Loop enters it again (UE's Loop re-entry, ported in kh-ai bt.rs). The spin issues no command:
+/// his tree asks for an attack only now and then (the overhaul answers those), his services keep their own countdown, and
+/// his strings keep their spacing (`ai.poke_every`).
+#[test]
+fn goofys_battleflow_spin_is_kh3s_own_poll_and_costs_nothing() {
+    for (name, foes) in [("dummy", vec![Foe::dummy(1, 250.0, -250.0)]), ("chasers", vec![Foe::chaser(1, 600.0, -200.0, 150.0, 2.5), Foe::chaser(2, 700.0, 250.0, 150.0, 2.5)])] {
+        let mut s = sim!(TestWorld::floor(), foes);
+        s.idle(20.0);
+        let g: Vec<&Sample> = s.samples.iter().filter(|x| x.who == "Goofy" && x.in_battle).collect();
+        let tree = |t: &str| t.split(':').next().unwrap_or("").to_string();
+        let flips = g.windows(2).filter(|w| tree(&w[0].task) != tree(&w[1].task)).count();
+        let asks = s.logs.iter().filter(|l| l.1 == "Goofy" && l.2.contains("TresBTTask_Action") && l.2.contains("Succeeded")).count();
+        let mut starts: Vec<u64> = Vec::new();
+        let mut last = None;
+        for e in s.events.iter().filter(|e| e.1 == "Goofy" && matches!(&e.2, PartyEventKind::Hit { attack, .. } if attack.starts_with("Attack"))) {
+            if last.is_none_or(|l: u64| e.0 > l + 30) {
+                starts.push(e.0);
+            }
+            last = Some(e.0);
+        }
+        let gap = starts.windows(2).map(|w| w[1] - w[0]).min().unwrap_or(u64::MAX);
+        println!("{name}: {} battle steps, {flips} tree flips, {asks} attack asks, strings at {starts:?}", g.len());
+        assert!(flips > 50, "{name}: the spin happens here as in game ({flips})");
+        assert!((asks as f32) <= g.len() as f32 * STEP, "{name}: at most one attack ask a second, not one a pass ({asks})");
+        assert!(starts.len() >= 3, "{name}: he keeps fighting: {starts:?}");
+        assert!(gap as f32 * STEP >= kh_party::goofy::K.ai_poke_every, "{name}: his strings keep their spacing ({gap} steps)");
+    }
+}
+
+// ------------------------------------------------------------------------------------------------ (GRABS) caught and released
+
+/// (GRABS) An action of his own: a tree action, an attack, a pad move, a played motion (a swing, a spell).
+fn acting(state: &str) -> bool {
+    state == "Action" || state == "Attack" || state == "PlayMotion" || state.starts_with("Pad(")
+}
+
+/// (GRABS) The first step at or after `from` at which `who` acts (an action, an attack, a pad move) or has moved more than
+/// 60 cm from where he stood at `from`: seconds after `from`.
+fn acts_again(s: &Sim, who: &str, from: u64) -> Option<f32> {
+    let start = s.samples.iter().find(|x| x.who == who && x.step >= from)?.pos;
+    s.samples
+        .iter()
+        .filter(|x| x.who == who && x.step >= from)
+        .find(|x| acting(&x.state) || x.pos.truncate().distance(start.truncate()) > 60.0)
+        .map(|x| (x.step - from) as f32 * STEP)
+}
+
+/// (GRABS) Holds `c` caught (the host's word every step) for `seconds`, then free for `after` seconds; returns the step of
+/// the release.
+fn grab(s: &mut Sim, c: PartyChara, seconds: f32, after: f32) -> u64 {
+    for _ in 0..(seconds / STEP).round() as usize {
+        s.rt.set_caught(c, true);
+        s.step(Input::default());
+    }
+    let released = s.foes.step;
+    for _ in 0..(after / STEP).round() as usize {
+        s.rt.set_caught(c, false);
+        s.step(Input::default());
+    }
+    released
+}
+
+/// (GRABS, the user 2026-11-06: "make sure AI doesn't break after they are released from the grab") Donald and Goofy, each
+/// caught in the middle of the fight (Donald in the middle of an action: a spell or a swing), held 2 s, released: no
+/// action while caught (KH3's caught motion, SituationAction), and he fights or moves again within 4 s of the release.
+#[test]
+fn s30_caught_friends_act_again_after_the_release() {
+    let mut s = sim!(TestWorld::floor(), vec![Foe::dummy(1, 350.0, -100.0), Foe::dummy(2, 400.0, 250.0)]);
+    s.victims_on = false;
+    s.idle(4.0);
+    // Donald caught in the middle of an action
+    let mut mid_action = false;
+    for _ in 0..(10.0 / STEP) as usize {
+        s.step(Input::default());
+        if s.samples.iter().rev().take(3).any(|x| x.who == "Donald" && acting(&x.state)) {
+            mid_action = true;
+            break;
+        }
+    }
+    assert!(mid_action, "Donald acted within 10 s (the scenario needs him busy): his states {:?}", s.samples.iter().filter(|x| x.who == "Donald").map(|x| x.state.as_str()).collect::<std::collections::BTreeSet<_>>());
+    for c in [PartyChara::Donald, PartyChara::Goofy] {
+        let held_from = s.foes.step;
+        let released = grab(&mut s, c, 2.0, 6.0);
+        let name = c.name();
+        let held: Vec<&Sample> = s.samples.iter().filter(|x| x.who == name && x.step > held_from + 2 && x.step < released).collect();
+        assert!(!held.is_empty() && held.iter().all(|x| x.state == "SituationAction"), "{name} plays KH3's caught motion all the hold: {:?}", held.iter().map(|x| x.state.as_str()).collect::<std::collections::BTreeSet<_>>());
+        assert!(!s.rt.ai_caught(c), "{name}: the gate let go");
+        let t = acts_again(&s, name, released).unwrap_or(f32::INFINITY);
+        assert!(t <= 4.0, "{name} acts again {t:.2} s after the release");
+        println!("s30: {name} held 2 s, acts again {t:.2} s after the release");
+    }
+}
+
+/// (GRABS) AI Sora (Donald leads) caught 2 s and released: his core takes nothing from his tree while caught, and he acts
+/// or follows again within 4 s.
+#[test]
+fn s31_caught_ai_sora_acts_again_after_the_release() {
+    let mut s = sim!(TestWorld::floor(), vec![Foe::dummy(1, 450.0, 0.0), Foe::dummy(2, 500.0, 300.0)]);
+    s.victims_on = false;
+    s.word(&["leader", "donald"]);
+    s.idle(4.0);
+    let held_from = s.foes.step;
+    let released = grab(&mut s, PartyChara::Sora, 2.0, 6.0);
+    let pressed: Vec<&Sample> = s.samples.iter().filter(|x| x.who == "Sora" && x.step > held_from + 60 && x.step < released && x.state == "Attack").collect();
+    assert!(pressed.is_empty(), "no attack of his own while caught ({} steps)", pressed.len());
+    assert!(!s.rt.ai_caught(PartyChara::Sora));
+    let t = acts_again(&s, "Sora", released).unwrap_or(f32::INFINITY);
+    assert!(t <= 4.0, "AI Sora acts again {t:.2} s after the release");
+    println!("s31: AI Sora acts again {t:.2} s after the release");
+}
+
+/// (GRABS) THE GUARD: a "held" word that never ends (a stale throw node) is given up after `HELD_MAX_S`: Goofy fights
+/// again although the host still says held, and a real grab after his body was seen free is taken again.
+#[test]
+fn s32_a_stale_caught_flag_never_persists() {
+    let mut s = sim!(TestWorld::floor(), vec![Foe::dummy(1, 350.0, 0.0)]);
+    s.victims_on = false;
+    s.idle(3.0);
+    for _ in 0..((kh_partyhost::caught::HELD_MAX_S + 0.5) / STEP) as usize {
+        s.rt.set_caught(PartyChara::Goofy, true);
+        s.step(Input::default());
+    }
+    assert!(!s.rt.ai_caught(PartyChara::Goofy), "given up after {} s", kh_partyhost::caught::HELD_MAX_S);
+    let from = s.foes.step;
+    for _ in 0..(5.0 / STEP) as usize {
+        s.rt.set_caught(PartyChara::Goofy, true);
+        s.step(Input::default());
+    }
+    let t = acts_again(&s, "Goofy", from).unwrap_or(f32::INFINITY);
+    assert!(t <= 4.0 && !s.rt.ai_caught(PartyChara::Goofy), "the stale word holds nobody: Goofy acts {t:.2} s after the guard");
+    s.rt.set_caught(PartyChara::Goofy, false);
+    s.step(Input::default());
+    s.rt.set_caught(PartyChara::Goofy, true);
+    assert!(s.rt.ai_caught(PartyChara::Goofy), "a real grab is taken again");
+}
+
+// ------------------------------------------------------------------------------------------------ (HUD-REVIVE)
+
+/// (HUD-REVIVE) Member `c` knocked out: HP 0 and KH3's Die state (`start_die`: its timer, its KO clip), past the abilities a blow
+/// would meet at level 99 (Second Chance and the like).
+fn hr_knock_out(s: &mut Sim, c: PartyChara) {
+    let id = s.rt.id(c).unwrap();
+    let m = s.rt.party.member_mut(id).unwrap();
+    m.status.hp = 0;
+    m.start_die();
+}
+
+/// (HUD-REVIVE) AI Sora (a friend leads) knocked out by a lethal hit (struck again until one lands: a style change, a dodge or
+/// an attack's invincibility lets one through unharmed).
+fn hr_knock_out_sora(s: &mut Sim) {
+    for _ in 0..300 {
+        if s.sora.status().hp < 1 {
+            return;
+        }
+        s.sora.status_mut().hp = 1;
+        let at = s.sora.output().position;
+        s.sora.take_hit(kh_core::states::HitOnPlayer { direction: Vec3::new(-1.0, 0.0, 0.0), causer_yaw: 180.0, ..kh_core::states::HitOnPlayer::new(kh_core::enums::ETresDamageKind::Small, 60.0, TargetId(1), at + Vec3::X * 150.0) });
+        s.step(Input::default());
+    }
+    panic!("AI Sora never went down");
+}
+
+/// (HUD-REVIVE) No Cure / item of the AI on anyone (KH3's Cure or item on a KO'd ally revives him: not what these tests time).
+fn hr_no_cures(s: &mut Sim) {
+    s.idle(0.1); // the members are spawned at the first step
+    for c in [PartyChara::Donald, PartyChara::Goofy, PartyChara::Sora] {
+        s.ai(c, FriendAiSettings { cure_targets: 0, ..FriendAiSettings::default() });
+    }
+    // and no item to give (a Potion on a downed ally revives him too)
+    for c in [PartyChara::Donald, PartyChara::Goofy] {
+        let id = s.rt.id(c).unwrap();
+        for slot in 0..5 {
+            s.rt.party.status_mut(id).unwrap().set_item_slot(slot, None);
+        }
+    }
+}
+
+fn hr_view(s: &Sim, c: PartyChara) -> kh_party::MemberView {
+    s.rt.party.view(s.rt.id(c).unwrap()).unwrap()
+}
+
+/// (HUD-REVIVE, THE USER 2026-11-07: "healing at a save point should be able to revive downed party members. If they revive and
+/// are very far away they should teleport to you like they usually do when alive") Donald and Goofy knocked out in a fight
+/// (the party's combat holds: no revive of its end), Goofy 50 m behind the camera: the save point's revive stands both up at
+/// FULL HP, the KO flags gone, the AI acting again; Goofy is warped to the leader by the living members' rule.
+#[test]
+fn hr1_the_save_point_revives_downed_friends_near_and_far() {
+    let mut s = sim!(TestWorld::floor(), vec![Foe::dummy(1, 300.0, 0.0)]);
+    hr_no_cures(&mut s);
+    s.idle(2.0);
+    assert!(s.rt.party_combat(), "the dummy by the leader: the party is in combat");
+    hr_knock_out(&mut s, PartyChara::Donald);
+    hr_knock_out(&mut s, PartyChara::Goofy);
+    s.idle(1.0);
+    let g = s.rt.id(PartyChara::Goofy).unwrap();
+    {
+        let m = s.rt.party.member_mut(g).unwrap();
+        m.cmc.location = Vec3::new(-5000.0, 0.0, m.cmc.location.z);
+    }
+    s.idle(5.0);
+    for c in [PartyChara::Donald, PartyChara::Goofy] {
+        let v = hr_view(&s, c);
+        assert!(v.ko && v.hp == 0 && v.state == kh_party::NpcStateId::Die, "{c:?} down in combat: {v:?}");
+    }
+    let warps_before = s.events.iter().filter(|e| e.1 == "Goofy" && matches!(e.2, PartyEventKind::Warped { .. })).count();
+    // the save point
+    let mut stood = s.rt.savepoint_revive(&mut s.sora);
+    stood.sort_by_key(|c| c.name());
+    assert_eq!(stood, vec![PartyChara::Donald, PartyChara::Goofy]);
+    s.idle(0.1);
+    for c in [PartyChara::Donald, PartyChara::Goofy] {
+        let v = hr_view(&s, c);
+        assert_eq!(v.hp, v.hp_max, "{c:?} at FULL HP");
+    }
+    s.idle(3.0);
+    for c in [PartyChara::Donald, PartyChara::Goofy] {
+        let v = hr_view(&s, c);
+        assert!(!v.ko && v.state != kh_party::NpcStateId::Die, "{c:?} up, no stale KO: {:?}", v.state);
+    }
+    assert_eq!(s.events.iter().filter(|e| matches!(e.2, PartyEventKind::Revived)).count(), 2, "one Revived each");
+    // far Goofy: the warp of a living member brings him (path 30 m, unseen, checked every 2 s)
+    let mut near = false;
+    for _ in 0..(8.0 / STEP) as usize {
+        s.step(Input::default());
+        near |= hr_view(&s, PartyChara::Goofy).position.distance(s.leader_pos().0) < 1500.0;
+    }
+    let warps = s.events.iter().filter(|e| e.1 == "Goofy" && matches!(e.2, PartyEventKind::Warped { .. })).count();
+    assert!(near && warps > warps_before, "Goofy warped to the leader: near {near}, warps {warps_before} -> {warps}");
+    // the AI acts: Donald's tree runs a task again
+    let from = s.foes.step.saturating_sub(120);
+    assert!(s.samples.iter().any(|x| x.who == "Donald" && x.step >= from && !x.task.is_empty()), "Donald's AI runs again");
+}
+
+/// (HUD-REVIVE, THE USER 2026-11-07: "allies revive when combat ends. They revive in combat after 60 seconds as a baseline")
+/// Goofy down in a fight stays down while it lasts and is up when the last enemy goes (KH3's revive amount); Donald down
+/// through a long fight is up after 60 s.
+#[test]
+fn hr2_friends_revive_when_the_combat_ends_and_after_60_s_in_it() {
+    let mut s = sim!(TestWorld::floor(), vec![Foe::dummy(1, 300.0, 0.0)]);
+    hr_no_cures(&mut s);
+    s.idle(2.0);
+    hr_knock_out(&mut s, PartyChara::Donald);
+    s.idle(30.0);
+    assert!(hr_view(&s, PartyChara::Donald).ko, "Donald down at 30 s of combat (KH3 alone: 40 s)");
+    s.idle(29.0);
+    assert!(hr_view(&s, PartyChara::Donald).ko, "still down at 59 s");
+    s.idle(4.0);
+    let d = hr_view(&s, PartyChara::Donald);
+    assert!(!d.ko && d.hp > 0, "Donald up after 60 s in combat: {d:?}");
+    hr_knock_out(&mut s, PartyChara::Goofy);
+    s.idle(5.0);
+    assert!(hr_view(&s, PartyChara::Goofy).ko && s.rt.party_combat());
+    s.foes.list[0].hp = 0.0; // the last enemy goes
+    s.idle(1.5);
+    assert!(!s.rt.party_combat(), "the combat is over");
+    s.idle(3.0);
+    let g = hr_view(&s, PartyChara::Goofy);
+    assert!(!g.ko && g.hp > 0 && g.state != kh_party::NpcStateId::Die, "Goofy up when the combat ended: {g:?}");
+}
+
+/// (HUD-REVIVE) AI SORA (Donald leads): down in his game-over pose; up after 60 s of combat, at the combat's end, and at the save
+/// point (full HP); his AI acting after each.
+#[test]
+fn hr3_ai_sora_revives_by_the_timer_the_combat_end_and_the_save_point() {
+    let mut s = sim!(TestWorld::floor(), vec![Foe::dummy(1, 300.0, 0.0)]);
+    hr_no_cures(&mut s);
+    s.word(&["leader", "donald"]);
+    s.idle(2.0);
+    assert!(s.rt.friend_leads() && s.rt.party_combat());
+    let game_over = kh_core::AnimId::from_name(kh_core::states::member_ko::GAME_OVER_CLIP);
+    // 1. the 60 s timer in combat (Goofy down with him: his Breaker heals the party, a heal that would revive Sora first)
+    hr_knock_out_sora(&mut s);
+    hr_knock_out(&mut s, PartyChara::Goofy);
+    s.idle(2.0);
+    assert!(s.rt.ai_sora_down(&s.sora));
+    assert_eq!((s.out.state, Some(s.out.anim.name)), (kh_core::StateId::Die, game_over), "the game-over pose");
+    for k in 0..55 {
+        s.idle(1.0);
+        assert!(s.rt.ai_sora_down(&s.sora), "down at {} s of combat (HP {}, combat {}, state {:?})", k + 3, s.sora.status().hp, s.rt.party_combat(), s.out.state);
+    }
+    s.idle(5.0);
+    assert!(!s.rt.ai_sora_down(&s.sora), "up after 60 s");
+    let quarter = kh_party::status::revive_amount(s.sora.status().max_hp(), 0);
+    assert_eq!(s.sora.status().hp, quarter, "KH3's revive amount");
+    s.idle(2.0);
+    assert_ne!(s.out.state, kh_core::StateId::Die);
+    // 2. the combat's end
+    hr_knock_out_sora(&mut s);
+    s.idle(3.0);
+    assert!(s.rt.ai_sora_down(&s.sora));
+    s.foes.list[0].hp = 0.0;
+    s.idle(4.0);
+    assert!(!s.rt.ai_sora_down(&s.sora) && s.out.state != kh_core::StateId::Die, "up when the combat ended");
+    // 3. the save point (in combat again: a new dummy by the leader)
+    s.foes.list.push(Foe::dummy(2, s.leader_pos().0.x + 300.0, s.leader_pos().0.y));
+    s.idle(2.0);
+    hr_knock_out_sora(&mut s);
+    hr_knock_out(&mut s, PartyChara::Goofy);
+    s.idle(3.0);
+    assert!(s.rt.ai_sora_down(&s.sora), "AI Sora down");
+    assert!(s.rt.party_combat(), "in combat again");
+    let stood = s.rt.savepoint_revive(&mut s.sora);
+    assert_eq!(stood, vec![PartyChara::Goofy, PartyChara::Sora], "Goofy (down with him) and AI Sora");
+    assert_eq!(s.sora.status().hp, s.sora.status().max_hp(), "FULL HP at the save point");
+    s.idle(2.0);
+    assert_ne!(s.out.state, kh_core::StateId::Die, "his get-up and Idle");
+}
+
+/// (HUD-REVIVE) A DOWNED AI SORA ENGAGES NOTHING (as a downed friend): an enemy standing by his hovering body, far from the leader
+/// and the other members, holds no party combat, so the combat's end revives him.
+#[test]
+fn hr4_an_enemy_by_downed_ai_sora_holds_no_combat() {
+    let mut s = sim!(TestWorld::floor(), vec![Foe::dummy(1, 3000.0, 0.0)]);
+    hr_no_cures(&mut s);
+    s.word(&["leader", "donald"]);
+    s.idle(1.0);
+    hr_knock_out(&mut s, PartyChara::Goofy); // no Breaker heal from him
+    s.sora.teleport(Pose { position: Vec3::new(2900.0, 0.0, Sora::origin_height_on_floor(&SORA_PARAMS)), yaw: 0.0 });
+    s.step(Input::default());
+    hr_knock_out_sora(&mut s);
+    assert!(s.rt.ai_sora_down(&s.sora), "AI Sora down beside the enemy, 29 m from the leader");
+    let mut up = false;
+    for _ in 0..(4.0 / STEP) as usize {
+        s.step(Input::default());
+        up |= !s.rt.ai_sora_down(&s.sora);
+    }
+    assert!(up, "no combat held by the enemy at his body: he got up at the combat's end");
 }

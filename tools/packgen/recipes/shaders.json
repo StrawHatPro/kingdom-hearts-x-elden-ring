@@ -12,7 +12,9 @@
     "h91",
     "probe3",
     "probe4",
-    "zdraw"
+    "zdraw",
+    "bluehour",
+    "iceshell"
    ]
   },
   {
@@ -98,6 +100,32 @@
    ]
   },
   {
+   "pack": "build/sora_pack/party/n_ex014",
+   "er": "party/n_ex014/materials/er",
+   "args": [
+    "--party",
+    "--main-pack",
+    "build/sora_pack"
+   ],
+   "modes": [
+    "velo88",
+    "hy3"
+   ]
+  },
+  {
+   "pack": "build/sora_pack/party/n_ex028",
+   "er": "party/n_ex028/materials/er",
+   "args": [
+    "--party",
+    "--main-pack",
+    "build/sora_pack"
+   ],
+   "modes": [
+    "velo88",
+    "hy3"
+   ]
+  },
+  {
    "pack": "build/sora_pack/party/team",
    "er": "party/team/materials/er",
    "args": [
@@ -108,6 +136,24 @@
    "modes": [
     "velo88"
    ]
+  },
+  {
+   "pack": "build/sora_pack/npc/shop",
+   "er": "npc/shop/materials/er",
+   "args": [
+    "--party",
+    "--main-pack",
+    "build/sora_pack"
+   ],
+   "modes": []
+  }
+ ],
+ "kb_dirs": [
+  {
+   "pack": "build/sora_pack/keyblades",
+   "main": "build/sora_pack",
+   "er": "keyblades/materials/er",
+   "work": "build/packgen/kb"
   }
  ],
  "hair": {
@@ -23161,15 +23207,1304 @@
  "vfx_roots": [
   "build/sora_pack",
   "build/sora_pack/party",
-  "build/sora_pack/xsi"
+  "build/sora_pack/xsi",
+  "build/sora_pack/keyblades"
  ],
  "vfx_overlays": [
   {
    "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm102",
+   "file": "fm102_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm104",
+   "file": "fm104_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm116",
+   "file": "fm116_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm117",
+   "file": "fm117_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm118",
+   "file": "fm118_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm119",
+   "file": "fm119_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm120",
+   "file": "fm120_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm121",
+   "file": "fm121_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm174",
+   "file": "fm174_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm226",
+   "file": "fm226_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm270",
+   "file": "fm270_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm28",
+   "file": "fm28_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm2",
+   "file": "fm2_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm306",
+   "file": "fm306_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm32",
+   "file": "fm32_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm33",
+   "file": "fm33_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm40",
+   "file": "fm40_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm43",
+   "file": "fm43_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm46",
+   "file": "fm46_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm47",
+   "file": "fm47_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm48",
+   "file": "fm48_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm68",
+   "file": "fm68_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm7",
+   "file": "fm7_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm84",
+   "file": "fm84_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm85",
+   "file": "fm85_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm86",
+   "file": "fm86_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm93",
+   "file": "fm93_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm94",
+   "file": "fm94_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm95",
+   "file": "fm95_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fm98",
+   "file": "fm98_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fs104",
+   "file": "fs104_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fs174",
+   "file": "fs174_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fs226",
+   "file": "fs226_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fs270",
+   "file": "fs270_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fs28",
+   "file": "fs28_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fs2",
+   "file": "fs2_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fs32",
+   "file": "fs32_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fs33",
+   "file": "fs33_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fs43",
+   "file": "fs43_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fs46",
+   "file": "fs46_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fs47",
+   "file": "fs47_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "fs98",
+   "file": "fs98_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm102",
+   "file": "lm102_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm104",
+   "file": "lm104_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm116",
+   "file": "lm116_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm117",
+   "file": "lm117_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm118",
+   "file": "lm118_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm119",
+   "file": "lm119_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm120",
+   "file": "lm120_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm121",
+   "file": "lm121_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm174",
+   "file": "lm174_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm226",
+   "file": "lm226_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm270",
+   "file": "lm270_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm28",
+   "file": "lm28_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm2",
+   "file": "lm2_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm306",
+   "file": "lm306_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm32",
+   "file": "lm32_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm33",
+   "file": "lm33_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm40",
+   "file": "lm40_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm43",
+   "file": "lm43_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm46",
+   "file": "lm46_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm47",
+   "file": "lm47_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm48",
+   "file": "lm48_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm68",
+   "file": "lm68_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm7",
+   "file": "lm7_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm84",
+   "file": "lm84_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm85",
+   "file": "lm85_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm86",
+   "file": "lm86_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm93",
+   "file": "lm93_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm94",
+   "file": "lm94_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm95",
+   "file": "lm95_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "lm98",
+   "file": "lm98_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "ls104",
+   "file": "ls104_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "ls174",
+   "file": "ls174_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "ls226",
+   "file": "ls226_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "ls270",
+   "file": "ls270_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "ls28",
+   "file": "ls28_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "ls2",
+   "file": "ls2_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "ls32",
+   "file": "ls32_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "ls33",
+   "file": "ls33_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "ls43",
+   "file": "ls43_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "ls46",
+   "file": "ls46_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "ls47",
+   "file": "ls47_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "ls98",
+   "file": "ls98_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m102",
+   "file": "m102_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m104",
+   "file": "m104_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m116",
+   "file": "m116_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m117",
+   "file": "m117_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m118",
+   "file": "m118_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m119",
+   "file": "m119_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m120",
+   "file": "m120_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m121",
+   "file": "m121_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m174",
+   "file": "m174_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m226",
+   "file": "m226_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m270",
+   "file": "m270_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m28",
+   "file": "m28_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m2",
+   "file": "m2_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m306",
+   "file": "m306_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m32",
+   "file": "m32_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m33",
+   "file": "m33_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m40",
+   "file": "m40_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m43",
+   "file": "m43_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m46",
+   "file": "m46_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m47",
+   "file": "m47_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m48",
+   "file": "m48_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m68",
+   "file": "m68_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m7",
+   "file": "m7_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m84",
+   "file": "m84_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m85",
+   "file": "m85_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m86",
+   "file": "m86_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m93",
+   "file": "m93_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m94",
+   "file": "m94_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m95",
+   "file": "m95_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "m98",
+   "file": "m98_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "s104",
+   "file": "s104_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "s174",
+   "file": "s174_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "s226",
+   "file": "s226_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "s270",
+   "file": "s270_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "s28",
+   "file": "s28_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "s2",
+   "file": "s2_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "s32",
+   "file": "s32_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "s33",
+   "file": "s33_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "s43",
+   "file": "s43_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "s46",
+   "file": "s46_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "s47",
+   "file": "s47_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "s98",
+   "file": "s98_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "v28",
+   "file": "v28_fwl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "v306",
+   "file": "v306_fwl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "v47",
+   "file": "v47_fwl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "xm28",
+   "file": "xm28_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "xm32",
+   "file": "xm32_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "xm43",
+   "file": "xm43_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "xm46",
+   "file": "xm46_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "xm47",
+   "file": "xm47_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "xs28",
+   "file": "xs28_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "xs32",
+   "file": "xs32_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "xs43",
+   "file": "xs43_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "xs46",
+   "file": "xs46_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_fwl",
+   "table": "materials.wgsl",
+   "only": "xs47",
+   "file": "xs47_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "fm0",
+   "file": "fm0_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "fm126",
+   "file": "fm126_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "fm246",
+   "file": "fm246_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "fm304",
+   "file": "fm304_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "fm319",
+   "file": "fm319_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "fm320",
+   "file": "fm320_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "fm38",
+   "file": "fm38_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "fm56",
+   "file": "fm56_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "fs126",
+   "file": "fs126_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "fs246",
+   "file": "fs246_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "fs304",
+   "file": "fs304_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "fs56",
+   "file": "fs56_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "gm0",
+   "file": "gm0_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "gm319",
+   "file": "gm319_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "gm320",
+   "file": "gm320_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "gm56",
+   "file": "gm56_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "gs56",
+   "file": "gs56_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "m0",
+   "file": "m0_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "m126",
+   "file": "m126_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "m246",
+   "file": "m246_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "m304",
+   "file": "m304_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "m319",
+   "file": "m319_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "m320",
+   "file": "m320_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "m38",
+   "file": "m38_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "m56",
+   "file": "m56_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "nm0",
+   "file": "nm0_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "nm319",
+   "file": "nm319_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "nm320",
+   "file": "nm320_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "nm56",
+   "file": "nm56_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "ns56",
+   "file": "ns56_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "s126",
+   "file": "s126_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "s246",
+   "file": "s246_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "s304",
+   "file": "s304_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "s56",
+   "file": "s56_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "v0",
+   "file": "v0_vxl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "v126",
+   "file": "v126_vxl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "v246",
+   "file": "v246_vxl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "v304",
+   "file": "v304_vxl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "v319",
+   "file": "v319_vxl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "v38",
+   "file": "v38_vxl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "v56",
+   "file": "v56_vxl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_vxl",
+   "table": "materials.wgsl",
+   "only": "xm38",
+   "file": "xm38_vxl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
    "stage": "main_xwb",
    "table": "materials.wgsl",
-   "only": "s73",
-   "file": "s73_xwb.ps.dxil"
+   "only": "fm73",
+   "file": "fm73_xwb.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_xwb",
+   "table": "materials.wgsl",
+   "only": "fs73",
+   "file": "fs73_xwb.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_xwb",
+   "table": "materials.wgsl",
+   "only": "gm73",
+   "file": "gm73_xwb.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_xwb",
+   "table": "materials.wgsl",
+   "only": "gs73",
+   "file": "gs73_xwb.ps.dxil"
   },
   {
    "root": "build/sora_pack/vfx",
@@ -23180,31 +24515,52 @@
   },
   {
    "root": "build/sora_pack/vfx",
-   "stage": "main_xwd",
+   "stage": "main_xwb",
    "table": "materials.wgsl",
-   "only": "m264",
-   "file": "m264_xwd.ps.dxil"
+   "only": "nm73",
+   "file": "nm73_xwb.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_xwb",
+   "table": "materials.wgsl",
+   "only": "ns73",
+   "file": "ns73_xwb.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_xwb",
+   "table": "materials.wgsl",
+   "only": "s73",
+   "file": "s73_xwb.ps.dxil"
   },
   {
    "root": "build/sora_pack/vfx",
    "stage": "main_xwd",
    "table": "materials.wgsl",
-   "only": "xm264",
-   "file": "xm264_xwd.ps.dxil"
+   "only": "fm169",
+   "file": "fm169_xwd.ps.dxil"
   },
   {
    "root": "build/sora_pack/vfx",
    "stage": "main_xwd",
    "table": "materials.wgsl",
-   "only": "v264",
-   "file": "v264_xwd.vs.dxil"
+   "only": "fm264",
+   "file": "fm264_xwd.ps.dxil"
   },
   {
    "root": "build/sora_pack/vfx",
    "stage": "main_xwd",
    "table": "materials.wgsl",
-   "only": "s169",
-   "file": "s169_xwd.ps.dxil"
+   "only": "fm313",
+   "file": "fm313_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_xwd",
+   "table": "materials.wgsl",
+   "only": "fs169",
+   "file": "fs169_xwd.ps.dxil"
   },
   {
    "root": "build/sora_pack/vfx",
@@ -23217,8 +24573,8 @@
    "root": "build/sora_pack/vfx",
    "stage": "main_xwd",
    "table": "materials.wgsl",
-   "only": "v169",
-   "file": "v169_xwd.vs.dxil"
+   "only": "m264",
+   "file": "m264_xwd.ps.dxil"
   },
   {
    "root": "build/sora_pack/vfx",
@@ -23231,8 +24587,1205 @@
    "root": "build/sora_pack/vfx",
    "stage": "main_xwd",
    "table": "materials.wgsl",
+   "only": "s169",
+   "file": "s169_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_xwd",
+   "table": "materials.wgsl",
+   "only": "v169",
+   "file": "v169_xwd.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_xwd",
+   "table": "materials.wgsl",
+   "only": "v264",
+   "file": "v264_xwd.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_xwd",
+   "table": "materials.wgsl",
    "only": "v313",
    "file": "v313_xwd.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/vfx",
+   "stage": "main_xwd",
+   "table": "materials.wgsl",
+   "only": "xm264",
+   "file": "xm264_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm100",
+   "file": "fm100_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm101",
+   "file": "fm101_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm104",
+   "file": "fm104_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm108",
+   "file": "fm108_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm110",
+   "file": "fm110_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm122",
+   "file": "fm122_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm123",
+   "file": "fm123_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm124",
+   "file": "fm124_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm125",
+   "file": "fm125_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm126",
+   "file": "fm126_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm127",
+   "file": "fm127_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm182",
+   "file": "fm182_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm237",
+   "file": "fm237_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm283",
+   "file": "fm283_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm29",
+   "file": "fm29_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm2",
+   "file": "fm2_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm302",
+   "file": "fm302_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm324",
+   "file": "fm324_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm32",
+   "file": "fm32_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm342",
+   "file": "fm342_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm349",
+   "file": "fm349_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm34",
+   "file": "fm34_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm354",
+   "file": "fm354_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm357",
+   "file": "fm357_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm35",
+   "file": "fm35_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm370",
+   "file": "fm370_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm43",
+   "file": "fm43_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm49",
+   "file": "fm49_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm52",
+   "file": "fm52_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm53",
+   "file": "fm53_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm54",
+   "file": "fm54_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm74",
+   "file": "fm74_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm8",
+   "file": "fm8_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm90",
+   "file": "fm90_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm91",
+   "file": "fm91_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm92",
+   "file": "fm92_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fm99",
+   "file": "fm99_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fs104",
+   "file": "fs104_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fs110",
+   "file": "fs110_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fs182",
+   "file": "fs182_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fs237",
+   "file": "fs237_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fs283",
+   "file": "fs283_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fs29",
+   "file": "fs29_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fs2",
+   "file": "fs2_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fs34",
+   "file": "fs34_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fs35",
+   "file": "fs35_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fs370",
+   "file": "fs370_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fs49",
+   "file": "fs49_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fs52",
+   "file": "fs52_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "fs53",
+   "file": "fs53_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm100",
+   "file": "lm100_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm101",
+   "file": "lm101_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm104",
+   "file": "lm104_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm108",
+   "file": "lm108_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm110",
+   "file": "lm110_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm122",
+   "file": "lm122_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm123",
+   "file": "lm123_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm124",
+   "file": "lm124_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm125",
+   "file": "lm125_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm126",
+   "file": "lm126_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm127",
+   "file": "lm127_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm182",
+   "file": "lm182_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm237",
+   "file": "lm237_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm283",
+   "file": "lm283_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm29",
+   "file": "lm29_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm2",
+   "file": "lm2_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm302",
+   "file": "lm302_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm324",
+   "file": "lm324_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm32",
+   "file": "lm32_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm342",
+   "file": "lm342_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm349",
+   "file": "lm349_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm34",
+   "file": "lm34_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm354",
+   "file": "lm354_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm357",
+   "file": "lm357_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm35",
+   "file": "lm35_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm370",
+   "file": "lm370_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm43",
+   "file": "lm43_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm49",
+   "file": "lm49_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm52",
+   "file": "lm52_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm53",
+   "file": "lm53_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm54",
+   "file": "lm54_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm74",
+   "file": "lm74_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm8",
+   "file": "lm8_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm90",
+   "file": "lm90_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm91",
+   "file": "lm91_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm92",
+   "file": "lm92_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "lm99",
+   "file": "lm99_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "ls104",
+   "file": "ls104_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "ls110",
+   "file": "ls110_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "ls182",
+   "file": "ls182_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "ls237",
+   "file": "ls237_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "ls283",
+   "file": "ls283_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "ls29",
+   "file": "ls29_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "ls2",
+   "file": "ls2_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "ls34",
+   "file": "ls34_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "ls35",
+   "file": "ls35_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "ls370",
+   "file": "ls370_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "ls49",
+   "file": "ls49_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "ls52",
+   "file": "ls52_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "ls53",
+   "file": "ls53_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m100",
+   "file": "m100_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m101",
+   "file": "m101_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m104",
+   "file": "m104_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m108",
+   "file": "m108_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m110",
+   "file": "m110_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m122",
+   "file": "m122_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m123",
+   "file": "m123_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m124",
+   "file": "m124_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m125",
+   "file": "m125_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m126",
+   "file": "m126_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m127",
+   "file": "m127_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m182",
+   "file": "m182_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m237",
+   "file": "m237_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m283",
+   "file": "m283_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m29",
+   "file": "m29_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m2",
+   "file": "m2_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m302",
+   "file": "m302_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m324",
+   "file": "m324_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m32",
+   "file": "m32_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m342",
+   "file": "m342_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m349",
+   "file": "m349_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m34",
+   "file": "m34_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m354",
+   "file": "m354_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m357",
+   "file": "m357_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m35",
+   "file": "m35_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m370",
+   "file": "m370_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m43",
+   "file": "m43_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m49",
+   "file": "m49_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m52",
+   "file": "m52_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m53",
+   "file": "m53_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m54",
+   "file": "m54_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m74",
+   "file": "m74_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m8",
+   "file": "m8_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m90",
+   "file": "m90_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m91",
+   "file": "m91_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m92",
+   "file": "m92_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "m99",
+   "file": "m99_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "s104",
+   "file": "s104_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "s110",
+   "file": "s110_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "s182",
+   "file": "s182_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "s237",
+   "file": "s237_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "s283",
+   "file": "s283_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "s29",
+   "file": "s29_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "s2",
+   "file": "s2_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "s34",
+   "file": "s34_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "s35",
+   "file": "s35_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "s370",
+   "file": "s370_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "s49",
+   "file": "s49_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "s52",
+   "file": "s52_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "s53",
+   "file": "s53_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "v29",
+   "file": "v29_fwl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "v302",
+   "file": "v302_fwl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "v324",
+   "file": "v324_fwl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "v342",
+   "file": "v342_fwl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "v349",
+   "file": "v349_fwl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "v370",
+   "file": "v370_fwl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "v53",
+   "file": "v53_fwl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "xm29",
+   "file": "xm29_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "xm34",
+   "file": "xm34_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "xm49",
+   "file": "xm49_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "xm52",
+   "file": "xm52_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "xm53",
+   "file": "xm53_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "xs29",
+   "file": "xs29_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "xs34",
+   "file": "xs34_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "xs49",
+   "file": "xs49_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "xs52",
+   "file": "xs52_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_fwl",
+   "table": "materials.wgsl",
+   "only": "xs53",
+   "file": "xs53_fwl.ps.dxil"
   },
   {
    "root": "build/sora_pack/party/vfx",
@@ -23294,8 +25847,50 @@
    "root": "build/sora_pack/party/vfx",
    "stage": "party_xwb",
    "table": "materials.wgsl",
+   "only": "fm79",
+   "file": "fm79_xwb.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_xwb",
+   "table": "materials.wgsl",
+   "only": "fs79",
+   "file": "fs79_xwb.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_xwb",
+   "table": "materials.wgsl",
+   "only": "gm79",
+   "file": "gm79_xwb.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_xwb",
+   "table": "materials.wgsl",
+   "only": "gs79",
+   "file": "gs79_xwb.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_xwb",
+   "table": "materials.wgsl",
    "only": "m79",
    "file": "m79_xwb.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_xwb",
+   "table": "materials.wgsl",
+   "only": "nm79",
+   "file": "nm79_xwb.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_xwb",
+   "table": "materials.wgsl",
+   "only": "ns79",
+   "file": "ns79_xwb.ps.dxil"
   },
   {
    "root": "build/sora_pack/party/vfx",
@@ -23308,22 +25903,43 @@
    "root": "build/sora_pack/party/vfx",
    "stage": "party_xwd",
    "table": "materials.wgsl",
-   "only": "s345",
-   "file": "s345_xwd.ps.dxil"
+   "only": "fm277",
+   "file": "fm277_xwd.ps.dxil"
   },
   {
    "root": "build/sora_pack/party/vfx",
    "stage": "party_xwd",
    "table": "materials.wgsl",
-   "only": "m345",
-   "file": "m345_xwd.ps.dxil"
+   "only": "fm331",
+   "file": "fm331_xwd.ps.dxil"
   },
   {
    "root": "build/sora_pack/party/vfx",
    "stage": "party_xwd",
    "table": "materials.wgsl",
-   "only": "v345",
-   "file": "v345_xwd.vs.dxil"
+   "only": "fm345",
+   "file": "fm345_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_xwd",
+   "table": "materials.wgsl",
+   "only": "fs345",
+   "file": "fs345_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_xwd",
+   "table": "materials.wgsl",
+   "only": "gm345",
+   "file": "gm345_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_xwd",
+   "table": "materials.wgsl",
+   "only": "gs345",
+   "file": "gs345_xwd.ps.dxil"
   },
   {
    "root": "build/sora_pack/party/vfx",
@@ -23336,8 +25952,57 @@
    "root": "build/sora_pack/party/vfx",
    "stage": "party_xwd",
    "table": "materials.wgsl",
+   "only": "m331",
+   "file": "m331_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_xwd",
+   "table": "materials.wgsl",
+   "only": "m345",
+   "file": "m345_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_xwd",
+   "table": "materials.wgsl",
+   "only": "nm345",
+   "file": "nm345_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_xwd",
+   "table": "materials.wgsl",
+   "only": "ns345",
+   "file": "ns345_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_xwd",
+   "table": "materials.wgsl",
+   "only": "s345",
+   "file": "s345_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_xwd",
+   "table": "materials.wgsl",
    "only": "v277",
    "file": "v277_xwd.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_xwd",
+   "table": "materials.wgsl",
+   "only": "v331",
+   "file": "v331_xwd.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/party/vfx",
+   "stage": "party_xwd",
+   "table": "materials.wgsl",
+   "only": "v345",
+   "file": "v345_xwd.vs.dxil"
   },
   {
    "root": "build/sora_pack/party/vfx",
@@ -23347,18 +26012,1194 @@
    "file": "xm277_xwd.ps.dxil"
   },
   {
-   "root": "build/sora_pack/party/vfx",
-   "stage": "party_xwd",
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
    "table": "materials.wgsl",
-   "only": "m331",
-   "file": "m331_xwd.ps.dxil"
+   "only": "fm104",
+   "file": "fm104_fwl.ps.dxil"
   },
   {
-   "root": "build/sora_pack/party/vfx",
-   "stage": "party_xwd",
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
    "table": "materials.wgsl",
-   "only": "v331",
-   "file": "v331_xwd.vs.dxil"
+   "only": "fm105",
+   "file": "fm105_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm106",
+   "file": "fm106_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm109",
+   "file": "fm109_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm113",
+   "file": "fm113_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm115",
+   "file": "fm115_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm127",
+   "file": "fm127_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm128",
+   "file": "fm128_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm129",
+   "file": "fm129_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm130",
+   "file": "fm130_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm131",
+   "file": "fm131_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm132",
+   "file": "fm132_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm187",
+   "file": "fm187_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm242",
+   "file": "fm242_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm289",
+   "file": "fm289_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm2",
+   "file": "fm2_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm308",
+   "file": "fm308_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm31",
+   "file": "fm31_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm334",
+   "file": "fm334_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm34",
+   "file": "fm34_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm356",
+   "file": "fm356_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm362",
+   "file": "fm362_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm367",
+   "file": "fm367_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm370",
+   "file": "fm370_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm37",
+   "file": "fm37_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm384",
+   "file": "fm384_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm38",
+   "file": "fm38_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm47",
+   "file": "fm47_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm53",
+   "file": "fm53_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm56",
+   "file": "fm56_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm57",
+   "file": "fm57_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm58",
+   "file": "fm58_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm64",
+   "file": "fm64_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm79",
+   "file": "fm79_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm95",
+   "file": "fm95_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm96",
+   "file": "fm96_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm97",
+   "file": "fm97_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fm9",
+   "file": "fm9_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fs109",
+   "file": "fs109_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fs115",
+   "file": "fs115_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fs187",
+   "file": "fs187_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fs242",
+   "file": "fs242_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fs289",
+   "file": "fs289_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fs2",
+   "file": "fs2_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fs31",
+   "file": "fs31_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fs37",
+   "file": "fs37_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fs384",
+   "file": "fs384_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fs38",
+   "file": "fs38_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fs53",
+   "file": "fs53_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fs56",
+   "file": "fs56_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "fs57",
+   "file": "fs57_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm104",
+   "file": "lm104_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm105",
+   "file": "lm105_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm106",
+   "file": "lm106_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm109",
+   "file": "lm109_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm113",
+   "file": "lm113_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm115",
+   "file": "lm115_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm127",
+   "file": "lm127_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm128",
+   "file": "lm128_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm129",
+   "file": "lm129_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm130",
+   "file": "lm130_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm131",
+   "file": "lm131_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm132",
+   "file": "lm132_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm187",
+   "file": "lm187_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm242",
+   "file": "lm242_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm289",
+   "file": "lm289_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm2",
+   "file": "lm2_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm308",
+   "file": "lm308_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm31",
+   "file": "lm31_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm334",
+   "file": "lm334_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm34",
+   "file": "lm34_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm356",
+   "file": "lm356_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm362",
+   "file": "lm362_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm367",
+   "file": "lm367_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm370",
+   "file": "lm370_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm37",
+   "file": "lm37_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm384",
+   "file": "lm384_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm38",
+   "file": "lm38_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm47",
+   "file": "lm47_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm53",
+   "file": "lm53_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm56",
+   "file": "lm56_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm57",
+   "file": "lm57_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm58",
+   "file": "lm58_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm64",
+   "file": "lm64_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm79",
+   "file": "lm79_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm95",
+   "file": "lm95_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm96",
+   "file": "lm96_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm97",
+   "file": "lm97_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "lm9",
+   "file": "lm9_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "ls109",
+   "file": "ls109_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "ls115",
+   "file": "ls115_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "ls187",
+   "file": "ls187_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "ls242",
+   "file": "ls242_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "ls289",
+   "file": "ls289_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "ls2",
+   "file": "ls2_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "ls31",
+   "file": "ls31_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "ls37",
+   "file": "ls37_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "ls384",
+   "file": "ls384_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "ls38",
+   "file": "ls38_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "ls53",
+   "file": "ls53_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "ls56",
+   "file": "ls56_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "ls57",
+   "file": "ls57_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m104",
+   "file": "m104_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m105",
+   "file": "m105_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m106",
+   "file": "m106_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m109",
+   "file": "m109_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m113",
+   "file": "m113_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m115",
+   "file": "m115_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m127",
+   "file": "m127_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m128",
+   "file": "m128_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m129",
+   "file": "m129_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m130",
+   "file": "m130_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m131",
+   "file": "m131_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m132",
+   "file": "m132_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m187",
+   "file": "m187_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m242",
+   "file": "m242_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m289",
+   "file": "m289_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m2",
+   "file": "m2_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m308",
+   "file": "m308_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m31",
+   "file": "m31_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m334",
+   "file": "m334_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m34",
+   "file": "m34_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m356",
+   "file": "m356_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m362",
+   "file": "m362_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m367",
+   "file": "m367_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m370",
+   "file": "m370_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m37",
+   "file": "m37_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m384",
+   "file": "m384_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m38",
+   "file": "m38_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m47",
+   "file": "m47_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m53",
+   "file": "m53_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m56",
+   "file": "m56_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m57",
+   "file": "m57_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m58",
+   "file": "m58_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m64",
+   "file": "m64_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m79",
+   "file": "m79_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m95",
+   "file": "m95_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m96",
+   "file": "m96_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m97",
+   "file": "m97_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "m9",
+   "file": "m9_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "s109",
+   "file": "s109_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "s115",
+   "file": "s115_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "s187",
+   "file": "s187_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "s242",
+   "file": "s242_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "s289",
+   "file": "s289_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "s2",
+   "file": "s2_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "s31",
+   "file": "s31_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "s37",
+   "file": "s37_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "s384",
+   "file": "s384_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "s38",
+   "file": "s38_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "s53",
+   "file": "s53_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "s56",
+   "file": "s56_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "s57",
+   "file": "s57_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "v308",
+   "file": "v308_fwl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "v31",
+   "file": "v31_fwl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "v334",
+   "file": "v334_fwl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "v356",
+   "file": "v356_fwl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "v362",
+   "file": "v362_fwl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "v384",
+   "file": "v384_fwl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "v57",
+   "file": "v57_fwl.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "xm31",
+   "file": "xm31_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "xm37",
+   "file": "xm37_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "xm53",
+   "file": "xm53_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "xm56",
+   "file": "xm56_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "xm57",
+   "file": "xm57_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "xs31",
+   "file": "xs31_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "xs37",
+   "file": "xs37_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "xs53",
+   "file": "xs53_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "xs56",
+   "file": "xs56_fwl.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_fwl",
+   "table": "materials.wgsl",
+   "only": "xs57",
+   "file": "xs57_fwl.ps.dxil"
   },
   {
    "root": "build/sora_pack/xsi/vfx",
@@ -23441,8 +27282,50 @@
    "root": "build/sora_pack/xsi/vfx",
    "stage": "xsi_xwb",
    "table": "materials.wgsl",
+   "only": "fm84",
+   "file": "fm84_xwb.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_xwb",
+   "table": "materials.wgsl",
+   "only": "fs84",
+   "file": "fs84_xwb.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_xwb",
+   "table": "materials.wgsl",
+   "only": "gm84",
+   "file": "gm84_xwb.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_xwb",
+   "table": "materials.wgsl",
+   "only": "gs84",
+   "file": "gs84_xwb.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_xwb",
+   "table": "materials.wgsl",
    "only": "m84",
    "file": "m84_xwb.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_xwb",
+   "table": "materials.wgsl",
+   "only": "nm84",
+   "file": "nm84_xwb.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_xwb",
+   "table": "materials.wgsl",
+   "only": "ns84",
+   "file": "ns84_xwb.ps.dxil"
   },
   {
    "root": "build/sora_pack/xsi/vfx",
@@ -23455,43 +27338,50 @@
    "root": "build/sora_pack/xsi/vfx",
    "stage": "xsi_xwd",
    "table": "materials.wgsl",
+   "only": "fm283",
+   "file": "fm283_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_xwd",
+   "table": "materials.wgsl",
+   "only": "fm344",
+   "file": "fm344_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_xwd",
+   "table": "materials.wgsl",
+   "only": "fm358",
+   "file": "fm358_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_xwd",
+   "table": "materials.wgsl",
+   "only": "fs358",
+   "file": "fs358_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_xwd",
+   "table": "materials.wgsl",
+   "only": "gm358",
+   "file": "gm358_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_xwd",
+   "table": "materials.wgsl",
+   "only": "gs358",
+   "file": "gs358_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_xwd",
+   "table": "materials.wgsl",
    "only": "m283",
    "file": "m283_xwd.ps.dxil"
-  },
-  {
-   "root": "build/sora_pack/xsi/vfx",
-   "stage": "xsi_xwd",
-   "table": "materials.wgsl",
-   "only": "xm283",
-   "file": "xm283_xwd.ps.dxil"
-  },
-  {
-   "root": "build/sora_pack/xsi/vfx",
-   "stage": "xsi_xwd",
-   "table": "materials.wgsl",
-   "only": "v283",
-   "file": "v283_xwd.vs.dxil"
-  },
-  {
-   "root": "build/sora_pack/xsi/vfx",
-   "stage": "xsi_xwd",
-   "table": "materials.wgsl",
-   "only": "s358",
-   "file": "s358_xwd.ps.dxil"
-  },
-  {
-   "root": "build/sora_pack/xsi/vfx",
-   "stage": "xsi_xwd",
-   "table": "materials.wgsl",
-   "only": "m358",
-   "file": "m358_xwd.ps.dxil"
-  },
-  {
-   "root": "build/sora_pack/xsi/vfx",
-   "stage": "xsi_xwd",
-   "table": "materials.wgsl",
-   "only": "v358",
-   "file": "v358_xwd.vs.dxil"
   },
   {
    "root": "build/sora_pack/xsi/vfx",
@@ -23504,8 +27394,160 @@
    "root": "build/sora_pack/xsi/vfx",
    "stage": "xsi_xwd",
    "table": "materials.wgsl",
+   "only": "m358",
+   "file": "m358_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_xwd",
+   "table": "materials.wgsl",
+   "only": "nm358",
+   "file": "nm358_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_xwd",
+   "table": "materials.wgsl",
+   "only": "ns358",
+   "file": "ns358_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_xwd",
+   "table": "materials.wgsl",
+   "only": "s358",
+   "file": "s358_xwd.ps.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_xwd",
+   "table": "materials.wgsl",
+   "only": "v283",
+   "file": "v283_xwd.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_xwd",
+   "table": "materials.wgsl",
    "only": "v344",
    "file": "v344_xwd.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_xwd",
+   "table": "materials.wgsl",
+   "only": "v358",
+   "file": "v358_xwd.vs.dxil"
+  },
+  {
+   "root": "build/sora_pack/xsi/vfx",
+   "stage": "xsi_xwd",
+   "table": "materials.wgsl",
+   "only": "xm283",
+   "file": "xm283_xwd.ps.dxil"
+  }
+ ],
+ "vfx_check_roots": [
+  "build/sora_pack/keyblades"
+ ],
+ "anti_jobs": [
+  {
+   "pack": "build/sora_pack/outfits/kh1",
+   "materials": "build/sora_pack/outfits/kh1/materials/materials.wgsl",
+   "jobs": "build/packgen/anti_jobs_kh1.json",
+   "er": "outfits/kh1/materials/er"
+  },
+  {
+   "pack": "build/sora_pack/outfits/kh1",
+   "materials": "build/sora_tmp/er/er91/genh/kh1.wgsl",
+   "jobs": "tools/packgen/recipes/anti_h91_kh1.json",
+   "er": "outfits/kh1/materials/er"
+  }
+ ],
+ "mimic_sets": [
+  {
+   "pack": "build/sora_pack",
+   "er": "materials/er",
+   "suffix": null
+  },
+  {
+   "pack": "build/sora_pack/outfits/caribbean",
+   "er": "outfits/caribbean/materials/er",
+   "suffix": null
+  },
+  {
+   "pack": "build/sora_pack/outfits/caribbean",
+   "er": "outfits/caribbean/materials/er",
+   "suffix": "real"
+  },
+  {
+   "pack": "build/sora_pack/outfits/kh1",
+   "er": "outfits/kh1/materials/er",
+   "suffix": null
+  },
+  {
+   "pack": "build/sora_pack/outfits/kh2",
+   "er": "outfits/kh2/materials/er",
+   "suffix": null
+  },
+  {
+   "pack": "build/sora_pack/outfits/monstropolis",
+   "er": "outfits/monstropolis/materials/er",
+   "suffix": null
+  },
+  {
+   "pack": "build/sora_pack/outfits/monstropolis",
+   "er": "outfits/monstropolis/materials/er",
+   "suffix": "cg"
+  },
+  {
+   "pack": "build/sora_pack/outfits/sanfransokyo",
+   "er": "outfits/sanfransokyo/materials/er",
+   "suffix": null
+  },
+  {
+   "pack": "build/sora_pack/outfits/sanfransokyo",
+   "er": "outfits/sanfransokyo/materials/er",
+   "suffix": "cg"
+  },
+  {
+   "pack": "build/sora_pack/outfits/toybox",
+   "er": "outfits/toybox/materials/er",
+   "suffix": null
+  },
+  {
+   "pack": "build/sora_pack/outfits/toybox",
+   "er": "outfits/toybox/materials/er",
+   "suffix": "cg"
+  },
+  {
+   "pack": "build/sora_pack/outfits/verumrex",
+   "er": "outfits/verumrex/materials/er",
+   "suffix": null
+  },
+  {
+   "pack": "build/sora_pack/outfits/verumrex",
+   "er": "outfits/verumrex/materials/er",
+   "suffix": "cg"
+  },
+  {
+   "pack": "build/sora_pack/outfits/verumrex",
+   "er": "outfits/verumrex/materials/er",
+   "suffix": "cg2"
+  }
+ ],
+ "mimic_pool": {
+  "pack": "build/sora_pack",
+  "er": "materials/er"
+ },
+ "fx_copies": [
+  {
+   "only": "fxfog",
+   "er": "vfx/er"
+  },
+  {
+   "only": "fxlit",
+   "er": "vfx/er"
   }
  ]
 }

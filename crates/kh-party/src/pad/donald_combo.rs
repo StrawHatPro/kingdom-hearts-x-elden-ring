@@ -331,7 +331,7 @@ pub fn press(p: &mut NpcPawn, host: &mut PartyHost) -> bool {
 
 /// The last Wand Bonk's clip has ended (its time from its start at its play rate).
 pub fn bonk_ready(p: &NpcPawn) -> bool {
-    kit::kit_ref(p).map_or(true, |k| k.clock >= k.bonk_ready_at - 1e-4)
+    kit::kit_ref(p).is_none_or(|k| k.clock >= k.bonk_ready_at - 1e-4)
 }
 
 /// A press now would be a Wand Bonk: an enemy within reach on the ground, or no target at all (ground or air).

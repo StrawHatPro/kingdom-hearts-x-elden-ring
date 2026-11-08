@@ -12,7 +12,7 @@ fn xsi_enemy_base_defense_is_the_game_table() {
     let mut by_level: Vec<(u32, i32)> = Vec::new();
     for chunk in text.split("\"_row_name\"").skip(1) {
         let level: u32 = chunk.split('"').nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-        let defense: i32 = chunk.split("\"m_BaseDefensePower\":").nth(1).and_then(|s| s.split(|c: char| c == ',' || c == '}').next()).and_then(|s| s.trim().parse().ok()).unwrap_or(-1);
+        let defense: i32 = chunk.split("\"m_BaseDefensePower\":").nth(1).and_then(|s| s.split([',', '}']).next()).and_then(|s| s.trim().parse().ok()).unwrap_or(-1);
         by_level.push((level, defense));
     }
     by_level.sort();

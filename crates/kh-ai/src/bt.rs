@@ -54,10 +54,6 @@ impl AbortMode {
             _ => AbortMode::None,
         }
     }
-    #[allow(dead_code)]
-    fn observes_self(self) -> bool {
-        matches!(self, AbortMode::SelfAbort | AbortMode::Both)
-    }
     fn observes_lower(self) -> bool {
         matches!(self, AbortMode::LowerPriority | AbortMode::Both)
     }
@@ -448,11 +444,9 @@ impl Library {
 // ---- runtime ---------------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
 enum ActiveType {
     Composite,
     ActiveTask,
-    AbortingTask,
     InactiveTask,
 }
 
@@ -488,12 +482,9 @@ struct AuxUpdate {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 struct Request {
     inst: usize,
     composite: NodeIx,
-    /// Child the request names (the finished / aborted child, or the child to restart at).
-    child: i32,
     result: Res,
     try_next_child: bool,
     /// Restart: search start (instance, execution index) and end (the active node).
@@ -593,7 +584,7 @@ impl BtComponent {
         if let Some(t) = self.lib.trees.get(&self.root_name).cloned() {
             let known = self.known_instance(&t.name, Vec::new(), t.mem_slots);
             self.stack.push(Instance { tree: t, known, active: None, active_type: ActiveType::Composite, aux_active: Vec::new() });
-            self.request = Some(Request { inst: 0, composite: 0, child: -1, result: Res::InProgress, try_next_child: true, search_start: None, search_end: None });
+            self.request = Some(Request { inst: 0, composite: 0, result: Res::InProgress, try_next_child: true, search_start: None, search_end: None });
         }
     }
 
@@ -642,7 +633,7 @@ impl BtComponent {
         if let Some(inst) = self.stack.last() {
             if let Some(n) = inst.active {
                 let node = &inst.tree.nodes[n as usize];
-                if matches!(inst.active_type, ActiveType::ActiveTask | ActiveType::AbortingTask) {
+                if matches!(inst.active_type, ActiveType::ActiveTask) {
                     return format!("{}:{} [{}]", inst.tree.name, node.name, node.class);
                 }
             }
@@ -1339,7 +1330,7 @@ impl BtComponent {
             if let Some(k) = snap_known {
                 // CopyInstanceMemoryFromPersistent (instances created by the search stay known)
                 let n = k.len();
-                for (dst, src) in self.known.iter_mut().zip(k.into_iter()) {
+                for (dst, src) in self.known.iter_mut().zip(k) {
                     *dst = src;
                 }
                 let _ = n;
@@ -1403,7 +1394,7 @@ impl BtComponent {
                 self.stack[0].active_type = ActiveType::Composite;
                 self.unregister_aux_up_to((0, 0));
                 self.apply_updates(c);
-                self.request = Some(Request { inst: 0, composite: 0, child: -1, result: Res::InProgress, try_next_child: true, search_start: None, search_end: None });
+                self.request = Some(Request { inst: 0, composite: 0, result: Res::InProgress, try_next_child: true, search_start: None, search_end: None });
                 self.trace(c.now(), format!("{} finished, restart", self.stack[0].tree.name));
             }
         }
@@ -1460,7 +1451,7 @@ impl BtComponent {
                     return;
                 }
                 self.trace(c.now(), format!("push {}", sub.name));
-                self.request = Some(Request { inst: ni, composite: 0, child: -1, result: Res::InProgress, try_next_child: true, search_start: None, search_end: None });
+                self.request = Some(Request { inst: ni, composite: 0, result: Res::InProgress, try_next_child: true, search_start: None, search_end: None });
             }
             NodeKind::Task(t) => {
                 let mut m = self.take_mem(inst, node.mem);
@@ -1490,7 +1481,7 @@ impl BtComponent {
         if self.stack[inst].active == Some(n) {
             self.stack[inst].active_type = ActiveType::InactiveTask;
             if let Some(p) = node.parent {
-                self.request = Some(Request { inst, composite: p, child: node.child_index as i32, result: r, try_next_child: true, search_start: None, search_end: None });
+                self.request = Some(Request { inst, composite: p, result: r, try_next_child: true, search_start: None, search_end: None });
             }
         }
     }
@@ -1538,12 +1529,12 @@ impl BtComponent {
                 n = p;
             }
             let search_end = (inst, self.child_first_exec(inst, comp, child + 1));
-            Request { inst, composite: common, child: child as i32, result: Res::Aborted, try_next_child: false, search_start: Some(start), search_end: Some(search_end) }
+            Request { inst, composite: common, result: Res::Aborted, try_next_child: false, search_start: Some(start), search_end: Some(search_end) }
         } else {
             if !executing {
                 return;
             }
-            Request { inst, composite: comp, child: child as i32, result: Res::Failed, try_next_child: true, search_start: None, search_end: None }
+            Request { inst, composite: comp, result: Res::Failed, try_next_child: true, search_start: None, search_end: None }
         };
         // a pending continuation (task finished / subtree pushed) is never replaced: the observer
         // asks again on its next tick

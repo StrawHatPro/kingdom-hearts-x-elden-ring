@@ -196,6 +196,14 @@ for (const rel of ['er/mods/kh_er.dll', 'er/mods/kh_er_loader.dll', 'tools/bin/k
 const loader = fs.readFileSync(path.join(mods, 'kh_er_loader.dll')).toString('latin1');
 if (!loader.includes('2.7.1.0 or 2.7.2.0') || loader.includes('2.7.1.0 (app 1.17.1) only')) problems.push('the loader is not the 2.7.1.0 / 2.7.2.0 one');
 if (!fs.readFileSync(path.join(mods, 'kh_er.dll')).toString('latin1').includes('kh_er_selfcheck')) problems.push('kh_er.dll does not export kh_er_selfcheck');
+// 3c. (2026-11, KH3TEXT) tools/kh3_text_scan.js on the RELEASE binaries: the rule above plus its stricter pass (KH3 lines with
+// their markup, KH3 sentences inside composed lines), against the same UI pack
+{
+  const ts = cp.spawnSync(process.execPath, [path.join(REPO, 'tools', 'kh3_text_scan.js'), path.join(mods, 'kh_er.dll'), path.join(mods, 'kh_er_loader.dll'), path.join(OUT, 'tools', 'bin', 'kh-shaderc.exe'), '--pack', PACK], { cwd: REPO, encoding: 'utf8' });
+  process.stdout.write(ts.stdout + ts.stderr);
+  report.kh3_text_scan = { exit: ts.status };
+  if (ts.status !== 0) problems.push('tools/kh3_text_scan.js found KH3 text in a release binary');
+}
 fs.writeFileSync(path.join(DIST, NAME + '.check.json'), JSON.stringify({ ...report, game_text_reference_lines: gameText.size, runtime_samples: runtimeSamples.length, problems }, null, 1) + '\n');
 if (problems.length) { for (const p of problems) console.error('PROBLEM: ' + p); fail('the release folder is not clean: no zip made'); }
 

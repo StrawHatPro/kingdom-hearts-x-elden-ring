@@ -24,10 +24,17 @@
 //! - the attack camera (0x14140DF20) of Sonic Rave: `combat/camera.rs`, mode 3;
 //! - the stick-steering block of `Tick` (state+0x16C) has no writer in the three Kingdom Key
 //!   commands (only slot 144 0x1413DED90 sets it): dead here.
-//! The post effect and the HUD hiding are the host's to derive from `EventKind::TimeDilation` /
-//! the form events.
+//!   The post effect and the HUD hiding are the host's to derive from `EventKind::TimeDilation` /
+//!   the form events.
+//!
+//! (weapons P3) The other forms' finish commands (FINISH_BZ ...) run here too: their body is the form package's
+//! (`combat::forms` `finishes` / `finish_begin` / `finish_tick`), after the begin event common to all; a finish command
+//! without a body ends at once (DoFinish), and `End` ends the form.
+//!
+//! (F-SECOND) The fourth per-command tick of the class, slot 155 0x1413E2810 (Ancient Light, `LM_UNIONDISCODE` 0xAE: Second
+//! Form S's finish level 3) with its helpers slot 164 0x1413D12A0 / 165 0x1413E50D0 (the rise), read whole in decompiled C;
+//! and the Attack state's slot 115 in the TresAtk begin handler (+0x12C, which slot 155 counts).
 
-use glam::Vec3;
 
 use super::attack::Attack;
 use super::common::{ground_probe, on_ground};
@@ -63,16 +70,23 @@ pub(crate) struct StyleFinish {
     pub count: i32,
     /// +0x1D8 as written by the command (10.9 item 3).
     pub root_len: f32,
+    /// (F-HAMMER) m_pCatchPawn: the pawn a finish caught (Drill Punch's warhead), held until the finish ends.
+    pub catch: TargetId,
+    /// (F-HAMMER) The finish's accompany pawn (m_pClock of STYLEFINISH_DR): its root (world) and yaw, while it stands.
+    pub accompany: Option<(glam::Vec3, f32)>,
+    /// (F-SECOND) +0x290: where slot 164 lifts Sora to (Ancient Light's rise; Reset clears it).
+    pub rise_to: glam::Vec3,
 }
 
 impl StyleFinish {
     pub fn new(cmd: i32) -> StyleFinish {
-        StyleFinish { cmd, a: Attack::RESET, pending: 0, extra_shown: false, count: 0, root_len: 0.0 }
+        StyleFinish { cmd, a: Attack::RESET, pending: 0, extra_shown: false, count: 0, root_len: 0.0, catch: TargetId::NONE, accompany: None, rise_to: glam::Vec3::ZERO /* (F-SECOND) */ }
     }
 
-    /// `Play(name, blendIn, mode)`.
-    fn play(&mut self, s: &mut Pawn, name: &str, blend_in: f32, mode: u8) {
-        match AnimId::from_name(name) {
+    /// `Play(name, blendIn, mode)`. (weapons P3) Through the held form's replacement anim set (combat/forms
+    /// `replace_clip`); for the form packages' finish bodies too.
+    pub(crate) fn play(&mut self, s: &mut Pawn, name: &str, blend_in: f32, mode: u8) {
+        match AnimId::from_name(crate::combat::forms::clip(s.combat.form.cmd, name)) {
             Some(clip) => s.anim.play_with(clip, PlayArgs::mode(mode, blend_in)),
             None => s.note("a finish-command clip (M_1421 .. M_1434) is not in the generated animation table"),
         }
@@ -80,26 +94,26 @@ impl StyleFinish {
     }
 
     /// `extra(k)` (slot 162 0x1413E3690).
-    fn extra(&mut self, cx: &mut Ctx, kind: i32) {
+    pub(crate) fn extra(&mut self, cx: &mut Ctx, kind: i32) {
         situation::set_extra(cx, kind);
         self.extra_shown = true;
     }
 
     /// `remove(k, b)` (slot 163).
-    fn remove_extra(&mut self, cx: &mut Ctx) {
+    pub(crate) fn remove_extra(&mut self, cx: &mut Ctx) {
         situation::clear_extra(cx);
         self.extra_shown = false;
     }
 
     /// `PreDecide` (slot 121): the target metrics and the air test.
-    fn pre_decide(&mut self, cx: &mut Ctx) {
+    pub(crate) fn pre_decide(&mut self, cx: &mut Ctx) {
         (self.a.target_on_ground, self.a.dist, self.a.dz) = (true, 0.0, 0.0);
         self.a.target_metrics(cx);
     }
 
     /// DASH_SETUP of Sonic Rave, also the per-step setup of Last Arcanum: the XY homing channel
     /// on, the root-scale channel off, z gain 3.0, the channel phases 0, air mode.
-    fn channels(&mut self, cx: &mut Ctx, root_len: f32) {
+    pub(crate) fn channels(&mut self, cx: &mut Ctx, root_len: f32) {
         self.pre_decide(cx);
         let a = &mut self.a;
         (a.chan_xy, a.chan_root, a.z_gain) = (true, false, 3.0);
@@ -109,7 +123,7 @@ impl StyleFinish {
     }
 
     /// Sub 0 of Sonic Rave and Last Arcanum: +0x234 |= 4 | 0x10, GravityScale 0.1, Flying.
-    fn hover(&mut self, s: &mut Pawn) {
+    pub(crate) fn hover(&mut self, s: &mut Pawn) {
         self.a.air_mode = true;
         self.a.hover = true;
         s.cmc.gravity_scale = crate::combat::tables::P.air_gravity_scale;
@@ -117,7 +131,7 @@ impl StyleFinish {
     }
 
     /// FINISH: Falling, gravity on, GravityScale back to the class default, DoChain.
-    fn finish(&mut self, s: &mut Pawn) -> bool {
+    pub(crate) fn finish(&mut self, s: &mut Pawn) -> bool {
         let p = *s.params();
         s.cmc.set_falling();
         s.cmc.gravity_off = false;
@@ -158,7 +172,6 @@ impl StyleFinish {
     }
 
     /// Sonic Rave, slot 153 (0x1413E1FC0).
-    #[allow(clippy::nonminimal_bool)]
     fn sonic_rave(&mut self, cx: &mut Ctx, dt: f32) -> bool {
         match self.a.sub {
             0 => {
@@ -308,9 +321,92 @@ impl StyleFinish {
         self.finish(cx.pawn)
     }
 
+    /// (F-SECOND) Ancient Light, slot 155 (0x1413E2810, decompiled C, the whole function): Second Form S's level 3
+    /// (`LM_UNIONDISCODE` 0xAE). The numbers are the sheet's (sora-form-second `finish.L2.*`).
+    fn union_discode(&mut self, cx: &mut Ctx, dt: f32) -> bool {
+        use crate::combat::forms::second;
+        match self.a.sub {
+            0 => {
+                // SetMovementMode(5 Flying, 1) (pawn vt+0x17A0); Play("M_1435", blend -1, mode 2); m_bFaceAt; sub 1; then
+                // slot 164(500): a floor nearer than 500 cm -> sub 3 (the rise first).
+                cx.pawn.cmc.set_flying();
+                self.play(cx.pawn, "M_1435", -1.0, 2);
+                self.a.face_at = true;
+                self.a.sub = 1;
+                if self.rise_target(cx, second::rise_height()) {
+                    self.a.sub = 3;
+                }
+                return false;
+            }
+            1..=3 => {
+                // sub 3: slot 165 (the rise); done -> sub 1. Sub 3 then runs sub 1's code (0x1413E2868) every tick.
+                if self.a.sub == 3 && self.rise(cx, dt) {
+                    self.a.sub = 1;
+                }
+                // sub 1: the fifth hit window has begun (+0x12C > 4): WorldSlow(off), sub 2.
+                if self.a.sub != 2 && self.a.counters[0] > second::hits_before_slow_end() {
+                    form::world_slow(cx, false);
+                    self.a.sub = 2;
+                }
+                // sub 2: m_bEnableChange: SetMovementMode(3 Falling, 1), gravity on (vt+0x1728(1)), GravityScale = the
+                // class default (vt+0x1658), sub 0xC.
+                if cx.pawn.queue.flags.enable_change {
+                    let s = &mut *cx.pawn;
+                    let p = *s.params();
+                    s.cmc.set_falling();
+                    s.cmc.gravity_off = false;
+                    s.cmc.gravity_scale = p.gravity_scale;
+                    self.a.sub = 0xC;
+                }
+            }
+            0xC => {}
+            _ => return false,
+        }
+        // AnimEnded (anim interface vt+200): DoChain (vt+0x270), done.
+        if cx.pawn.anim.ended {
+            cx.pawn.queue.do_chain();
+            return true;
+        }
+        false
+    }
+
+    /// (F-SECOND) Slot 164 (0x1413D12A0, h): the ground probe 0x14063A650(pawn, 0, h + 300); a floor nearer than h, or none
+    /// but the floor test (0x1405ADAA0: movement vt+0x9D8) standing: the target (+0x290) = the actor location raised by
+    /// h - distance (no hit: by h), true; else false.
+    fn rise_target(&mut self, cx: &Ctx, height: f32) -> bool {
+        let (hit, distance, _) = ground_probe(cx.pawn, cx.world, height + crate::combat::forms::second::probe_extra());
+        let below = if hit {
+            if distance >= height {
+                return false;
+            }
+            distance
+        } else if cx.pawn.cmc.floor_under(cx.world, cx.pawn.params()) {
+            0.0
+        } else {
+            return false;
+        };
+        self.rise_to = cx.pawn.cmc.location + glam::Vec3::Z * (height - below);
+        true
+    }
+
+    /// (F-SECOND) Slot 165 (0x1413E50D0, dt): dz = target z - actor z; dz > 0 and dt x 500 x dz < dz: StopMovement and
+    /// Velocity.Z = dt x 500 x dz, false; else StopMovement and SetActorLocation(target, sweep) (0x143EAC3D0), true.
+    fn rise(&mut self, cx: &mut Ctx, dt: f32) -> bool {
+        let dz = self.rise_to.z - cx.pawn.cmc.location.z;
+        let v = dt * crate::combat::forms::second::rise_rate() * dz;
+        cx.pawn.cmc.stop_movement();
+        if dz > 0.0 && v < dz {
+            cx.pawn.cmc.velocity.z = v;
+            return false;
+        }
+        let p = *cx.pawn.params();
+        cx.pawn.cmc.sweep_to(cx.world, &p, self.rise_to);
+        true
+    }
+
     /// Slot 128 (dt): the traction delegate (attack.rs, spec 6.3), then its tail: the hover ends
     /// at `TresEnableChange`.
-    fn traction_tick(&mut self, cx: &mut Ctx, dt: f32) {
+    pub(crate) fn traction_tick(&mut self, cx: &mut Ctx, dt: f32) {
         self.a.traction(cx, dt);
         let s = &mut *cx.pawn;
         if s.queue.flags.enable_change && self.a.hover {
@@ -329,7 +425,8 @@ impl StyleFinish {
 /// 0x14143EE20): the kind is stored as "pending" when the current state is a StyleFinish.
 pub(crate) fn extra_pressed(state: &mut StateData, kind: i32) -> bool {
     match state {
-        StateData::StyleFinish(f) => {
+        // (F-SHIELD) ... and STYLEFINISH_SH (38, a subclass)
+        StateData::StyleFinish(f) | StateData::StyleFinishSh(super::combo_sh::StyleFinishSh(f, _)) => {
             f.pending = kind;
             true
         }
@@ -346,13 +443,25 @@ impl PlayerState for StyleFinish {
 
     /// `Begin` (0x1413CBF70) with the command begin event (base slot 103 0x14150A1F0).
     fn begin(&mut self, cx: &mut Ctx) {
-        if !matches!(self.cmd, LM_STUNIMPACT | LM_SONICRAVE | LM_LASTARCANUM) {
+        // (weapons P3) a form package's finish body (combat/forms `finishes`) is a known command too; one without a body
+        // ends at once (DoFinish), and the form with it (`End`).
+        let body = crate::combat::forms::of_finish(self.cmd);
+        if !matches!(self.cmd, LM_STUNIMPACT | LM_SONICRAVE | LM_LASTARCANUM) && body.is_none() {
             cx.pawn.queue.do_finish();
             return;
         }
         form::world_slow(cx, true);
+        // (AUDIT-A ARROWGUN) the begin event's 0x14140DF80(ctrl, 1, 1.0, 1.0): the dark screen on (master light x MyDarkScreenRate, 1 s)
+        form::dark_screen(cx, true);
         let s = &mut *cx.pawn;
         s.combat.form.bad_status_block = true;
+        // (AUDIT-A SECOND) the begin event's pawn vt+0x2068(1) (0x14150A1F0; slot 1037 0x1405B9120): pawn+0x630 bit 2,
+        // invincible through every finish command (the end event's pawn vt+0x23B8 0x1405A5E00 clears it: `End`).
+        s.status.damage_invalid = true;
+        // (AUDIT-B W-DATA) ... and FUN_1405B8B30(pawn+0x460, 8) (asm/text/141500000.s line 10008, `mov dl,8`): PPL_90 for every
+        // finish command (W-CORE's open list: "the formchange finish's command-begin event"; StyleFinish Begin 0x1413CBF70
+        // line 137 calls slot 103 for every finish kind it accepts)
+        s.actions.push_level = Some(super::attack::PUSH_LEVEL_PPL_90);
         s.cmc.stop_movement();
         s.cmc.gravity_off = true;
         self.a.face_yaw = s.yaw;
@@ -360,6 +469,9 @@ impl PlayerState for StyleFinish {
         s.combat.swing_hit = false;
         s.root_scale = (1.0, 1.0);
         self.a.sync_ctx(s);
+        if let Some(m) = body {
+            (m.finish_begin)(self, cx);
+        }
     }
 
     /// `Tick` (0x1413D4550).
@@ -374,7 +486,11 @@ impl PlayerState for StyleFinish {
         let done = match self.cmd {
             LM_STUNIMPACT => self.stun_impact(cx),
             LM_SONICRAVE => self.sonic_rave(cx, dt),
-            _ => self.last_arcanum(cx, dt),
+            LM_LASTARCANUM => self.last_arcanum(cx, dt),
+            // (F-SECOND) slot 155: Ancient Light (Second Form S's level 3).
+            crate::combat::forms::second::LM_UNIONDISCODE => self.union_discode(cx, dt),
+            // (weapons P3) the form package's per-command tick (slots 143 .. 161).
+            other => crate::combat::forms::of_finish(other).is_none_or(|m| (m.finish_tick)(self, cx, dt)),
         };
         if !done {
             self.a.facing(cx, dt);
@@ -384,12 +500,23 @@ impl PlayerState for StyleFinish {
 
     /// `End` (0x1413CEBD0) with the command end event (base slot 111 0x14150C440).
     fn end(&mut self, cx: &mut Ctx) {
+        // (F-HAMMER) the caught pawn is given back (Drill Punch: an interrupted finish too).
+        if self.catch != TargetId::NONE {
+            cx.host.targets.script_hold(std::mem::replace(&mut self.catch, TargetId::NONE), None);
+        }
+        // (AUDIT-A STAFF) StyleFinishWA's End 0x1413CF310: its cleanup 0x1413CFE90 first (an interrupted FINISH_WA too)
+        if self.cmd == crate::combat::forms::staff::FINISH_WA {
+            super::combo_wa::finish_cleanup(cx);
+        }
         // ctrl.slot859(0, 0): the form ends with the finish (unless the style is fixed).
-        form::finish_ended(cx);
+        // (F-RAGE) the end event 0x14150C440 skips slot 859 for RISKCHARGE (0xB3): Rage Form goes on.
+        if self.cmd != crate::combat::forms::rage::RISKCHARGE { form::finish_ended(cx); } else { crate::combat::forms::rage::riskcharge_ended(cx); } // (AUDIT-C) 0x1413CF044: the eyes at n == 1
         // The end event's controller part [I 0x14150C4E4 ...]: the attack camera off, then the
         // world slow off.
         crate::combat::camera::off(cx);
         form::world_slow(cx, false);
+        // (AUDIT-A ARROWGUN) the end event's 0x14140DF80(ctrl, 0, 1.0, 1.0): the dark screen off (SetMasterLightCoefficientDefault, 1 s)
+        form::dark_screen(cx, false);
         if self.extra_shown {
             self.remove_extra(cx);
         }
@@ -410,7 +537,10 @@ impl PlayerState for StyleFinish {
         s.combat.form.command_in_action = 0;
         s.combat.attack_ctx = Default::default();
         s.combat.recoil = None;
-        let _ = Vec3::ZERO;
+        // (AUDIT-A SECOND) the end event's first call, pawn vt+0x23B8 (0x1405A5E00): among its resets vt+0x2068 (the
+        // invincible bit off) and the body-push level back to the base param's.
+        s.status.damage_invalid = false;
+        s.actions.push_level = None; // (AUDIT-B W-DATA) MyBodyColl vt+0x720(m_pBaseParam +0x98), 0x1405A5E00
     }
 
     fn on_notifies(&mut self, cx: &mut Ctx, notifies: &Notifies) {
@@ -418,6 +548,10 @@ impl PlayerState for StyleFinish {
             match (event.class(), event.phase) {
                 (NotifyClass::TresAnimNotifyStateAttack, NotifyPhase::Begin) => {
                     self.a.swing_started = true;
+                    // (F-SECOND) the Attack state's handler first (0x1413459E0 -> slot 115 0x141332790): +0x12C / +0x138,
+                    // the count Ancient Light (slot 155) waits on, in every finish command as KH3 counts (the golden trace was
+                    // re-blessed for it on 2026-11-03 by the coordinator's decision: build/sora_tmp/weapons/F-SECOND/STATE.md).
+                    self.a.count_window(cx.pawn, event);
                     // The class's own `TresAtk` begin handler (0x1413DD7D0 [I]): after the Attack
                     // state's, `if commandInAction == 0xAD: inc dword [state+128h]`.
                     if self.cmd == LM_LASTARCANUM {
@@ -446,11 +580,15 @@ pub struct FinishView {
     pub count: i32,
     pub pending: i32,
     pub root_len: f32,
+    /// (F-HAMMER) The finish's accompany pawn (the Clock): its root (world) and yaw.
+    pub accompany: Option<(glam::Vec3, f32)>,
 }
 
 pub(crate) fn view(state: &StateData) -> Option<FinishView> {
     match state {
-        StateData::StyleFinish(f) => Some(FinishView { cmd: f.cmd, sub: f.a.sub, count: f.count, pending: f.pending, root_len: f.root_len }),
+        StateData::StyleFinish(f) | StateData::StyleFinishSh(super::combo_sh::StyleFinishSh(f, _)) => Some(FinishView { cmd: f.cmd, sub: f.a.sub, count: f.count, pending: f.pending, root_len: f.root_len, accompany: f.accompany }),
+        // (F-HAMMER) STYLEFINISH_DR
+        StateData::StyleFinishDr(super::combo_hm::StyleFinishDr(f)) => Some(FinishView { cmd: f.cmd, sub: f.a.sub, count: f.count, pending: f.pending, root_len: f.root_len, accompany: f.accompany }),
         _ => None,
     }
 }

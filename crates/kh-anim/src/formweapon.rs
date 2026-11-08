@@ -77,6 +77,69 @@ impl WeaponRig {
     }
 }
 
+/// (DRILL-IDLE) A WEAPON'S DEFAULT CLIP, KH3's UTresAnimInstance play by name (0x14056ECE0): when the weapon's anim set has
+/// no row of the name Sora plays (param_2), and `m_DefaultAnimName` (+0x420) is set and found, the instance plays THAT row
+/// instead, its loop bit (mode bit 0) = `m_bDefaultAnimAlwaysLoopPlay` (+0x428); with `m_bDefaultAnimCheckSame` (+0x42C)
+/// a default play that is already running (the slot instance's +0x18 bit 0, set by vt+0x6A0 for a default play) is kept, not
+/// restarted. The values are each weapon's anim blueprint CDO (PACK/keyblades/anim_instances.json, tools/sora_keyblades_pack.js
+/// phase `anim_instances`): Drill Punch's w_so053 plays its `ResetPose` 0000 LOOPED, which is what folds its rope (himo01's
+/// X scale 0.01, himo16's 100) and spins its drill (dorill_all, one turn per 0.567 s). Without it the weapon showed its bind
+/// pose: the rope stretched out 15 links and the drill head hanging 1.5 m away from the gauntlet.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DefaultPlay {
+    /// `m_bDefaultAnimAlwaysLoopPlay`
+    pub looping: bool,
+    /// `m_bDefaultAnimCheckSame`
+    pub check_same: bool,
+}
+
+/// (DRILL-IDLE) The clock of a weapon's default clip ([`DefaultPlay`]), driven by what Sora plays: a weapon actor's anim
+/// instance is told the name of each of his play calls; the default clip starts at the first call the weapon has no row
+/// of, runs on its own clock (looping or held at its end) and restarts at each later such call unless `check_same`. A call
+/// is seen here as a change of his clip's name (a loop of his that wraps is one call). Repeated calls with the same name and
+/// time change nothing, so every pass of a frame may ask.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DefaultClock {
+    last: Option<(String, f32)>,
+    playing: bool,
+    clock: f32,
+}
+
+impl DefaultClock {
+    /// Sora plays `anim` at `time` (s) and the weapon has (`own_row`) or lacks its row of it; the default clip's time when the
+    /// weapon plays its default, else None.
+    pub fn advance(&mut self, anim: &str, time: f32, own_row: bool, play: DefaultPlay) -> Option<f32> {
+        let new_call = self.last.as_ref().is_none_or(|(name, _)| name != anim);
+        let step = match &self.last {
+            // the same play: his clock moved on (or wrapped: the part of his new cycle)
+            Some((name, before)) if name == anim => if time >= *before { time - before } else { time },
+            // a new play call: as long as his new clip has run
+            _ => time.max(0.0),
+        };
+        self.last = Some((anim.to_string(), time));
+        if own_row {
+            self.playing = false;
+            return None;
+        }
+        if !self.playing || (new_call && !play.check_same) {
+            self.playing = true;
+            self.clock = time.max(0.0);
+        } else {
+            self.clock += step;
+        }
+        Some(self.clock)
+    }
+
+    /// The time to sample a default clip of `length` s at (looped, else held at its end).
+    pub fn sample_time(clock: f32, length: f32, play: DefaultPlay) -> f32 {
+        if play.looping && length > 0.0 {
+            clock.rem_euclid(length)
+        } else {
+            clock.clamp(0.0, length.max(0.0))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,5 +186,32 @@ mod tests {
                 assert!((x.translation - y.translation).length() < 0.01 && x.rotation.dot(y.rotation).abs() > 0.9999, "{model}");
             }
         }
+    }
+
+    /// (DRILL-IDLE) the default clip's clock (KH3 0x14056ECE0): it starts at the first play the weapon has no row of, runs on
+    /// across Sora's loop wraps, keeps running into his next row-less play with check-same (restarts without), stops while
+    /// he plays one of its rows, and samples looped or held
+    #[test]
+    fn the_default_clip_runs_on_its_own_clock() {
+        let same = DefaultPlay { looping: true, check_same: true };
+        let fresh = DefaultPlay { looping: true, check_same: false };
+        let mut c = DefaultClock::default();
+        assert_eq!(c.advance("6001", 0.1, false, same), Some(0.1));
+        assert_eq!(c.advance("6001", 0.1, false, same), Some(0.1), "the same call again changes nothing");
+        assert!((c.advance("6001", 0.5, false, same).unwrap() - 0.5).abs() < 1.0e-6);
+        // his idle wraps: the clock goes on
+        assert!((c.advance("6001", 0.05, false, same).unwrap() - 0.55).abs() < 1.0e-6);
+        // his walk (no row either): check-same keeps the running default
+        assert!((c.advance("6010", 0.02, false, same).unwrap() - 0.57).abs() < 1.0e-6);
+        // a row of its own: no default; the next row-less play starts it again
+        assert_eq!(c.advance("M_6411", 0.3, true, same), None);
+        assert_eq!(c.advance("6001", 0.0, false, same), Some(0.0));
+        // without check-same a new row-less call restarts it
+        let mut d = DefaultClock::default();
+        d.advance("6001", 0.4, false, fresh);
+        assert_eq!(d.advance("6010", 0.01, false, fresh), Some(0.01));
+        // looped / held
+        assert!((DefaultClock::sample_time(1.2, 0.5, same) - 0.2).abs() < 1.0e-5);
+        assert!((DefaultClock::sample_time(1.2, 0.5, DefaultPlay::default()) - 0.5).abs() < 1.0e-6);
     }
 }

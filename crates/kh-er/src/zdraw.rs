@@ -89,7 +89,7 @@ pub fn model_of(name: &str, f: &kh_erfile::Flver) -> Model {
 }
 
 /// The game's folder (the exe's).
-fn game_dir() -> std::path::PathBuf {
+pub(crate) fn game_dir() -> std::path::PathBuf {
     std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())).unwrap_or_else(kh_erfile::archive::default_game_dir)
 }
 
@@ -168,7 +168,7 @@ fn wide(at: usize) -> String {
     if !read(at, &mut b) {
         return String::new();
     }
-    let units: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|u| *u != 0).collect();
+    let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|u| *u != 0).collect();
     String::from_utf16_lossy(&units)
 }
 
@@ -254,8 +254,8 @@ fn bones_now(item: usize, m: &Model, body: Vec3) -> Result<(Vec<Mat4>, PoseRead)
     }
     let mut out = vec![Mat4::IDENTITY; n];
     let mut ok = vec![false; n];
-    for (k, c) in bytes.chunks_exact(0x30).enumerate() {
-        let f: Vec<f32> = c.chunks_exact(4).map(|x| f32::from_le_bytes([x[0], x[1], x[2], x[3]])).collect();
+    for (k, c) in bytes.as_chunks::<0x30>().0.iter().enumerate() {
+        let f: Vec<f32> = c.as_chunks::<4>().0.iter().map(|x| f32::from_le_bytes([x[0], x[1], x[2], x[3]])).collect();
         let mm = kh_erfile::flver::mat_from_rows34(&f);
         out[k] = mm;
         ok[k] = mm.is_finite() && (mm.w_axis.truncate() - body).length() < 100.0;
@@ -322,8 +322,8 @@ fn worn_parts(chr: &eldenring::cs::ChrIns) -> Vec<Item> {
     if !read(asm + 0x28, &mut raw) {
         return Vec::new();
     }
-    raw.chunks_exact(8)
-        .map(|c| usize::from_le_bytes(c.try_into().unwrap()))
+    raw.as_chunks::<8>().0.iter()
+        .map(|c| usize::from_le_bytes(*c))
         .filter(|p| *p != 0)
         .filter_map(|part| {
             let item = word(part + 0x10).filter(|p| *p != 0)?;
@@ -334,7 +334,12 @@ fn worn_parts(chr: &eldenring::cs::ChrIns) -> Vec<Item> {
 }
 
 fn body(id: u32) -> Option<Body> {
-    let handle = crate::zfinale::handle_of(id)?;
+    body_of(&crate::zfinale::handle_of(id)?)
+}
+
+/// (FREEZE-FX) [`body`] by the character's handle.
+fn body_of(handle: &eldenring::cs::FieldInsHandle) -> Option<Body> {
+    let handle = *handle;
     // SAFETY: game thread; the game's own lookup by handle.
     let wcm = unsafe { WorldChrMan::instance_mut() }.ok()?;
     let chr = wcm.chr_ins_by_handle_mut(&handle)?;
@@ -588,6 +593,73 @@ pub fn frame() {
     }
     // (a cut finished for a body read no more this frame: logged next time)
     kh_er_render::zdraw::set_frame(soups, bodies);
+}
+
+/// (FREEZE-FX, the user 2026-11-07: "make sure frozen effects are applied to anything that gets frozen by blizzard") A BODY'S
+/// OWN BONES NOW, for KH3's frozen look (its shards and smoke start on the victim's mesh: kh-vfx's `SQEX_VertexSpawn` takes the
+/// host's bones for its vertices): the character's own model read from the game's files (the reader's thread, once per model,
+/// as Zettaflare's draw reads it) and its pose from the game's memory ([`bones_now`]); every bone's place in KH3 space (cm,
+/// `frame`), at most `most` of them taken evenly from the model's list. None while the model is being read, or when it
+/// cannot be read or posed (the host then uses the body's capsule). Generic: any character model.
+pub fn bones_of(handle: &eldenring::cs::FieldInsHandle, frame: crate::coords::Frame, most: usize) -> Option<Vec<(String, Vec3)>> {
+    if !ON.load(Ordering::Relaxed) {
+        return None;
+    }
+    let b = body_of(handle)?;
+    let own = b.items.iter().find(|i| matches!(i.key, Key::Chr(_)))?;
+    let m = model(&own.key).ok()??;
+    let (world, _) = bones_now(own.item, &m, b.er_pos).ok()?;
+    let n = world.len().min(m.bone_names.len());
+    if n == 0 {
+        return None;
+    }
+    let step = n.div_ceil(most.max(1));
+    Some((0..n).step_by(step.max(1)).map(|k| (m.bone_names[k].clone(), frame.pos_er_to_kh(world[k].w_axis.truncate()))).collect())
+}
+
+/// (FREEZE-FX) The reduced models of the ice shells: (model name, budget) -> the model at most that many triangles.
+type ReducedModels = HashMap<(String, usize), Arc<Model>>;
+static REDUCED: Mutex<Option<ReducedModels>> = Mutex::new(None);
+
+fn reduced(m: &Arc<Model>, most: usize) -> Arc<Model> {
+    let Ok(mut guard) = REDUCED.lock() else { return m.clone() };
+    let map = guard.get_or_insert_with(HashMap::new);
+    if map.len() > 64 {
+        map.clear();
+    }
+    map.entry((m.name.clone(), most)).or_insert_with(|| Arc::new(m.reduced(most))).clone()
+}
+
+/// (FREEZE-FX, the user 2026-11-07: "make sure frozen effects are applied to anything that gets frozen by blizzard") A FROZEN
+/// BODY'S ICE SHELL: its own model (and, for a `c0000` human, every worn part that lies on it) as the game poses it now,
+/// skinned into triangles in KH3 space (game cm, kh-er-render `iceshell`'s soup), each model reduced to `most` triangles;
+/// its display groups as the character shows them. None while the model is being read, or when it cannot be read or posed
+/// (the host then keeps KH3's particle look alone and logs it). Generic: any character model.
+pub fn shell_of(handle: &eldenring::cs::FieldInsHandle, frame: crate::coords::Frame, most: usize) -> Option<Vec<[f32; 4]>> {
+    if !ON.load(Ordering::Relaxed) {
+        return None;
+    }
+    let b = body_of(handle)?;
+    let own_item = b.items.iter().find(|i| matches!(i.key, Key::Chr(_)))?;
+    let own = model(&own_item.key).ok()??;
+    let (own_world, _) = bones_now(own_item.item, &own, b.er_pos).ok()?;
+    let to_game = |p: Vec3| frame.pos_er_to_kh(p) / 100.0;
+    let mask = disp_mask(b.npc_param);
+    let shown = |g: u8| mask.is_none_or(|m| m & (1 << g) != 0);
+    let mut tris: Vec<Tri> = kh_er_render::zdraw::skin(&reduced(&own, most), &own_world, &shown, &to_game);
+    for it in b.items.iter().filter(|i| matches!(i.key, Key::Part(_))) {
+        let Ok(Some(m)) = model(&it.key) else { continue };
+        let Ok((w, _)) = bones_now(it.item, &m, b.er_pos) else { continue };
+        if part_fits(&m, &w, &own, &own_world).is_ok() {
+            tris.extend(kh_er_render::zdraw::skin(&reduced(&m, most), &w, &|_| true, &to_game));
+        }
+    }
+    if tris.is_empty() {
+        return None;
+    }
+    let mut soup = Vec::with_capacity(tris.len() * 3);
+    kh_er_render::zdraw::body_soup(&tris, &mut soup);
+    Some(soup)
 }
 
 #[cfg(test)]

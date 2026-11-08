@@ -64,6 +64,25 @@ pub(crate) struct Guard {
     power_scale: f32,
     brake: f32,
     damage_kind: u8,
+    // ---- (F-SHIELD) the shield guard: Guard slot 118 0x14139D2D0, the delegate of weapon forms 0x0B / 0x13 (Counter Shield,
+    // Frying Pan; Begin 0x1413851D0 table 0x141385898)
+    /// The delegate is slot 118 (a held guard that walks) instead of the Keyblade's slot 117.
+    pub(super) shield: bool,
+    /// +0xDE: the guard button is held this frame (`GuardHeld`, request slot 56 0x14143CA20); cleared by every Tick.
+    held: bool,
+    /// +0xD0 / +0xD4 / +0xD8: the stick this frame (`MoveInput` slot 35 0x141440600 case 0xC); cleared by every Tick.
+    stick: bool,
+    stick_yaw: f32,
+    stick_mag: f32,
+    /// +0x104: the hold time left (MyGuardHoldTime); +0x108: the walk's stop delay.
+    hold: f32,
+    walk_end: f32,
+    /// (F-HAMMER) The delegate is slot 119 0x14139F770 (the Reflec guard): table 0x141385898 weapon forms 8, 9, 16, 17, 20 .. 23;
+    /// here 0x14 / 0x15 (Boom Hammer, Clock Drill: `combat::forms::hammer::is_toon`).
+    pub(super) reflec: bool,
+    /// (F-LIGHTDARK) Begin 0x1413851D0 weapon form 0x18 (Double Form): slot 119 with +0xE8 |= 0xC00 (bit 10: a hit entry plays
+    /// ReflecHit / AirReflecHit; bit 11: its push-back, sub 3).
+    pub(super) reflec_c00: bool,
 }
 
 impl Guard {
@@ -89,6 +108,15 @@ impl Guard {
         power_scale: 1.0,
         brake: 0.0,
         damage_kind: 0,
+        shield: false,
+        held: false,
+        stick: false,
+        stick_yaw: 0.0,
+        stick_mag: 0.0,
+        hold: 0.0,
+        walk_end: 0.0,
+        reflec: false,
+        reflec_c00: false,
     };
 
     /// Slot 116 `SetGuardParts(bOn)` (0x1413A0650).
@@ -108,6 +136,72 @@ impl Guard {
             self.push_speed *= self.power_scale;
         }
         self.pushback = true;
+    }
+
+    /// (F-HAMMER) Slot 119 0x14139F770 (decompiled C), the Reflec guard: sub 0: gravity off (pawn vt+0x1728(0)); "Reflec" /
+    /// "AirReflec" (the form's set: Classic Tone K279 / K280, L279 / L280) with the play's effect group +0xEC = 0xD48 (weapon kind
+    /// 0x16 / 0x17: 0x834 / 0x898; 0x18 with +0xE8 bit 13: 0xD52); a player request: +0xF4 = 1.0, sub 1; a hit entry: the clip from
+    /// 0.1667 s (anim vt+0xF0; +0xE8 bit 10 would play ReflecHit: never set for these kinds), sub 2, +0xF4 = 1.0 with success, else
+    /// +0xF4 = +0xF8 = 0.05 (bit 11, the push-back, is never set for these kinds: Begin sets 0xC00 only for the Keyblade and kind
+    /// 24). Every tick after: the clip's end, or a queued JUMP at m_bEnableChange / DODGEROLL / AIR_SLIDE, chains.
+    fn reflec_tick(&mut self, s: &mut Pawn) {
+        if self.sub == 0 {
+            s.cmc.gravity_off = true;
+            let logical = if self.air { "AirReflec" } else { "Reflec" };
+            // (F-ULTIMATE) Ultimate Form's set: AnimSet9 9279 / 9280.
+            let replaced = crate::combat::forms::hammer::replaced_clip(s.combat.form.cmd, logical).or_else(|| crate::combat::forms::ultimate::is_ultimate(s.combat.form.cmd).then(|| crate::combat::forms::ultimate::replaced_clip(logical)).flatten());
+            // (F-ARROWGUN) Hunny Blasters / Launcher: AnimSet16's Reflec / AirReflec (G279 / G280), AnimSet17's (H279 / H280).
+            let replaced = replaced.or_else(|| crate::combat::forms::arrowgun::is_hunny(s.combat.form.cmd).then(|| crate::combat::forms::arrowgun::replaced_clip(s.combat.form.cmd, logical)).flatten());
+            // (F-LIGHTDARK) Light / Dark / Dual Guard: AnimSet22's Reflec / AirReflec (8279 / 8280), AnimSet23's (N279 / N280); with
+            // bit 10 a hit entry plays ReflecHit / AirReflecHit (N277 / N278).
+            let form_guard = crate::combat::forms::lightdark::guard(s.combat.form.cmd);
+            let hit_clip = form_guard.filter(|_| self.hit_entry && self.reflec_c00).map(|g| if self.air { g.air_hit } else { g.hit }).filter(|c| *c != "-");
+            let replaced = replaced.or_else(|| form_guard.map(|g| if self.air { g.air_start } else { g.start }).filter(|c| *c != "-"));
+            let replaced = hit_clip.or(replaced);
+            let Some(clip) = replaced.and_then(AnimId::from_name) else {
+                s.note("the Reflec guard's clip is not in the generated animation table");
+                s.queue.do_chain();
+                return;
+            };
+            // (F-LIGHTDARK) +0xEC: 0x834 in weapon form 0x16, 0x898 in 0x17, else 0xD48.
+            s.next_effect_group = Some(form_guard.map_or(0xD48, |g| g.group));
+            s.anim.play_with(clip, PlayArgs::mode(2, -1.0));
+            if !self.hit_entry {
+                self.turn_rate = 1.0;
+                self.sub = 1;
+                return;
+            }
+            // (F-LIGHTDARK) bit 10 set: ReflecHit from its start (no anim vt+0xF0).
+            if hit_clip.is_none() {
+                s.anim.set_time(0.166_666_7);
+            }
+            self.sub = 2;
+            if self.success {
+                self.turn_rate = 1.0;
+            } else {
+                (self.turn_rate, self.turn_timer) = (0.05, 0.05);
+            }
+            // (F-LIGHTDARK) bit 11 (0x14139FA9B): with success the push-back direction +0x134 = the hit direction +0x14C (zero:
+            // minus his forward); slot 115 (the push-back); sub 3.
+            if self.reflec_c00 {
+                if self.success {
+                    let a = s.yaw.to_radians();
+                    self.push_dir = if self.hit_dir == Vec3::ZERO { -Vec3::new(a.cos(), a.sin(), 0.0) } else { self.hit_dir };
+                }
+                self.start_pushback();
+                self.sub = 3;
+            }
+            return;
+        }
+        if s.anim.ended {
+            s.queue.do_chain();
+            return;
+        }
+        match s.queue.queued_id() {
+            Some(StateId::Jump) if s.queue.flags.enable_change => s.queue.do_chain(),
+            Some(StateId::Dodgeroll) | Some(StateId::AirSlide) => s.queue.do_chain(),
+            _ => {}
+        }
     }
 
     /// Slot 117 (0x14139C310), the Keyblade tick.
@@ -165,11 +259,13 @@ fn can_guard(state: &StateData, s: &Pawn) -> bool {
         return false;
     }
     // Next queued: nothing, an attack, or a Guard (table 0x141429B14).
-    if !matches!(s.queue.queued_id(), None | Some(StateId::Attack) | Some(StateId::Guard)) {
+    if !matches!(s.queue.queued_id(), None | Some(StateId::Attack) | Some(StateId::Guard) | Some(StateId::ComboSw) /* (F-ULTIMATE) */ | Some(StateId::ComboLf) | Some(StateId::ComboDf) | Some(StateId::ComboTf) /* (F-LIGHTDARK) table 0x141429B14: 0x9F .. 0xA1 */) {
         return false;
     }
-    // Weapon kind 1: HasAbility(3 REFLECT_GUARD) (0x1414295C2).
-    if !actions::has(s, Ability::ReflectGuard) {
+    // Weapon kind 1: HasAbility(3 REFLECT_GUARD) (0x1414295C2). (F-ULTIMATE) only weapon form 1 needs it (pawn vt+0x12E0(-1)
+    // == 1): Ultimate Form (weapon form 9) guards without it.
+    // (F-LIGHTDARK) ... nor Light / Dark / Double Form (weapon forms 0x16 / 0x17 / 0x18).
+    if !actions::has(s, Ability::ReflectGuard) && !crate::combat::forms::ultimate::is_ultimate(s.combat.form.cmd) && crate::combat::forms::lightdark::class_of(s.combat.form.cmd).is_none() {
         return false;
     }
     match state {
@@ -178,6 +274,15 @@ fn can_guard(state: &StateData, s: &Pawn) -> bool {
         StateData::Jump(j) => !j.flow,
         // Attack states: Attack+0x234 bit 7 (0x1414296EF).
         StateData::Attack(a) => a.cancel,
+        // (F-HAMMER) COMBO_HM / COMBO_DR: the Attack class's bit 7.
+        StateData::ComboHm(c) => c.0.a.cancel,
+        StateData::ComboDr(c) => c.0.a.cancel,
+        // (F-ULTIMATE) COMBO_SW: the Attack class's bit 7.
+        StateData::ComboSw(c) => c.a.cancel,
+        // (F-LIGHTDARK) COMBO_LF / COMBO_DF / COMBO_TF: the Attack class's bit 7.
+        StateData::ComboLf(c) => c.a.cancel,
+        StateData::ComboDf(c) => c.0.a.cancel,
+        StateData::ComboTf(c) => c.0.a.cancel,
         StateData::Guard(g) => g.hit_entry && g.enable_input,
         StateData::DodgeRoll(_) | StateData::AirSlide(_) => s.queue.flags.enable_change,
         // (magic implementer) FIREMAGIC 18: !(+0xD8 & 0x10) && m_bEnableInput && !(+0xD8 & 0x40)
@@ -186,7 +291,6 @@ fn can_guard(state: &StateData, s: &Pawn) -> bool {
         StateData::UseItem(_) => s.queue.flags.enable_change && on_ground(s),
         // DAMAGE: +0x90 == 0 && kinds 1, 2, 9 && m_bEnableChange (table 0x141429CBC).
         StateData::Damage(d) => matches!(d.kind.value(), 1 | 2 | 9) && s.queue.flags.enable_change,
-        #[allow(unreachable_patterns)]
         _ => false,
     }
 }
@@ -292,6 +396,241 @@ pub(crate) fn guard_reaction(cx: &mut Ctx, causer: TargetId, causer_position: Ve
     true
 }
 
+/// (F-SHIELD) `GuardHeld()` (request slot 56 0x14143CA20; the controller calls it every frame the GUARD button is down
+/// and not pressed, actions spec 2.1): only in GUARD: +0xDE = 1 (the shield guard's hold time keeps running).
+pub(crate) fn guard_held(state: &mut StateData) {
+    if let StateData::Guard(g) = state {
+        g.held = true;
+    }
+}
+
+/// (F-SHIELD) `MoveInput(yaw, magnitude)` (slot 35 0x141440600 case 0xC): in GUARD the stick is stored (+0xD4 yaw,
+/// +0xD8 magnitude, +0xD0 = 1).
+pub(crate) fn move_input(state: &mut StateData, yaw: f32, magnitude: f32) {
+    if let StateData::Guard(g) = state {
+        (g.stick, g.stick_yaw, g.stick_mag) = (true, yaw, magnitude);
+    }
+}
+
+impl Guard {
+    /// (F-SHIELD) A clip of the held form's set (Counter Shield / Frying Pan: AnimSet11), mode as the call gives it.
+    fn shield_play(s: &mut Pawn, name: &str, mode: u8) {
+        let clip = crate::combat::forms::shield::replaced_clip(s.combat.form.cmd, name).unwrap_or(name);
+        match AnimId::from_name(clip) {
+            Some(id) => s.anim.play_with(id, PlayArgs::mode(mode, -1.0)),
+            None => s.note("a shield-guard clip is not in the generated animation table"),
+        }
+    }
+
+    /// (F-SHIELD) The walk: GuardWalk (mode 3), MaxWalkSpeed = MyGuardMoveSpeed, the stop delay, sub 5.
+    fn shield_walk(&mut self, s: &mut Pawn) {
+        let g = crate::combat::forms::shield::guard_params();
+        Self::shield_play(s, "GuardWalk", 3);
+        s.cmc.max_walk_speed = g[0];
+        self.walk_end = g[1];
+        self.sub = 5;
+    }
+
+    /// (F-SHIELD) The air guard's descent: flags |= air, GuardJumpDownLoop (mode 3), gravity on, Falling, sub 8.
+    fn shield_descend(&mut self, s: &mut Pawn) {
+        self.air = true;
+        Self::shield_play(s, "GuardJumpDownLoop", 3);
+        s.cmc.gravity_off = false;
+        s.cmc.set_falling();
+        self.sub = 8;
+    }
+
+    /// (F-SHIELD) Slot 118 0x14139D2D0 (decompiled C), the shield forms' guard: a guard held as long as the button is
+    /// (at most MyGuardHoldTime), walking with the stick (GuardWalk, MyGuardMoveSpeed; facing the locked target and
+    /// strafing, else turning to the stick), dropping to the ground from the air (GuardJumpDownLoop -> GuardLand), and on a
+    /// successful block at grow LV1 / LV2 GuardChange / GuardChange2 with the weapon's GrowUp. True = the state is over.
+    fn shield_tick(&mut self, cx: &mut Ctx, dt: f32) -> bool {
+        let g = crate::combat::forms::shield::guard_params();
+        let p = crate::combat::tables::P;
+        // The hold time runs only while the button is held.
+        if self.hold > 0.0 {
+            self.hold -= dt;
+            if !self.held || self.hold <= 0.0 {
+                self.hold = 0.0;
+            }
+        }
+        let lock = cx.pawn.combat.lockon;
+        let target = (lock.locked && lock.current != TargetId::NONE).then(|| cx.target(lock.current)).flatten().map(|t| t.position);
+        let (probe_hit, ground, _) = super::common::ground_probe(cx.pawn, cx.world, g[6]);
+        let s = &mut *cx.pawn;
+        match self.sub {
+            0 => {
+                self.hold = p.guard_hold_time;
+                if self.hit_entry {
+                    // The hit: GuardHit / AirGuardHit, or on a successful block GuardChange(2) with GrowUp (0x1405BD810).
+                    let grown = if self.success { crate::combat::forms::shield::guard_grow(&mut s.combat.form, self.air) } else { None };
+                    match grown {
+                        Some(id) => s.anim.play_with(id, PlayArgs::mode(2, -1.0)),
+                        None => Self::shield_play(s, if self.air { "AirGuardHit" } else { "GuardHit" }, 2),
+                    }
+                    self.sub = 2;
+                    if self.success {
+                        self.turn_rate = 1.0;
+                    } else {
+                        (self.turn_timer, self.turn_rate) = (0.05, 0.05);
+                    }
+                    return false;
+                }
+                Self::shield_play(s, if self.air { "AirGuardStart" } else { "GuardStart" }, 2);
+                self.turn_rate = 1.0;
+                self.sub = 1;
+            }
+            10 => self.sub = 1,
+            1 => {
+                if s.anim.ended {
+                    if self.air {
+                        self.shield_descend(s);
+                    } else {
+                        Self::shield_play(s, "GuardLoop", 3);
+                        self.sub = 4;
+                    }
+                }
+            }
+            2 | 3 => {
+                if s.anim.ended {
+                    if self.hold > 0.0 {
+                        // Back to the held guard as a player guard (+0xDC = 0, flags |= 1): the next block succeeds again.
+                        Self::shield_play(s, if self.air { "AirGuardStart" } else { "GuardStart" }, 2);
+                        (self.sub, self.hit_entry, self.player_request) = (1, false, true);
+                        return false;
+                    }
+                    s.queue.do_chain();
+                    return true;
+                }
+                match s.queue.queued_id() {
+                    Some(StateId::Jump) if s.queue.flags.enable_change => {
+                        s.queue.do_chain();
+                        return true;
+                    }
+                    Some(StateId::Dodgeroll) | Some(StateId::AirSlide) => {
+                        s.queue.do_chain();
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
+            4 => {
+                self.enable_input = true;
+                if self.hold > 0.0 {
+                    if self.stick {
+                        self.shield_walk(s);
+                    }
+                } else {
+                    Self::shield_play(s, "GuardEnd", 2);
+                    self.sub = 11;
+                }
+            }
+            5 | 6 => {
+                self.enable_input = true;
+                if self.hold <= 0.0 {
+                    Self::shield_play(s, "GuardEnd", 2);
+                    self.sub = 11;
+                    return false;
+                }
+                if self.sub == 6 {
+                    if self.stick {
+                        self.shield_walk(s);
+                    } else if s.anim.ended {
+                        Self::shield_play(s, "GuardLoop", 3);
+                        self.sub = 4;
+                    }
+                    return false;
+                }
+                // Off the ground by more than 50 cm: the air guard's descent.
+                if !probe_hit || ground > g[4] {
+                    self.shield_descend(s);
+                    return false;
+                }
+                if !self.stick {
+                    self.walk_end = (self.walk_end - dt).max(0.0);
+                    if self.walk_end <= 0.0 {
+                        s.cmc.stop_movement();
+                        Self::shield_play(s, if s.anim.reverse_leg { "GuardWalkEndL" } else { "GuardWalkEndR" }, 2);
+                        self.sub = 6;
+                        return false;
+                    }
+                }
+                self.shield_move(s, target, dt, g);
+            }
+            8 => {
+                // The descent: landed (within 1 cm) -> GuardLand; too high (MyDiveFallStartHeight) -> the guard gives up
+                // with the air slide / air guard cool-downs; the hold over -> AirGuardEnd.
+                if probe_hit && ground >= A.divefall_start_height {
+                    s.combat.air_slide_cooldown = p.attack_whiff_air_airslide_cooldown;
+                    s.combat.air_guard_cooldown = p.attack_whiff_air_airguard_cooldown;
+                    s.queue.do_chain();
+                    return true;
+                }
+                if probe_hit && ground <= g[5] {
+                    self.air = false;
+                    Self::shield_play(s, "GuardLand", 2);
+                    self.sub = 10;
+                    return false;
+                }
+                if self.hold <= 0.0 {
+                    Self::shield_play(s, "AirGuardEnd", 2);
+                    self.sub = 9;
+                    return false;
+                }
+                self.shield_move(s, target, dt, g);
+            }
+            _ => {
+                // 7, 9, 11: the end clips.
+                self.enable_input = true;
+                if s.anim.ended {
+                    s.queue.do_chain();
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// (F-SHIELD) The walk's steering (slot 118 sub 5 / 8): locked on a target he faces it (turn rate 0.2 per 1/60 s) and
+    /// GuardWalk's axis is the stick against his facing (0 ahead, -90 / 90 aside, 180 back); else he turns to the stick
+    /// (dt x 6) with the axis 0. The stick moves him (AddMovementInput) at MyGuardMoveSpeed.
+    fn shield_move(&mut self, s: &mut Pawn, target: Option<Vec3>, dt: f32, g: [f32; 7]) {
+        if !self.stick {
+            s.cmc.control_input = Vec3::ZERO;
+            return;
+        }
+        let a = self.stick_yaw.to_radians();
+        let dir = Vec3::new(a.cos(), a.sin(), 0.0);
+        let axis = match target {
+            Some(t) => {
+                let d = (t - s.cmc.location).truncate();
+                if d.length_squared() > 1.0e-8 {
+                    turn(s, d.y.atan2(d.x).to_degrees(), dt * g[2] * 60.0);
+                }
+                let f = s.yaw.to_radians();
+                let face = glam::Vec2::new(f.cos(), f.sin());
+                let dot = face.dot(dir.truncate());
+                if dot >= std::f32::consts::FRAC_1_SQRT_2 {
+                    0.0
+                } else if dot <= -std::f32::consts::FRAC_1_SQRT_2 {
+                    180.0
+                } else if face.perp_dot(dir.truncate()) >= 0.0 {
+                    -90.0
+                } else {
+                    90.0
+                }
+            }
+            None => {
+                turn(s, self.stick_yaw, dt * g[3]);
+                0.0
+            }
+        };
+        s.anim.set_axis(axis);
+        s.cmc.max_walk_speed = g[0];
+        s.cmc.control_input = dir * self.stick_mag.min(1.0);
+    }
+}
+
 /// `CanAttack` case GUARD without an open counter window (0x141426832, combat spec 3.2): a plain
 /// attack out of the guard-hit clip after its `TresEnableInput`: "(queued is not an Attack &&
 /// Guard+0xDC != 0 && Guard+0x84 & 0x20) || (queued == null && ...)".
@@ -335,9 +674,22 @@ impl PlayerState for Guard {
         } else if let Some(position) = lock_position {
             self.look_at = position;
         }
+        // (F-SHIELD) the delegate (table 0x141385898): weapon forms 0x0B / 0x13 -> slot 118, which keeps the reaction type
+        // GUARD on the body for as long as the guard is held (no RestoreReaction, no parts).
+        self.shield = crate::combat::forms::shield::is_shield(s.combat.form.cmd);
+        // (F-HAMMER) slot 119 for Classic Tone's forms: like slot 118 it keeps the reaction type GUARD (no RestoreReaction, no parts).
+        self.reflec = crate::combat::forms::hammer::is_toon(s.combat.form.cmd);
+        // (F-ULTIMATE) ... and for Ultimate Form (weapon form 9).
+        self.reflec |= crate::combat::forms::ultimate::is_ultimate(s.combat.form.cmd);
+        // (F-ARROWGUN) ... and for Hunny Blasters / Hunny Launcher (weapon forms 0x10 / 0x11 of table 0x141385898).
+        self.reflec |= crate::combat::forms::arrowgun::is_hunny(s.combat.form.cmd);
+        // (F-LIGHTDARK) ... and for Light / Dark Form (weapon forms 0x16 / 0x17) and Double Form (0x18, with +0xE8 |= 0xC00).
+        let ld = crate::combat::forms::lightdark::class_of(s.combat.form.cmd);
+        self.reflec |= ld.is_some();
+        self.reflec_c00 = ld == Some(crate::combat::forms::lightdark::Class::Tf);
         // The Keyblade variant (0x1413856EE): a player guard takes the reaction type back at
         // once and switches the parts instead.
-        if !self.hit_entry {
+        if !self.hit_entry && !self.shield && !self.reflec {
             actions::restore_reaction(s);
             Guard::set_parts(s, true);
         }
@@ -360,8 +712,20 @@ impl PlayerState for Guard {
 
     /// Tick 0x141392080.
     fn tick(&mut self, cx: &mut Ctx, dt: f32) {
+        // (F-SHIELD) the delegate: slot 118 for the shield forms.
+        if self.shield {
+            let done = self.shield_tick(cx, dt);
+            (self.held, self.stick) = (false, false);
+            if done {
+                return;
+            }
+        } else if self.reflec {
+            // (F-HAMMER) slot 119.
+            self.reflec_tick(cx.pawn);
+        } else {
+            self.keyblade_tick(cx.pawn);
+        }
         let s = &mut *cx.pawn;
-        self.keyblade_tick(s);
         // comiss 0,[+0xF8]; jae skip.
         if self.turn_timer > 0.0 {
             let d = (self.look_at - s.cmc.location).truncate();
@@ -384,6 +748,10 @@ impl PlayerState for Guard {
         s.cmc.gravity_off = false;
         s.cmc.gravity_scale = p.gravity_scale;
         s.cmc.max_walk_speed = p.speed_run;
+        // (F-SHIELD) the shield guard's walk input stops with it.
+        if self.shield {
+            s.cmc.control_input = Vec3::ZERO;
+        }
         s.cmc.direct_xy = None;
         if self.air {
             // SetMovementMode(3 Falling, 0), also when he has landed meanwhile: the movement

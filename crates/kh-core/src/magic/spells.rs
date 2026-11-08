@@ -388,6 +388,32 @@ pub fn attack_row(name: &'static str) -> Option<AttackRow> {
             });
         }
     }
+    // (SHOT-A) the other shotlock rows (SF_DRAIN, SF_SHOOTINGSTAR ...: p_ex001_AttackData's SF_* rows, appended to
+    // sora-combat-attack-data by tools/sora_combat_sheet.js): the combat sheet's row, the same fields.
+    if let Some((_, r)) = crate::combat::tables::attack_row(name).filter(|(_, r)| r.id.len() > 3 && r.id[..3].eq_ignore_ascii_case("SF_")) {
+        return Some(AttackRow {
+            name,
+            power: r.power,
+            kind: r.damage_kind,
+            attribute: r.attribute,
+            power_scale: r.power_scale,
+            parabola_angle: r.parabola_angle,
+            effect_time: r.effect_time,
+            bad_status: r.bad_status,
+            bad_rate: r.bad_gen_rate,
+            bad_time: r.bad_time,
+            reaction_power: r.reaction_power,
+            armor_attack: r.armor_attack,
+            form_point: r.form_point,
+            revenge_point: r.revenge_point,
+            magic: r.magic,
+            invalid_guard: r.invalid_guard,
+            rapid_fire: r.rapid_fire,
+            killer: r.killer,
+            attraction: r.attraction,
+            phys_force: r.phys_force,
+        });
+    }
     None
 }
 

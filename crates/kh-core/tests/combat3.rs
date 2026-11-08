@@ -623,7 +623,7 @@ fn attacks_out_of_a_bar_swing_and_a_pole_spin() {
     bench.tap(PadButton::ATTACK);
     bench.until(6, "the attack state", |_, o| o.state == StateId::Attack);
     let kind = bench.sora.attack().unwrap().kind;
-    assert!(matches!(kind, 0x36 | 0x37 | 0x38), "a flow attack out of the pole spin: {kind:#x}");
+    assert!(matches!(kind, 0x36..=0x38), "a flow attack out of the pole spin: {kind:#x}");
 }
 
 /// `CanAttack` rows of the action states (spec 3.2): out of a Dodge Roll an attack starts from
@@ -647,4 +647,26 @@ fn an_attack_leaves_a_dodge_roll_at_its_change_point() {
         assert_eq!(out.state, StateId::Dodgeroll, "nothing but the roll or the attack");
     }
     assert!(started.is_some(), "the attack out of the roll");
+}
+
+/// (F-CLAWS) Final Blow's chase with a wall between Sora and the blown-away target: slot 136's Warp line test from him meets
+/// the wall, so he is put on his side of it (never into or through the level).
+#[test]
+fn final_blow_s_warp_stops_at_a_wall() {
+    let mut bench = counter_landed(None);
+    assert!(bench.sora.combat().chase_armed);
+    bench.world = TestWorld::floor().with_box(Vec3::new(400.0, -1000.0, -10.0), Vec3::new(450.0, 1000.0, 800.0));
+    bench.host.targets[0].position = Vec3::new(900.0, 0.0, 0.0);
+    bench.host.targets[0].center = Vec3::new(900.0, 0.0, 90.0);
+    for _ in 0..90 {
+        let out = bench.tap(PadButton::ATTACK);
+        bench.step(&[], &[]);
+        if bench.sora.attack().is_some_and(|a| a.kind == 0x22) || out.state == StateId::Idle {
+            break;
+        }
+    }
+    assert_eq!(bench.sora.attack().map(|a| a.kind), Some(0x22), "the chase attack; states {:?}", bench.states());
+    bench.until(30, "the chase clip", |_, o| o.anim.name.name() == "ChaseAttack");
+    let far = bench.outs.iter().map(|o| o.position.x).fold(f32::MIN, f32::max);
+    assert!(far <= 400.0 - SORA_PARAMS.capsule_radius + 1.0, "he stays on his side of the wall: got to x {far}");
 }

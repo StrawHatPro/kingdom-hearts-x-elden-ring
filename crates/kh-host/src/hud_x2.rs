@@ -10,10 +10,15 @@ use super::{Hud, StatusAction};
 use crate::party::{CustomEdit, PartyChara, PartyMenuEdit, PartyMenuMember};
 use kh_core::command::leader::{entry_name, goofy, LeaderKind, MagicBook, Tab};
 use kh_core::Sora;
-use kh_ui::camp_custom::{CommandEntry, CustomizeIn, GROUP_ITEM, GROUP_MAGIC};
+use kh_ui::camp_custom::{ArtsPage, CommandEntry, CustomizeIn, SetRule, GROUP_FIXED, GROUP_ITEM, GROUP_MAGIC};
 
 /// The label key of Goofy's page (KH3's "Abilities", the Friends layer's row title).
 pub const GOOFY_LABEL_KEY: &str = "kh3_camp.customize.group_0010";
+/// (GF-UI) His Arts: the list's tab, the top entry while he does not lead, its help line.
+pub const GOOFY_ARTS_TAB: &str = "Shield Arts";
+pub const GOOFY_ARTS_LABEL: &str = "Goofy's Shield Arts";
+// (BUTTON-ICONS) the buttons as icons: they follow the remap tables and the chosen set
+pub const GOOFY_ARTS_HELP: &str = "Choose the two Shield Arts Goofy uses. <icon(L1)> + <icon(Square)> is always Taunt; <icon(L1)> + <icon(Triangle)> uses an item.";
 
 pub(super) fn leader_kind(c: PartyChara) -> Option<LeaderKind> {
     match c {
@@ -21,11 +26,6 @@ pub(super) fn leader_kind(c: PartyChara) -> Option<LeaderKind> {
         PartyChara::Goofy => Some(LeaderKind::Goofy),
         PartyChara::Sora => None,
     }
-}
-
-#[allow(dead_code)] // (EQ) the list is Hud::eq_leader_items now
-fn items_of(m: &PartyMenuMember) -> Vec<kh_core::status::ItemKind> {
-    m.items.iter().flatten().copied().collect()
 }
 
 /// The friend's equipped abilities (the menu snapshot's (kind, owned, equipped mask)).
@@ -45,6 +45,21 @@ pub(super) fn fill_cost(help: String, cost: Option<i32>) -> String {
     }
 }
 
+/// (GF-ARTS) An Art's cooldown into its help line's "{1}" (THE USER 2026-11-02: "...introduce a cooldown with a visible timer"):
+/// whole seconds as "6", else one decimal. Unknown or none: the "Cooldown" words go, so no "{1}" is ever shown.
+pub(super) fn fill_cooldown(help: String, seconds: Option<f32>) -> String {
+    match seconds {
+        Some(s) if s > 0.0 => help.replace("{1}", &if s.fract() == 0.0 { format!("{s:.0}") } else { format!("{s:.1}") }),
+        _ => help.replace("  Cooldown: {1} s", ""),
+    }
+}
+
+/// (GF-ARTS) The help line of Goofy's entry `kind` with its MP cost and cooldown from the host's `custom_costs`.
+fn art_help(kind: u8, costs: &[(u8, i32, f32)]) -> String {
+    let c = costs.iter().find(|c| c.0 == kind);
+    fill_cooldown(fill_cost(goofy::help(kind).to_string(), c.map(|c| c.1)), c.map(|c| c.2))
+}
+
 impl Hud {
     /// The leading friend's menu entry with his block (None: Sora leads, or the host keeps no block).
     pub(super) fn x2_leader_member(&self) -> Option<(usize, LeaderKind)> {
@@ -60,6 +75,24 @@ impl Hud {
     /// (party X2) Customize's data for a leading friend; None = Sora's (the caller's own rule).
     pub(super) fn x2_customize_in(&self, sora: &Sora) -> Option<CustomizeIn> {
         let (i, kind) = self.x2_leader_member()?;
+        let mut page = self.x2_page(sora, i, kind)?;
+        page.arts_page = self.x2_arts_page(sora); // (GF-UI)
+        Some(page)
+    }
+
+    /// (GF-UI) GOOFY'S PANEL WHILE HE DOES NOT LEAD: Customize follows the leader, and an AI Goofy uses his two Arts too, so they stay
+    /// reachable from the leader's screen, as an entry of their own under the Friends. None while he leads or has no block.
+    pub(super) fn x2_arts_page(&self, sora: &Sora) -> Option<Box<ArtsPage>> {
+        if self.leader_anim.map_or(self.leader, |a| a.0) == PartyChara::Goofy {
+            return None;
+        }
+        let i = self.party_menu.iter().position(|m| m.chara == PartyChara::Goofy && m.custom.is_some())?;
+        let page = self.x2_page(sora, i, LeaderKind::Goofy)?;
+        Some(Box::new(ArtsPage { label: GOOFY_ARTS_LABEL.to_string(), help: GOOFY_ARTS_HELP.to_string(), page }))
+    }
+
+    /// One friend's Customize page, leading or not.
+    fn x2_page(&self, sora: &Sora, i: usize, kind: LeaderKind) -> Option<CustomizeIn> {
         let m = &self.party_menu[i];
         let custom = m.custom?;
         let book = MagicBook::of(sora.status(), sora.command().magic_slots);
@@ -78,14 +111,9 @@ impl Hud {
                     // Sora's cost with Donald's own MP Thrift (the cost he pays)
                     fill_cost(help, kh_core::magic::caster::effective_cost(a.kind, 0, &abilities_of(m), sora.status().mp_cost_scale))
                 }
-                // Goofy's abilities: KH3's own texts (kh3_system.ability detail_act_0300 / 0310 / 0320, "MP Cost: {0}")
-                (LeaderKind::Goofy, Tab::Magic) => match goofy::split(a.kind) {
-                    Some((index, _)) => {
-                        let help = self.camp_view.string(&format!("kh3_system.ability.detail_act_{:04}", 300 + index as usize * 10));
-                        fill_cost(help, m.custom_costs.iter().find(|c| c.0 == a.kind).map(|c| c.1))
-                    }
-                    None => String::new(),
-                },
+                // (GF-ARTS) Goofy's Arts: their own help lines ("MP Cost: {0}  Cooldown: {1} s")
+                // (GF-UI) with the Art's rank: boss steps change it, the list shows no other sign of it
+                (LeaderKind::Goofy, Tab::Magic) => format!("{}  Rank {}", art_help(a.kind, &m.custom_costs), custom.gof.rank(a.kind).max(1)),
                 _ => String::new(),
             };
             // (EQ) an item entry shows the Auto-Reload of the slots holding it, as Sora's list does
@@ -94,7 +122,7 @@ impl Hud {
         }
         let mut names: Vec<(u8, String)> = (27u8..=68).map(|k| (k, kh_core::magic::spells::command_name(k).to_string())).collect();
         if kind == LeaderKind::Goofy {
-            names.extend((goofy::BASE..=goofy::LAST).map(|k| (k, entry_name(k).to_string())));
+            names.extend((goofy::FIRST..=goofy::LAST).map(|k| (k, entry_name(k).to_string())));
         }
         if kind == LeaderKind::Donald {
             // (DON-UI) Donald's own ids
@@ -105,6 +133,19 @@ impl Hud {
         for s in slots.iter_mut().skip(kind.slot_count()) {
             *s = 0;
         }
+        let is_goofy = kind == LeaderKind::Goofy;
+        if is_goofy {
+            // (GF-UI) Taunt: its name and help for its fixed button, on no list
+            entries.push(CommandEntry { kind: goofy::TAUNT, name: goofy::name(goofy::TAUNT).to_string(), group: GROUP_FIXED, auto_reload: false, help: art_help(goofy::TAUNT, &m.custom_costs) });
+        }
+        // (GF-UI, R19) his panel in the shortcut order B, Y, X, A: two Arts, an item, the fixed Taunt
+        let mut set_rules = [SetRule::Free; 4];
+        if is_goofy {
+            set_rules[goofy::SLOT_A] = SetRule::Held(GROUP_MAGIC);
+            set_rules[goofy::SLOT_B] = SetRule::Held(GROUP_MAGIC);
+            set_rules[goofy::SLOT_ITEM] = SetRule::Only(GROUP_ITEM);
+            set_rules[goofy::SLOT_TAUNT] = SetRule::Fixed;
+        }
         Some(CustomizeIn {
             magic_slots: slots,
             shortcuts: custom.shortcuts,
@@ -112,14 +153,31 @@ impl Hud {
             names,
             friends: self.friends_in(),
             magic_label: (kind == LeaderKind::Goofy).then(|| GOOFY_LABEL_KEY.to_string()),
-            tier_groups: if kind == LeaderKind::Goofy { (0..3u8).map(|i| [goofy::id(i, 1), goofy::id(i, 2), goofy::id(i, 3)]).collect() } else { Vec::new() },
+            tier_groups: Vec::new(), // (GF-ARTS) one id per Art, the rank is the Art's own
             shotlock: None, // (XSI) a friend leader's shotlock is his kit's own: no choice
+            hide_magic: is_goofy, // (GF-UI) no magic, no Magic entry: his Arts are his set's buttons
+            set_rules,
+            magic_text: is_goofy.then(|| GOOFY_ARTS_TAB.to_string()),
+            arts_page: None,
         })
     }
 
     /// (party X2) A Customize action while a friend leads: his block's edit (sent to the host, applied to the local copy
     /// at once). Returns the action back when it is not his (Sora's rule then).
     pub(super) fn x2_custom_action(&mut self, sora: &Sora, action: StatusAction) -> Option<StatusAction> {
+        // (GF-UI) Goofy's panel while he does not lead
+        if let StatusAction::SetArtsShortcut { page, slot, kind } = action {
+            let i = self.party_menu.iter().position(|m| m.chara == PartyChara::Goofy)?;
+            let edit = CustomEdit::SetShortcut { page, slot, kind };
+            let book = MagicBook::of(sora.status(), sora.command().magic_slots);
+            let items = self.eq_leader_items(sora, &self.party_menu[i]);
+            if let Some(c) = self.party_menu[i].custom.as_mut() {
+                let ok = apply(c, LeaderKind::Goofy, &book, &items, edit);
+                (self.log)(&format!("camp: Goofy {edit:?} ({})", if ok { "set" } else { "refused" }));
+            }
+            self.party_edits.push(PartyMenuEdit::Custom { chara: PartyChara::Goofy, edit });
+            return None;
+        }
         let Some((i, kind)) = self.x2_leader_member() else { return Some(action) };
         let edit = match action {
             StatusAction::SetMagicSlot { slot, kind } => CustomEdit::SetMagicSlot { slot, kind },

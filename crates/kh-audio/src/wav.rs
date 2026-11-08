@@ -52,7 +52,7 @@ pub fn parse(bytes: &[u8]) -> Result<Buffer, String> {
                 buffer.sample_rate = u32_at(bytes, body + 4);
                 bits = u16::from_le_bytes([bytes[body + 14], bytes[body + 15]]);
             }
-            b"data" => buffer.data = bytes[body..end].chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect(),
+            b"data" => buffer.data = bytes[body..end].as_chunks::<2>().0.iter().map(|c| i16::from_le_bytes([c[0], c[1]])).collect(),
             // 36 bytes of header, then loops of 24 bytes: id, type, start, end (inclusive) ...
             b"smpl" if size >= 36 + 24 && end >= body + 60 && u32_at(bytes, body + 28) >= 1 => buffer.loop_points = Some((u32_at(bytes, body + 36 + 8), u32_at(bytes, body + 36 + 12) + 1)),
             _ => {}

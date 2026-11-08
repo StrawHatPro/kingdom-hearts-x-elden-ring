@@ -269,7 +269,7 @@ impl Damage {
 
     /// The move-length start (0x14135FD80), at the end of every sub-step 0.
     fn move_length_start(&self, s: &mut Pawn) {
-        if !(self.move_length > 0.0) {
+        if self.move_length.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
             return;
         }
         let mut u = self.knock * self.power;
@@ -484,7 +484,7 @@ impl Damage {
                     }
                     _ => return true,
                 }
-                if self.brake_on && matches!(self.sub, 3 | 4 | 5) {
+                if self.brake_on && matches!(self.sub, 3..=5) {
                     self.brake_tick(s, brake, dt);
                 }
                 false
@@ -705,6 +705,48 @@ impl Damage {
 /// The victim side of `TakeDamage` (0x1405BB850; E 8.4) with the reaction gate (E 9.1) and the
 /// Damage state's `Setup` (slot 114 0x141365930; E 9.3). Called at the start of a step for
 /// every hit the host delivered.
+/// (SHOT-C) pawn vt+0x1E48 0x141112510: pawn+0xE44 = `seconds` (the invincibility timer read by IsInvincible).
+pub(crate) fn set_invincible(cx: &mut Ctx, seconds: f32) {
+    cx.pawn.combat.invincible_timer = seconds;
+}
+
+/// (KILLPLANE) A KILL PLANE'S DEATH (`Sora::kill_unconditional`): the die path of `take_hit` (0x1405A35D0) WITHOUT anything
+/// before it: no invincibility test (Leaf Bracer, the i-frame timer, the Aero aura), no classification (dodge, guard,
+/// reflect), no `IsNoDamage`, no `ApplyHpDamage` survival rule (Second Chance, Withstand Combo, the HP-limit hold, the
+/// invincible pawn) and no `Survive()` (the auto-revive item is not taken). HP 0, every survival timer emptied, the bad
+/// statuses cleared, the Die state thrown away from `from`, `PlayerDied`. In the Die state already: HP 0 only.
+pub(crate) fn kill_unconditional(state: &mut StateData, cx: &mut Ctx, from: Vec3) {
+    cx.pawn.aura_ghost = 0.0;
+    cx.pawn.combat.invincible_timer = 0.0;
+    cx.pawn.combat.no_damage_timer = 0.0;
+    cx.pawn.combat.incoming.clear();
+    cx.pawn.combat.kill_plane_held = true;
+    let st = &mut cx.pawn.status;
+    st.combo_leave_timer = 0.0;
+    st.in_damage_state = false;
+    st.hp_limit_one = false;
+    st.hp = 0;
+    if matches!(state, StateData::Die(_)) {
+        return;
+    }
+    let to_causer = from - cx.pawn.cmc.location;
+    let behind = wrap_degrees(yaw_of(to_causer) - cx.pawn.yaw).abs() > 90.0;
+    let away = Vec3::new(-to_causer.x, -to_causer.y, 0.0);
+    let knock = if away.length_squared() < 1.0e-8 {
+        let a = cx.pawn.yaw.to_radians();
+        -Vec3::new(a.cos(), a.sin(), 0.0)
+    } else {
+        away.normalize()
+    };
+    if cx.pawn.combat.bad.frozen {
+        crate::combat::badstat::set_frozen(cx, false);
+    }
+    crate::combat::badstat::clear(cx, 0);
+    cx.pawn.queue.clear();
+    cx.pawn.queue.push_state(super::die::Die::new(knock, behind));
+    cx.pawn.event(EventKind::PlayerDied { causer: TargetId::NONE });
+}
+
 pub(crate) fn take_hit(state: &mut StateData, cx: &mut Ctx, hit: &HitOnPlayer) {
     if cx.pawn.status.hp < 1 {
         return;
@@ -720,7 +762,8 @@ pub(crate) fn take_hit(state: &mut StateData, cx: &mut Ctx, hit: &HitOnPlayer) {
     // its shot, the Water barrier, Cure with Leaf Bracer, the shotlock and airstep states) a hit
     // that is not RECOVER is registered for the attacker and does nothing: no HP loss, no
     // reaction, no status.
-    if cx.pawn.status.damage_invalid && hit.kind != ETresDamageKind::Recover {
+    // (SHOT-C) IsInvincible 0x141435A90 also holds while the pawn+0xE44 timer runs (`PawnCombat::invincible_timer`).
+    if (cx.pawn.status.damage_invalid || cx.pawn.combat.invincible_timer > 0.0) && hit.kind != ETresDamageKind::Recover {
         cx.pawn.magic.hits_refused += 1;
         let hp = cx.pawn.status.hp;
         cx.pawn.event(EventKind::PlayerHit { hit: *hit, hp_lost: 0, hp_after: hp });
@@ -900,6 +943,8 @@ pub(crate) fn take_hit(state: &mut StateData, cx: &mut Ctx, hit: &HitOnPlayer) {
     match state {
         StateData::Die(_) => return,
         StateData::Damage(cur) => carried = cur.hits,
+        // (F-ARROWGUN) case 40 (0x141439A50): ShooterMode swallows a SMALL hit (iface2 vt+0x80, a no-op stub 0x14041F120).
+        StateData::ShooterMode(_) if hit.kind == ETresDamageKind::Small && !killed => return,
         _ => {}
     }
     // (The no-flinch cases of the light kinds - flowmotion states, attack kinds 0x36 - 0x39, the

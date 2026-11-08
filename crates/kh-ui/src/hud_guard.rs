@@ -301,3 +301,140 @@ impl GuardBar {
         }
     }
 }
+
+// ------------------------------------------------------------------------------------------------------------------------
+// (GOOFY) RESOLVE (documentation/GOOFY_OVERHAUL.md 7, PLAN.md R20): three pips beside GUARD, KH3's style-gauge chevrons
+// (`hud_command/StylePntGg.png`) on the MP bar's rounded base (`hud_status/HudStatusMpBase9.png`), as Donald's Resonance pips.
+// They stand over the GUARD label, whose place does not change with the bar's length, and follow the GUARD part's matrix, colour and
+// visibility, so they move with it through the leader switch.
+
+/// Resolve as the HUD draws it (kh-party `GoofyHud`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct ResolveValues {
+    /// In thirds of a pip, 0 ..= 9.
+    pub thirds: u8,
+    /// In the Zone (3 pips).
+    pub in_zone: bool,
+}
+
+/// The look (sheet `party-guard` rows `hud.resolve_*`): units of the status HUD, straight RGBA 0..1.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolveLook {
+    /// The plate's centre, from the GUARD part's origin.
+    pub at: (f32, f32),
+    pub pip_size: (f32, f32),
+    pub pip_step: f32,
+    pub plate_pad: f32,
+    pub plate_h: f32,
+    pub plate: [f32; 4],
+    pub lit: [f32; 4],
+    pub off: [f32; 4],
+    pub zone: [f32; 4],
+    pub zone_hz: f32,
+}
+
+impl Default for ResolveLook {
+    fn default() -> ResolveLook {
+        ResolveLook { at: (0.0, 0.0), pip_size: (26.0, 13.0), pip_step: 23.0, plate_pad: 8.0, plate_h: 20.0, plate: [0.2, 0.2, 0.23, 0.88], lit: [0.92, 0.94, 1.0, 1.0], off: [0.3, 0.3, 0.34, 0.95], zone: [1.0, 0.8, 0.3, 1.0], zone_hz: 2.0 }
+    }
+}
+
+const PIP_CLASS: &str = "CoPcMpLogo";
+const PIPS: usize = 3;
+
+fn pip_base(i: usize) -> String {
+    format!("{PC}.gofPipBase{i}")
+}
+
+fn pip_lit(i: usize) -> String {
+    format!("{PC}.gofPipLit{i}")
+}
+
+const PLATE: &str = "sttsPc.gofPipPlate";
+
+/// The pips' driver (one per HUD).
+#[derive(Clone, Debug, Default)]
+pub struct ResolvePips {
+    installed: bool,
+    /// The pips are up.
+    pub shown: bool,
+    phase: f32,
+    /// What was last applied (tests): each pip's share, in the Zone.
+    pub last: ([f32; PIPS], bool),
+    /// The plate's box (tests): left, top, right, bottom in the status HUD's units.
+    pub plate_box: (f32, f32, f32, f32),
+}
+
+impl ResolvePips {
+    fn hide(&self, hud: &mut HudStatus) {
+        let m = &mut hud.movie;
+        m.set_visible(PLATE, false);
+        for i in 0..PIPS {
+            m.set_visible(&pip_base(i), false);
+            m.set_visible(&pip_lit(i), false);
+        }
+    }
+
+    /// One update of the status HUD, after the GUARD bar's: `v` None = no pips.
+    pub fn update(&mut self, hud: &mut HudStatus, art: &crate::hud_resonance::DonArt, v: Option<(&ResolveValues, &ResolveLook)>, dt: f32) {
+        use crate::hud_resonance::{ensure_art_of, multiply, pill, set_art, tex_rect, CHEVRON_RECT};
+        let Some((v, look)) = v else {
+            if self.installed && self.shown {
+                self.hide(hud);
+            }
+            self.shown = false;
+            return;
+        };
+        let m = &mut hud.movie;
+        let Some((matrix, cx, visible)) = m.node(GUARD).map(|n| (n.matrix, n.cx, n.is_visible())) else { return };
+        if !self.installed || !m.exists(PLATE) {
+            if !ensure_art_of(m, PIP_CLASS, PC, "gofPipPlate") {
+                return;
+            }
+            for i in 0..PIPS {
+                if !ensure_art_of(m, PIP_CLASS, PC, &format!("gofPipBase{i}")) || !ensure_art_of(m, PIP_CLASS, PC, &format!("gofPipLit{i}")) {
+                    return;
+                }
+            }
+            self.installed = true;
+        }
+        let (Some(chevron), Some(base)) = (art.chevron.as_ref(), art.base.as_ref()) else { return };
+        self.shown = true;
+        self.phase = (self.phase + dt * look.zone_hz.max(0.0)).fract();
+        let row = (PIPS as f32 - 1.0) * look.pip_step + look.pip_size.0;
+        let width = row + 2.0 * look.plate_pad;
+        let (x0, y0) = (look.at.0 - width / 2.0, look.at.1 - look.plate_h / 2.0);
+        set_art(m, PLATE, pill(base, x0, y0, width, look.plate_h), multiply(look.plate), visible);
+        let (pw, ph) = look.pip_size;
+        let py = look.at.1 - ph / 2.0;
+        // In the Zone the pips pulse between the lit colour and the Zone's
+        let zone = if v.in_zone {
+            let k = 0.5 + 0.5 * (self.phase * std::f32::consts::TAU).sin();
+            std::array::from_fn(|c| look.zone[c] + (look.lit[c] - look.zone[c]) * k * 0.45)
+        } else {
+            look.lit
+        };
+        let mut shares = [0.0f32; PIPS];
+        for (i, share) in shares.iter_mut().enumerate() {
+            let s = (v.thirds as f32 / 3.0 - i as f32).clamp(0.0, 1.0);
+            *share = s;
+            let x = x0 + look.plate_pad + i as f32 * look.pip_step;
+            set_art(m, &pip_base(i), vec![tex_rect(chevron, CHEVRON_RECT, (x, py, pw, ph))], multiply(look.off), visible);
+            // the pip being filled brightens by thirds, as Donald's Resonance pip does: a chevron's own shape hides a part fill
+            let c: [f32; 4] = if s >= 1.0 { zone } else { std::array::from_fn(|k| look.off[k] + (zone[k] - look.off[k]) * (0.3 + 0.45 * s)) };
+            set_art(m, &pip_lit(i), vec![tex_rect(chevron, CHEVRON_RECT, (x, py, pw, ph))], multiply(c), visible && s > 0.0);
+        }
+        // the art follows the GUARD part's place and its fade
+        let nodes = std::iter::once(PLATE.to_string()).chain((0..PIPS).flat_map(|i| [pip_base(i), pip_lit(i)]));
+        for path in nodes {
+            if let Some(n) = m.node_mut(&path) {
+                n.matrix = matrix;
+                n.script_matrix = true;
+                let own = n.cx;
+                n.cx = Cx { mul: [own.mul[0] * cx.mul[0], own.mul[1] * cx.mul[1], own.mul[2] * cx.mul[2], own.mul[3] * cx.mul[3]], add: own.add };
+            }
+        }
+        self.last = (shares, v.in_zone);
+        self.plate_box = (matrix.tx + x0, matrix.ty + y0, matrix.tx + x0 + width, matrix.ty + y0 + look.plate_h);
+    }
+}

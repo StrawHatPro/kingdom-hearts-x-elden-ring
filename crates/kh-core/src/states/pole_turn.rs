@@ -204,7 +204,7 @@ impl PlayerState for PoleTurn {
                 if !valid {
                     (self.jump_latch, self.guard_latch) = (false, false);
                 }
-                let release = !(self.time_left > 0.0) || !valid || self.jump_latch || self.guard_latch;
+                let release = self.time_left.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) || !valid || self.jump_latch || self.guard_latch;
                 if !release {
                     self.time_left -= dt;
                 } else {

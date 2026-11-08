@@ -134,7 +134,7 @@ pub fn grouped(n: i64) -> String {
     let digits = n.unsigned_abs().to_string();
     let mut out = String::new();
     for (k, c) in digits.chars().enumerate() {
-        if k > 0 && (digits.len() - k) % 3 == 0 {
+        if k > 0 && (digits.len() - k).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -421,6 +421,8 @@ pub(crate) fn category_icon(category: u8) -> &'static str {
 pub struct ShopView {
     pub movie: Movie,
     pub dialog: Movie,
+    /// (ER-POPUPS) KH3's layout of the window (fitted to its text: crate::question::DialogFit).
+    dialog_fit: crate::question::DialogFit,
     pub fonts: Fonts,
     strings: HashMap<String, String>,
     pub art: crate::item_art::ItemArt,
@@ -454,7 +456,7 @@ impl ShopView {
             strings.extend(pack.string_table(table));
         }
         let art = crate::item_art::ItemArt::load(pack);
-        Ok(ShopView { movie: Movie::new(def), dialog: Movie::new(dialog), fonts, strings, art, open: false, closing: false, age: 0, tabs: TabBar::new(format!("{ITEM_ROOT}.listTabCamp")), stamp: 0, shown_tab: None, guide: String::new(), pane_item: None, dialog_open: false, dialog_closing: false, dialog_stamp: 0 })
+        Ok(ShopView { movie: Movie::new(def), dialog: Movie::new(dialog), dialog_fit: Default::default(), fonts, strings, art, open: false, closing: false, age: 0, tabs: TabBar::new(format!("{ITEM_ROOT}.listTabCamp")), stamp: 0, shown_tab: None, guide: String::new(), pane_item: None, dialog_open: false, dialog_closing: false, dialog_stamp: 0 })
     }
 
     /// A string of the pack, `<br>` as a line break; `fallback` when the pack has none.
@@ -540,12 +542,8 @@ impl ShopView {
         if self.movie.exists(&spinner) {
             self.movie.set_visible(&spinner, false);
         }
-        let field = format!("{PANE}.txHelp.textField");
-        let help = match self.movie.node(&field).map(|n| &n.kind) {
-            Some(crate::player::Kind::Text(t)) => crate::render::fit_text(&self.fonts, &t.def, help),
-            _ => help.to_string(),
-        };
-        self.text(&field, &help);
+        // (THE USER 2026-11-03: "...never cut off") the whole text: shrunk, then scrolled (`Movie::set_text_fit`)
+        self.movie.set_text_fit(&format!("{PANE}.txHelp.textField"), help, &self.fonts);
         let shown = texture.as_ref().and(item).map(str::to_string);
         if self.pane_item.as_ref() != Some(&shown) {
             let image = format!("{PANE}.itemImage");
@@ -573,7 +571,7 @@ impl ShopView {
         }
         // the frame (munny, the merchant's name) once its clips are there
         if self.movie.exists(&format!("{FRAME}.munny.munnyNum.textField")) {
-            let munny = menu.data.munny.max(0).min(99_999_999).to_string();
+            let munny = menu.data.munny.clamp(0, 99_999_999).to_string();
             self.text(&format!("{FRAME}.munny.munnyNum.textField"), &munny);
             let word = self.string("kh3_menu.shop.munny_0010", "MUNNY");
             self.text(&format!("{FRAME}.munny.txMunny.coText"), &word);
@@ -611,7 +609,7 @@ impl ShopView {
             self.tabs.select(&mut self.movie, index, &tab_name, menu.tab_flash.take(), &fonts);
             // the help line: the notice, else KH3's line for the tab
             let help = menu.notice.clone().unwrap_or_else(|| if menu.tab == ShopTab::Buy { self.string("kh3_menu.shop.detail_0110", "") } else { self.string("kh3_menu.shop.detail_0120", "") });
-            self.text("backyard.helpText.txHelpText.textField", &help);
+            self.movie.set_text_fit("backyard.helpText.txHelpText.textField", &help, &self.fonts); // (THE USER 2026-11-03) never cut
             let rows: Vec<ShopRow> = menu.rows().to_vec();
             let empty = if rows.is_empty() { self.string("kh3_system.general.system_0011", "") } else { String::new() };
             self.text(&format!("{ITEM_ROOT}.textField"), &empty);
@@ -697,7 +695,7 @@ impl ShopView {
         self.dialog_closing = false;
         self.dialog_stamp = stamp;
         self.dialog.set_visible("dialogText", true);
-        self.dialog.set_text("dialogText.textField", &text, &self.fonts);
+        self.dialog_fit.lay(&mut self.dialog, &self.fonts, &text, &buttons); // (ER-POPUPS) the window fitted to its text
         for (n, name) in ["dialogButton", "dialogButton2"].into_iter().enumerate() {
             self.dialog.set_visible(name, n < buttons.len());
             if let Some(label) = buttons.get(n) {
@@ -724,6 +722,8 @@ impl ShopView {
             self.dialog.set_position("dialogText", x, y, 0.0);
         }
         if let Some((x, y)) = stage(&self.dialog, &format!("{holder}.poDialogButton")) {
+            let (cx, cy) = self.dialog_fit.canvas(); // (ER-POPUPS) the button canvas under the text's last line
+            let (x, y) = (x + cx, y + cy);
             self.dialog.set_position("dialogButton", x, y, 0.0);
             self.dialog.set_position("dialogButton2", x, y + 35.0, 0.0);
         }

@@ -61,7 +61,6 @@ fn main() {
     }
 }
 
-#[allow(dead_code)]
 fn dump_chara(s: &Sprite, depth: usize) {
     for n in s.children.iter().chain(&s.extra) {
         match &n.kind {

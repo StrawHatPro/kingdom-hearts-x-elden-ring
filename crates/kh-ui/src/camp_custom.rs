@@ -16,6 +16,33 @@ use crate::UiSound;
 pub const GROUP_MAGIC: u8 = 1;
 pub const GROUP_LINK: u8 = 2;
 pub const GROUP_ITEM: u8 = 3;
+/// (GF-UI) A fixed command (Goofy's Taunt): its name and help for a button, never on a list.
+pub const GROUP_FIXED: u8 = 4;
+
+/// (GF-UI, PLAN.md R19) WHAT A BUTTON OF A SHORTCUT SET MAY HOLD. Every character's buttons are free but Goofy's: two Shield Arts,
+/// Taunt on LB + X, an item on LB + Y.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SetRule {
+    /// Anything of the list.
+    #[default]
+    Free,
+    /// One of this group's entries; it cannot be emptied (an Art).
+    Held(u8),
+    /// This group's entries, or nothing (his item).
+    Only(u8),
+    /// Not the player's to change (Taunt).
+    Fixed,
+}
+
+impl SetRule {
+    /// The group its list shows; None = all of them.
+    pub fn group(self) -> Option<u8> {
+        match self {
+            SetRule::Held(g) | SetRule::Only(g) => Some(g),
+            SetRule::Free | SetRule::Fixed => None,
+        }
+    }
+}
 
 /// One assignable command (a learned magic kind, a link, an item command).
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -52,6 +79,26 @@ pub struct CustomizeIn {
     /// (XSI, 2026-10-16) The Shotlock choice of this character (XS 2.8: Spectral Rays as a second shotlock): shown as
     /// the top layer's entry under Magic (KH3's Links button, which the port never fills); None = no choice to make.
     pub shotlock: Option<ShotlockIn>,
+    /// (GF-UI) No Magic entry on the top layer (Goofy has no magic).
+    pub hide_magic: bool,
+    /// (GF-UI) The rule of each shortcut button, in the order of `shortcuts`.
+    pub set_rules: [SetRule; 4],
+    /// (GF-UI) The list tab's own text for the magic group, instead of `magic_label`'s key (Goofy's "Shield Arts").
+    pub magic_text: Option<String>,
+    /// (GF-UI) Goofy's panel while he does NOT lead: Customize follows the leader, so his Arts are an entry of their own on the
+    /// top layer, under the Friends. Its edits are `CampAction::SetArtsShortcut`.
+    pub arts_page: Option<Box<ArtsPage>>,
+}
+
+/// (GF-UI) A friend's own panel on a leader's Customize screen.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct ArtsPage {
+    /// The top entry's text and the set's title.
+    pub label: String,
+    /// The top entry's help line.
+    pub help: String,
+    /// His shortcuts, entries and rules.
+    pub page: CustomizeIn,
 }
 
 /// (XSI) The Shotlock entry: the label ("Shotlocks"), the choices (shotlock kind, name) and the one in force.
@@ -106,6 +153,11 @@ pub fn target_help(target: usize, on: bool) -> &'static str {
 /// The friend layer's rows: three style buttons, then the three Recovery targets.
 pub const FRIEND_ROWS: usize = 6;
 
+/// (GF-UI) Where a set opens: on its first button that can be changed in order (Goofy's first Art), else the first.
+fn goofy_first_button(page: &CustomizeIn) -> usize {
+    [3usize, 0].into_iter().find(|i| matches!(page.set_rules[*i], SetRule::Held(_))).unwrap_or(0)
+}
+
 impl CustomizeIn {
     pub fn name(&self, kind: u8) -> String {
         if kind == 0 {
@@ -143,6 +195,8 @@ pub enum TopItem {
     Shortcut(usize),
     /// (party) The friend at this index of `CustomizeIn::friends` (entry text `custom_0006 ..` = "{0}", the name).
     Friend(usize),
+    /// (GF-UI) `CustomizeIn::arts_page`.
+    Arts,
 }
 
 pub const TOP_ITEMS: [TopItem; 4] = [TopItem::Magic, TopItem::Shortcut(0), TopItem::Shortcut(1), TopItem::Shortcut(2)];
@@ -191,6 +245,8 @@ pub struct CustomizeScreen {
     pub choice_cursor: usize,
     /// (party) Triangle on the friend layer: the menu asks "restore the defaults?" (CampMenu opens the dialog).
     pub restore_request: bool,
+    /// (GF-UI) The Set / List layers show `CustomizeIn::arts_page`.
+    pub on_arts: bool,
 }
 
 impl CustomizeScreen {
@@ -200,6 +256,12 @@ impl CustomizeScreen {
 
     pub fn set(&mut self, data: CustomizeIn) {
         self.data = data;
+        if self.on_arts && self.data.arts_page.is_none() {
+            // the page is gone (he took the lead, or left the party)
+            self.on_arts = false;
+            self.layer = CustomLayer::Top;
+        }
+        self.top_cursor = self.top_cursor.min(self.top_items().len().saturating_sub(1));
         if self.layer == CustomLayer::List {
             let count = self.list_rows().len();
             self.list.set_count(count);
@@ -213,8 +275,35 @@ impl CustomizeScreen {
         if self.data.shotlock.as_ref().is_some_and(|s| !s.choices.is_empty()) {
             items.insert(1, TopItem::Shotlock); // (XSI)
         }
+        if self.data.hide_magic {
+            items.retain(|i| *i != TopItem::Magic); // (GF-UI)
+        }
         items.extend((0..self.data.friends.len().min(4)).map(TopItem::Friend));
+        if self.data.arts_page.is_some() {
+            items.push(TopItem::Arts); // (GF-UI)
+        }
         items
+    }
+
+    /// (GF-UI) The data the Set and List layers show: the page in force.
+    pub fn page(&self) -> &CustomizeIn {
+        self.data.arts_page.as_ref().filter(|_| self.on_arts).map_or(&self.data, |a| &a.page)
+    }
+
+    /// (GF-UI) The focused button's rule.
+    pub fn set_rule(&self) -> SetRule {
+        self.page().set_rules[self.set_cursor.min(3)]
+    }
+
+    /// A button written from the screen: its local copy and the action.
+    fn write_set(&mut self, kind: u8, actions: &mut Vec<CampAction>) {
+        let (page, slot, on_arts) = (self.page, self.set_cursor, self.on_arts);
+        let shortcuts = match self.data.arts_page.as_mut() {
+            Some(a) if on_arts => &mut a.page.shortcuts,
+            _ => &mut self.data.shortcuts,
+        };
+        shortcuts[page][slot] = kind;
+        actions.push(if on_arts { CampAction::SetArtsShortcut { page, slot, kind } } else { CampAction::SetShortcut { page, slot, kind } });
     }
 
     /// (party) The friend whose layer is up.
@@ -229,13 +318,18 @@ impl CustomizeScreen {
 
     /// The tabs that have entries, as indices into [`TAB_KEYS`].
     pub fn tabs(&self) -> Vec<usize> {
-        (0..TAB_KEYS.len()).filter(|t| TAB_KEYS[*t].1.is_none_or(|g| self.data.entries.iter().any(|e| e.group == g))).collect()
+        let page = self.page();
+        // (GF-UI) a button that takes one group has that group's tab alone
+        if let Some(g) = self.set_rule().group() {
+            return (0..TAB_KEYS.len()).filter(|t| TAB_KEYS[*t].1 == Some(g)).collect();
+        }
+        (0..TAB_KEYS.len()).filter(|t| TAB_KEYS[*t].1.is_none_or(|g| page.entries.iter().any(|e| e.group == g))).collect()
     }
 
     pub fn list_rows(&self) -> Vec<&CommandEntry> {
         let tabs = self.tabs();
         let filter = tabs.get(self.tab).and_then(|t| TAB_KEYS[*t].1);
-        self.data.entries.iter().filter(|e| filter.is_none_or(|g| e.group == g)).collect()
+        self.page().entries.iter().filter(|e| e.group != GROUP_FIXED && filter.is_none_or(|g| e.group == g)).collect()
     }
 
     /// The tier buttons of the focused magic slot: (kind, learned).
@@ -284,6 +378,13 @@ impl CustomizeScreen {
                             self.friend = i;
                             self.friend_row = 0;
                         }
+                        // (GF-UI) Goofy's Arts while he does not lead
+                        TopItem::Arts => {
+                            self.on_arts = true;
+                            self.layer = CustomLayer::Set;
+                            self.page = 0;
+                            self.set_cursor = goofy_first_button(self.page());
+                        }
                         TopItem::Magic => {
                             if self.magic_count() == 0 {
                                 sounds.push(UiSound::Play(SE_MENU_REFUSED));
@@ -296,7 +397,7 @@ impl CustomizeScreen {
                         TopItem::Shortcut(page) => {
                             self.layer = CustomLayer::Set;
                             self.page = page;
-                            self.set_cursor = 0;
+                            self.set_cursor = goofy_first_button(self.page());
                         }
                     }
                 }
@@ -356,6 +457,7 @@ impl CustomizeScreen {
             },
             CustomLayer::Set => match key {
                 _ if vertical => drop(Self::step(&mut self.set_cursor, 4, down, repeat, sounds)),
+                CampKey::Decide if self.set_rule() == SetRule::Fixed => sounds.push(UiSound::Play(SE_MENU_REFUSED)), // (GF-UI)
                 CampKey::Decide => {
                     sounds.push(UiSound::Play(SE_MENU_DECIDE));
                     self.layer = CustomLayer::List;
@@ -369,15 +471,17 @@ impl CustomizeScreen {
                 }
                 // "Remove": the slot is cleared (kind 0).
                 CampKey::Square => {
-                    if self.data.shortcuts[self.page][self.set_cursor] != 0 {
+                    if matches!(self.set_rule(), SetRule::Held(_) | SetRule::Fixed) {
+                        sounds.push(UiSound::Play(SE_MENU_REFUSED)); // (GF-UI) an Art is swapped, never removed; Taunt stays
+                    } else if self.page().shortcuts[self.page][self.set_cursor] != 0 {
                         sounds.push(UiSound::Play(SE_MENU_CLOSE));
-                        self.data.shortcuts[self.page][self.set_cursor] = 0;
-                        actions.push(CampAction::SetShortcut { page: self.page, slot: self.set_cursor, kind: 0 });
+                        self.write_set(0, actions);
                     }
                 }
                 CampKey::Cancel => {
                     sounds.push(UiSound::Play(SE_MENU_CLOSE));
                     self.layer = CustomLayer::Top;
+                    self.on_arts = false;
                 }
                 _ => {}
             },
@@ -415,8 +519,7 @@ impl CustomizeScreen {
                     // The same command may sit in several slots and sets.
                     Some(kind) => {
                         sounds.push(UiSound::Play(SE_MENU_DECIDE));
-                        self.data.shortcuts[self.page][self.set_cursor] = kind;
-                        actions.push(CampAction::SetShortcut { page: self.page, slot: self.set_cursor, kind });
+                        self.write_set(kind, actions);
                         self.layer = CustomLayer::Set;
                     }
                     None => sounds.push(UiSound::Play(SE_MENU_REFUSED)),
@@ -505,6 +608,10 @@ impl CustomizeScreen {
                 if items[self.top_cursor.min(items.len() - 1)] == TopItem::Shotlock {
                     return (None, self.data.shotlock.as_ref().map(|s| s.help.clone()).unwrap_or_default());
                 }
+                // (GF-UI) his Arts' entry: its own line
+                if items[self.top_cursor.min(items.len() - 1)] == TopItem::Arts {
+                    return (None, self.data.arts_page.as_ref().map(|a| a.help.clone()).unwrap_or_default());
+                }
                 (
                     Some(match items[self.top_cursor.min(items.len() - 1)] {
                         TopItem::Magic => "kh3_camp.customize.detail_0001",
@@ -512,7 +619,7 @@ impl CustomizeScreen {
                         TopItem::Shortcut(0) => "kh3_camp.customize.detail_0003",
                         TopItem::Shortcut(1) => "kh3_camp.customize.detail_0004",
                         TopItem::Shortcut(_) => "kh3_camp.customize.detail_0005",
-                        TopItem::Friend(_) => "kh3_camp.customize.detail_0006",
+                        TopItem::Friend(_) | TopItem::Arts => "kh3_camp.customize.detail_0006",
                     }),
                     String::new(),
                 )
@@ -524,7 +631,7 @@ impl CustomizeScreen {
             CustomLayer::FriendList => (STYLE_HELP[self.friend_row.min(2)].get(self.choice_cursor).copied(), String::new()),
             CustomLayer::Magic => (None, self.data.entry(self.data.magic_slots[self.magic_cursor.min(5)]).map(|e| e.help.clone()).unwrap_or_default()),
             CustomLayer::Tier => (None, self.tiers().get(self.tier_cursor).and_then(|t| self.data.entry(t.0)).map(|e| e.help.clone()).unwrap_or_default()),
-            CustomLayer::Set => (None, self.data.entry(self.data.shortcuts[self.page][self.set_cursor.min(3)]).map(|e| e.help.clone()).unwrap_or_default()),
+            CustomLayer::Set => (None, self.page().entry(self.page().shortcuts[self.page][self.set_cursor.min(3)]).map(|e| e.help.clone()).unwrap_or_default()),
             CustomLayer::List => (None, usize::try_from(self.list.focus).ok().and_then(|i| self.list_rows().get(i).map(|e| e.help.clone())).unwrap_or_default()),
         }
     }
@@ -533,6 +640,8 @@ impl CustomizeScreen {
     pub fn guide_key(&self) -> &'static str {
         match self.layer {
             CustomLayer::Magic => "kh3_camp.customize.button_0001",
+            // (GF-UI) "Remove" only where a button can be emptied
+            CustomLayer::Set if matches!(self.set_rule(), SetRule::Held(_) | SetRule::Fixed) => "",
             CustomLayer::Set => "kh3_camp.customize.button_0002",
             CustomLayer::Friend => "kh3_camp.customize.button_0003",
             _ => "",
@@ -769,6 +878,89 @@ mod tests {
         screen.key(CampKey::Decide, false, &mut sounds, &mut actions);
         assert_eq!(actions, vec![CampAction::SetMagicSlot { slot: 1, kind: 0xC4 }]);
         assert_eq!(screen.data.name(screen.data.magic_slots[1]), "Goofy Turbo");
+    }
+
+    /// (GF-UI) Goofy's panel in the shortcut order B, Y, X, A: Goofy Tornado, a Potion, Taunt, Goofy Charge.
+    fn goofy_page() -> CustomizeIn {
+        let mut entries = vec![entry(0xCA, "Goofy Charge", GROUP_MAGIC), entry(0xCB, "Goofy Tornado", GROUP_MAGIC), entry(0xCC, "Goofy Bash", GROUP_MAGIC)];
+        entries.extend([entry(58, "Potion", GROUP_ITEM), entry(61, "Ether", GROUP_ITEM), entry(0xD0, "Taunt", GROUP_FIXED)]);
+        CustomizeIn { shortcuts: [[0xCB, 58, 0xD0, 0xCA]; 3], entries, hide_magic: true, set_rules: [SetRule::Held(GROUP_MAGIC), SetRule::Only(GROUP_ITEM), SetRule::Fixed, SetRule::Held(GROUP_MAGIC)], magic_text: Some("Shield Arts".into()), ..CustomizeIn::default() }
+    }
+
+    #[test]
+    fn goofys_set_two_arts_an_item_and_a_fixed_taunt_on_a_pad() {
+        let (mut sounds, mut actions) = (Vec::new(), Vec::new());
+        let mut screen = CustomizeScreen::new();
+        screen.set(goofy_page());
+        assert_eq!(screen.top_items(), vec![TopItem::Shortcut(0), TopItem::Shortcut(1), TopItem::Shortcut(2)], "no Magic entry");
+        // Set A opens on LB + A, his first Art
+        screen.key(CampKey::Decide, false, &mut sounds, &mut actions);
+        assert_eq!((screen.layer, screen.page, screen.set_cursor), (CustomLayer::Set, 0, 3));
+        // only the Arts on an Art's list, one tab; Taunt on no list
+        screen.key(CampKey::Decide, false, &mut sounds, &mut actions);
+        assert_eq!(screen.layer, CustomLayer::List);
+        assert_eq!(screen.tabs().len(), 1);
+        assert_eq!(screen.list_rows().iter().map(|e| e.kind).collect::<Vec<_>>(), vec![0xCA, 0xCB, 0xCC]);
+        screen.key(CampKey::Down, false, &mut sounds, &mut actions);
+        screen.key(CampKey::Down, false, &mut sounds, &mut actions);
+        screen.key(CampKey::Decide, false, &mut sounds, &mut actions);
+        assert_eq!(actions, vec![CampAction::SetShortcut { page: 0, slot: 3, kind: 0xCC }]);
+        assert_eq!(screen.layer, CustomLayer::Set);
+        // an Art cannot be removed
+        actions.clear();
+        sounds.clear();
+        screen.key(CampKey::Square, false, &mut sounds, &mut actions);
+        assert_eq!((sounds.as_slice(), actions.len()), (&[UiSound::Play(SE_MENU_REFUSED)][..], 0));
+        // up to Taunt on LB + X: it shows, its help reads, nothing edits it
+        screen.key(CampKey::Up, false, &mut sounds, &mut actions);
+        assert_eq!(screen.set_rule(), SetRule::Fixed);
+        sounds.clear();
+        screen.key(CampKey::Decide, false, &mut sounds, &mut actions);
+        screen.key(CampKey::Square, false, &mut sounds, &mut actions);
+        assert_eq!((screen.layer, actions.len()), (CustomLayer::Set, 0));
+        assert_eq!(sounds, vec![UiSound::Play(SE_MENU_REFUSED); 2]);
+        // LB + Y: items only, and it can be emptied
+        screen.key(CampKey::Up, false, &mut sounds, &mut actions);
+        screen.key(CampKey::Decide, false, &mut sounds, &mut actions);
+        assert_eq!(screen.list_rows().iter().map(|e| e.kind).collect::<Vec<_>>(), vec![58, 61]);
+        screen.key(CampKey::Down, false, &mut sounds, &mut actions);
+        screen.key(CampKey::Decide, false, &mut sounds, &mut actions);
+        assert_eq!(actions, vec![CampAction::SetShortcut { page: 0, slot: 1, kind: 61 }]);
+        actions.clear();
+        screen.key(CampKey::Square, false, &mut sounds, &mut actions);
+        assert_eq!(actions, vec![CampAction::SetShortcut { page: 0, slot: 1, kind: 0 }]);
+    }
+
+    #[test]
+    fn a_leaders_screen_reaches_goofys_arts_while_he_does_not_lead() {
+        let (mut sounds, mut actions) = (Vec::new(), Vec::new());
+        let mut data = level_99();
+        data.friends = vec![FriendIn { member: 1, name: "Donald".into(), ..FriendIn::default() }, FriendIn { member: 2, name: "Goofy".into(), ..FriendIn::default() }];
+        data.arts_page = Some(Box::new(ArtsPage { label: "Goofy's Shield Arts".into(), help: "line".into(), page: goofy_page() }));
+        let mut screen = CustomizeScreen::new();
+        screen.set(data);
+        assert_eq!(*screen.top_items().last().unwrap(), TopItem::Arts);
+        assert_eq!(screen.top_items()[0], TopItem::Magic, "the leader's own page stays");
+        screen.top_cursor = screen.top_items().len() - 1;
+        assert_eq!(screen.help(), (None, "line".to_string()));
+        screen.key(CampKey::Decide, false, &mut sounds, &mut actions);
+        assert!(screen.on_arts);
+        assert_eq!((screen.layer, screen.set_cursor), (CustomLayer::Set, 3));
+        assert_eq!(screen.page().shortcuts[0][3], 0xCA, "his set, not the leader's");
+        screen.key(CampKey::Decide, false, &mut sounds, &mut actions);
+        screen.key(CampKey::Decide, false, &mut sounds, &mut actions);
+        assert_eq!(actions, vec![CampAction::SetArtsShortcut { page: 0, slot: 3, kind: 0xCA }]);
+        // Cancel: back on the leader's top layer
+        screen.key(CampKey::Cancel, false, &mut sounds, &mut actions);
+        assert!(!screen.on_arts);
+        assert_eq!((screen.layer, screen.page().shortcuts[0][0]), (CustomLayer::Top, 0));
+        // he took the lead with the page open: the page goes
+        screen.key(CampKey::Decide, false, &mut sounds, &mut actions);
+        let mut plain = level_99();
+        plain.friends = screen.data.friends.clone();
+        screen.set(plain);
+        assert_eq!((screen.on_arts, screen.layer), (false, CustomLayer::Top));
+        assert!(screen.top_cursor < screen.top_items().len());
     }
 
     #[test]

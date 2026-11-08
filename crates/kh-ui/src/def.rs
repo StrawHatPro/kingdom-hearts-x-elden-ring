@@ -197,9 +197,29 @@ pub struct SpriteDef {
     /// (IMPL_ER21) `DefineScalingGrid` of this sprite (the pack's `scale9`: the grids of this pack all belong to
     /// sprites): the rectangle, in the sprite's own space, whose outside keeps its size when the sprite is scaled.
     pub scale9: Option<Rect>,
+    /// (INTERACT-MARK) The BLUR filters its children carry, as frame runs (the pack's `filters/<movie>.json`, written by
+    /// tools/sora_ui_filters.js from the movie's GFX; none = the movie has no such file).
+    pub blurs: Vec<BlurRun>,
+}
+
+/// (INTERACT-MARK) Flash's BlurFilter on the child at `depth` from frame `from` to `to` (inclusive): box widths in stage
+/// pixels and the passes (quality).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BlurRun {
+    pub depth: i32,
+    pub from: u32,
+    pub to: u32,
+    pub x: f32,
+    pub y: f32,
+    pub passes: u8,
 }
 
 impl SpriteDef {
+    /// (INTERACT-MARK) The blur on the child at `depth` in `frame` (None: none, or a zero box).
+    pub fn blur_at(&self, frame: u32, depth: i32) -> Option<&BlurRun> {
+        self.blurs.iter().find(|b| b.depth == depth && (b.from..=b.to).contains(&frame) && (b.x > 0.0 || b.y > 0.0) && b.passes > 0)
+    }
+
     pub fn label_frame(&self, label: &str) -> Option<u32> {
         self.labels.iter().find(|(l, _)| l == label).map(|(_, f)| *f)
     }
@@ -287,13 +307,21 @@ impl Font {
     }
 }
 
+/// A strings file: section -> key -> text.
+type StringTable = HashMap<String, HashMap<String, String>>;
+
+/// An image id resolved: (texture, declared size, sub-image offset).
+type ResolvedImage = (Arc<Texture>, (f32, f32), (f32, f32));
+
 /// The pack on disk, with caches.
 pub struct Pack {
     pub dir: PathBuf,
+    /// (INTERACT-MARK) Directories searched before `dir` for a movie's filters file (a staged pack part, tests).
+    pub overlays: Vec<PathBuf>,
     textures: HashMap<String, Arc<Texture>>,
     movies: HashMap<String, Arc<MovieDef>>,
     fonts: HashMap<String, Arc<Font>>,
-    strings: HashMap<String, Arc<HashMap<String, HashMap<String, String>>>>,
+    strings: HashMap<String, Arc<StringTable>>,
 }
 
 #[derive(Debug)]
@@ -440,7 +468,9 @@ impl Pack {
         if !dir.join("manifest.json").is_file() {
             return err(format!("{}: no manifest.json (run node tools/sora_ui_pack.js)", dir.display()));
         }
-        Ok(Pack { dir, textures: HashMap::new(), movies: HashMap::new(), fonts: HashMap::new(), strings: HashMap::new() })
+        // (BUTTON-ICONS) KH_UI_OVERLAY: staged pack parts searched first for data files and textures (offline pictures, tests)
+        let overlays = std::env::var_os("KH_UI_OVERLAY").map(|v| std::env::split_paths(&v).filter(|d| d.is_dir()).collect()).unwrap_or_default();
+        Ok(Pack { dir, overlays, textures: HashMap::new(), movies: HashMap::new(), fonts: HashMap::new(), strings: HashMap::new() })
     }
 
     /// The pack of this repository, found from the crate's own location (tests, examples).
@@ -450,6 +480,22 @@ impl Pack {
             Some(dir) => Pack::open(PathBuf::from(dir)),
             None => Pack::open(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../build/sora_pack/ui")),
         }
+    }
+
+    /// (INTERACT-MARK) `filters/<movie>.json` (format kh3-ui-filters/1) from the first overlay that has it, else the pack:
+    /// sprite id -> its blur runs. A missing or unreadable file = no filters (the movie draws as before).
+    fn filters_of(&self, movie: &str) -> HashMap<u32, Vec<BlurRun>> {
+        let rel = format!("filters/{movie}.json");
+        let Some(text) = self.overlays.iter().chain(std::iter::once(&self.dir)).find_map(|d| fs::read_to_string(d.join(&rel)).ok()) else { return HashMap::new() };
+        let Ok(j) = serde_json::from_str::<Value>(&text) else { return HashMap::new() };
+        if j["format"].as_str() != Some("kh3-ui-filters/1") {
+            return HashMap::new();
+        }
+        let run = |r: &Value| -> Option<BlurRun> {
+            let n = |k: usize| r.get(k).and_then(Value::as_f64);
+            Some(BlurRun { depth: n(0)? as i32, from: n(1)? as u32, to: n(2)? as u32, x: n(3)? as f32, y: n(4)? as f32, passes: n(5)?.clamp(0.0, 15.0) as u8 })
+        };
+        j["sprites"].as_object().into_iter().flatten().filter_map(|(id, runs)| Some((id.parse().ok()?, runs.as_array()?.iter().filter_map(run).collect()))).collect()
     }
 
     fn json(&self, rel: &str) -> Result<Value, PackError> {
@@ -462,7 +508,9 @@ impl Pack {
         if let Some(t) = self.textures.get(file) {
             return Ok(t.clone());
         }
-        let (width, height, rgba) = read_png(&self.dir.join(file))?;
+        // (BUTTON-ICONS) a staged pack part (overlays) first, as the filters files are found
+        let path = self.overlays.iter().map(|d| d.join(file)).find(|p| p.is_file()).unwrap_or_else(|| self.dir.join(file));
+        let (width, height, rgba) = read_png(&path)?;
         let t = Arc::new(Texture { file: file.to_string(), width, height, rgba });
         self.textures.insert(file.to_string(), t.clone());
         Ok(t)
@@ -534,7 +582,12 @@ impl Pack {
 
     /// A data file of the pack (`data/<name>.json`).
     pub fn data(&self, name: &str) -> Result<Value, PackError> {
-        self.json(&format!("data/{name}.json"))
+        // (BUTTON-ICONS) a staged pack part (overlays) first
+        let rel = format!("data/{name}.json");
+        if let Some(text) = self.overlays.iter().find_map(|d| fs::read_to_string(d.join(&rel)).ok()) {
+            return serde_json::from_str(&text).map_err(|e| PackError(format!("{rel} (overlay): {e}")));
+        }
+        self.json(&rel)
     }
 
     pub fn movie(&mut self, name: &str) -> Result<Arc<MovieDef>, PackError> {
@@ -582,7 +635,7 @@ impl Pack {
         }
         let images = &j["images"];
         // image id -> (texture, declared size, sub-image offset)
-        let resolve = |pack: &mut Pack, id: &str| -> Result<Option<(Arc<Texture>, (f32, f32), (f32, f32))>, PackError> {
+        let resolve = |pack: &mut Pack, id: &str| -> Result<Option<ResolvedImage>, PackError> {
             let mut img = &images[id];
             let mut off = (0.0, 0.0);
             if let Some(parent) = img.get("sub_image_of") {
@@ -613,10 +666,13 @@ impl Pack {
             Control::Plain
         };
         let mut unknown = Vec::new();
+        // (INTERACT-MARK) the movie's blur filters, when its pack (or an overlay) has them
+        let blurs = self.filters_of(name);
         let sprite = |id: u32, s: &Value, unknown: &mut Vec<String>| -> SpriteDef {
             let frames = s["frames"].as_u64().unwrap_or(1).max(1) as u32;
             let mut def = SpriteDef { id, frames, ops: vec![Vec::new(); frames as usize], scripts: vec![Vec::new(); frames as usize], class: s["class"].as_str().map(|c| c.replace("::", ".")), scale9: j["scale9"].get(id.to_string()).filter(|g| g.is_array()).map(|g| rect0(g).rect()), ..SpriteDef::default() };
             def.control = control_of(def.class.as_deref());
+            def.blurs = blurs.get(&id).cloned().unwrap_or_default(); // (INTERACT-MARK)
             for (label, frame) in s["labels"].as_object().into_iter().flatten() {
                 def.labels.push((label.clone(), frame.as_u64().unwrap_or(1) as u32));
             }
@@ -628,7 +684,7 @@ impl Pack {
                         depth: op["d"].as_i64().unwrap_or(0) as i32,
                         remove: op["remove"].as_bool().unwrap_or(false),
                         is_move: op["move"].as_bool().unwrap_or(false),
-                        ch: op["ch"].as_u64().map(|c| c as u32).or_else(|| op["class"].as_str().and_then(&resolve_class)),
+                        ch: op["ch"].as_u64().map(|c| c as u32).or_else(|| op["class"].as_str().and_then(resolve_class)),
                         matrix: op.get("m").map(matrix),
                         cx: op.get("cx").map(|c| Cx { mul: [f(&c[0]), f(&c[1]), f(&c[2]), f(&c[3])], add: [f(&c[4]), f(&c[5]), f(&c[6]), f(&c[7])] }),
                         name: op["name"].as_str().map(Arc::from),

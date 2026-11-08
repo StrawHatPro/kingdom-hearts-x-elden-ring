@@ -75,7 +75,7 @@ fn every_slot_shows_the_elden_ring_logo_where_kh3_shows_its_world_logo() {
     let Some((er, _)) = list(Some("er"), false) else { return };
     // the bounding box of what the logo changed: inside the rows' world-picture column only
     let (mut x0, mut y0, mut x1, mut y1, mut n) = (1920usize, 1080usize, 0usize, 0usize, 0usize);
-    for (i, (a, b)) in none.chunks_exact(4).zip(er.chunks_exact(4)).enumerate() {
+    for (i, (a, b)) in none.as_chunks::<4>().0.iter().zip(er.as_chunks::<4>().0).enumerate() {
         if a.iter().zip(b).any(|(p, q)| p.abs_diff(*q) > 12) {
             let (x, y) = (i % 1920, i / 1920);
             (x0, y0, x1, y1, n) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y), n + 1);
@@ -126,6 +126,6 @@ fn every_slot_shows_the_elden_ring_logo_where_kh3_shows_its_world_logo() {
     let Some((load, _)) = list(Some("er"), true) else { return };
     write_png(&dir.join("logo_load_list.png"), 1920, 1080, &load).unwrap();
     let Some((load_none, _)) = list(None, true) else { return };
-    let m = load.chunks_exact(4).zip(load_none.chunks_exact(4)).filter(|(a, b)| a.iter().zip(*b).any(|(p, q)| p.abs_diff(*q) > 12)).count();
+    let m = load.as_chunks::<4>().0.iter().zip(load_none.as_chunks::<4>().0).filter(|(a, b)| a.iter().zip(*b).any(|(p, q)| p.abs_diff(*q) > 12)).count();
     assert!(m > 3000, "the Load list's rows show the logo too ({m} px)");
 }

@@ -26,6 +26,8 @@ pub mod pointlight;
 pub mod blood;
 // (IMPL_ER78) The hybrid: KH3's toon look lit by Elden Ring's own world light (the *_hy / *_gb pixel shaders).
 pub mod hybrid;
+// (LIGHT-RT) The depth bias of the KH casters in the game's sun atlas (no shadow acne on them in the Elden Ring Style).
+pub mod castbias;
 
 mod cbcap;
 mod detour;
@@ -45,6 +47,7 @@ pub mod stable;
 mod shadowcaps; // (IMPL_ER23A) the Keyblade in the stand-in sun shadow
 mod shscan;
 mod survey;
+mod ffx; // (PARTY-NATIVE) the game's lit / fogged effect pipelines, recognised by their DXIL hash
 // (IMPL_ER80b) the game's light shafts kept off his pixels
 pub mod shaft;
 // (ER88) Sora and the game's temporal anti-aliasing: the check of the previous view-projection his motion vectors use
@@ -54,7 +57,11 @@ pub mod hair;
 pub mod hair91;
 // (ER90, XSI request 1) the XS moves' form weapons (Hyper Hammer, Blizzard Blades, Ultima) in his hands (PACK/xsi/weapons)
 pub mod xsiweapon;
+// (P5 WEAPON DRAW) whichever keyblade Sora has equipped, its own materials and models (PACK/keyblades), and its form weapons
+pub mod keyblade;
 pub use xsiweapon::FormWeapon;
+// (HEROLIGHT-KB) the hero light's glow, sparkles, place and colour per weapon (sheets/port/sora-herolight.json)
+pub mod herolight;
 // (ER party S4) Donald, Goofy and the team props drawn by the same passes as Sora (cargo feature `party`, key `r.party`)
 #[cfg(feature = "party")]
 pub mod party;
@@ -62,8 +69,24 @@ pub mod party;
 pub mod camfade;
 // (ZFIN) Zettaflare's finale on an Elden Ring character: the black silhouette that crumbles (finale.rs)
 pub mod finale;
+// (AUDIT-C TF) Double Form's Ultimate Finish: the Blue Hour's map hide
+pub mod bluehour;
 // (ZDRAW) Zettaflare's target drawn from its own model into the finale's mask
 pub mod zdraw;
+pub mod iceshell; // (FREEZE-FX) the ice shell of a frozen Elden Ring body: its own posed model with KH3's ice
+// (MIMIC SORA, THE USER 2026-11-02: "Make sure mimic Sora uses the shaders that mimic should use from Elden Ring.") the Mimic
+// Tear's look from Elden Ring's own rows (WetAspectParam 18, PhantomParam 200) for a KH character; not drawn yet
+pub mod mimic;
+// (MIMIC-RENDER) the Mimic Tear bosses' Sora copies: silver for Elden Ring's 3 s, then his KH3 look at full quality
+pub mod sora_copy;
+// (F-RAGE) Rage Form's look on every outfit: KH3's AntiVolume, the outfits' baked form 7 with its glow, the hair (rage.rs)
+pub mod rage; // (F-RAGE)
+// (MIMIC-BOSS hotfix 3, MB3-FORMLEAK) every copy of Sora wears his own form (his costume, slide, Rage look), never the player's
+pub mod copy_wear;
+// (VFX-2 lit) the forward lighting of KH3's lit translucent effects, fed from Elden Ring's light (fwdlight.rs)
+pub mod fwdlight;
+// (AUDIT-A CAMS) KH3's dark screen of every finish: the master light coefficient x 0.5 over 1 s (darkscreen.rs)
+pub mod darkscreen;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -285,7 +308,9 @@ pub(crate) fn portrait_now() -> Option<Arc<PortraitFrame>> {
 
 /// (IMPL_ER23B) THE WEAR FORM the pawn has applied (`kh_core` `combat.form.wear_form`: 0 NORMAL, 5 Second Form): the
 /// character's materials slide into that form's costume (gfx.rs, `kh_look::library::Library::step_wear`). The host
-/// sets it whenever it likes (every frame is fine); it stays until set again.
+/// sets it whenever it likes (every frame is fine); it stays until set again. (weapons P5b) Every wear form 1..10 (7 = Rage
+/// Form): the worn outfit's own costume for it or its colour variant (kh-er boc.rs), the normal clothes where it has neither;
+/// an outfit loaded during a form wears it on its first frame.
 static WEAR_FORM: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 pub fn set_wear_form(form: u8) {
@@ -402,6 +427,7 @@ pub fn install(pack: &Path, log_fn: LogFn) {
 
 /// The host's frame: call once per game frame, after the camera moved.
 pub fn submit(input: FrameInput) {
+    herolight::note_drawn(&input); // (HEROLIGHT-KB) the weapons drawn this frame: the hero light's copies are locked onto them
     if let Ok(mut guard) = SHARED.lock() {
         if let Some(shared) = guard.as_mut() {
             // SAFETY: plain getter.
@@ -443,6 +469,26 @@ pub fn hybrid_dump() {
 /// after the G-buffer (gfx.rs `early_pass`), so that what the game makes from its depth later knows he is there.
 pub fn set_early_depth(on: bool) {
     gfx::set_early(on);
+}
+
+/// (HAIR-BLEED) `r.hybrid_gb_first` (default on): the KH characters go into the game's G-buffer stage right after its depth
+/// clear (survey.rs `GB_FIRST`), so every copy the stage makes of its depth and normal holds them; 0 = after its last list
+/// (2 and 10 + N: testing aids, survey.rs `gbuffer_split_list`).
+pub fn set_gb_first(mode: u32) {
+    survey::GB_FIRST.store(mode, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// (HAIR-BLEED) `r.hybrid_recopy` (default on, both styles): right after the KH characters' G-buffer pass the game's own copies
+/// of its scene depth and G-buffer normal (made inside its G-buffer stage, before them) are made again, so its ambient
+/// occlusion and light passes read the KH surfaces there, not the scene behind them (gfx.rs `redo_stage_copies`).
+pub fn set_recopy(on: bool) {
+    gfx::RECOPY.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// (HAIR-BLEED) `r.kh_eye_adapt` (default OFF since 2026-11-06): on = KH3's EyeAdaptation in the KH shaders is 1 / reference
+/// white (er_char.wgsl v161.y, gfx.rs `eye_row`); off = 1, KH3's own camera exposure (gfx.rs EYE_ADAPT says why).
+pub fn set_eye_adapt(on: bool) {
+    gfx::EYE_ADAPT.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// (RSF2 round 14) `r.effects_depth` (default 1): the KH characters' depth into the game's half-size effect depth (its fire,
@@ -587,7 +633,8 @@ pub fn status() -> String {
   {}
   {}
   {}", gfx::status(), vfx::status(), pointlight::status(), stable::status(), taa::status()) + &format!("\n  {}", passtime::status()) /* (HAIRPERF) */ + &format!("\n  {}", camfade::status()) /* (NF) */ + &format!("\n  {}", finale::status()) /* (ZFIN) */ + &format!("
-  {}", zdraw::status()) // (ZDRAW)
+  {}", zdraw::status()) /* (ZDRAW) */ + &format!("
+  {}", keyblade::status()) // (P5)
 }
 
 /// An inline hook of the host's own on any function (detour.rs: prologue decoder, relay and

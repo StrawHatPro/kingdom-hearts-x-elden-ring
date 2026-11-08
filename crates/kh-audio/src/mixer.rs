@@ -13,7 +13,13 @@
 //! - the low-pass: one pole, cut-off = factor x 20 kHz. The game's factor -> cut-off mapping
 //!   was not read; `set_lowpass(false)` passes the factor through unused.
 //! - the reverb send is carried by the commands and NOT rendered (no reverb here).
-//! - volume changes are ramped over a block and a stopped voice fades over 5 ms, against clicks.
+//! - volume changes are ramped over a block and a stopped voice fades over 5 ms, against clicks; (ER-HITSFX-AUDIT) a
+//!   paused voice fades out over the same 5 ms and back in on its resume.
+//! - (THE USER 2026-11-02: "sometimes Audio from specifically our mod will become very loud") THE SUM GOES THROUGH A
+//!   LIMITER after the master gain: a frame whose louder channel would pass `LIMIT` (-0.5 dBFS) is turned down to it at
+//!   once (no overshoot, no clipping), and the gain comes back with a `LIMIT_RELEASE` time constant. Before, the sum was
+//!   only clipped at full scale: the user's log has 625 clipped samples at a peak of 1.457 (the game-over loop raised
+//!   +12 dB as a menu sound). The clamp at full scale stays behind it as the last resort.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,8 +32,14 @@ use crate::wav::Buffer;
 pub const RATE: u32 = 48_000;
 /// Frames of the declick fade of a stopped voice.
 const DECLICK: f32 = 240.0;
+/// (ER-HITSFX-AUDIT) Voices the mixer's list holds without reallocating (more than KH3's pools let live at once in a fight).
+pub const VOICES_RESERVED: usize = 512;
 /// Longest gain ramp, frames.
 const RAMP: usize = 256;
+/// (limiter) The output level no frame passes: -0.5 dBFS.
+pub const LIMIT: f32 = 0.944;
+/// (limiter) Seconds of the gain's way back to 1 after a reduction (time constant).
+pub const LIMIT_RELEASE: f32 = 0.25;
 
 /// The pack's materials, read on first use.
 #[derive(Clone, Debug, Default)]
@@ -45,6 +57,17 @@ impl Materials {
     /// (DON-KIT) Whether a material is read already.
     pub fn has(&self, bank: u32, material: u32) -> bool {
         self.cache.get(&(bank, material)).is_some_and(|b| b.is_some())
+    }
+
+    /// (ER-HITSFX-AUDIT) What the cache knows of a material without reading it: `None` = not read yet, `Some(None)` = it
+    /// could not be read, `Some(Some(buffer))` = read.
+    pub fn cached(&self, bank: u32, material: u32) -> Option<Option<Arc<Buffer>>> {
+        self.cache.get(&(bank, material)).cloned()
+    }
+
+    /// (ER-HITSFX-AUDIT) Puts a material read elsewhere (a reader thread's [`Materials::get`]) into this cache.
+    pub fn insert(&mut self, bank: u32, material: u32, buffer: Option<Arc<Buffer>>) {
+        self.cache.insert((bank, material), buffer);
     }
 
     pub fn get(&mut self, pack: &Pack, bank: u32, material: u32) -> Option<Arc<Buffer>> {
@@ -84,6 +107,9 @@ struct MixVoice {
     started: bool,
     lowpass_state: [f32; 2],
     paused: bool,
+    /// (ER-HITSFX-AUDIT) The pause's own declick: 1 = playing, 0 = held; it moves by `1 / DECLICK` a frame toward the pause
+    /// state, so a pause (a menu holding the world) and its resume fade over 5 ms instead of cutting mid-wave (a click).
+    pause_gain: f32,
     /// `Some(frames left)` of the declick fade.
     stopping: Option<f32>,
     done: bool,
@@ -107,11 +133,17 @@ pub struct Mixer {
     lowpass: bool,
     /// Linear gain of the sum.
     pub master: f32,
-    /// Largest absolute sample before clipping, since the start.
+    /// Largest absolute sample of the sum after the master gain and before the limiter, since the start.
     pub peak: f32,
-    /// Output samples that had to be clipped.
+    /// Output samples that had to be clipped (the limiter leaves none: the last resort).
     pub clipped: u64,
     pub frames_rendered: u64,
+    /// (limiter) Its gain now (1 = nothing taken off), the frames it turned down since the start, and the last
+    /// rendered block's peak before it and smallest gain (a host's per-second line).
+    pub limit_gain: f32,
+    pub limited: u64,
+    pub block_peak: f32,
+    pub block_gain: f32,
 }
 
 impl Default for Mixer {
@@ -122,7 +154,9 @@ impl Default for Mixer {
 
 impl Mixer {
     pub fn new() -> Mixer {
-        Mixer { voices: Vec::new(), lowpass: true, master: 1.0, peak: 0.0, clipped: 0, frames_rendered: 0 }
+        // (ER-HITSFX-AUDIT) room for VOICES_RESERVED voices from the start: the device callback starts and renders the
+        // voices, and a growing list would reallocate there.
+        Mixer { voices: Vec::with_capacity(VOICES_RESERVED), lowpass: true, master: 1.0, peak: 0.0, clipped: 0, frames_rendered: 0, limit_gain: 1.0, limited: 0, block_peak: 0.0, block_gain: 1.0 }
     }
 
     pub fn set_lowpass(&mut self, on: bool) {
@@ -140,17 +174,19 @@ impl Mixer {
         if buffer.frames() == 0 {
             return;
         }
-        self.voices.push(MixVoice { id: voice, buffer, position: offset, looped: loop_points, params, gain: [0.0; 2], started: false, lowpass_state: [0.0; 2], paused: false, stopping: None, done: false });
+        self.voices.push(MixVoice { id: voice, buffer, position: offset, looped: loop_points, params, gain: [0.0; 2], started: false, lowpass_state: [0.0; 2], paused: false, pause_gain: 1.0, stopping: None, done: false });
     }
 
+    /// (THE USER 2026-11-02) The NEWEST voice of that id: after a host's restart (a new engine counts its voices from 1
+    /// again) an old voice of the same id may still be in its declick fade; it must not take the new one's updates.
     pub fn update(&mut self, voice: VoiceId, params: VoiceParams) {
-        if let Some(v) = self.voices.iter_mut().find(|v| v.id == voice) {
+        if let Some(v) = self.voices.iter_mut().rev().find(|v| v.id == voice) {
             v.params = params;
         }
     }
 
     pub fn pause(&mut self, voice: VoiceId, paused: bool) {
-        if let Some(v) = self.voices.iter_mut().find(|v| v.id == voice) {
+        if let Some(v) = self.voices.iter_mut().rev().find(|v| v.id == voice) {
             v.paused = paused;
         }
     }
@@ -187,7 +223,8 @@ impl Mixer {
         out.fill(0.0);
         let frames = out.len() / 2;
         for v in &mut self.voices {
-            if v.paused && v.stopping.is_none() {
+            // (ER-HITSFX-AUDIT) a paused voice is skipped once its pause fade is down (a stopping one still fades out)
+            if v.paused && v.stopping.is_none() && v.pause_gain <= 0.0 {
                 continue;
             }
             let channels = v.buffer.channels as usize;
@@ -197,7 +234,7 @@ impl Mixer {
                 v.started = true;
                 v.gain = target;
             }
-            let ramp = frames.min(RAMP).max(1) as f32;
+            let ramp = frames.clamp(1, RAMP) as f32;
             let delta = [(target[0] - v.gain[0]) / ramp, (target[1] - v.gain[1]) / ramp];
             let step = v.params.pitch as f64 * v.buffer.sample_rate as f64 / RATE as f64;
             let total = v.buffer.frames() as f64;
@@ -222,13 +259,18 @@ impl Mixer {
                 let sample = |frame: usize, channel: usize| -> f32 { data.get(frame * channels + channel.min(channels - 1)).map_or(0.0, |s| *s as f32 / 32768.0) };
                 let mut x = [sample(i, 0) + (sample(j, 0) - sample(i, 0)) * t, 0.0];
                 x[1] = if stereo { sample(i, 1) + (sample(j, 1) - sample(i, 1)) * t } else { x[0] };
-                if let Some(alpha) = alpha {
-                    for c in 0..2 {
-                        v.lowpass_state[c] += alpha * (x[c] - v.lowpass_state[c]);
-                        x[c] = v.lowpass_state[c];
+                // (ER-HITSFX-AUDIT) THE ONE-POLE LOW-PASS: the state follows the input by `alpha` each frame and is the output.
+                // Before, the filtered branch only copied the state out and never moved it: every voice whose distance curve
+                // asked for a low-pass (3293 of the pack's 4099 sequences, beyond 4 m of the listener) played the frozen last
+                // sample (silence from its start, a held DC step mid-sound): cut off, and choppy when it crossed 4 m.
+                match alpha {
+                    Some(alpha) => {
+                        for (state, input) in v.lowpass_state.iter_mut().zip(x.iter_mut()) {
+                            *state += alpha * (*input - *state);
+                            *input = *state;
+                        }
                     }
-                } else {
-                    v.lowpass_state = x;
+                    None => v.lowpass_state = x,
                 }
                 if (f as f32) < ramp {
                     v.gain[0] += delta[0];
@@ -244,9 +286,16 @@ impl Mixer {
                     }
                     None => 1.0,
                 };
+                // (ER-HITSFX-AUDIT) the pause's declick: toward 0 while paused, back to 1 when resumed
+                v.pause_gain = if v.paused { (v.pause_gain - 1.0 / DECLICK).max(0.0) } else { (v.pause_gain + 1.0 / DECLICK).min(1.0) };
+                let fade = fade * v.pause_gain;
                 out[f * 2] += x[0] * v.gain[0] * fade;
                 out[f * 2 + 1] += x[1] * v.gain[1] * fade;
                 if v.done {
+                    break;
+                }
+                if v.paused && v.stopping.is_none() && v.pause_gain <= 0.0 {
+                    // held where its fade ended: the resume goes on from here
                     break;
                 }
                 v.position += step;
@@ -254,17 +303,31 @@ impl Mixer {
             v.gain = if v.done { v.gain } else { target };
         }
         self.voices.retain(|v| !v.done);
-        for s in out.iter_mut() {
-            *s *= self.master;
-            let a = s.abs();
-            if a > self.peak {
-                self.peak = a;
+        // (THE USER 2026-11-02) the master gain, then the limiter (instant attack, LIMIT_RELEASE back), then the clamp
+        let release = 1.0 - (-1.0 / (LIMIT_RELEASE * RATE as f32)).exp();
+        let (mut block_peak, mut block_gain) = (0.0f32, 1.0f32);
+        for frame in out.as_chunks_mut::<2>().0 {
+            frame[0] *= self.master;
+            frame[1] *= self.master;
+            let a = frame[0].abs().max(frame[1].abs());
+            block_peak = block_peak.max(a);
+            let need = if a > LIMIT { LIMIT / a } else { 1.0 };
+            self.limit_gain = (self.limit_gain + (1.0 - self.limit_gain) * release).min(need);
+            if self.limit_gain < 0.999 {
+                self.limited += 1;
+                block_gain = block_gain.min(self.limit_gain);
+                frame[0] *= self.limit_gain;
+                frame[1] *= self.limit_gain;
             }
-            if a > 1.0 {
-                self.clipped += 1;
-                *s = s.clamp(-1.0, 1.0);
+            for s in frame.iter_mut() {
+                if s.abs() > 1.0 {
+                    self.clipped += 1;
+                    *s = s.clamp(-1.0, 1.0);
+                }
             }
         }
+        self.peak = self.peak.max(block_peak);
+        (self.block_peak, self.block_gain) = (block_peak, block_gain);
         self.frames_rendered += frames as u64;
     }
 }
@@ -322,14 +385,57 @@ mod tests {
         assert_eq!(m.voices(), 0);
     }
 
+    /// (THE USER 2026-11-02: "sometimes Audio from specifically our mod will become very loud") A sum over full scale is
+    /// turned down to LIMIT by the limiter, never clipped; the peak before it is still counted.
     #[test]
-    fn the_sum_is_clipped_and_counted() {
+    fn the_sum_is_limited_not_clipped() {
         let mut m = Mixer::new();
         let loud = Arc::new(Buffer { channels: 2, sample_rate: RATE, data: vec![30_000; 200], loop_points: None });
         m.start(1, loud.clone(), 0.0, false, FLAT);
         m.start(2, loud, 0.0, false, FLAT);
         let mut out = vec![0.0; 2 * 50];
         m.render(&mut out);
-        assert!(m.peak > 1.8 && m.clipped == 100 && out.iter().all(|s| *s <= 1.0));
+        assert!(m.peak > 1.8 && m.clipped == 0, "peak {} clipped {}", m.peak, m.clipped);
+        assert!(out.iter().all(|s| s.abs() <= LIMIT + 1.0e-6), "nothing passes the limit");
+        assert!((out[20] - LIMIT).abs() < 1.0e-3, "held at the limit: {}", out[20]);
+        assert_eq!(m.limited, 50);
+        assert!(m.block_peak > 1.8 && m.block_gain < 0.52, "{} {}", m.block_peak, m.block_gain);
+    }
+
+    /// (limiter) After a loud burst the gain comes back with LIMIT_RELEASE: a quiet sound right after it is turned down at
+    /// first and back at its own level within a second; a mix under the limit is never touched.
+    #[test]
+    fn the_limiter_lets_go_and_leaves_a_quiet_mix_alone() {
+        let mut m = Mixer::new();
+        let loud = Arc::new(Buffer { channels: 2, sample_rate: RATE, data: vec![30_000; 2 * 480], loop_points: None });
+        let quiet = Arc::new(Buffer { channels: 2, sample_rate: RATE, data: vec![8_000; 2 * 96_000], loop_points: None });
+        m.start(1, loud.clone(), 0.0, false, FLAT);
+        m.start(2, loud, 0.0, false, FLAT);
+        let mut out = vec![0.0; 2 * 480];
+        m.render(&mut out);
+        m.start(3, quiet, 0.0, false, FLAT);
+        let level = 8_000.0 / 32_768.0;
+        m.render(&mut out);
+        assert!(out[0] < level * 0.7, "just after the burst: turned down ({})", out[0]);
+        let mut long = vec![0.0; 2 * 48_000];
+        m.render(&mut long);
+        assert!((long[2 * 47_999] / level - 1.0).abs() < 0.02, "a second later (4 time constants): its own level within 2 % ({})", long[2 * 47_999]);
+        let mut calm = Mixer::new();
+        calm.start(1, Arc::new(Buffer { channels: 2, sample_rate: RATE, data: vec![20_000; 400], loop_points: None }), 0.0, false, FLAT);
+        let mut out = vec![0.0; 2 * 100];
+        calm.render(&mut out);
+        assert!(calm.limited == 0 && (out[10] - 20_000.0 / 32_768.0).abs() < 1.0e-6);
+    }
+
+    /// (THE USER 2026-11-02) A restarted host's new voice 1 takes the updates, not the old voice 1 in its declick fade.
+    #[test]
+    fn updates_go_to_the_newest_voice_of_an_id() {
+        let mut m = Mixer::new();
+        let buffer = Arc::new(Buffer { channels: 2, sample_rate: RATE, data: vec![10_000; 20_000], loop_points: None });
+        m.start(1, buffer.clone(), 0.0, false, FLAT);
+        m.stop_all();
+        m.start(1, buffer, 0.0, false, FLAT);
+        m.update(1, VoiceParams { volume: 0.25, ..FLAT });
+        assert_eq!((m.voices[0].params.volume, m.voices[1].params.volume), (1.0, 0.25));
     }
 }

@@ -58,6 +58,8 @@ const XWB = 'packgen/xwb/tools/xwb_chandelier.js<=er/xwb/tools/xwb_chandelier.js
 const ER90 = 'packgen/er90/tools/xsi_weapon_er_slots.js<=er/er90/tools/xsi_weapon_er_slots.js';
 const VFB = 'packgen/vfb/tools/mk_shards.js<=er/party/vfb/tools/mk_shards.js';
 const XWD = 'packgen/xwd/tools/mk_shards_xwd.js<=er/xwd/tools/mk_shards_xwd.js';
+const KBA = 'weapons/AUDIT-A/stage/sound/pawn_triggers.js'; // (AUDIT-A SOUND) staged where it was: it finds the repository 6 folders up
+const VFXR_M = 'weapons/VFX-RING/tools/M/stage_mesh.js'; // (VFX-RING M) staged where it was: it finds tools/sora_vfx_pack.js 6 folders up
 const STEPS = [
   // ---- extract: the pak key (found in the player's executable) and the KH3 files the build reads
   { id: 'pak-footers', phase: 'extract', run: ['tools/pak_footers.js'] },
@@ -65,9 +67,11 @@ const STEPS = [
   { id: 'exe-check', phase: 'extract', run: ['tools/packgen_exe_check.js'] },          // the executable is the build the research tools read
   { id: 'extract', phase: 'extract', run: ['tools/packgen_extract.js'] },
   // ---- convert: the cooked files to JSON / glTF / PNG / WAV (assets_converted/)
-  { id: 'census', phase: 'convert', run: ['tools/asset_census.js', '--workers', String(WORKERS)] },
+  // (SETUP-TOOLS) census and packages resume from chunk files keyed by their position in the file list: when the extracted files
+  // changed (an update that extracts more KH3 folders) the old chunks would stand for other files, so they start afresh
+  { id: 'census', phase: 'convert', run: () => freshWhenInputsChanged('census', ['tools/asset_census.js', '--workers', String(WORKERS)]) },
   { id: 'bases', phase: 'convert', run: ['tools/packgen_bases.js'] },                         // every blueprint's native base, from all the paks
-  { id: 'packages', phase: 'convert', run: ['tools/package_convert.js', '--workers', String(WORKERS)] },
+  { id: 'packages', phase: 'convert', run: () => freshWhenInputsChanged('packages', ['tools/package_convert.js', '--workers', String(WORKERS)]) },
   { id: 'textures', phase: 'convert', run: ['tools/texture_convert.js', 'export', '--workers', String(WORKERS)] },
   { id: 'meshes', phase: 'convert', run: ['tools/mesh_convert.js', 'export', '--workers', String(Math.max(1, Math.min(4, WORKERS)))] },
   { id: 'anim-index', phase: 'convert', run: ['tools/anim_convert.js', 'index', '--workers', String(WORKERS)] },
@@ -137,6 +141,10 @@ const STEPS = [
   // (ER79) the leg guard of the outfits whose cloth goes into the legs (`enabled`; the development deploy took those only)
   { id: 'outfit-legguard', phase: 'pack', run: () => { runNode(['tools/sora_outfit_legguard.js', '--out', 'build/packgen/legguard']); let n = 0; for (const o of fs.readdirSync(path.join(ROOT, 'build/packgen/legguard/outfits'))) { const f = path.join(ROOT, 'build/packgen/legguard/outfits', o, 'legguard.json'); if (!fs.existsSync(f) || !JSON.parse(fs.readFileSync(f, 'utf8')).enabled) continue; const d = path.join(ROOT, 'build/sora_pack/outfits', o, 'legguard.json'); if (!fs.existsSync(d)) { fs.copyFileSync(f, d); n++; } } console.log(`   ${n} leg guard(s)`); } },
   { id: 'ui', phase: 'pack', run: ['tools/sora_ui_pack.js'] },
+  // (BUTTON-ICONS) KH3's keyboard / mouse glyphs (IconTextData_km + IconText_km per language), new files of the UI folder
+  { id: 'ui-button-icons', phase: 'pack', run: () => { fs.rmSync(path.join(ROOT, 'build/packgen/button_icons'), { recursive: true, force: true }); runNode(['tools/button_icons_pack.js', '--out=build/packgen/button_icons/ui']); copyNew('build/packgen/button_icons/ui', 'build/sora_pack/ui'); } },
+  // (INTERACT-MARK) the interaction marker's blur filters (HudTarget, sprite 84), new files of the UI folder
+  { id: 'ui-filters', phase: 'pack', run: () => { fs.rmSync(path.join(ROOT, 'build/packgen/ui_filters'), { recursive: true, force: true }); runNode(['tools/sora_ui_filters.js', 'HudTarget', '01_hud/hud_target/HudTarget', 'build/packgen/ui_filters/ui', '84']); copyNew('build/packgen/ui_filters/ui', 'build/sora_pack/ui'); } },
   { id: 'saveload', phase: 'pack', run: ['tools/sora_saveload_pack.js'] },
   { id: 'er-icons', phase: 'pack', run: () => { if (!erGame) throw new Error('the Elden Ring install is needed for its item icons: --er "<ELDEN RING>\\Game" (or KH_ER_GAME)'); runNode(['tools/er_icons.js', '--game', erGame]); } },
   { id: 'vfx', phase: 'pack', run: ['tools/sora_vfx_pack.js'] },
@@ -151,12 +159,42 @@ const STEPS = [
   { id: 'party-audio-rows', phase: 'pack', run: ['tools/party_audio_pack.js'] },              // audit/sora_port/audio/party_rows.json
   { id: 'party-ai', phase: 'pack', run: ['tools/party_ai_pack.js'] },
   { id: 'party-team', phase: 'pack', run: ['tools/party_team_pack.js'] },
+  // (SETUP-TOOLS) the XS abilities' staged pack (build/sora_tmp/xsi/pack) BEFORE the keyblades: their form clips leave out the
+  // clips the XS overlay has (sora_keyblades_pack.js reads xsi_manifest.json); it reads only the main manifest
+  { id: 'xsi', phase: 'pack', run: ['tools/xsi_pack.js'] },
+  // (KEYBLADES) every keyblade (base + Re Mind), its formchanges' weapons, Sora's form clips, the keyblades' effects (their own
+  // root keyblades/vfx), their sound rows (audit/sora_port/audio/keyblade_rows.json, read by the audio step below), the Moogle shop
+  // NPCs; then every KH3 wear form's colours on the KH1 / KH2 outfits (after outfit-forms: it merges into their wear_extra.json)
+  { id: 'keyblades', phase: 'pack', run: ['tools/sora_keyblades_pack.js'] },
+  // (KBFX) every keyblade model's keychain (bonamik.json) and its skeleton's sockets (sockets.json), beside the model (P5)
+  { id: 'keyblades-chains', phase: 'pack', run: ['tools/sora_weapon_pack.js', '--keyblades', 'build/sora_pack/keyblades'] },
+  // (P8 / MOOGLE-HOVER) the synthesis Moogles in the friends' layout, from the keyblades step's npc folders: n_ex028 (the field
+  // Moogle: the DLL merges its voices, PACK/party/n_ex028/audio) and n_ex014 (the Twilight Town Moogle the DLL draws)
+  { id: 'moogle', phase: 'pack', run: () => { runNode(['tools/moogle_pack.js']); runNode(['tools/moogle_pack.js', '--npc', 'n_ex014']); } },
+  { id: 'outfit-kb-forms', phase: 'pack', run: ['tools/sora_outfit_formcolours.js'] },
   { id: 'audio', phase: 'pack', run: ['tools/sora_audio_pack.js'] },
   { id: 'audio-tables', phase: 'pack', run: ['tools/sora_audio_tables.js'] },
   { id: 'audio-party', phase: 'pack', run: ['tools/sora_audio_pack.js', '--party-extra'], env: { KH_AUDIO_EXTRA_SOUNDS: 'tools/packgen/recipes/party_extra_sounds.json' } },
-  { id: 'xsi', phase: 'pack', run: ['tools/xsi_pack.js'] },
   { id: 'xsi-weapons', phase: 'pack', run: ['tools/xsi_weapons.js'] },
   { id: 'audio-xsi', phase: 'pack', run: ['tools/sora_audio_pack.js', '--xsi-extra'] },
+  // (TITLE-AUDIO) KH3's title music (the title HUD's m_TitleBGM, BGM_title.mab of the `sounds` step) for Elden Ring's title
+  // screen: its own audio root PACK/title/audio (kh-er fx.rs merges it; titlemusic.rs plays it on the title only)
+  { id: 'title-audio', phase: 'pack', run: ['tools/title_audio_pack.js', '--out', 'build/sora_pack/title/audio'] },
+  // (MIMIC-MUSIC) KH3's replica Xehanorts battle theme ("Replicas": BGM_xeha_bat__boss_1.mab of the `sounds` step) for Elden
+  // Ring's two Mimic Tear boss fights: its own audio root PACK/mimic/audio (kh-er fx.rs merges it; mimic_music.rs plays it)
+  { id: 'mimic-music', phase: 'pack', run: ['tools/mimic_music_pack.js', '--out', 'build/sora_pack/mimic/audio'] },
+  // (FINAL-FIX + HM-MAGIC) the shotlocks' and the hm magic set's actor sounds: their own audio root PACK/shotlocks/audio
+  { id: 'shotlocks-audio', phase: 'pack', run: ['tools/sora_shotlock_audio_root.js'] },
+  // (AUDIT-A SOUND) the keyblade forms' audio root PACK/keyblades/audio: the effect-carried SE whose particle system names an
+  // SeAttach package of another name, the forms' projectile SE and the pawn clips' voice notifies (our lists:
+  // tools/packgen/recipes/keyblades_audio_{effects,sounds}.json; the notifies from the keyblades' model.json, AUDIT-A's script)
+  { id: 'keyblades-audio', phase: 'pack', files: [KBA], run: () => {
+    const w = path.join(ROOT, 'build/packgen/kb_audio'); fs.rmSync(w, { recursive: true, force: true }); fs.mkdirSync(w, { recursive: true });
+    runNode([`${T}/${KBA}`]);
+    runNode(['tools/sora_audio_pack.js', '--party-extra', '--out', 'build/packgen/kb_audio/audio'], ROOT, { KH_AUDIO_EXTRA_EFFECTS: 'tools/packgen/recipes/keyblades_audio_effects.json', KH_AUDIO_EXTRA_SOUNDS: 'tools/packgen/recipes/keyblades_audio_sounds.json', KH_AUDIO_EXTRA_TRIGGERS: `${T}/weapons/AUDIT-A/stage/sound/pawn_triggers.json` });
+    fs.rmSync(path.join(ROOT, 'build/sora_pack/keyblades/audio'), { recursive: true, force: true });
+    copyOver('build/packgen/kb_audio/audio', 'build/sora_pack/keyblades/audio');
+  } },
   { id: 'xsi-deploy', phase: 'pack', run: () => copyNew('build/sora_tmp/xsi/pack', 'build/sora_pack') },
   // (XW / XW-b / ER90) the XS moves' form weapons as KH3 equips them (their skeletons, clips and materials), Chandelier's
   // pawn w_so088, and the form weapons' Elden Ring maps: the streams' own tools, staged under build/sora_tmp/packgen (their
@@ -169,8 +207,19 @@ const STEPS = [
     for (const s of ['xw', 'xwb', 'er90']) copyNew(`${T}/packgen/${s}/pack`, 'build/sora_pack');
   } },
   { id: 'lip', phase: 'pack', run: ['tools/face_lip_pack.js', '--pack', 'build/sora_pack', '--out', 'build/sora_pack'] },
+  // (AUDIT-C AN) Rage Form's three face clips (ANTI_00..02 = 9999EM / 9998EM / 9997EM) and face/face_extra.json, new files
+  { id: 'face-rage', phase: 'pack', run: () => { fs.rmSync(path.join(ROOT, 'build/packgen/rage_face'), { recursive: true, force: true }); runNode(['tools/audit_c/rage_face_clips.js', 'build/packgen/rage_face']); copyNew('build/packgen/rage_face/face', 'build/sora_pack/face'); } },
+  // (AUDIT-C ANLOOK) KH1's face / skin / hair with KH3's anti-mode owners in Rage Form (their shaders: the shader phase's `anti`)
+  { id: 'outfit-anti', phase: 'pack', run: ['tools/outfit_anti_owners.js', 'kh1'] },
   // ---- the streams' pack files (recipes)
-  { id: 'replay-scratch', phase: 'replay', run: ['tools/packgen_replay.js', 'prepare'] },
+  // (SETUP-TOOLS) the AUX files (streams' manifests outside the pack: tools/packgen/replay/files_aux.json) are the replay's own
+  // outputs: removed first, so that a build run again (or the clean room a release compiles its recipes in) starts as a fresh
+  // one does; a leftover one became part of the recipe compiler's corpus once, and a recipe referenced its own file
+  { id: 'replay-scratch', phase: 'replay', run: () => {
+    const aux = path.join(ROOT, 'tools', 'packgen', 'replay', 'files_aux.json');
+    if (fs.existsSync(aux)) for (const rel of Object.keys(JSON.parse(fs.readFileSync(aux, 'utf8')).files || {})) fs.rmSync(path.join(ROOT, rel), { force: true });
+    runNode(['tools/packgen_replay.js', 'prepare']);
+  } },
   // (ZETTA) the streams' own tools whose outputs the recipes copy: Zettaflare's sounds (the event's SE stream cut at the
   // matinee's times, Donald's event lines) and Donald's clips from the event kg702b / kg702c on his skeleton
   { id: 'zetta-audio', phase: 'replay', files: ['party/ZETTA/data/audio_extra.json', 'party/ZETTA/tools/zetta_audio.js'], run: () => {
@@ -182,6 +231,19 @@ const STEPS = [
     runNode([`${T}/party/ZETTA/tools/zetta_clips.js`]);
   } },
   { id: 'replay-files', phase: 'replay', run: ['tools/packgen_replay.js', 'apply'] },
+  // (SETUP-TOOLS) the keyblades' effect root and manifest AGAIN, now that the replay has laid the party's and the XS abilities'
+  // effects: the keyblades pack leaves out every effect another root has (sora_keyblades_pack.js effectRoots) and names its
+  // materials against the main root's, as it did in development (the pack step's first pass ran before the replay). Then the
+  // root's cube maps and attach effects (VFX-2, VFX-XLATE).
+  { id: 'keyblades-effects', phase: 'replay', run: () => { fs.rmSync(path.join(ROOT, 'build/sora_pack/keyblades/vfx'), { recursive: true, force: true }); runNode(['tools/sora_keyblades_pack.js', '--only', 'vfx,manifest']); } },
+  // (VFX-2) the keyblades' effect materials' cube maps (Dead of Night's shards), then the root's own table made again so that it
+  // reads them (tools/sora_vfx_shaders.js --root: the cube slots come from textures/cubes.json)
+  { id: 'keyblades-cubes', phase: 'replay', run: () => { runNode(['tools/vfx_cube_pack.js', '--pack', 'build/sora_pack/keyblades/vfx']); runNode(['tools/sora_vfx_shaders.js', '--root', path.join(ROOT, 'build/sora_pack/keyblades/vfx'), '--xw-break']); } },
+  // (VFX-XLATE) the keyblades' attach data assets as effects of their root
+  { id: 'keyblades-attach', phase: 'replay', run: ['tools/vfx_attach_effects.js'] },
+  // (VFX-RING M) the TailModelMarch meshes the keyblades' root lacks (kmd_cin00: Shooting Star's shot tail), converted as the
+  // effect pack converts meshes (VFX-RING's own script; new files only)
+  { id: 'keyblades-meshes', phase: 'replay', files: [VFXR_M], run: () => { fs.rmSync(path.join(ROOT, 'build/packgen/vfxring_mesh'), { recursive: true, force: true }); runNode([`${T}/${VFXR_M}`, path.join(ROOT, 'build/packgen/vfxring_mesh')]); copyNew('build/packgen/vfxring_mesh', 'build/sora_pack/keyblades/vfx/meshes'); } },
   // (VF-b / XW-d) Chandelier's shatter fragments for the character pipeline: the XS effect pack's fragment meshes, each with
   // its material slot renamed (the streams' mk_shards tools over the XS root as the recipes left it); their records and
   // materials are recipe files, the models (.glb) are written here
@@ -221,6 +283,11 @@ const STEPS = [
   { id: 'er-title', phase: 'replay', files: ['party/SP2/tools/logo_cut.js'], run: () => { runNode([`${T}/party/SP2/tools/logo_cut.js`, 'build/packgen/sp2']); const d = path.join(ROOT, 'build/sora_pack/saveload/textures'); fs.mkdirSync(d, { recursive: true }); fs.copyFileSync(path.join(ROOT, 'build/packgen/sp2/MenuWorldTitleER.png'), path.join(d, 'MenuWorldTitleER.png')); } },
   // (VFXR) the spawn points two Square Enix modules read from textures / vertex data, baked into the effects that use them
   { id: 'replay-bake', phase: 'replay', files: ['vfxr/tools/vfxr_bake.js'], run: () => { fs.rmSync(path.join(ROOT, 'build/packgen/vfxr_bake'), { recursive: true, force: true }); runNode([`${T}/vfxr/tools/vfxr_bake.js`, 'build/sora_pack', 'build/packgen/vfxr_bake']); copyOver('build/packgen/vfxr_bake', 'build/sora_pack'); } },
+  // (SETUP-TOOLS) what the development streams changed in the keyblades' effect root after its pack (AUDIT-B's crack effects,
+  // AUDIT-A's shield effects, the root's table and manifest): the late recipes (tools/packgen/replay/late_*.json), AFTER the bake
+  // (a file the bake rewrites and a stream changed too would else be baked over the stream's version; the recipes are compiled
+  // against the pack as the bake left it)
+  { id: 'replay-late', phase: 'replay', run: ['tools/packgen_replay.js', 'apply', '--late'] },
   { id: 'replay-verify', phase: 'replay', run: ['tools/packgen_replay.js', 'verify'] },
   // ---- the Elden Ring shaders
   { id: 'shaders', phase: 'shaders', files: ['er/er87/tools/patch_udiv.js', 'er/er87/tools/hair_fade.js', 'er/er91/tools/hair91.js'], run: ['tools/packgen_shaders.js'] },
@@ -249,6 +316,23 @@ function walkFiles(dir, base = dir, out = []) {
   if (!fs.existsSync(dir)) return out;
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory()) walkFiles(p, base, out); else out.push(path.relative(base, p)); }
   return out;
+}
+// (SETUP-TOOLS) the extracted files (assets/: path and size of each) as one hash; a converter whose chunks were made for another
+// list runs with --fresh. The print is written after the step succeeded (build/packgen/convert_inputs_<step>.json).
+function assetsPrint() {
+  const h = require('crypto').createHash('sha256');
+  const files = walkFiles(path.join(ROOT, 'assets')).map((f) => f.split(path.sep).join('/')).sort();
+  for (const f of files) h.update(`${f}|${fs.statSync(path.join(ROOT, 'assets', f)).size};`);
+  return { files: files.length, sha256: h.digest('hex') };
+}
+function freshWhenInputsChanged(step, argv) {
+  const file = path.join(ROOT, 'build', 'packgen', `convert_inputs_${step}.json`);
+  const now = assetsPrint();
+  let before = null; try { before = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* no print: a first run, or a build from before the prints */ }
+  const fresh = !before || before.sha256 !== now.sha256;
+  if (fresh) console.log(`   ${step}: the extracted files are new or changed (${now.files}): from the start (--fresh)`);
+  runNode(fresh ? [...argv, '--fresh'] : argv);
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(now, null, 1) + '\n');
 }
 // copy every file of SRC that DST does not have (the development deploys: new files only)
 function copyNew(src, dst) {

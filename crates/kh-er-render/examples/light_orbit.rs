@@ -115,7 +115,7 @@ fn capsules(feet: Vec3) -> Vec<Vec4> {
 fn ray_capsule(o: Vec3, d: Vec3, caps: &[Vec4]) -> Option<f32> {
     // marched: fine enough for pixels of a body a few metres away
     let mut best: Option<f32> = None;
-    for c in caps.chunks_exact(2) {
+    for c in caps.as_chunks::<2>().0 {
         let (a, b, r) = (c[0].truncate(), c[1].truncate(), c[0].w);
         let mid = (a + b) * 0.5;
         let t0 = (mid - o).dot(d);
@@ -456,8 +456,11 @@ fn write_csv(path: &str, s: &[Sample]) {
     std::fs::write(path, text).unwrap();
 }
 
+/// One line of `svg`: (label, colour, its points).
+type Series<'a> = (&'a str, &'a str, Vec<(f32, f32)>);
+
 /// A small line chart (SVG) of one quantity over time, before (orange) and with the steady light (blue).
-fn svg(title: &str, unit: &str, series: &[(&str, &str, Vec<(f32, f32)>)], marks: &[(f32, &str)]) -> String {
+fn svg(title: &str, unit: &str, series: &[Series<'_>], marks: &[(f32, &str)]) -> String {
     let (w, h, l, r, t, b) = (760.0, 260.0, 64.0, 150.0, 34.0, 34.0);
     let xs = series.iter().flat_map(|s| s.2.iter().map(|p| p.0));
     let (x0, x1) = xs.clone().fold((f32::MAX, f32::MIN), |(a, b), x| (a.min(x), b.max(x)));

@@ -51,10 +51,11 @@ mod finish_effects {
         Status::from_loadout(&loadout)
     }
 
-    /// Second Form's charge effect (`vs_com_lv2` on the Keyblade) is spawned with the form and is
-    /// stopped by the finish command's end: `(pawn+0x598)+0x200 .vt+0x1A8(-1, 1)`.
+    /// (HAIR-PULSE) Second Form and its finish command spawn NO charge effect: KH3 spawns the form's weapons with charge level
+    /// -1 and never raises it (build/sora_tmp/weapons/HAIR-PULSE/STATE.md section 6), so neither `vs_com_lv2` nor the burst
+    /// `vs_com_kyp01` (was: the charge effect spawned with the form, stopped by the finish command's end).
     #[test]
-    fn the_charge_effect_ends_with_the_finish_command() {
+    fn the_form_and_its_finish_spawn_no_charge_effect() {
         let origin = Vec3::new(0.0, 0.0, Sora::origin_height_on_floor(&SORA_PARAMS));
         let mut sora = Sora::new(SORA_PARAMS, Pose { position: origin, yaw: 0.0 }).with_tuning(Tuning::GAME_EXACT).with_status(level99());
         let mut host = RecordingHost::new();
@@ -66,7 +67,7 @@ mod finish_effects {
             let held = button.map_or(PadButtons::NONE, |b| PadButtons::NONE.with(b));
             let input = Input::default().with_pad(PadState::from_held(held, PadButtons::NONE));
             let out = host.step(&world, |h| sora.step_hosted(DT, &input, h));
-            events.extend(out.events.iter().map(|e| e.kind.clone()));
+            events.extend(out.events.iter().map(|e| e.kind));
             out.state
         };
         for _ in 0..5 {
@@ -81,9 +82,8 @@ mod finish_effects {
         for _ in 0..220 {
             step(&mut sora, &mut host, &mut events, None);
         }
-        let charge = events.iter().find_map(|e| if let EventKind::EffectSpawn { spawn, handle } = e { (spawn.name == "vs_com_lv2").then_some(*handle) } else { None }).expect("the form's charge effect");
-        let stopped = |events: &[EventKind]| events.iter().any(|e| matches!(e, EventKind::EffectStop { handle, .. } if *handle == charge));
-        assert!(!stopped(&events), "the charge effect lasts while the form does");
+        let glow = |events: &[EventKind]| events.iter().any(|e| matches!(e, EventKind::EffectSpawn { spawn, .. } if spawn.name == "vs_com_lv2" || spawn.name == "vs_com_kyp01"));
+        assert!(!glow(&events), "no charge glow with the form");
         step(&mut sora, &mut host, &mut events, Some(PadButton::SITUATION));
         let mut state = step(&mut sora, &mut host, &mut events, None);
         assert_eq!(state, StateId::Stylefinish);
@@ -94,6 +94,6 @@ mod finish_effects {
             state = step(&mut sora, &mut host, &mut events, None);
         }
         assert_ne!(state, StateId::Stylefinish, "the finish command ended");
-        assert!(stopped(&events), "EndEffect on the weapons at the finish end");
+        assert!(!glow(&events), "no charge glow through the finish either");
     }
 }

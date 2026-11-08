@@ -223,7 +223,7 @@ pub fn mp_of_pct(max_mp: i32, pct: f32, scale: f32) -> i32 {
 /// - `0x9E + element`: the ultimate (0x9E..=0xA3);
 /// - `0xA4 + n`: the n-th hybrid in [`hybrid_pairs`] order (0xA4..=0xB2);
 /// - `0xB3 + element`: Attune to that element (0xB3..=0xB8).
-/// The item commands 58..=68 stay as in every block. The Y Arcane spells and the Releases have no id (Y / automatic).
+///   The item commands 58..=68 stay as in every block. The Y Arcane spells and the Releases have no id (Y / automatic).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DonCmd {
     Spell(SpellRef),

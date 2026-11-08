@@ -10,6 +10,8 @@
 //!   device's own callback; the device is reopened when it goes away or the default changes;
 //! - [`host`]: all of it as one object ([`HostAudio`]) for a host without an ECS.
 
+pub mod anchors; // (AUDIT-A SOUND) the weapons' / pawns' own points (`kb:` / `pawn:`) for the sounds on them
+pub mod core_lists; // (AUDIT-A) the random voice lists of the form anim sets' clips (the pack lacks them)
 pub mod device;
 pub mod host;
 pub mod pose;
@@ -19,9 +21,9 @@ pub mod threaded;
 pub use device::{start_device_thread, WavOut};
 pub use host::{HostAudio, Step};
 pub use pose::{socket_transform, BoneSample, PoseTap};
-pub use session::{reflected_hit_sounds, Alarm, Attaches};
+pub use session::{reflected_hit_sounds, ui_voice_gain, Alarm, Attaches};
 pub use session::party_voice_inputs; // (FACE)
-pub use threaded::{Output, Stats};
+pub use threaded::{MixWindow, Output, Stats};
 
 /// Frames per fixed 60 Hz step at the mixer's rate.
 pub const FRAMES_PER_STEP: usize = (kh_audio::mixer::RATE / 60) as usize;

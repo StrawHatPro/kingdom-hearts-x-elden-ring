@@ -25,7 +25,7 @@
 //! - Hits: the team rows are rows of Sora's `p_ex001_AttackData` [A] (FR_CALLMETEOR_FINISH ...):
 //!   they are delivered as Sora's shots through `FriendLinkView::shots`.
 
-use super::proj::{rich_eval, rot_vector, Contact, ProjKind, TeamProj, METEOR_SHAKE_MAX, METEOR_SHAKE_MIN, METEOR_SHAKE_Z, FLARE_APPEAR_END, FLARE_APPEAR_X, FLARE_APPEAR_Z, FLARE_FIRE_END, FLARE_FIRE_X, FLARE_FIRE_Z};
+use super::proj::{rich_eval, rot_vector, Contact, FlareHoming, ProjKind, TeamProj, METEOR_SHAKE_MAX, METEOR_SHAKE_MIN, METEOR_SHAKE_Z, FLARE_APPEAR_END, FLARE_APPEAR_X, FLARE_APPEAR_Z, FLARE_FIRE_END, FLARE_FIRE_X, FLARE_FIRE_Z};
 use super::{fr_id, FrDrive, TeamEvent, TeamMember, TeamOutput, TeamParty};
 use kh_core::cmc::Cmc;
 use kh_core::host::party::SeamHandles;
@@ -112,7 +112,7 @@ pub const METEORS: [(f32, f32, f32, f32, f32); 40] = [
     (313.6154, 0.23, 0.54, 0.36, 1.3),
     (341.30768, 0.24, 0.6, 0.26, 1.0),
     (18.0, 0.2, 0.9, 0.3, 1.1),
-    (36.947369, 0.31, 0.75, 0.4, 1.4),
+    (36.947_37, 0.31, 0.75, 0.4, 1.4),
     (55.894737, 0.25, 0.83, 0.46, 1.2),
     (74.8421, 0.31, 0.95, 0.3, 1.0),
     (93.789474, 0.33, 0.88, 0.22, 1.1),
@@ -179,6 +179,16 @@ pub const FLARE_DISAPPEAR_TIME: f32 = 3.030_303;
 pub const FLARE_UP_OFFSET: Vec3 = Vec3::new(200.0, 0.0, 250.0);
 pub const FLARE_HOMING_RANGE: f32 = 25.0;
 pub const FLARE_LIFE_TIME: f32 = 10.0;
+
+/// The world a missile's tick reads: the pawn's place and facing (deg) and clock, the pawn's target and the missile's own.
+#[derive(Clone, Copy, Debug)]
+struct FlareScene<'a> {
+    base: Vec3,
+    yaw: f32,
+    pawn_t: f32,
+    main: Option<&'a TargetInfo>,
+    own: Option<&'a TargetInfo>,
+}
 
 /// What a missile's tick produced.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -391,6 +401,48 @@ pub const SGUARD_BASH_LENGTH: f32 = 1.133_333_3;
 pub const SGUARD_BASH2_LENGTH: f32 = 1.633_333_3;
 pub const SGUARD_AIR_BASH_LENGTH: f32 = 0.833_333_3;
 pub const SGUARD_LAND_LENGTH: f32 = 0.333_333_3;
+pub const SGUARD_HEAVY_LENGTH: f32 = 1.966_666_7;
+
+/// (COMBAT-FIX) KH3's Trinity Guard hit shapes (ShieldGuardian_Pawn TresAtkColl0.CollisionShapesSrc [A]): group
+/// FR_SHIELDGUARDIAN_SHIELDBASH = SPHERE m_Size 100 at X_Link03_skt + (80, 0, 120), FR_SHIELDGUARDIAN_HEAVYBASH = SPHERE 150 at
+/// X_Link03_skt + (80, 0, 150); m_IncSize 0 and no size curve: they never grow. o_at001 keeps every X_Linkn (where the riders
+/// stand) at kh_sk, and X_Link03_skt's rotation (pitch 90, roll -90) under kh_sk's Rx(-90) and the mesh's yaw 270 is the actor
+/// frame: (ahead, -, up) of the riders' feet. (radius, the place in the pawn's frame)
+pub const SGUARD_BASH_SPHERE: (f32, Vec3) = (100.0, Vec3::new(80.0, 0.0, 120.0));
+pub const SGUARD_HEAVY_SPHERE: (f32, Vec3) = (150.0, Vec3::new(80.0, 0.0, 150.0));
+/// (COMBAT-FIX) The TresAnimNotifyState_Attack windows of the pawn's own clips (o_at001 rt/1630 SGuardShieldBash, 1635
+/// SGuardShieldBash2, 1631 SGuardAirShieldBash, 1632 SGuardHeavyBash) [A], clip seconds.
+pub const SGUARD_BASH_WINDOW: (f32, f32) = (0.4007, 0.6109);
+pub const SGUARD_BASH2_WINDOW: (f32, f32) = (0.3649, 0.7236);
+pub const SGUARD_AIR_BASH_WINDOW: (f32, f32) = (0.168, 0.3783);
+pub const SGUARD_HEAVY_WINDOW: (f32, f32) = (0.5316, 1.2806);
+/// (COMBAT-FIX) The pawn's root motion of those clips (bEnableRootMotion; o_at001 kh_sk translation keys, mesh +Y = the
+/// pawn's forward under the mesh yaw 270) [A]: (clip s, cm ahead). The bash lunges 4 m, the second bash 8 m, the air bash
+/// 4 m, the heavy bash 18 m, and the hit spheres ride the pawn through them.
+pub const SGUARD_BASH_ROOT: &[(f32, f32)] = &[(0.0, 0.0), (0.4, 0.0), (0.4333, 73.4276), (0.4667, 221.7375), (0.5, 337.0924), (0.5333, 381.3607), (0.5667, 397.6701), (0.6, 400.0), (1.1333, 400.0)];
+pub const SGUARD_BASH2_ROOT: &[(f32, f32)] = &[(0.0, 0.0), (0.3, 0.0), (0.3333, 75.3962), (0.3667, 248.8125), (0.4, 453.4657), (0.4333, 616.3009), (0.4667, 701.9026), (0.5, 753.2865), (0.5333, 781.9357), (0.5667, 795.4756), (0.6, 799.7551), (0.6333, 800.0), (1.6333, 800.0)];
+pub const SGUARD_AIR_BASH_ROOT: &[(f32, f32)] = &[(0.0, 0.0), (0.1333, 0.0), (0.1667, 37.6762), (0.2, 124.334), (0.2333, 226.6012), (0.2667, 307.9715), (0.3, 350.7675), (0.3333, 376.49), (0.3667, 390.8617), (0.4, 397.6814), (0.4333, 399.8609), (0.4667, 400.0), (0.8333, 400.0)];
+pub const SGUARD_HEAVY_ROOT: &[(f32, f32)] = &[(0.0, 0.0), (0.3333, 0.0), (0.3667, 1.1256), (0.4, 6.5846), (0.4333, 19.0824), (0.4667, 39.9437), (0.5, 68.9788), (0.5333, 112.0012), (0.5667, 169.5907), (0.6, 236.8591), (0.6333, 311.3415), (0.6667, 391.6289), (0.7, 476.8726), (0.7333, 566.5735), (0.7667, 660.4918), (0.8, 758.6263), (0.8333, 861.265), (0.8667, 969.1607), (0.9, 1084.0812), (0.9333, 1211.1958), (0.9667, 1330.7021), (1.0, 1426.1326), (1.0333, 1506.1349), (1.0667, 1573.9415), (1.1, 1630.2867), (1.1333, 1673.3723), (1.1667, 1700.8098), (1.2, 1720.6473), (1.2333, 1736.8237), (1.2667, 1750.7831), (1.3, 1763.3081), (1.3333, 1775.0313), (1.3667, 1785.2628), (1.4, 1792.6093), (1.4333, 1797.1573), (1.4667, 1799.398), (1.5, 1800.0), (1.9667, 1800.0)];
+
+/// (COMBAT-FIX) A root track at clip time `t` (linear between keys, held at the ends).
+pub fn sguard_root(track: &[(f32, f32)], t: f32) -> f32 {
+    let (Some(first), Some(last)) = (track.first(), track.last()) else { return 0.0 };
+    if t <= first.0 {
+        return first.1;
+    }
+    for w in track.windows(2) {
+        if t <= w[1].0 {
+            let u = if w[1].0 > w[0].0 { (t - w[0].0) / (w[1].0 - w[0].0) } else { 1.0 };
+            return w[0].1 + (w[1].1 - w[0].1) * u;
+        }
+    }
+    last.1
+}
+
+/// (COMBAT-FIX) One of the pawn's hit spheres, riding the pawn (Sora rides it: `TeamShot::follow`) through its window.
+fn sguard_shot(row: &'static str, at: Vec3, yaw: f32, (radius, local): (f32, Vec3), (w0, w1): (f32, f32), effect: &'static str) -> TeamShot {
+    TeamShot { row, position: at + fwd(yaw) * local.x + Vec3::Z * local.z, radius, grow: 0.0, max: radius, life: w1 - w0, effect, follow: Some(local) }
+}
 
 /// The ShieldGuardian_Pawn movement component as kh-core's CMC parameters: its root capsule
 /// (TresRoot CAPSULE1 r 170, half height 190, centre 190) [A], MaxWalkSpeed 180, MaxStepHeight 47
@@ -863,8 +915,8 @@ impl Team {
     /// - 5 (0x1412E6290): homing (10, m_fHomingAngle, 0.2 / 0.7 x max with a target, 0.7 / 1.0
     ///   without, cos 0.3 / 0) to the aim; <= m_fHomingRange 25: explode; the aim follows the
     ///   target when it moved more than m_fHomingUpdateRange; after m_fLifeTime 10 s: explode.
-    #[allow(clippy::too_many_arguments)]
-    fn flare_missile(p: &mut TeamProj, dt: f32, base: Vec3, yaw: f32, pawn_t: f32, main: Option<&TargetInfo>, own: Option<&TargetInfo>, rng: &mut u32, ids: &mut SeamHandles, host: &mut PartyHost) -> MissileOut {
+    fn flare_missile(p: &mut TeamProj, dt: f32, scene: FlareScene, rng: &mut u32, ids: &mut SeamHandles, host: &mut PartyHost) -> MissileOut {
+        let FlareScene { base, yaw, pawn_t, main, own } = scene;
         let info = MISSILES[p.index];
         let ryaw = yaw + info.0;
         p.countdown -= dt;
@@ -913,7 +965,7 @@ impl Team {
                 }
             }
             4 => {
-                let d = p.flare_homing(dt, 10.0, 100f32.to_radians(), 100.0, 1000.0, 0.5, 100.0);
+                let d = p.flare_homing(dt, FlareHoming { rate: 10.0, turn: 100f32.to_radians(), min: 100.0, max: 1000.0, cos_min: 0.5, slow: 100.0 });
                 if d < 100.0 {
                     let mut aim = main.map_or(p.target_point.unwrap_or(p.position), |m| m.center);
                     (p.mstate, p.countdown) = (5, 0.0);
@@ -931,7 +983,7 @@ impl Team {
             }
             5 => {
                 let (lo, hi, c) = if p.no_target { (FLARE_SPEED * 0.7, FLARE_SPEED, 0.0) } else { (FLARE_SPEED * 0.2, FLARE_SPEED * 0.7, 0.3) };
-                let d = p.flare_homing(dt, 10.0, FLARE_HOMING_ANGLE.to_radians(), lo, hi, c, 0.0);
+                let d = p.flare_homing(dt, FlareHoming { rate: 10.0, turn: FLARE_HOMING_ANGLE.to_radians(), min: lo, max: hi, cos_min: c, slow: 0.0 });
                 if d <= FLARE_HOMING_RANGE {
                     p.mstate = 10;
                 } else {
@@ -1047,9 +1099,7 @@ impl Team {
             self.offers[slot] = Some((kind, -1.0));
             self.offers_made += 1;
             out.events.push(TeamEvent::Offered { member: m.id, kind, time: -1.0 });
-            for q in &mut self.points {
-                *q = LinkPoints { points: 0.0, timer: LINK_POINT_INTERVAL, threshold: 0.0 };
-            }
+            self.points.fill(LinkPoints { points: 0.0, timer: LINK_POINT_INTERVAL, threshold: 0.0 });
             break;
         }
     }
@@ -1236,7 +1286,7 @@ impl Team {
                         }
                         if t0 < METEOR_WHITE_OUT && r.t >= METEOR_WHITE_OUT {
                             // m_MeteorExpProj: sphere 100 + 1500 / s up to 1500, 1.2 s, no particle [A].
-                            self.pending.push((0.0, TeamShot { row: "FR_CALLMETEOR_FINISH_EXP", position: r.aim, radius: 100.0, grow: 1500.0, max: 1500.0, life: 1.2, effect: "" }));
+                            self.pending.push((0.0, TeamShot { row: "FR_CALLMETEOR_FINISH_EXP", position: r.aim, radius: 100.0, grow: 1500.0, max: 1500.0, life: 1.2, effect: "", follow: None }));
                         }
                         if r.t >= METEOR_WHITE_IN {
                             for p in &mut self.projs {
@@ -1329,13 +1379,13 @@ impl Team {
                         }
                     }
                     let own_t = enemies.iter().find(|t| t.id == p.target).copied();
-                    let out_of = Self::flare_missile(p, dt, base, r.yaw, r.clip_t, main.as_ref(), own_t.as_ref(), &mut self.rng, ids, host);
+                    let out_of = Self::flare_missile(p, dt, FlareScene { base, yaw: r.yaw, pawn_t: r.clip_t, main: main.as_ref(), own: own_t.as_ref() }, &mut self.rng, ids, host);
                     match out_of {
                         MissileOut::None => {}
                         MissileOut::Hit(at) => {
                             // The missile's own 25 cm sphere (row FR_FLAREFORCE_FINISH01, its CDO
                             // default) on a pawn; destroyed on the hit (no m_bNoDestroyOnHit) [A].
-                            self.pending.push((0.0, TeamShot { row: "FR_FLAREFORCE_FINISH01", position: at, radius: p.radius, grow: 0.0, max: p.radius, life: 0.1, effect: "" }));
+                            self.pending.push((0.0, TeamShot { row: "FR_FLAREFORCE_FINISH01", position: at, radius: p.radius, grow: 0.0, max: p.radius, life: 0.1, effect: "", follow: None }));
                             p.kill(host.effects);
                         }
                         MissileOut::Explode(at) => {
@@ -1346,7 +1396,7 @@ impl Team {
                             let dz = at.z - pawn_z;
                             let row = if dz <= FLARE_TARGET_HEIGHT_2 { "FR_FLAREFORCE_FINISH01" } else if dz <= FLARE_TARGET_HEIGHT_3 { "FR_FLAREFORCE_FINISH02" } else { "FR_FLAREFORCE_FINISH03" };
                             burst(ids, host.effects, "vn_ex001_fff_hit00", at);
-                            self.pending.push((0.1, TeamShot { row, position: at, radius: 65.0, grow: 0.0, max: 65.0, life: 0.8, effect: "" }));
+                            self.pending.push((0.1, TeamShot { row, position: at, radius: 65.0, grow: 0.0, max: 65.0, life: 0.8, effect: "", follow: None }));
                             p.kill(host.effects);
                         }
                     }
@@ -1418,7 +1468,7 @@ impl Team {
                         for t in &enemies {
                             if !r.hit_set.contains(&t.id) && seg_dist(p0 + Vec3::Z * LINK_PAWN_ORIGIN_Z, r.at + Vec3::Z * LINK_PAWN_ORIGIN_Z, t.center) <= GSHOOT_SORA_RADIUS + t.radius {
                                 r.hit_set.push(t.id);
-                                self.pending.push((0.0, TeamShot { row: "FR_GOOFYSHOOT_SORA", position: t.center, radius: t.radius.max(25.0), grow: 0.0, max: t.radius.max(25.0), life: 0.1, effect: "" }));
+                                self.pending.push((0.0, TeamShot { row: "FR_GOOFYSHOOT_SORA", position: t.center, radius: t.radius.max(25.0), grow: 0.0, max: t.radius.max(25.0), life: 0.1, effect: "", follow: None }));
                             }
                         }
                         let near = (r.aim - (r.at + Vec3::Z * LINK_PAWN_ORIGIN_Z)).length_squared() < 48_400.0;
@@ -1503,7 +1553,7 @@ impl Team {
                             // destroy on hit, particle vn_ex002_gsh_sho0; at his location.
                             // (D4) at his root location (0x1411CB010: uStack_78 = RootComponent +0x2B0) [C].
                             let at = r.friend_at.unwrap_or(g1);
-                            self.pending.push((0.0, TeamShot { row: "FR_GOOFYSHOOT_EXP", position: at, radius: 500.0, grow: 1000.0, max: 900.0, life: 0.5, effect: "vn_ex002_gsh_sho0" }));
+                            self.pending.push((0.0, TeamShot { row: "FR_GOOFYSHOOT_EXP", position: at, radius: 500.0, grow: 1000.0, max: 900.0, life: 0.5, effect: "vn_ex002_gsh_sho0", follow: None }));
                             (r.phase, r.clip_t, r.vel) = (6, 0.0, Vec3::ZERO);
                         }
                     }
@@ -1598,7 +1648,7 @@ impl Team {
                             r.phase = 1;
                         }
                     }
-                    1 | 2 | 3 => {
+                    1..=3 => {
                         let params = shield_params();
                         let mut body = r.body.unwrap_or_else(|| Cmc::new(&params, r.at));
                         r.clip_t += dt;
@@ -1620,8 +1670,7 @@ impl Team {
                             let air = !grounded;
                             r.n += 1;
                             (r.phase, r.clip_t, r.vz) = (2, 0.0, if air { 1.0 } else { 0.0 });
-                            let row = if air || r.n % 2 == 1 { "FR_SHIELDGUARDIAN_SHIELDBASH" } else { "FR_SHIELDGUARDIAN_SHIELDBASH2" };
-                            r.shots.push(TeamShot { row, position: r.at + fwd(r.yaw) * 150.0 + Vec3::Z * 80.0, radius: 200.0, grow: 0.0, max: 200.0, life: 0.3, effect: "VN_slg_bsh0" });
+                            // (COMBAT-FIX) its sphere comes in at the clip's Attack window, below (was a 200 sphere at once)
                         } else if r.phase == 1 && jump && grounded {
                             body.jump_z_velocity = SGUARD_JUMP_Z;
                             body.do_jump();
@@ -1636,9 +1685,25 @@ impl Team {
                             r.yaw += d.clamp(-SGUARD_TURN_RATE * dt, SGUARD_TURN_RATE * dt);
                         }
                         body.control_input = input;
+                        // (COMBAT-FIX) THE BASH (KH3 1:1): the pawn's own clip lunges it (its root motion) and its sphere rides it
+                        // through the clip's Attack window (SHIELDBASH on 1630 / 1631, SHIELDBASH2 on 1635)
+                        let bash = (r.phase == 2).then_some({
+                            if r.vz > 0.5 {
+                                (SGUARD_AIR_BASH_ROOT, SGUARD_AIR_BASH_WINDOW, "FR_SHIELDGUARDIAN_SHIELDBASH")
+                            } else if r.n % 2 == 1 {
+                                (SGUARD_BASH_ROOT, SGUARD_BASH_WINDOW, "FR_SHIELDGUARDIAN_SHIELDBASH")
+                            } else {
+                                (SGUARD_BASH2_ROOT, SGUARD_BASH2_WINDOW, "FR_SHIELDGUARDIAN_SHIELDBASH2")
+                            }
+                        });
+                        let before = (r.clip_t - dt).max(0.0);
+                        let root_motion = bash.map(|(track, _, _)| (fwd(r.yaw) * (sguard_root(track, r.clip_t) - sguard_root(track, before)), 0.0));
+                        if let Some((_, w, row)) = bash.filter(|(_, w, _)| before < w.0 && r.clip_t >= w.0) {
+                            r.shots.push(sguard_shot(row, r.at, r.yaw, SGUARD_BASH_SPHERE, w, "VN_slg_bsh0"));
+                        }
                         let mut yaw = r.yaw;
                         body.tick_head(host.world, &params, dt);
-                        body.perform_movement(host.world, &params, dt, None, &mut yaw);
+                        body.perform_movement(host.world, &params, dt, root_motion, &mut yaw);
                         r.at = body.location;
                         r.body = Some(body);
                         r.landed = (r.landed - dt).max(0.0);
@@ -1669,10 +1734,22 @@ impl Team {
                         friend_motion = Some("SGuardHeavyBash");
                         let before = r.clip_t;
                         r.clip_t += dt;
-                        if before < 0.8 && r.clip_t >= 0.8 {
-                            r.shots.push(TeamShot { row: "FR_SHIELDGUARDIAN_HEAVYBASH", position: r.at + fwd(r.yaw) * 200.0, radius: 300.0, grow: 1000.0, max: 600.0, life: 0.3, effect: "VN_slg_hvy00" });
+                        // (COMBAT-FIX) KH3 1:1: the heavy bash lunges the pawn 18 m (its root motion) and its 150 sphere rides it
+                        // through 1632's Attack window (was a sphere 200 ahead growing from 300 to 600 at 0.8 s)
+                        let params = shield_params();
+                        let mut body = r.body.unwrap_or_else(|| Cmc::new(&params, r.at));
+                        body.control_input = Vec3::ZERO;
+                        let lunge = fwd(r.yaw) * (sguard_root(SGUARD_HEAVY_ROOT, r.clip_t) - sguard_root(SGUARD_HEAVY_ROOT, before));
+                        let mut yaw = r.yaw;
+                        body.tick_head(host.world, &params, dt);
+                        body.perform_movement(host.world, &params, dt, Some((lunge, 0.0)), &mut yaw);
+                        r.at = body.location;
+                        r.body = Some(body);
+                        let w = SGUARD_HEAVY_WINDOW;
+                        if before < w.0 && r.clip_t >= w.0 {
+                            r.shots.push(sguard_shot("FR_SHIELDGUARDIAN_HEAVYBASH", r.at, r.yaw, SGUARD_HEAVY_SPHERE, w, "VN_slg_hvy00"));
                         }
-                        if r.clip_t >= 1.9667 {
+                        if r.clip_t >= SGUARD_HEAVY_LENGTH {
                             r.finished = true;
                         }
                     }
@@ -1693,17 +1770,17 @@ impl Team {
                 };
                 match (p.kind, contact) {
                     (ProjKind::Meteor, Contact::Pawn { .. }) => {
-                        self.pending.push((0.0, TeamShot { row: p.row, position: at, radius: p.radius, grow: 0.0, max: p.radius, life: 0.1, effect: "vn_ex001_fcm_hit00" }));
+                        self.pending.push((0.0, TeamShot { row: p.row, position: at, radius: p.radius, grow: 0.0, max: p.radius, life: 0.1, effect: "vn_ex001_fcm_hit00", follow: None }));
                     }
                     (ProjKind::Meteor, Contact::Map { .. }) => {
                         burst(ids, host.effects, "vn_ex001_fcm_hit00", at);
                     }
                     (ProjKind::Missile, Contact::Pawn { .. } | Contact::Map { .. }) => {
                         if matches!(contact, Contact::Pawn { .. }) {
-                            self.pending.push((0.0, TeamShot { row: p.row, position: at, radius: p.radius, grow: 0.0, max: p.radius, life: 0.1, effect: "" }));
+                            self.pending.push((0.0, TeamShot { row: p.row, position: at, radius: p.radius, grow: 0.0, max: p.radius, life: 0.1, effect: "", follow: None }));
                         }
                         burst(ids, host.effects, "vn_ex001_fff_hit00", at);
-                        self.pending.push((0.1, TeamShot { row: "FR_FLAREFORCE_FINISH01", position: at, radius: 65.0, grow: 0.0, max: 65.0, life: 0.8, effect: "" }));
+                        self.pending.push((0.1, TeamShot { row: "FR_FLAREFORCE_FINISH01", position: at, radius: 65.0, grow: 0.0, max: 65.0, life: 0.8, effect: "", follow: None }));
                     }
                     _ => {}
                 }
@@ -1758,6 +1835,37 @@ impl Team {
                 self.drive(party, id, at, yaw, friend_motion);
             }
         }
+    }
+}
+
+// ------------------------------------------------------------------------------------------------ (DON-KIT)
+
+/// (DON-KIT) DONALD'S TEAM ATTACKS AT RESONANCE 3 (documentation/DONALD_OVERHAUL.md 6.6, DON_PLAN R22): x `team.res3_mult`
+/// (1.2) while any of a Donald's meters in the party is at Resonance 3, else 1.
+pub fn don_res3_mult(party: &crate::party::Party) -> f32 {
+    let d = crate::donald::data();
+    let full = party.members().filter_map(|id| party.status(id)).filter_map(|s| s.donald.as_ref()).any(|st| st.core.full_power_any(&d));
+    if full {
+        crate::pad::donald::K.team_res3_mult
+    } else {
+        1.0
+    }
+}
+
+/// (DON-KIT) A team attack's hit (its row of Sora's attack data) is one of Donald's: Flare Force, Donald Meteor, the Unisons
+/// (with Sora) and Trinity Guard (with Goofy).
+pub fn is_donald_team_row(row: &str) -> bool {
+    row.starts_with("FR_FLAREFORCE") || row.starts_with("FR_CALLMETEOR") || row.starts_with("UNISON_") || row.starts_with("FR_SHIELDGUARDIAN")
+}
+
+/// (DON-KIT) THE MULTIPLIER OF ONE HIT (`HitRecord::attack_name`) of a team attack, for the hosts' damage route of Sora's
+/// hits (the team shots are delivered by Sora's core: kh-core spawn_team_shot): `don_res3_mult` on Donald's team rows, 1 on
+/// anything else.
+pub fn don_team_hit_mult(party: &crate::party::Party, row: &str) -> f32 {
+    if is_donald_team_row(row) && party.members().any(|id| party.member(id).is_some_and(|m| m.chara == Chara::Donald)) {
+        don_res3_mult(party)
+    } else {
+        1.0
     }
 }
 
@@ -1925,7 +2033,23 @@ mod tests {
         let mut rows = Vec::new();
         team.friend_rows(&p, &mut rows);
         assert_eq!(rows[0].link.sora_motion, Some("SGuardShieldBash"));
-        assert_eq!(rows[0].link.shots[0].map(|s| s.row), Some("FR_SHIELDGUARDIAN_SHIELDBASH"));
+        // (COMBAT-FIX) KH3's sphere comes in at o_at001 1630's Attack window, not at the press
+        assert!(rows[0].link.shots[0].is_none(), "nothing at the press");
+        let mut waited = 1;
+        let shot = loop {
+            team.step(1.0 / 60.0, &mut p, &mut host);
+            waited += 1;
+            let mut rows = Vec::new();
+            team.friend_rows(&p, &mut rows);
+            if let Some(s) = rows[0].link.shots[0] {
+                break s;
+            }
+            assert!(waited < 60, "the bash's sphere never came");
+        };
+        assert_eq!(shot.row, "FR_SHIELDGUARDIAN_SHIELDBASH");
+        // the press step starts the clip at 0: the sphere comes in on the first step at or past the window (60 steps a second)
+        let clip = (waited - 1) as f32 / 60.0;
+        assert!(clip >= SGUARD_BASH_WINDOW.0 && clip < SGUARD_BASH_WINDOW.0 + 1.0 / 60.0, "at clip {clip} s");
         team.request(FriendLinkRequest::Action { kind: 193, action: 2 });
         let mut saw68 = false;
         for _ in 0..300 {
@@ -1939,6 +2063,64 @@ mod tests {
         }
         assert!(saw68);
     }
+    /// (COMBAT-FIX) Trinity Guard is KH3's: each bash lunges the pawn by its clip's root motion (o_at001 1630 4 m, 1635 8 m,
+    /// 1632 18 m) and hits with the pawn's own spheres riding it (ShieldGuardian_Pawn TresAtkColl0: SHIELDBASH 100 at
+    /// X_Link03_skt + (80, 0, 120), HEAVYBASH 150 at + (80, 0, 150), no growth) through the clip's Attack window; before, a 200
+    /// sphere 150 ahead at the press and a 300 - 600 sphere 200 ahead, with no lunge.
+    #[test]
+    fn trinity_guard_bashes_lunge_with_kh3s_spheres_riding_them() {
+        let world = kh_core::test_world::TestWorld::floor();
+        let mut null = crate::host::NullPartyHost::default();
+        let mut host = null.host(&world);
+        let (mut team, mut p) = (Team::new(), party());
+        team.request(FriendLinkRequest::Sora { gauge_full: true, in_battle: true, position: Vec3::ZERO, yaw: 0.0 });
+        team.request(FriendLinkRequest::Start { kind: 193, target: TargetId::NONE });
+        for _ in 0..120 {
+            team.step(1.0 / 60.0, &mut p, &mut host);
+        }
+        let at = |team: &Team| team.run.as_ref().unwrap().at;
+        let shots = |team: &Team, p: &dyn TeamParty| {
+            let mut rows = Vec::new();
+            team.friend_rows(p, &mut rows);
+            rows[0].link.shots.iter().flatten().copied().collect::<Vec<_>>()
+        };
+        // the two ground bashes: SHIELDBASH lunges 4 m, SHIELDBASH2 8 m
+        for (row, lunge, window) in [("FR_SHIELDGUARDIAN_SHIELDBASH", 400.0, SGUARD_BASH_WINDOW), ("FR_SHIELDGUARDIAN_SHIELDBASH2", 800.0, SGUARD_BASH2_WINDOW)] {
+            let from = at(&team);
+            team.request(FriendLinkRequest::Input { kind: 193, stick: Vec3::ZERO, attack: true, jump: false, target: TargetId::NONE });
+            let mut seen = Vec::new();
+            for _ in 0..110 {
+                team.step(1.0 / 60.0, &mut p, &mut host);
+                seen.extend(shots(&team, &p));
+            }
+            let moved = (at(&team) - from).truncate().length();
+            assert!((moved - lunge).abs() < 3.0, "{row}: the pawn lunged {moved} cm, its clip's root {lunge}");
+            assert_eq!(seen.len(), 1, "{row}: one sphere");
+            let s = seen[0];
+            assert_eq!((s.row, s.radius, s.grow, s.max, s.follow), (row, 100.0, 0.0, 100.0, Some(Vec3::new(80.0, 0.0, 120.0))));
+            assert!((s.life - (window.1 - window.0)).abs() < 1e-4, "{row}: it lives the window");
+            team.step(1.0 / 60.0, &mut p, &mut host);
+        }
+        // the heavy bash (Finish): an 18 m lunge with the 150 sphere riding it
+        let from = at(&team);
+        team.request(FriendLinkRequest::Action { kind: 193, action: 2 });
+        let mut seen = Vec::new();
+        let mut far = 0.0f32;
+        for _ in 0..200 {
+            team.step(1.0 / 60.0, &mut p, &mut host);
+            seen.extend(shots(&team, &p));
+            if let Some(r) = team.run.as_ref() {
+                far = far.max((r.at - from).truncate().length());
+            }
+        }
+        assert!((far - 1800.0).abs() < 5.0, "the heavy bash lunged {far} cm");
+        let heavy: Vec<_> = seen.iter().filter(|s| s.row == "FR_SHIELDGUARDIAN_HEAVYBASH").collect();
+        assert_eq!(heavy.len(), 1);
+        let h = heavy[0];
+        assert_eq!((h.radius, h.grow, h.max, h.follow), (150.0, 0.0, 150.0, Some(Vec3::new(80.0, 0.0, 150.0))), "KH3's sphere, no growth");
+        assert!((h.life - (SGUARD_HEAVY_WINDOW.1 - SGUARD_HEAVY_WINDOW.0)).abs() < 1e-4);
+    }
+
     /// One enemy for the tests (D3).
     struct Foe(TargetInfo);
 
@@ -1952,6 +2134,13 @@ mod tests {
         fn hurt_shapes(&self, _id: TargetId, _out: &mut Vec<kh_core::host::HurtShape>) {}
         fn apply_hit(&mut self, _hit: &kh_core::host::HitRecord) -> kh_core::host::HitResult {
             kh_core::host::HitResult::default()
+        }
+        // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+        fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+            None
+        }
+        fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+            None
         }
     }
 
@@ -2060,7 +2249,7 @@ mod tests {
         (m.velocity, m.rate, m.turn, m.target_point) = (m.forward, 10.0, std::f32::consts::TAU, Some(Vec3::new(800.0, 0.0, 90.0)));
         let mut d = f32::MAX;
         for _ in 0..600 {
-            d = m.flare_homing(1.0 / 60.0, 10.0, FLARE_HOMING_ANGLE.to_radians(), 240.0, 840.0, 0.3, 0.0);
+            d = m.flare_homing(1.0 / 60.0, FlareHoming { rate: 10.0, turn: FLARE_HOMING_ANGLE.to_radians(), min: 240.0, max: 840.0, cos_min: 0.3, slow: 0.0 });
             let v = m.velocity;
             m.position += v / 60.0;
             if d <= FLARE_HOMING_RANGE {
@@ -2229,6 +2418,13 @@ mod tests {
         fn apply_hit(&mut self, _hit: &kh_core::host::HitRecord) -> kh_core::host::HitResult {
             kh_core::host::HitResult::default()
         }
+        // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+        fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+            None
+        }
+        fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+            None
+        }
     }
 
     fn foe_at(id: u32, at: Vec3) -> TargetInfo {
@@ -2284,36 +2480,5 @@ mod tests {
         }
         assert!(team.mesh_pitch(g).unwrap().abs() < 0.01);
         assert_eq!(team.mesh_pitch(MemberId(0)), None);
-    }
-}
-
-// ------------------------------------------------------------------------------------------------ (DON-KIT)
-
-/// (DON-KIT) DONALD'S TEAM ATTACKS AT RESONANCE 3 (documentation/DONALD_OVERHAUL.md 6.6, DON_PLAN R22): x `team.res3_mult`
-/// (1.2) while any of a Donald's meters in the party is at Resonance 3, else 1.
-pub fn don_res3_mult(party: &crate::party::Party) -> f32 {
-    let d = crate::donald::data();
-    let full = party.members().filter_map(|id| party.status(id)).filter_map(|s| s.donald.as_ref()).any(|st| st.core.full_power_any(&d));
-    if full {
-        crate::pad::donald::K.team_res3_mult
-    } else {
-        1.0
-    }
-}
-
-/// (DON-KIT) A team attack's hit (its row of Sora's attack data) is one of Donald's: Flare Force, Donald Meteor, the Unisons
-/// (with Sora) and Trinity Guard (with Goofy).
-pub fn is_donald_team_row(row: &str) -> bool {
-    row.starts_with("FR_FLAREFORCE") || row.starts_with("FR_CALLMETEOR") || row.starts_with("UNISON_") || row.starts_with("FR_SHIELDGUARDIAN")
-}
-
-/// (DON-KIT) THE MULTIPLIER OF ONE HIT (`HitRecord::attack_name`) of a team attack, for the hosts' damage route of Sora's
-/// hits (the team shots are delivered by Sora's core: kh-core spawn_team_shot): `don_res3_mult` on Donald's team rows, 1 on
-/// anything else.
-pub fn don_team_hit_mult(party: &crate::party::Party, row: &str) -> f32 {
-    if is_donald_team_row(row) && party.members().any(|id| party.member(id).is_some_and(|m| m.chara == Chara::Donald)) {
-        don_res3_mult(party)
-    } else {
-        1.0
     }
 }

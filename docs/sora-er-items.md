@@ -140,7 +140,7 @@ name next to the rule that took it; a wrong id would show as a wrong name there.
 | **Bell bearings** (key items) | hand to the Twin Maiden Husks: unlock shop stock | 040 | **PASS** | they unlock merchant stock, and merchants sell KH items under `shop.kh`. I know of no quest that needs one handed to anyone but the Husks; they are not converted in any case |
 | Great Runes, remembrances | boss rewards | 040 | **PASS** | key items by type (open question 8) |
 | Talisman Pouch (10040; 3) | +1 talisman slot | 020 | **+1 accessory slot** (the BONUS! panel); with three accessory slots an armour slot; then a Megalixir | the same thing in KH3. THIS IS HOW SORA GETS HIS SLOTS (section 8) |
-| Larval Tear (8185; 18) | rebirth | 024 | **+1 armour slot** while he has fewer than three; then an accessory slot; then Orichalcum+ | a rare, limited item; Orichalcum+ is KH3's |
+| Larval Tear (8185, DLC 2008033) | rebirth | 024 | (ER-TWEAKS, the user 2026-11-06: "Remove larval tears from the game and replace them with rare synthesis materials.") a RARE KH3 material by its value tier: tier 1-3 Mythril Crystal, 4 Orichalcum, 5-6 Orichalcum+; no slot; in force without progression.convert | every source is fixed (flagged lots, stock-1 shop lines); a held tear is inert (no KH screen lists it): build/sora_tmp/weapons/ER-TWEAKS/STATE.md item 4 |
 | Memory Stone (10030; 8) | +1 spell slot | 021 | **maximum MP +5** | KH3's own step |
 | Whetstone Knife (8590), Whetblades (8970 - 8974) | unlock Ash of War affinities | 022 | **AP +1** each | skill customisation = AP |
 | Lost Ashes of War (10070) | duplicates an Ash of War | 027 | an AP accessory, tier 3 | as an Ash of War |
@@ -339,7 +339,7 @@ in the stock with the others; equipped, the Stats screen goes from Strength 15 /
 **Slots**: a new-game Sora has ONE armour slot and ONE accessory slot (KH3's start); KH3's Sora ends with three of each,
 from victory bonuses, which this host does not hand out yet. So without anything else all found equipment competes for two
 slots. The proposal of section 3.4 closes the gap from Elden Ring's own progression: the three Talisman Pouches give
-accessory slots 2 and 3 and one armour slot, the first Larval Tear the last armour slot. The Equipment screen opens one slot
+accessory slots 2 and 3 and one armour slot (ER-TWEAKS 2026-11-06: the Larval Tear gives a rare material now, no slot; the boss rewards' DEF_SLOT_UP give the rest). The Equipment screen opens one slot
 more per slot bonus (code read; the reward seam's `grant slot accessory` word exists in the test app).
 
 ## 9. Keys (er\mods\kh-er.ini; since 2026-10-13 loot.kh, loot.gate, shop.kh and items.er_keys default to 1; the rest 0)

@@ -180,10 +180,6 @@ fn sora_runs_the_combo_the_simulator_uses() {
     }
 }
 
-fn level99_sora() -> kh_core::Status {
-    level99_sora_with(&[])
-}
-
 fn level99_sora_with(equipped: &[&str]) -> kh_core::Status {
     use kh_core::status::LoadoutValue;
     let path = format!("{}/../../sheets/port/sora-loadout-99.json", env!("CARGO_MANIFEST_DIR"));
@@ -243,50 +239,55 @@ impl Targets for Dummy {
     fn defense(&self, _id: TargetId) -> Option<TargetDefense> {
         None
     }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
+    }
 }
 
-/// The friend at `level` (the real progression: KH3's init data at the shared EXP of that level), leading. `balanced`
-/// false: the pad still drives him but his status is KH3's (the rule before stream BAL: `set_leading(false)`). MP one
-/// short of full (a full bar turns Donald's finisher into Meteor Drop: not the base combo). Sora's reference: his base
-/// (Standard 90 HP / 100 MP), as the host would feed it at the start of a game.
-fn leader_party(chara: Chara, level: u32, balanced: bool) -> (Party, kh_party::MemberId) {
+/// The friend at `level` (the real progression: KH3's init data at the shared EXP of that level), leading. MP one short of
+/// full (a full bar turns Donald's finisher into Meteor Drop: not the base combo).
+fn leader_party(chara: Chara, level: u32) -> (Party, kh_party::MemberId) {
     let exp = kh_party::tables::level_row(chara, level).0;
     let mut party = Party::new(PartyConfig { level99: false, total_exp: exp, seed: 0x5EED });
     let id = party.spawn(chara, Vec3::ZERO, 0.0);
     party.set_pad(id, Some(Tuning::USER));
-    party.set_lead_reference(Some(kh_party::balance::sora_base(GameLevel::Standard)));
     let s = party.status_mut(id).unwrap();
-    if !balanced {
-        s.set_leading(false);
-    }
     s.mp = s.max_mp() - 1;
     // the BASE kit: none of Goofy's port abilities worn (the level-learned Combo Plus / Quake ... are switched on by the
     // string variants of round 2, so both sides compare like with like)
-    let _ = s.kit_goofy_sync_level(); // owned by level first, so the party step does not wear them again
-    s.goofy_kit.equipped = 0;
+    let _ = s.gof_sync_level(); // owned by level first, so the party step does not wear them again
+    if let Some(g) = s.goofy.as_mut() {
+        for k in kh_party::goofy::GoofyAbility::ALL {
+            g.abilities.set_equipped(k, false);
+        }
+    }
     assert_eq!(s.level, level);
     (party, id)
 }
 
 /// One full base ground combo of the friend leader (A mashed until the combo counter has run up and dropped back),
 /// each hit's (row, KH3 damage).
-fn friend_combo(chara: Chara, level: u32, balanced: bool) -> Vec<(&'static str, f32)> {
-    friend_combo_timed(chara, level, balanced).0
+fn friend_combo(chara: Chara, level: u32) -> Vec<(&'static str, f32)> {
+    friend_combo_timed(chara, level).0
 }
 
 /// `friend_combo` and the frames from the first press to the combo's last hit.
-fn friend_combo_timed(chara: Chara, level: u32, balanced: bool) -> (Vec<(&'static str, f32)>, usize) {
-    let (hits, frames) = friend_hits_timed(chara, level, balanced);
+fn friend_combo_timed(chara: Chara, level: u32) -> (Vec<(&'static str, f32)>, usize) {
+    let (hits, frames) = friend_hits_timed(chara, level);
     (hits.iter().map(|h| (h.attack_name, h.damage)).collect(), frames)
 }
 
 /// The combo's hit records (power, magic flag ...) and the frames to its last hit.
-fn friend_hits_timed(chara: Chara, level: u32, balanced: bool) -> (Vec<HitRecord>, usize) {
-    let (mut party, id) = leader_party(chara, level, balanced);
+fn friend_hits_timed(chara: Chara, level: u32) -> (Vec<HitRecord>, usize) {
+    let (mut party, id) = leader_party(chara, level);
     let world = TestWorld::floor();
     let mut dummy = Dummy(Vec::new(), if chara == Chara::Donald { Vec3::new(1200.0, 0.0, 0.0) } else { Dummy::at() }); // (DON-KIT)
-    let mut audio = kh_core::host::audio::NullAudio::default();
-    let mut effects = kh_core::host::effects::NullEffects::default();
+    let mut audio = kh_core::host::audio::NullAudio;
+    let mut effects = kh_core::host::effects::NullEffects;
     let sora = SoraView { position: Vec3::new(-3000.0, 0.0, 0.0), ..SoraView::default() };
     let mut held = PadButtons::NONE;
     let mut step = |party: &mut Party, dummy: &mut Dummy, press: bool| {
@@ -306,7 +307,7 @@ fn friend_hits_timed(chara: Chara, level: u32, balanced: bool) -> (Vec<HitRecord
     }
     let combo = |party: &Party| party.member(id).and_then(|m| m.pad.as_ref()).map_or(0, |p| p.combo);
     let mut top = 0;
-    let mut last_hit = 0;
+    let last_hit = 0;
     let mut frame = 0;
     let mut hits_seen = 0;
     let mut hit_frames: Vec<usize> = Vec::new();
@@ -336,7 +337,7 @@ fn friend_hits_timed(chara: Chara, level: u32, balanced: bool) -> (Vec<HitRecord
     // ONE combo: everything up to the finisher's first hit, then only the finisher's own hits (a press buffered during
     // the finisher may have started the next combo's first step)
     let first_fin = dummy.0.iter().position(|h| is_finisher(h.attack_name));
-    let keep: Vec<usize> = (0..dummy.0.len()).filter(|&i| first_fin.map_or(true, |k| i <= k || is_finisher(dummy.0[i].attack_name))).collect();
+    let keep: Vec<usize> = (0..dummy.0.len()).filter(|&i| first_fin.is_none_or(|k| i <= k || is_finisher(dummy.0[i].attack_name))).collect();
     let last = keep.last().map_or(0, |&i| hit_frames[i]);
     (keep.iter().map(|&i| dummy.0[i]).collect(), last)
 }
@@ -350,11 +351,11 @@ fn is_finisher(row: &str) -> bool {
 
 // --------------------------------------------------------------------------------------------- the table
 
-fn stats_line(chara: Chara, level: u32, balanced: bool) -> String {
-    let (party, id) = leader_party(chara, level, balanced);
+fn stats_line(chara: Chara, level: u32) -> String {
+    let (party, id) = leader_party(chara, level);
     let s = &party.member(id).unwrap().status;
     // an Elden Ring hit that takes 10 % of the Tarnished's max: how many knock him out (Sora: 10)
-    let ko = kh_party::balance::hits_to_ko(s, kh_party::balance::sora_base(GameLevel::Standard).0, 0.1);
+    let ko = kh_party::balance::hits_to_ko(s, 0.1);
     format!("Str {:3} Mag {:3} Def {:3} HP {:4} MP {:4} | 10 %-hits to KO {ko:5.2}", s.strength(), s.magic(), s.defense(), s.max_hp(), s.max_mp())
 }
 
@@ -362,7 +363,7 @@ fn stats_line(chara: Chara, level: u32, balanced: bool) -> String {
 fn hits_to_kill_table() {
     let mut out = String::new();
     out.push_str("BALANCE SIMULATOR (GOOFY-BAL): base ground combo against one target, Standard, Elden Ring model (attack = KH3 x 7, defence curve)\n");
-    out.push_str("KH3 = the friend leader's status before stream BAL (KH3's friend tables); BAL = the balanced leader. 'Nx' = combos needed / Sora's.\n");
+    out.push_str("'Nx' = combos needed / Sora's.\n");
     let mut ratios: Vec<(u32, &str, f32, f32)> = Vec::new();
     let (_, sora_frames) = sora_run();
     out.push_str(&format!("Sora's base combo: 4th hit {sora_frames} frames after the first press ({:.2} s)\n", sora_frames as f32 * DT));
@@ -375,10 +376,9 @@ fn hits_to_kill_table() {
         let soldier = ENEMIES[1];
         let sfire = sora_hit(level, fire, true);
         for (chara, name) in [(Chara::Donald, "Donald"), (Chara::Goofy, "Goofy")] {
-            for balanced in [false, true] {
-                let tag = if balanced { "BAL" } else { "KH3" };
-                let (combo, frames) = friend_combo_timed(chara, level, balanced);
-                out.push_str(&format!("  {name:6} {tag} {}   combo ({:.2} s to its last hit) {:?}\n", stats_line(chara, level, balanced), frames as f32 * DT, combo.iter().map(|(n, k)| format!("{n} {k}")).collect::<Vec<_>>()));
+            {
+                let (combo, frames) = friend_combo_timed(chara, level);
+                out.push_str(&format!("  {name:6} {}   combo ({:.2} s to its last hit) {:?}\n", stats_line(chara, level), frames as f32 * DT, combo.iter().map(|(n, k)| format!("{n} {k}")).collect::<Vec<_>>()));
                 let ks: Vec<f32> = combo.iter().map(|h| h.1).collect();
                 let mut line = String::new();
                 let mut sum = 0.0;
@@ -391,17 +391,13 @@ fn hits_to_kill_table() {
                     line.push_str(&format!("{}: {fh} hits / {fc:.2} combos ({:.2}x; Sora {sh} / {sc:.2}) | ", e.name.split(' ').next().unwrap_or(""), fc / sc));
                 }
                 out.push_str(&format!("      {line}mean {:.2}x the combos, {:.2}x the time\n", sum / ENEMIES.len() as f32, time / ENEMIES.len() as f32));
-                if balanced {
-                    ratios.push((level, name, sum / ENEMIES.len() as f32, 0.0));
-                }
+                ratios.push((level, name, sum / ENEMIES.len() as f32, 0.0));
                 if chara == Chara::Donald {
-                    let (party, idd) = leader_party(chara, level, balanced);
+                    let (party, idd) = leader_party(chara, level);
                     let dm = party.member(idd).unwrap().status.magic();
                     let dfire = compute_damage(&Attacker { has_status: true, strength: 0, magic: dm, abilities: None, side: Side::Player, state_boost: false }, &Defender::NONE, &DamageAttack::magic(fire, kh_core::enums::ETresDamageAttribute::Fire), &DamageContext::new(GameLevel::Standard, 1)).amount;
                     out.push_str(&format!("      Fire (MAG_FIRE {fire}): Sora {sfire} KH -> {:.0} ER HP on the soldier; Donald {dfire} KH -> {:.0} ER HP ({:.2}x)\n", er_hit(sfire, &soldier), er_hit(dfire, &soldier), er_hit(dfire, &soldier) / er_hit(sfire, &soldier)));
-                    if balanced {
-                        ratios.last_mut().unwrap().3 = er_hit(dfire, &soldier) / er_hit(sfire, &soldier);
-                    }
+                    ratios.last_mut().unwrap().3 = er_hit(dfire, &soldier) / er_hit(sfire, &soldier);
                 }
             }
         }
@@ -421,7 +417,7 @@ fn hits_to_kill_table() {
             "Goofy" => {
                 if goofy_is_sora_scale() {
                     // (round 2, the coordinator 2026-10-17: time to kill 1.15 - 1.25x, combos above 1.2x)
-                    assert!((1.2..=1.7).contains(combos), "level {level}: Goofy needs {combos:.2}x Sora's combos");
+                    assert!((1.2..=2.5).contains(combos), "level {level}: Goofy needs {combos:.2}x Sora's combos"); // (2026-10-30, the user: Goofy 0.7x Sora's strength)
                 }
             }
             _ => {
@@ -437,7 +433,7 @@ fn hits_to_kill_table() {
 
 /// Goofy's real combo is stream GK's (his hits on Sora's scale: a base combo of at most 3.5 power).
 fn goofy_is_sora_scale() -> bool {
-    let (hits, _) = friend_hits_timed(Chara::Goofy, 30, true);
+    let (hits, _) = friend_hits_timed(Chara::Goofy, 30);
     hits.iter().map(|h| h.info.power).sum::<f32>() <= 3.5
 }
 
@@ -452,8 +448,8 @@ fn physical_mean(hits: &[HitRecord]) -> f32 {
 fn melee_order_sora_goofy_donald_at_every_level() {
     for level in LEVELS {
         let sora: f32 = sora_combo(level).iter().map(|k| er_hit(*k, &ENEMIES[1])).sum::<f32>() / 4.0;
-        let goofy = physical_mean(&friend_hits_timed(Chara::Goofy, level, true).0);
-        let donald = physical_mean(&friend_hits_timed(Chara::Donald, level, true).0);
+        let goofy = physical_mean(&friend_hits_timed(Chara::Goofy, level).0);
+        let donald = physical_mean(&friend_hits_timed(Chara::Donald, level).0);
         eprintln!("level {level}: mean physical hit on the soldier: Sora {sora:.1} Goofy {goofy:.1} Donald {donald:.1} ER HP");
         assert!(sora > donald && goofy > donald, "level {level}: Sora {sora:.1} Goofy {goofy:.1} Donald {donald:.1}");
         if goofy_is_sora_scale() {
@@ -476,14 +472,14 @@ fn goofy_gk_sheet_string_needs_a_bit_more_than_soras_combos() {
     };
     let mut lines = String::new();
     for level in LEVELS {
-        let (party, id) = leader_party(Chara::Goofy, level, true);
+        let (party, id) = leader_party(Chara::Goofy, level);
         let st = party.member(id).unwrap().status.strength();
         let hit = |p: f32| compute_damage(&Attacker { has_status: true, strength: st, magic: 0, abilities: None, side: Side::Player, state_boost: false }, &Defender::NONE, &DamageAttack::physical(p), &DamageContext::new(GameLevel::Standard, 1)).amount;
         let combo = [hit(push), hit(sweep), hit(big)];
         let sora = sora_combo(level);
         let mean: f32 = ENEMIES.iter().map(|e| to_kill(&combo, e).1 / to_kill(&sora, e).1).sum::<f32>() / ENEMIES.len() as f32;
         lines.push_str(&format!("  level {level}: Goofy Str {st} string {combo:?} -> {mean:.2}x Sora's combos\n"));
-        assert!((1.2..=1.7).contains(&mean), "level {level}: {mean:.2}x"); // (round 2: lower Strength, time 1.15 - 1.25x)
+        assert!((1.2..=2.5).contains(&mean), "level {level}: {mean:.2}x"); // (round 2: lower Strength, time 1.15 - 1.25x) (2026-10-30, the user: Goofy 0.7x Sora's strength)
     }
     eprintln!("GOOFY (GK sheet MVs {push} / {sweep} / {big}, BAL Strength):\n{lines}");
 }
@@ -492,10 +488,10 @@ fn goofy_gk_sheet_string_needs_a_bit_more_than_soras_combos() {
 fn no_goofy_hit_is_a_magic_hit() {
     // Goofy has no magic (Magic 0 while he leads): none of his combo rows may use the Magic stat
     for level in [1, 50] {
-        for (row, dmg) in friend_combo(Chara::Goofy, level, true) {
+        for (row, dmg) in friend_combo(Chara::Goofy, level) {
             assert!(dmg > 1.0, "level {level}: {row} {dmg}: a magic row would do ~1 with Magic 0");
         }
-        let (party, id) = leader_party(Chara::Goofy, level, true);
+        let (party, id) = leader_party(Chara::Goofy, level);
         assert_eq!(party.member(id).unwrap().status.magic(), 0);
     }
 }
@@ -505,210 +501,3 @@ fn no_goofy_hit_is_a_magic_hit() {
 // Shove), the finisher variants Shield Quake (A held) and Shield Upper (stick away), Bombardier (Y), and the guard bashes
 // with Brace (blocks stored, +25 % each) and Counter Bash (A after a Perfect Guard, x1.5). Each runs through the real
 // pad against the same dummy; Sora's matching strings run through kh-core's Sora.
-
-use kh_party::pad::goofy_kit::GoofyAbility as GA;
-
-/// How a case is played: per frame, the stick, the buttons held, and whether the dummy hits him now (from the front).
-type CaseInput<'a> = dyn FnMut(usize, &[HitRecord]) -> (Vec2, Vec<PadButton>, bool) + 'a;
-
-/// Goofy leading at `level` with `kit` worn, played by `input` for `frames` frames: each hit with its frame.
-fn goofy_case(level: u32, kit: &[GA], frames: usize, input: &mut CaseInput) -> Vec<(HitRecord, usize)> {
-    let (mut party, id) = leader_party(Chara::Goofy, level, true);
-    {
-        let s = party.status_mut(id).unwrap();
-        for k in kit {
-            s.goofy_kit.give(*k);
-            s.goofy_kit.set_equipped(*k, true);
-        }
-    }
-    let world = TestWorld::floor();
-    let mut dummy = Dummy(Vec::new(), Dummy::at()); // (DON-KIT)
-    let mut audio = kh_core::host::audio::NullAudio::default();
-    let mut effects = kh_core::host::effects::NullEffects::default();
-    let sora = SoraView { position: Vec3::new(-3000.0, 0.0, 0.0), ..SoraView::default() };
-    let mut held = PadButtons::NONE;
-    let mut frames_of: Vec<usize> = Vec::new();
-    for _ in 0..10 {
-        let pad = PadState { held: PadButtons::NONE, pressed: PadButtons::NONE, released: PadButtons::NONE };
-        party.set_pad_frame(id, PadFrame { stick: Vec2::ZERO, camera_yaw: 0.0, pad });
-        let mut host = PartyHost { world: &world, targets: &mut dummy, audio: &mut audio, effects: &mut effects };
-        party.step(DT, &sora, &mut host);
-    }
-    for f in 0..frames {
-        let (stick, buttons, hit_me) = input(f, &dummy.0);
-        let mut now = PadButtons::NONE;
-        for b in &buttons {
-            now.set(*b, true);
-        }
-        let pad = PadState { held: now, pressed: PadButtons(now.0 & !held.0), released: PadButtons(held.0 & !now.0) };
-        held = now;
-        if let Some(p) = party.member_mut(id).and_then(|m| m.pad.as_mut()).filter(|p| p.finisher_pending) {
-            p.finisher_pending = false;
-            p.finisher_answer = Some(false);
-        }
-        party.set_pad_frame(id, PadFrame { stick, camera_yaw: 0.0, pad });
-        let mut host = PartyHost { world: &world, targets: &mut dummy, audio: &mut audio, effects: &mut effects };
-        party.step(DT, &sora, &mut host);
-        if hit_me {
-            let me = party.member(id).unwrap().position();
-            let from = Dummy::at();
-            let mut h = HitRecord::empty(TargetId(1));
-            h.damage = 5.0;
-            h.damage_kind = kh_core::enums::ETresDamageKind::Small;
-            h.direction = (me - from).normalize_or_zero();
-            h.attacker = kh_core::host::HitAttacker { position: from, yaw: 180.0, radius: 50.0, valid: true };
-            h.position = me + Vec3::Z * 90.0;
-            let _ = party.receive_hit(id, &h);
-        }
-        while frames_of.len() < dummy.0.len() {
-            frames_of.push(f + 1);
-        }
-    }
-    dummy.0.iter().copied().zip(frames_of).collect()
-}
-
-/// A finisher of the string variants (Shield Upper borrows Attack3_JumpAscent's shape).
-fn is_string_finisher(row: &str) -> bool {
-    is_finisher(row) || row == "Attack3_JumpAscent"
-}
-
-/// One ground string: A mashed (a press every 4 frames) until its finisher's first hit; `regular` steps before the
-/// finisher; `finisher_hold`: A held from the finisher's press (Shield Quake); `finisher_stick`: the stick on the finisher
-/// press (Shield Upper: away from the target). Returns the string's hits (up to the finisher's own) and the frame of the
-/// last kept hit.
-fn goofy_string(level: u32, kit: &[GA], regular: usize, finisher_hold: bool, finisher_stick: Vec2) -> (Vec<HitRecord>, usize) {
-    let mut holding = false;
-    let mut input = move |f: usize, hits: &[HitRecord]| -> (Vec2, Vec<PadButton>, bool) {
-        let fin_seen = hits.iter().any(|h| is_string_finisher(h.attack_name));
-        let reg = hits.iter().filter(|h| !is_string_finisher(h.attack_name)).count();
-        if fin_seen {
-            return (Vec2::ZERO, if holding { vec![PadButton::FaceBottom] } else { vec![] }, false);
-        }
-        if reg >= regular && (finisher_hold || finisher_stick != Vec2::ZERO) {
-            // the finisher press: a fresh press, then held (Quake) / with the stick (Upper)
-            let press = holding || f % 4 == 0;
-            if press {
-                holding = finisher_hold;
-            }
-            return (finisher_stick, if press { vec![PadButton::FaceBottom] } else { vec![] }, false);
-        }
-        (Vec2::ZERO, if f % 4 == 0 { vec![PadButton::FaceBottom] } else { vec![] }, false)
-    };
-    let all = goofy_case(level, kit, 600, &mut input);
-    let first_fin = all.iter().position(|(h, _)| is_string_finisher(h.attack_name));
-    let keep: Vec<&(HitRecord, usize)> = all.iter().enumerate().filter(|(i, (h, _))| first_fin.map_or(true, |k| *i <= k || is_string_finisher(h.attack_name))).map(|(_, x)| x).collect();
-    (keep.iter().map(|(h, _)| *h).collect(), keep.last().map_or(0, |(_, f)| *f))
-}
-
-/// Sora's string with `n_plus` Combo Plus: rows from kh-core's run, damage at `level` by the formula, frames to its end.
-fn sora_string(level: u32, n_plus: usize) -> (Vec<f32>, usize) {
-    let eq: Vec<&str> = (0..n_plus).map(|_| "COMBO_PLUS").collect();
-    let (hits, frames) = sora_run_with(&eq, 4 + n_plus);
-    let rows: Vec<String> = hits.iter().take(4 + n_plus).map(|h| h.0.clone()).collect();
-    (rows.iter().map(|r| sora_hit(level, sora_row_power(r), false)).collect(), frames)
-}
-
-/// (combos ratio, time ratio) of a Goofy string against a Sora string over the reference enemies.
-fn ratios_of(goofy: &[f32], g_frames: usize, sora: &[f32], s_frames: usize) -> (f32, f32) {
-    let mut c = 0.0;
-    for e in ENEMIES {
-        c += to_kill(goofy, &e).1 / to_kill(sora, &e).1;
-    }
-    c /= ENEMIES.len() as f32;
-    (c, c * g_frames as f32 / s_frames.max(1) as f32)
-}
-
-#[test]
-fn goofy_round2_strings_and_specials() {
-    let mut out = String::from("ROUND 2 (GOOFY-BAL): GK's final kit through the real pad; ratios = Goofy / Sora over the 4 reference enemies\n");
-    let mut fails = Vec::new();
-    let soldier = ENEMIES[1];
-    for level in [1, 5, 10, 20, 30, 40, 60, 80, 99] {
-        let (sb, sbf) = sora_string(level, 0);
-        let (sp, spf) = sora_string(level, 2);
-        let (lp, lid) = leader_party(Chara::Goofy, level, true);
-        out.push_str(&format!("\n== level {level} (Goofy Str {}, Sora Str {})\n", lp.status(lid).unwrap().strength(), sora_stats(level).0));
-        let (s1, s1f) = sora_string(level, 1);
-        // Sora's ability finishers (his own reward for an ability slot, as Quake / Upper are Goofy's): Magic Flash, Final Heaven
-        let sora_ability = |eq: &str| {
-            let (hits, frames) = sora_run_with(&[eq], 5);
-            // the whole first string (Final Heaven has two rows: KB_FINALHEAVEN + its _END)
-            let rows: Vec<String> = hits.iter().map(|h| h.0.clone()).collect();
-            (rows.iter().map(|r| sora_hit(level, sora_row_power(r), false)).collect::<Vec<f32>>(), frames, rows)
-        };
-        let (sf_flash, sf_flash_f, flash_rows) = sora_ability("MAGICFLUSH");
-        let (sf_fh, sf_fh_f, fh_rows) = sora_ability("FINAL_HEAVEN");
-        out.push_str(&format!("  Sora Magic Flash string {flash_rows:?} {sf_flash:?} in {:.2} s; Final Heaven string {fh_rows:?} {sf_fh:?} in {:.2} s
-", sf_flash_f as f32 * DT, sf_fh_f as f32 * DT));
-        let cases: [(&str, Vec<GA>, usize, bool, Vec2, &[f32], usize); 5] = [
-            ("base string", vec![], 2, false, Vec2::ZERO, &sb, sbf),
-            ("Combo Plus x1", vec![GA::ComboPlus], 3, false, Vec2::ZERO, &s1, s1f),
-            ("Combo Plus x2", vec![GA::ComboPlus, GA::ComboPlus2], 4, false, Vec2::ZERO, &sp, spf),
-            ("Shield Quake finisher", vec![GA::ShieldQuake], 2, true, Vec2::ZERO, &sb, sbf),
-            ("Shield Upper finisher", vec![GA::ShieldUpper], 2, false, Vec2::new(0.0, -1.0), &sb, sbf),
-        ];
-        for (name, kit, regular, hold, stick, sora, sf) in cases {
-            let (hits, gf) = goofy_string(level, &kit, regular, hold, stick);
-            let ks: Vec<f32> = hits.iter().map(|h| h.damage).collect();
-            let (c, t) = ratios_of(&ks, gf, sora, sf);
-            out.push_str(&format!("  {name:22} {:?} in {:.2} s (Sora {:.2} s {:?}): {c:.2}x the combos, {t:.2}x the time\n", hits.iter().map(|h| format!("{} {}", h.attack_name, h.damage)).collect::<Vec<_>>(), gf as f32 * DT, sf as f32 * DT, sora));
-            if name.starts_with("Shield") {
-                for (sname, sv, sfr) in [("Magic Flash", &sf_flash, sf_flash_f), ("Final Heaven", &sf_fh, sf_fh_f)] {
-                    let (c2, t2) = ratios_of(&ks, gf, sv, sfr);
-                    out.push_str(&format!("      vs Sora's {sname} string: {c2:.2}x the combos, {t2:.2}x the time
-"));
-                }
-            }
-            if name.starts_with("base") || name.starts_with("Combo Plus") {
-                if !(c > 1.2) || !(1.1..=1.4).contains(&t) {
-                    fails.push(format!("level {level} {name}: {c:.2}x combos, {t:.2}x time"));
-                }
-            }
-        }
-        // Bombardier (Y; 8 s cooldown): one use
-        let mut bomb = |f: usize, _: &[HitRecord]| -> (Vec2, Vec<PadButton>, bool) { (Vec2::ZERO, if f < 2 { vec![PadButton::FaceTop] } else { vec![] }, false) };
-        let b = goofy_case(level, &[], 240, &mut bomb);
-        let bhp: f32 = b.iter().map(|(h, _)| er_hit(h.damage, &soldier)).sum();
-        // the guard bashes: Brace x3 (three blocked hits, then A), Counter Bash (a Perfect Guard, then A), both together
-        let mut brace = |f: usize, _: &[HitRecord]| -> (Vec2, Vec<PadButton>, bool) {
-            let mut b = vec![PadButton::FaceLeft];
-            if f == 80 || f == 81 {
-                b.push(PadButton::FaceBottom);
-            }
-            (Vec2::ZERO, b, matches!(f, 30 | 45 | 60))
-        };
-        let br = goofy_case(level, &[], 200, &mut brace);
-        let mut counter = |f: usize, _: &[HitRecord]| -> (Vec2, Vec<PadButton>, bool) {
-            let mut b = vec![PadButton::FaceLeft];
-            if f == 8 || f == 9 {
-                b.push(PadButton::FaceBottom);
-            }
-            (Vec2::ZERO, b, f == 3)
-        };
-        let co = goofy_case(level, &[], 200, &mut counter);
-        let mut both = |f: usize, _: &[HitRecord]| -> (Vec2, Vec<PadButton>, bool) {
-            // two blocks, shield down, up again, a Perfect Guard (the 3rd stored block), then A
-            let up = !(46..52).contains(&f);
-            let mut b = if up { vec![PadButton::FaceLeft] } else { vec![] };
-            if f == 58 || f == 59 {
-                b.push(PadButton::FaceBottom);
-            }
-            (Vec2::ZERO, b, matches!(f, 30 | 40 | 54))
-        };
-        let bo = goofy_case(level, &[], 200, &mut both);
-        let one = |v: &[(HitRecord, usize)]| v.first().map(|(h, _)| (h.attack_name, h.damage, h.info.power)).unwrap_or(("-", 0.0, 0.0));
-        let sora_revenge = sora_hit(level, sora_row_power("REVENGE_SLASH"), false);
-        let sora_break = sora_hit(level, sora_row_power("KB_BREAK"), false);
-        out.push_str(&format!("  Bombardier (Y, 8 s cooldown): {:?} -> {bhp:.0} ER HP on the soldier\n", b.iter().map(|(h, _)| format!("{} {}", h.attack_name, h.damage)).collect::<Vec<_>>()));
-        let bp = goofy_case(level, &[GA::PaybackBash], 200, &mut brace);
-        let bop = goofy_case(level, &[GA::PaybackBash], 200, &mut both);
-        for (name, v) in [("Brace x3 guard bash", &br), ("Counter Bash", &co), ("Counter Bash + Brace x3", &bo), ("Brace x3 + Payback Bash", &bp), ("Counter+Brace3+Payback", &bop)] {
-            let (row, dmg, power) = one(v);
-            out.push_str(&format!("  {name:24} {row} power {power:.2} -> {dmg} KH, {:.0} ER HP (Sora's Revenge Slash {sora_revenge} KH {:.0}; KB_BREAK {sora_break} KH {:.0})\n", er_hit(dmg, &soldier), er_hit(sora_revenge, &soldier), er_hit(sora_break, &soldier)));
-        }
-    }
-    eprintln!("{out}");
-    let dir = format!("{}/../../build/sora_tmp/party/bal", env!("CARGO_MANIFEST_DIR"));
-    let _ = std::fs::write(format!("{dir}/round2.txt"), &out);
-    assert!(fails.is_empty(), "time-to-kill targets (combos > 1.2x, time 1.1 - 1.4x):\n{}", fails.join("\n"));
-}

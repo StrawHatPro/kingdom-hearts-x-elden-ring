@@ -303,7 +303,7 @@ mod tests {
         assert_eq!(P.camfade_alpha, 0.5);
         assert_eq!(P.camfade_seconds_per_unit, 0.3);
         assert_eq!(P.camfade_probe_radius, 1.0);
-        assert!(P.camfade_on && P.camfade_sweep && P.camfade_player_excluded && P.camfade_lead_overlap && P.camfade_limb_guard);
+        const { assert!(P.camfade_on && P.camfade_sweep && P.camfade_player_excluded && P.camfade_lead_overlap && P.camfade_limb_guard) };
         // every party character has KH3 camera volumes; Goofy's are a capsule r 50 / half height 100 on hara2 and a ball r 35 on R_te
         assert_eq!(rows_of("p_ex001").count(), 8);
         assert_eq!(rows_of("n_ex001").count(), 1);

@@ -33,7 +33,7 @@ fn the_face_clip_slot_plays_over_the_body_and_gives_the_face_back() {
     let mut view = kh_party::AnimView { clip: "n_ex001_70291w", sequence: "n_ex001_70291w", time: 0.0, weight: 1.0, ..Default::default() };
     let dt = 1.0 / 60.0;
     let step = |m: &mut PosedMember, v: &kh_party::AnimView| {
-        m.set_pose_view(poser::DONALD as u8, glam::Vec3::ZERO, 0.0, dt, v, true, true, &kh_anim::NoIkWorld);
+        m.set_pose_view(poser::PoseState { member: poser::DONALD, position: glam::Vec3::ZERO, yaw: 0.0, weapon_visible: true, grounded: true }, dt, v, &kh_anim::NoIkWorld);
     };
     for _ in 0..5 {
         step(&mut m, &view);

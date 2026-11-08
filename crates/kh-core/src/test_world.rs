@@ -136,7 +136,7 @@ impl TestWorld {
     fn sweep_box(component: u32, low: Vec3, high: Vec3, start: Vec3, end: Vec3, radius: f32, half_height: f32) -> Option<Hit> {
         let delta = end - start;
         let length = delta.length();
-        if !(length > 1.0e-9) {
+        if length.partial_cmp(&1.0e-9).is_none_or(std::cmp::Ordering::is_le) {
             return None;
         }
         let direction = delta / length;
@@ -177,6 +177,14 @@ impl World for TestWorld {
         // Stable: equal times keep the order planes, boxes.
         hits.sort_by(|a, b| a.time.total_cmp(&b.time));
         hits
+    }
+
+    /// (AUDIT-C TF) Exact: the sphere penetrates a plane's solid half-space or a box (a touch is no overlap).
+    fn overlap_sphere(&self, center: Vec3, radius: f32) -> bool {
+        const SKIN: f32 = 1.0e-3;
+        let planes = self.planes.iter().any(|&(n, d)| n.dot(center) - d < radius - SKIN);
+        let boxes = self.boxes.iter().any(|&(low, high)| center.clamp(low, high).distance(center) < radius - SKIN);
+        planes || boxes
     }
 
     fn line_trace(&self, start: Vec3, end: Vec3) -> Option<Hit> {

@@ -19,10 +19,10 @@
 //!    open any more, so the pad is free) while KH3's choice menu is asked in the HUD's title mode over the cover.
 //!    The answered pair is kept in `<saves>\newgame-pending.txt` and applied when the character first loads
 //!    (save.rs); then the step is let go and the cover goes when the game's own loading screen has the picture.
-//! Nothing of the game's memory is written.
+//!    Nothing of the game's memory is written.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
 
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
@@ -30,15 +30,17 @@ use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use crate::control::Control;
 use crate::erlog;
 use crate::inputs;
+use crate::ngquiet::Flow;
 use crate::title;
 
 /// The interface element that is VISIBLE on the Create Character screen (MEASURED).
 pub const EL_CREATE: usize = 69;
-/// The overlay's layer of the cover (above every HUD layer but drawn UNDER them by its place: see `cover`).
-const COVER_LAYER: usize = 15;
-/// While the choice menu is asked the black is drawn UNDER the menu's two layers (12, 13): the cutscene pause menu's
-/// layer, which cannot be in use then (the overlay draws its layers in index order).
-const BACKDROP_LAYER: usize = 11;
+/// The overlay's layer of the cover (above every HUD layer but drawn UNDER them by its place: see `cover`): the overlay's
+/// last one, after every layer of `LAYERS` (INT-F: 16 HUD layers since "HudOperation", the overlay has 17).
+const COVER_LAYER: usize = kh_host::hud_layers::LAYERS.len();
+/// While the choice menu is asked the black is drawn UNDER the menu's two layers ("NewGameText", "NewGameDialog"): the
+/// cutscene pause menu's layer, which cannot be in use then (the overlay draws its layers in index order).
+const BACKDROP_LAYER: usize = kh_host::hud_layers::layer_index("CutscenePause");
 
 const DPAD_UP: u16 = 0x0001;
 const DPAD_LEFT: u16 = 0x0004;
@@ -81,13 +83,41 @@ struct State {
     /// (CV3, ERT4 fault 7) our automatic creation gave up and handed the screens to the player: when he has made the
     /// character himself the choices (the starter first) are still asked on the title's black, as for a manual creation.
     handed_over: bool,
+    /// (CC-MUTE) this Ask's first KH pop-up is up (ngquiet.rs ends the creation's silence and input hold on it).
+    popup_up: bool,
 }
 
-static STATE: Mutex<State> = Mutex::new(State { step: Step::Idle, next_at: 0, started: 0, cover: false, cover_size: (0, 0), cover_layer: COVER_LAYER, last: None, watch_lines: 0, tries: 0, auto: false, asked_at: 0, saves: None, handed_over: false });
+static STATE: Mutex<State> = Mutex::new(State { step: Step::Idle, next_at: 0, started: 0, cover: false, cover_size: (0, 0), cover_layer: COVER_LAYER, last: None, watch_lines: 0, tries: 0, auto: false, asked_at: 0, saves: None, handed_over: false, popup_up: false });
 /// `newgame.auto` as of the latest frame (read by the dialog factory's hook).
 static AUTO: AtomicBool = AtomicBool::new(false);
 /// The base-select dialog was made and the cover must be up before anything else happens.
 static BASE_MADE: AtomicBool = AtomicBool::new(false);
+/// (CC-MUTE) What the flow is doing as of its latest frame (an index of `FLOWS`).
+static FLOW: AtomicU8 = AtomicU8::new(0);
+
+const FLOWS: [Flow; 7] = [Flow::Idle, Flow::Driving, Flow::HandedOver, Flow::AskLoading, Flow::PopUp, Flow::Going, Flow::Gone];
+
+/// (CC-MUTE) The flow as ngquiet.rs reads it (pure).
+fn flow_of(step: Step, handed_over: bool, popup_up: bool) -> Flow {
+    match step {
+        Step::Idle => Flow::Idle,
+        Step::Base | Step::Create(_) | Step::Leaving => Flow::Driving,
+        Step::Ask if popup_up => Flow::PopUp,
+        Step::Ask => Flow::AskLoading,
+        Step::Tail => Flow::Going,
+        Step::Done if handed_over => Flow::HandedOver,
+        Step::Done => Flow::Gone,
+    }
+}
+
+fn publish_flow(flow: Flow) {
+    FLOW.store(FLOWS.iter().position(|f| *f == flow).unwrap_or(0) as u8, Ordering::Relaxed);
+}
+
+/// (CC-MUTE, ngquiet.rs) What the new game's flow is doing (as of its latest frame).
+pub fn flow() -> Flow {
+    FLOWS.get(usize::from(FLOW.load(Ordering::Relaxed))).copied().unwrap_or_default()
+}
 
 /// What is pressed on the creation screen, in order: (pad buttons, scan code (0x100 = extended), shift held,
 /// keyboard only, milliseconds to wait after it).
@@ -116,6 +146,12 @@ fn key(scan: u16, up: bool) {
 fn type_key(scan: u16, shift: bool) -> bool {
     if !inputs::game_in_foreground() {
         return false;
+    }
+    // (CC-MUTE) the game's keyboard is held from the player while we press for him (ngquiet.rs): our own keys pass
+    if shift {
+        crate::dinput_mask::allow_press(&[scan, SCAN_LSHIFT]);
+    } else {
+        crate::dinput_mask::allow_press(&[scan]);
     }
     if shift {
         key(SCAN_LSHIFT, false);
@@ -166,7 +202,7 @@ fn cover_at(st: &mut State, on: bool, layer: usize) {
         let Some(size) = hud::output_size().filter(|(w, h)| *w >= 64 && *h >= 64) else { return };
         if !st.cover || st.cover_size != size {
             let mut rgba = vec![0u8; size.0 as usize * size.1 as usize * 4];
-            for px in rgba.chunks_exact_mut(4) {
+            for px in rgba.as_chunks_mut::<4>().0 {
                 px[3] = 255;
             }
             hud::set_options(hud::HudOptions { on: true, opacity: 1.0, ..hud::HudOptions::default() });
@@ -180,11 +216,6 @@ fn cover_at(st: &mut State, on: bool, layer: usize) {
         hud::set_options(hud::HudOptions::default());
         st.cover = false;
     }
-}
-
-/// The cover is up (the HUD's own option writes must not take it down).
-pub fn covering() -> bool {
-    STATE.lock().is_ok_and(|s| s.cover)
 }
 
 /// (title.rs, inside the game's call that makes "Select Character Base") the cover goes up NOW.
@@ -275,6 +306,7 @@ pub fn frame(control: &Control, root: &std::path::Path) {
             st.step = Step::Idle;
         }
         BASE_MADE.store(false, Ordering::Relaxed);
+        publish_flow(Flow::Idle);
         return;
     }
     // AT THE TITLE (no player): the UI pack is read ahead, and a new game's first step is held until the choices are made.
@@ -298,6 +330,7 @@ pub fn frame(control: &Control, root: &std::path::Path) {
                 st.auto = false;
                 st.started = now;
                 st.step = Step::Ask;
+                st.popup_up = false;
                 st.asked_at = now;
                 cover_at(&mut st, true, BACKDROP_LAYER);
             }
@@ -352,6 +385,7 @@ pub fn frame(control: &Control, root: &std::path::Path) {
             if title::begin_new_game_for().is_some() {
                 erlog!("newgame: the character \"Sora\" is made ({:.1} s after its first screen): the game begins its new game", (now - st.started) as f32 / 1000.0);
                 st.step = Step::Ask;
+                st.popup_up = false;
                 st.asked_at = now;
             } else if now >= st.next_at && on_create {
                 erlog!("newgame: the creation screen is still up: the cover goes, the player finishes it (the choices, the starter first, are asked when he has made it) (CV3)");
@@ -363,6 +397,8 @@ pub fn frame(control: &Control, root: &std::path::Path) {
         Step::Ask => {
             cover_at(&mut st, true, BACKDROP_LAYER);
             let answer = if choice_on { crate::hud::title_choice_frame(control) } else { crate::hud::TitleChoice::Unavailable };
+            // (CC-MUTE) the first KH pop-up is up this frame: the creation's silence and input hold end (ngquiet.rs)
+            st.popup_up |= matches!(answer, crate::hud::TitleChoice::Asking | crate::hud::TitleChoice::Chosen(_));
             let go = match answer {
                 crate::hud::TitleChoice::Asking => false,
                 crate::hud::TitleChoice::Loading => now.saturating_sub(st.asked_at) > 15_000,
@@ -403,6 +439,7 @@ pub fn frame(control: &Control, root: &std::path::Path) {
                 st.handed_over = false;
                 st.auto = false;
                 st.step = Step::Ask;
+                st.popup_up = false;
                 st.asked_at = now;
                 cover_at(&mut st, true, BACKDROP_LAYER);
                 erlog!("newgame: the player made the character himself after our creation gave up: THE CHOICES ARE ASKED on the title's black (the starter first) (CV3)");
@@ -423,6 +460,7 @@ pub fn frame(control: &Control, root: &std::path::Path) {
         st.step = Step::Done;
         st.handed_over = true;
     }
+    publish_flow(flow_of(st.step, st.handed_over, st.popup_up));
 }
 
 /// The payload goes away.
@@ -431,5 +469,30 @@ pub fn shutdown() {
         cover(&mut st, false);
         st.step = Step::Idle;
     }
+    publish_flow(Flow::Idle);
     title::let_go();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// (CC-MUTE) newgame's steps as ngquiet.rs reads them, and the byte they are kept in.
+    #[test]
+    fn cc_flow_of_every_step() {
+        assert_eq!(flow_of(Step::Idle, false, false), Flow::Idle);
+        for step in [Step::Base, Step::Create(0), Step::Create(9), Step::Leaving] {
+            assert_eq!(flow_of(step, false, false), Flow::Driving);
+        }
+        assert_eq!(flow_of(Step::Ask, false, false), Flow::AskLoading);
+        assert_eq!(flow_of(Step::Ask, false, true), Flow::PopUp);
+        assert_eq!(flow_of(Step::Tail, false, true), Flow::Going);
+        assert_eq!(flow_of(Step::Done, true, false), Flow::HandedOver);
+        assert_eq!(flow_of(Step::Done, false, true), Flow::Gone);
+        for f in FLOWS {
+            publish_flow(f);
+            assert_eq!(flow(), f);
+        }
+        publish_flow(Flow::Idle);
+    }
 }

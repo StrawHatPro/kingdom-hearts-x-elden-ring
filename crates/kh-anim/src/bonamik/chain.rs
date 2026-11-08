@@ -44,7 +44,7 @@ const K4: f32 = 0.04166663810610771_f64 as f32;
 /// SSE quaternion normalise with identity fallback
 pub fn qnorm(q: Q4) -> Q4 {
     let ss = ((q[0] * q[0]) + (q[2] * q[2])) + ((q[1] * q[1]) + (q[3] * q[3]));
-    if !(C_1E8 <= ss) {
+    if C_1E8.partial_cmp(&ss).is_none_or(std::cmp::Ordering::is_gt) {
         return [0.0, 0.0, 0.0, 1.0];
     }
     let y = rsqrt(ss);
@@ -57,7 +57,7 @@ pub fn vnorm(d: V3) -> V3 {
     if l2 == 1.0 || l2.is_nan() {
         return [d[0], d[1], d[2]];
     }
-    if !(l2 >= C_1E8) {
+    if l2.partial_cmp(&C_1E8).is_none_or(std::cmp::Ordering::is_lt) {
         return [0.0, 0.0, 0.0];
     }
     let y = rsqrt(l2);
@@ -66,7 +66,7 @@ pub fn vnorm(d: V3) -> V3 {
 
 /// shortest arc from +X to the unit vector d. x component is -0.0.
 pub fn arc_x(d: V3) -> Q4 {
-    if !(d[0] >= C_M9999) {
+    if d[0].partial_cmp(&C_M9999).is_none_or(std::cmp::Ordering::is_lt) {
         return [0.0, 1.0, 0.0, 0.0];
     }
     let s = sqrt((d[0] + d[0]) + 2.0);
@@ -129,7 +129,7 @@ pub fn sincos(x: f32) -> [f32; 2] {
     if y > C_HPI {
         y = C_PI - y;
         sign = -1.0;
-    } else if !(y >= -C_HPI) {
+    } else if y.partial_cmp(&-C_HPI).is_none_or(std::cmp::Ordering::is_lt) {
         y = (-C_PI) - y;
         sign = -1.0;
     } else {
@@ -141,13 +141,13 @@ pub fn sincos(x: f32) -> [f32; 2] {
     s = (s * y2) + S4;
     s = (s * y2) - S5;
     s = (s * y2) + 1.0;
-    s = s * y;
+    s *= y;
     let mut c = K2 - (y2 * K1);
     c = (c * y2) - K3;
     c = (c * y2) + K4;
     c = (c * y2) - 0.5;
     c = (c * y2) + 1.0;
-    c = c * sign;
+    c *= sign;
     [s, c]
 }
 
@@ -193,7 +193,7 @@ pub fn fn_143b0c600(core: &mut Core) {
         let cp = scene.f0[ch].f0;
         let mut d = [cp[0] - pp[0], cp[1] - pp[1], cp[2] - pp[2]];
         let l2 = ((d[1] * d[1]) + (d[0] * d[0])) + (d[2] * d[2]);
-        if !(l2 >= C_001) {
+        if l2.partial_cmp(&C_001).is_none_or(std::cmp::Ordering::is_lt) {
             if let Some(gc) = scene.f0[ch].f198 {
                 let gp = scene.f0[gc].f0;
                 d = [gp[0] - pp[0], gp[1] - pp[1], gp[2] - pp[2]];
@@ -220,14 +220,14 @@ pub fn fn_143b13b70(core: &mut Core, pi: usize, _parent_quat: Q4) {
     let v = p.f40;
     let sp = sqrt(((v[0] * v[0]) + (v[1] * v[1])) + (v[2] * v[2])) * C_SPD;
     let _one_minus_speed = 1.0 - (if sp < 1.0 { sp } else { 1.0 }); // used only in the branches that are dead for Sora
-    let q: Q4;
-    if p.f31c == 0 && p.f31d == 0 {
-        q = untwist(b, p.f160); // 143b13c5f..143b13f5e
+    
+    let q: Q4 = if p.f31c == 0 && p.f31d == 0 {
+        untwist(b, p.f160) // 143b13c5f..143b13f5e
     } else {
         // (ER69) NOT TRANSCRIBED, a FALLBACK instead of a stop (an outfit's asset reaches it; Sora's never): 143b13f63..143b14b2e (ground-attach / tag-11 smoothing): the plain untwist
         super::unported(3);
-        q = untwist(b, p.f160);
-    }
+        untwist(b, p.f160)
+    };
     if p.f31c != 0 {
         let n = p.f88;
         if ((n[0] * n[0]) + (n[1] * n[1])) + (n[2] * n[2]) > C_1E4 {
@@ -272,7 +272,7 @@ pub fn fn_143b192a0(r: f32, li: usize, core: &mut Core) {
             let (a, b) = (sc.f0[p1].f0, sc.f0[p2].f0);
             let (mut dx, mut dy, mut dz) = (b[0] - a[0], b[1] - a[1], b[2] - a[2]);
             let mut l2 = ((dy * dy) + (dx * dx)) + (dz * dz);
-            if !(l2 >= 0.0) {
+            if l2.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_lt) {
                 sc.f0[p1].f0 = [0.0, 0.0, 0.0];
                 sc.f0[p2].f0 = [0.0, 0.0, 0.0];
                 dx = 0.0;
@@ -283,14 +283,14 @@ pub fn fn_143b192a0(r: f32, li: usize, core: &mut Core) {
             let len = sqrt(l2);
             if len > 0.0 {
                 let inv = 1.0 / len;
-                dx = dx * inv;
-                dy = dy * inv;
-                dz = dz * inv;
+                dx *= inv;
+                dy *= inv;
+                dz *= inv;
             }
             let k = link.f20 - len;
-            dx = dx * k;
-            dy = dy * k;
-            dz = dz * k;
+            dx *= k;
+            dy *= k;
+            dz *= k;
             let (a, b) = (sc.f0[p1].f0, sc.f0[p2].f0);
             if sc.f0[p1].f276 != 0 {
                 if sc.f0[p2].f276 == 0 {
@@ -390,33 +390,32 @@ pub fn fn_143af3f70(core: &mut Core) {
         c = clamp11(c);
         let ang = if t >= 0.0 { acos_p(c) } else { -acos_p(c) };
         let delta = ang - rest;
-        if !(delta.abs() > C_1E4) {
+        if delta.abs().partial_cmp(&C_1E4).is_none_or(std::cmp::Ordering::is_le) {
             continue;
         }
         let sc = sincos(delta * 0.5);
         let rq = [d[0] * sc[0], d[1] * sc[0], d[2] * sc[0], sc[1]];
-        let bi;
-        match par {
+        
+        let bi = match par {
             Some(pa) => {
                 if core.f3778.f0[pa].f275 != 0 {
                     continue;
                 }
-                bi = core.f3778.f0[pa].f248;
+                core.f3778.f0[pa].f248
             }
             None => {
                 if own_f275 != 0 {
                     continue;
                 }
-                bi = own_bone;
+                own_bone
             }
-        }
+        };
         let bones = &mut core.f3848.bones;
         bones[bi].q = qnorm(qmul(rq, bones[bi].q));
     }
 }
 
 /// 0x143ae7de0 link record init
-#[allow(clippy::too_many_arguments)]
 pub fn fn_143ae7de0(sc: &mut Scene, p1: usize, p2: usize, link_str: f32, parent_str: f32, is_pc: u8, joint_twist: u8) -> Link {
     let (a, b) = (sc.f0[p1].f0, sc.f0[p2].f0);
     let (dz, dy, dx) = (a[2] - b[2], a[1] - b[1], a[0] - b[0]);
@@ -448,7 +447,7 @@ pub fn fn_143ae7de0(sc: &mut Scene, p1: usize, p2: usize, link_str: f32, parent_
         let a = w.abs();
         let a2 = a * a;
         let mut ang = sqrt(1.0 - a) * (((AC0 - (a * AC1)) + (a2 * AC2)) - ((a2 * a) * AC3));
-        if !(w >= 0.0) {
+        if w.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_lt) {
             ang = C_PI - ang;
         }
         sc.f0[p2].f314 = ang + ang;
@@ -508,19 +507,20 @@ pub fn blk_143b0a327(core: &mut Core, count: usize) {
         d = vnorm(d); // U is NOT normalised here
         let mut s: V3 = [0.0, 0.0, 0.0];
         let mut signs = p.f300;
-        for k in 0..p.f310 {
-            let nb = &sc.f0[p.f2e0[k]]; // direct pointer here
+        // (f310 only grows under its < 4 guard, so it never runs past the four neighbours)
+        for (&nb, sign) in p.f2e0.iter().zip(signs.iter_mut()).take(p.f310) {
+            let nb = &sc.f0[nb]; // direct pointer here
             let e = vnorm([nb.f0[0] - p.f0[0], nb.f0[1] - p.f0[1], nb.f0[2] - p.f0[2]]);
             let c = cross(&d, &e);
             let t = ((c[0] * u[0]) + (c[1] * u[1])) + (c[2] * u[2]);
-            let sg: f32;
-            if t >= 0.0 {
-                signs[k] = 1;
-                sg = 1.0;
+            
+            let sg: f32 = if t >= 0.0 {
+                *sign = 1;
+                1.0
             } else {
-                signs[k] = -1;
-                sg = -1.0;
-            }
+                *sign = -1;
+                -1.0
+            };
             s = [s[0] + (c[0] * sg), s[1] + (c[1] * sg), s[2] + (c[2] * sg)];
         }
         s = vnorm(s);

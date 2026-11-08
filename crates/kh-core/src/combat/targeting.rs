@@ -11,6 +11,8 @@
 //!
 //! Not here (not reachable with the Kingdom Key in base form, D 7.5): shooter mode, multi-lock,
 //! the shotlock aim search, the dive-fall search, the UI's input lock, soft-only mode.
+//! (F-ARROWGUN) The gun forms' shooter aim (step 5), the multi-lock (step 9) and the switch list outside the lock are
+//! here now (combat/forms/arrowgun/aim.rs); the shooter request (step 6) runs right after this function (controller.rs).
 
 use glam::Vec3;
 
@@ -63,11 +65,14 @@ pub struct Lockon {
     switch_index: i32,
     /// The marker shown on `current` (the HUD's `Add` is idempotent: D 7.11).
     cursor: Option<(TargetId, CursorKind)>,
+    /// (F-STAFF) +0x970: the soft-target range (MyAutoLockonLimit 900; StartStyle sets it to x 2.0 / x 3.0 for some forms,
+    /// slot 738 0x141410FD0 resets it).
+    pub soft_range: f32,
 }
 
 impl Default for Lockon {
     fn default() -> Lockon {
-        Lockon { rb_tap: false, rb_time: 0.0, rt_tap: false, rt_time: 0.0, current: TargetId::NONE, attack_target: TargetId::NONE, candidate: TargetId::NONE, crowd: 0, locked: false, switch_index: 0, cursor: None }
+        Lockon { rb_tap: false, rb_time: 0.0, rt_tap: false, rt_time: 0.0, current: TargetId::NONE, attack_target: TargetId::NONE, candidate: TargetId::NONE, crowd: 0, locked: false, switch_index: 0, cursor: None, soft_range: AUTO_LIMIT }
     }
 }
 
@@ -151,6 +156,10 @@ pub(crate) fn update(cx: &mut Ctx, dt: f32) {
     let mut targets = Vec::new();
     cx.targets(&mut targets);
     let locked = cx.pawn.combat.lockon.locked;
+    // (F-ARROWGUN) listMode = ctrl+0x9C4 (multi-lock) || locked || ctrl+0x968 (shooter aim) (D 7.4).
+    let list_mode = locked || cx.pawn.combat.arrowgun.aim.multilock || cx.pawn.combat.arrowgun.aim.shooter;
+    // (F-STAFF) controller+0x970.
+    let soft_range = cx.pawn.combat.lockon.soft_range;
     let (mut best, mut best_score, mut best_dist, mut best_priority) = (TargetId::NONE, MANUAL_LIMIT + 5000.0, MANUAL_LIMIT + 5000.0, 0u8);
     let mut count = 0;
     let mut list: Vec<(f32, TargetId)> = Vec::new();
@@ -163,21 +172,21 @@ pub(crate) fn update(cx: &mut Ctx, dt: f32) {
         if d3 < CROWD_RADIUS {
             count += 1;
         }
-        if !t.flags.has(TargetFlags::ENEMY) && dist > AUTO_LIMIT * 0.5 {
+        if !t.flags.has(TargetFlags::ENEMY) && dist > soft_range * 0.5 {
             continue;
         }
         let priority = t.flags.has(TargetFlags::PRIORITY_HIGH) as u8;
         if priority < best_priority {
             continue;
         }
-        if score < best_score || (priority > best_priority && dist < AUTO_LIMIT) {
+        if score < best_score || (priority > best_priority && dist < soft_range) {
             // The line of sight is tested only for a would-be best (D 7.4.1).
             if cx.world.line_trace(eye, t.center).is_some() {
                 continue;
             }
             (best, best_score, best_dist, best_priority) = (t.id, score, dist, priority);
         }
-        if locked && dist < SWITCH_RANGE {
+        if list_mode && dist < SWITCH_RANGE {
             list.push((dist, t.id));
         }
     }
@@ -189,6 +198,18 @@ pub(crate) fn update(cx: &mut Ctx, dt: f32) {
         if lock.attack_target != TargetId::NONE && !valid(lock.attack_target) {
             lock.attack_target = TargetId::NONE;
         }
+    }
+    // (F-ARROWGUN) ctrl+0x9E8: the switch list as the loop built it (empty outside listMode).
+    cx.pawn.combat.arrowgun.aim.switch_list = list.iter().map(|e| e.1).collect();
+    // (F-ARROWGUN) D 7.5 step 5: the shooter aim (slot 715 0x141406F80): the screen-centre pick is the current target.
+    if cx.pawn.combat.arrowgun.aim.shooter {
+        let (pick, found, crowd) = crate::combat::forms::arrowgun::aim::shooter_pick(cx, &targets);
+        cx.pawn.combat.lockon.crowd += crowd;
+        set_cursor(cx, pick, Some(CursorKind::Lock));
+        cx.pawn.combat.lockon.current = pick;
+        let aim = &mut cx.pawn.combat.arrowgun.aim;
+        (aim.pick, aim.on_screen) = (pick, found);
+        return;
     }
     let lock = cx.pawn.combat.lockon;
     let mut cur = lock.current;
@@ -206,12 +227,16 @@ pub(crate) fn update(cx: &mut Ctx, dt: f32) {
         }
         if !keep {
             unlock(cx);
+            // (F-ARROWGUN) 0x141406EB4: in 0x80 / 0x8E the multi-lock (slot 790).
+            crate::combat::forms::arrowgun::aim::on_unlock(cx);
             return;
         }
         if lock.rt_tap && !list.is_empty() {
             // The switch: nearest first, at most 6, by a running index.
             list.sort_by(|a, b| a.0.total_cmp(&b.0));
             list.truncate(SWITCH_MAX);
+            // (F-ARROWGUN) sorted in place (0x1413E60E0 / 0x1414156A0 on ctrl+0x9E8).
+            cx.pawn.combat.arrowgun.aim.switch_list = list.iter().map(|e| e.1).collect();
             let mut index = lock.switch_index + 1;
             if index >= list.len() as i32 {
                 index = 0;
@@ -224,6 +249,22 @@ pub(crate) fn update(cx: &mut Ctx, dt: f32) {
                 set_cursor(cx, cur, Some(CursorKind::Lock));
                 cx.pawn.event(EventKind::CameraLock { target: cur });
             }
+        }
+        return;
+    }
+    // (F-ARROWGUN) D 7.5 step 9: the multi-lock mode (0x141406894): the list nearest first, cut to 6, a type-0 marker on each
+    // entry; RB tap (slot 711): slot 791(1) and lock list[0].
+    if cx.pawn.combat.arrowgun.aim.multilock {
+        list.sort_by(|a, b| a.0.total_cmp(&b.0));
+        list.truncate(SWITCH_MAX);
+        cx.pawn.combat.arrowgun.aim.switch_list = list.iter().map(|e| e.1).collect();
+        crate::combat::forms::arrowgun::aim::show_markers(cx);
+        if let Some(first) = list.first().map(|e| e.1).filter(|id| valid(*id) && lock.rb_tap) {
+            crate::combat::forms::arrowgun::aim::multilock_end(cx);
+            let l = &mut cx.pawn.combat.lockon;
+            (l.locked, l.switch_index, l.current) = (true, 0, first);
+            set_cursor(cx, first, Some(CursorKind::Lock));
+            cx.pawn.event(EventKind::CameraLock { target: first });
         }
         return;
     }
@@ -242,7 +283,7 @@ pub(crate) fn update(cx: &mut Ctx, dt: f32) {
             cx.pawn.event(EventKind::CameraLock { target: cur });
             return;
         }
-        if best_dist > AUTO_LIMIT {
+        if best_dist > cx.pawn.combat.lockon.soft_range {
             // Nothing in soft range: the target and the pin go.
             cur = TargetId::NONE;
             cx.pawn.combat.lockon.attack_target = TargetId::NONE;

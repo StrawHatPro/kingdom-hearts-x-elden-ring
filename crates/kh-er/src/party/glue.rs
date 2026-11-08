@@ -124,6 +124,20 @@ pub struct BodyObs {
     pub yaw: f32,
 }
 
+/// ER.0 STEPS 3 - 5 (`PartyCore::step`): Sora's output, the step's time, his lock, the seams, his look-at point, the clock.
+pub struct CoreStep<'a> {
+    pub out: &'a Output,
+    pub dt: f32,
+    pub lock_on: TargetId,
+    pub world: &'a dyn kh_core::World,
+    pub ik: &'a dyn kh_anim::IkWorld,
+    pub targets: &'a mut dyn PartyTargets,
+    pub audio: &'a mut dyn kh_core::Audio,
+    pub effects: &'a mut dyn kh_core::Effects,
+    pub sora_look: Option<Vec3>,
+    pub now: f64,
+}
+
 /// What the host knows once a frame (before the steps).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameIn {
@@ -223,6 +237,8 @@ pub struct PartyCore {
     /// (LADDER2) The leader's ladder jump for the party's next step (the landing, KH3 floor point; its heading), and the
     /// friends' jumps given.
     leap: Option<(Vec3, f32)>,
+    /// (SPIRITSPRING) The leap is the spiritspring catch-up: only the members this near (KH3 cm) the take-off jump after him.
+    leap_near: Option<(Vec3, f32)>,
     leap_asks: Vec<LeapAsk>,
     /// S8: a loaded save's unlock record (S6's sync hands it over; S8 takes it).
     pub restored_unlock_record: Option<serde_json::Value>,
@@ -289,6 +305,7 @@ impl PartyCore {
             sora_job: Job::default(),
             sora_leaping: false,
             leap: None,
+            leap_near: None,
             leap_asks: Vec::new(),
             restored_unlock_record: None,
             camera: nothing,
@@ -350,6 +367,9 @@ impl PartyCore {
         self.trail.shift(delta);
         if let Some((to, _)) = self.leap.as_mut() {
             *to += delta;
+        }
+        if let Some((from, _)) = self.leap_near.as_mut() {
+            *from += delta;
         }
         for j in self.jobs.iter_mut() {
             if let Some(a) = j.anchor.as_mut() {
@@ -421,10 +441,45 @@ impl PartyCore {
 
     /// (LADDER2) THE LEADER LEAPS UP A LADDER (sora.rs, the frame his leap starts): the landing (KH3, the floor point the
     /// game's Tarnished stands on after the climb) and its heading; the party jumps after him at the next step.
+    /// (MIMIC-BOSS) The friends are put beside the leader at the next step (the solo fight's end: they joined again).
+    pub fn reseat_soon(&mut self) {
+        self.reseat_pending = true;
+        self.trail.cut();
+    }
+
     pub fn ladder_jump(&mut self, to: Vec3, facing: f32) {
         if self.on && to.is_finite() && facing.is_finite() {
             self.leap = Some((to, facing));
+            self.leap_near = None;
         }
+    }
+
+    /// (SPIRITSPRING) THE LEADER LANDED HIGHER AFTER A SPIRITSPRING JUMP (sora.rs, spiritspring.rs): the members who were within
+    /// `radius` (KH3 cm) of the take-off `from` jump after him onto the places beside his landing `to` (the ladder jump's own
+    /// leap and slots, `ladder_jumps`); the others come by their existing catch-up / warp.
+    pub fn spring_catch_up(&mut self, to: Vec3, facing: f32, from: Vec3, radius: f32) {
+        if self.on && to.is_finite() && facing.is_finite() && from.is_finite() {
+            self.leap = Some((to, facing));
+            self.leap_near = Some((from, radius));
+        }
+    }
+
+    /// (LOADFALL) A friend leader's pawn put on the game's body as the latest frame read it (`body`), his motion stopped, his
+    /// view in the step's snapshot made anew. The place (KH3) when done; None: Sora leads, or no body was read.
+    pub fn place_leader_on_body(&mut self) -> Option<Vec3> {
+        let (feet, yaw) = self.body?;
+        let id = self.rt.leader?;
+        let m = self.rt.party.member_mut(id)?;
+        m.cmc.location = feet;
+        m.cmc.stop_movement();
+        m.yaw = yaw;
+        if let Some(fresh) = self.rt.party.view(id) {
+            match self.rt.current.iter_mut().find(|v| v.id == id) {
+                Some(v) => *v = fresh,
+                None => self.rt.current.push(fresh),
+            }
+        }
+        Some(feet)
     }
 
     /// ONCE A FRAME, before the steps: the keys, loads / warps / cutscenes (park, reseat).
@@ -446,11 +501,22 @@ impl PartyCore {
             self.trace = f.trace;
             self.rt.trace = f.trace;
         }
+        // (LOADFALL, the in-game tester 2026-11-03: Goofy leading died mid-hop, Continue: the load's body was written to his
+        // place of the OLD host's frame, 20 m up, and fell for ever) A NEW SORA HOST STARTS THE LEADER WHERE THE GAME PUT ITS
+        // BODY: a friend leader carried over from the host before is put on the body's feet now, his motion stopped (no hop,
+        // no fall, no velocity of the death carried over), before anything reads his place
+        if f.fresh {
+            if let Some(feet) = self.place_leader_on_body() {
+                let text = format!("party: t={:.3}s (LOADFALL) a new Sora host: the friend leader starts on the game's body at kh ({:.0}, {:.0}, {:.0}), his motion stopped (his place of the host before is dropped)", f.now, feet.x, feet.y, feet.z);
+                self.say(text);
+            }
+        }
         if f.fresh || f.relocated {
             self.reseat_pending = true;
             self.trail.cut();
             self.cache.clear_all();
             self.leap = None;
+            self.leap_near = None;
             self.leap_asks.clear();
             let text = format!("party: t={:.3}s {}: the friends are put beside the leader when he stands again; the trail is cut", f.now, if f.fresh { "a new Sora host (a load, a respawn, fast travel)" } else { "the game put its player somewhere else" });
             self.say(text);
@@ -479,7 +545,6 @@ impl PartyCore {
 
     /// ER.0 STEP 1, BEFORE SORA'S STEP: the formation, the pad's frame to a leading friend, AI Sora's input. Returns Sora's
     /// input (the pad's when he leads).
-    #[allow(clippy::too_many_arguments)]
     pub fn route(&mut self, sora: &mut Sora, input: &Input, dt: f32, world: &dyn kh_core::World, targets: &dyn PartyTargets, now: f64) -> Input {
         if !self.on || self.park != Park::Live {
             return *input;
@@ -490,15 +555,23 @@ impl PartyCore {
         let nav = TrailNav { casts: &casts, trail: &self.trail, capsule: nav::NAV_CAPSULE };
         let asked_formation = self.asked_formation.take();
         let asked_ai = std::mem::take(&mut self.asked_ai);
+        let leader_before = self.rt.leader;
         let input = self.rt.route(RouteIn { sora, input, dt, targets, camera: &self.camera, asked_formation, asked_ai, nav: Some(&nav), now });
-        drop(casts);
         self.cache = cache;
+        // (LOADFALL, the GOS in-game run 2026-11-03: after a load the saved formation made Donald leader in the first live
+        // frame, and the body was written to HIS place of the host before, 4.6 m off) A NEW LEADER WHILE THE PLACES ARE STALE
+        // (a reseat is pending: a load, a warp, the end of a park) starts on the game's body, not where his old view says
+        if self.reseat_pending && self.rt.leader.is_some() && self.rt.leader != leader_before {
+            if let Some(feet) = self.place_leader_on_body() {
+                let text = format!("party: t={now:.3}s (LOADFALL) the new leader {} starts on the game's body at kh ({:.0}, {:.0}, {:.0}) (the places are stale: a reseat is pending)", self.rt.leader_chara().name(), feet.x, feet.y, feet.z);
+                self.say(text);
+            }
+        }
         input
     }
 
     /// ER.0 STEPS 3 - 5, RIGHT AFTER SORA'S STEP.
-    #[allow(clippy::too_many_arguments)]
-    pub fn step(&mut self, sora: &mut Sora, out: &Output, dt: f32, lock_on: TargetId, world: &dyn kh_core::World, ik: &dyn kh_anim::IkWorld, targets: &mut dyn PartyTargets, audio: &mut dyn kh_core::Audio, effects: &mut dyn kh_core::Effects, sora_look: Option<Vec3>, now: f64) {
+    pub fn step(&mut self, sora: &mut Sora, CoreStep { out, dt, lock_on, world, ik, targets, audio, effects, sora_look, now }: CoreStep<'_>) {
         self.feed = StepFeed::default();
         if !self.on {
             return;
@@ -514,8 +587,11 @@ impl PartyCore {
             match h {
                 AllyHitIn::Friend(c, record) => {
                     if let Some(r) = self.rt.receive_hit(c, &record) {
-                        // (FINAL4) a hit his guard took (or that did not land) bleeds nothing
-                        if r.guarded || !r.accepted {
+                        // (FINAL4) a hit his guard took (or that did not land) bleeds nothing; (THE USER 2026-11-02) a GUARDED
+                        // one also plays his guard sound (guardblow.rs, every character's one route)
+                        if r.guarded {
+                            crate::guardblow::guarded(c, record.position);
+                        } else if !r.accepted {
                             crate::blood::note_guarded(c);
                         }
                         if r.killed {
@@ -523,7 +599,12 @@ impl PartyCore {
                         }
                     }
                 }
-                AllyHitIn::Sora(hit) => sora.take_hit(hit),
+                // (GF-ARTS, R14) Goofy's Interpose absorbs a hit on AI Sora
+                AllyHitIn::Sora(hit) => {
+                    if !self.rt.party.cover_sora(sora.output().position, hit.amount, hit.causer_position, (hit.causer != TargetId::NONE).then_some(hit.causer)) {
+                        sora.take_hit(hit);
+                    }
+                }
             }
         }
         let budget = CastBudget::new(self.rules.casts_per_member * (self.rt.members.len() as u32 + 1));
@@ -536,7 +617,8 @@ impl PartyCore {
         }
         // (LADDER2) the leader's ladder jump: the party after him
         if let Some((to, facing)) = self.leap.take() {
-            self.ladder_jumps(&casts, out, sora, to, facing, now);
+            let near = self.leap_near.take();
+            self.ladder_jumps(&casts, out, sora, (to, facing), near, now);
         }
         self.leap_asks_again(dt, now);
         self.steer_members(&casts, &*targets, out, sora, now);
@@ -558,7 +640,6 @@ impl PartyCore {
             self.feed.projectiles = o.projectiles;
         }
         if self.rt.members.is_empty() {
-            drop(casts);
             self.cache = cache;
             return;
         }
@@ -580,7 +661,6 @@ impl PartyCore {
         self.fallbacks(&casts, out, sora, dt, now);
         self.sora_fallback(&casts, out, sora, dt, now);
         self.pending_warps(&casts, out, sora, dt, now);
-        drop(casts);
         self.cache = cache;
         self.feed.wants = self.rt.ally_wants(out, sora.status());
         // a line a second (party.trace) / when the budget starved
@@ -613,15 +693,18 @@ impl PartyCore {
     /// leads, Sora in the party) get a place beside the landing (ladder.rs `slots`: the leader's right, his left, on the
     /// top floor the landing reaches) and leap there from where they stand, one after the other (`ladder.gap`), facing the
     /// landing's heading. The trail gets a break (nobody walks that way).
-    fn ladder_jumps(&mut self, casts: &Casts, out: &Output, sora: &Sora, to: Vec3, facing: f32, now: f64) {
+    /// (SPIRITSPRING) `near`: the spiritspring catch-up's take-off and radius (only the members that near jump); None: the ladder
+    /// (everybody).
+    fn ladder_jumps(&mut self, casts: &Casts, out: &Output, sora: &Sora, (to, facing): (Vec3, f32), near: Option<(Vec3, f32)>, now: f64) {
+        let in_reach = |at: Vec3| near.is_none_or(|(from, radius)| at.distance(from) <= radius);
         let mut who: Vec<Option<(PartyChara, MemberId)>> = Vec::new();
         for (c, id) in self.rt.members.clone() {
-            if Some(id) == self.rt.leader || self.rt.party.view(id).is_none_or(|v| v.ko) {
+            if Some(id) == self.rt.leader || self.rt.party.view(id).is_none_or(|v| v.ko || !in_reach(v.position)) {
                 continue;
             }
             who.push(Some((c, id)));
         }
-        if self.rt.leader.is_some() && self.rt.lead.sora_active && sora.status().hp > 0 {
+        if self.rt.leader.is_some() && self.rt.lead.sora_active && sora.status().hp > 0 && in_reach(out.position) {
             who.push(None);
         }
         let places = crate::ladder::slots(to, facing, who.len(), self.rules.ladder_side, |p| casts.floor(p, 150.0, 300.0), |a, b| casts.clear(a, b, NAV_CAPSULE));
@@ -646,7 +729,8 @@ impl PartyCore {
         }
         self.trail.mark_break();
         let leader = self.rt.leader_view_of(out, sora.status());
-        self.say(format!("party: t={now:.3}s THE LADDER JUMP: {} leaps to ({:.0}, {:.0}, {:.0}) facing {facing:.0}; the party after him: {}", leader.chara.name(), to.x, to.y, to.z, if said.is_empty() { "nobody".to_string() } else { said.join(", ") }));
+        let what = if near.is_some() { "THE SPIRITSPRING CATCH-UP" } else { "THE LADDER JUMP" };
+        self.say(format!("party: t={now:.3}s {what}: {} leaps to ({:.0}, {:.0}, {:.0}) facing {facing:.0}; the party after him: {}", leader.chara.name(), to.x, to.y, to.z, if said.is_empty() { "nobody".to_string() } else { said.join(", ") }));
     }
 
     /// (LADDER2) A friend who refused the ladder jump (busy in a reaction, an item, a team attack) is asked again, at once,

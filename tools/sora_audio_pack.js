@@ -120,6 +120,11 @@ const PARTY = (() => {
   return { notify_rows: all('notify_rows'), voice_rows: all('voice_rows'), footstep_rows: all('footstep_rows'), cloth_rows: all('cloth_rows'), weapon_rows: all('weapon_rows'), code_rows: j ? j.code_rows || [] : [] };
 })();
 
+// (KEYBLADES) every keyblade weapon's swing / hit / alias sets, the effect-attached SE of the keyblades' effects and the sounds the
+// form clips name (tools/sora_keyblades_pack.js -> audit/sora_port/audio/keyblade_rows.json): Sora's rows (no owner), per weapon
+// model (kh-audio Routes::weapon_sets, select_weapon). Absent file = the Kingdom Key only, as before.
+const KEYBLADES = research('keyblade_rows.json', null) || { weapon_rows: [], code_rows: [], requests: [] };
+
 // ------------------------------------------------------------------ sound asset -> bank + index
 const pkgCache = new Map();
 function loadPackage(relPath) {
@@ -322,13 +327,18 @@ function buildTriggers() {
     const sw = r.kind === 'weapon_swing';
     add({ id: `party.${r.owner}.weapon.${r.weapon}.${sw ? 'swing' : 'hit'}.${r.index}`, owner: r.owner, weapon: r.weapon, route: sw ? 'weapon.swing_set' : 'weapon.hit_set', trigger: `${r.set} [${r.index}] ${r.enum_name}`, clip: null, logical: [], notify_class: null, time: null, duration: null, plays: true, sounds: [snd(r.asset, 'set entry', { alias_index: r.index })], spatial: '3D', attach: r.AttachPointName && r.AttachPointName !== 'None' ? r.AttachPointName : null, follow: r.bFollow ?? null, volume: null, pitch: null, condition: `weapon = ${r.weapon}`, evidence: 'asset', ref_addr: sw ? '0x14178BED0' : '0x14178BEB0', note: null });
   }
+  for (const r of KEYBLADES.weapon_rows) {
+    if (!r.asset) continue;
+    const kind = r.kind.replace('weapon_', '');
+    add({ id: `weapon.${r.weapon}.${kind}.${r.index}`, weapon: r.weapon, route: `weapon.${kind}_set`, trigger: `${r.set} [${r.index}] ${r.enum_name}`, clip: null, logical: [], notify_class: null, time: null, duration: null, plays: true, sounds: [snd(r.asset, 'set entry', kind === 'alias' ? {} : { alias_index: r.index })], spatial: '3D', attach: r.AttachPointName && r.AttachPointName !== 'None' ? r.AttachPointName : null, follow: r.bFollow ?? null, volume: null, pitch: null, condition: `weapon = ${r.weapon}`, evidence: 'asset', ref_addr: kind === 'swing' ? '0x14178BED0' : kind === 'hit' ? '0x14178BEB0' : null, note: '(KEYBLADES) tools/sora_keyblades_pack.js' });
+  }
   for (const r of PARTY.voice_rows) {
     if (r.kind !== 'voice_group' || !r.asset) continue;
     add({ id: `party.${r.owner}.voice.group.${r.group}.${r.group_no}`, owner: r.owner, route: 'voice.group', trigger: `voice group "${r.group}" unit ${r.group_no} of ${r.table}`, clip: null, logical: [], notify_class: null, time: null, duration: null, plays: true, sounds: [snd(r.asset, 'group unit', { group: r.group, group_no: r.group_no })], spatial: '3D', attach: 'atama', follow: true, volume: null, pitch: null, condition: `unit number ${r.group_no} (PlayVoiceGroup FUN_141275AA0, or the pawn's voice group number for a notify)`, evidence: 'asset', ref_addr: '0x141275AA0', note: r.play_on_group_not_found ? 'plays the default voice when no unit matches' : null });
   }
   // -- native code and blueprints
   const seen = new Map();
-  for (const r of [...research('code_rows.json', []), ...PARTY.code_rows]) {
+  for (const r of [...research('code_rows.json', []), ...PARTY.code_rows, ...KEYBLADES.code_rows]) {
     const base = `code.${r.category}.${String(r.sound_id || r.trigger || '').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 48)}`;
     const n = seen.get(base) || 0; seen.set(base, n + 1);
     const addr = /0x1[0-9A-Fa-f]{8}/.exec(String(r.ref || ''));
@@ -350,16 +360,20 @@ function partyExtraTriggers() {
   // (Windows' folder order on every system: tools/lib/ntfs_order.js)
   const { ntfsCompare } = require('./lib/ntfs_order');
   (function walk(dir) { for (const f of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => ntfsCompare(a.name, b.name))) { const p = P(dir, f.name); if (f.isDirectory()) walk(p); else if (f.name.endsWith('.uasset.json')) { const r = path.relative(PACKAGES, p).split(path.sep).join('/').replace(/\.uasset\.json$/, ''); const k = r.split('/').pop().toLowerCase(); if (!index.has(k)) index.set(k, []); index.get(k).push(r); } } })(P(PACKAGES, 'Sound', 'SE', '_Data', 'SeAttach'));
-  for (const entry of PARTY_EXTRA_EFFECTS) {
+  // (AUDIT-A) KH_AUDIO_EXTRA_EFFECTS=<file.json> (a list in this format) REPLACES the party's list: a root of other effects'
+  // SE (the keyblade forms' effects whose particle systems name an SeAttach package of another name: build/sora_pack/
+  // keyblades/audio). An entry 'EFFECT=/Game/Sound/SE/_Data/SeAttach/...' names the very package (the PS's ParticleSeAssets).
+  const LIST = process.env.KH_AUDIO_EXTRA_EFFECTS ? readJson(path.resolve(process.env.KH_AUDIO_EXTRA_EFFECTS)) : PARTY_EXTRA_EFFECTS;
+  for (const entry of LIST) {
     const [name, seName] = entry.includes('=') ? entry.split('=') : [entry, entry]; // (GOOFY-GK) an aliased SeAttach name
-    for (const r of index.get(seName.toLowerCase()) || []) {
+    for (const r of seName.startsWith('/Game/') ? [seName.slice(6)] : index.get(seName.toLowerCase()) || []) { // (AUDIT-A) a package path
       const pkg = loadPackage(r); if (!pkg) continue;
       pkg.exports.forEach((e, i) => {
         if (e.class !== 'SQEX_EffectSeAttachData') return;
         const pr = simplifyProps((e.data && e.data.props) || [], pkg);
         const a = pr.Sound ? '/Game/' + gameRel(pr.Sound) : null;
         T.push({
-          id: `party.d5.code.effect_se_npc.${name}.${i}`, route: 'code.effect_se_npc', trigger: 'Effect ' + name + (pr.bPlayAtEnd ? ' ends' : ' starts'), clip: null, logical: [], notify_class: null, time: null, duration: null, plays: !!a,
+          id: `${process.env.KH_AUDIO_EXTRA_EFFECTS ? 'forms' : 'party.d5'}.code.effect_se_npc.${name}.${i}`, route: 'code.effect_se_npc', /* (AUDIT-A) the id prefix of a forms root */ trigger: 'Effect ' + name + (pr.bPlayAtEnd ? ' ends' : ' starts'), clip: null, logical: [], notify_class: null, time: null, duration: null, plays: !!a,
           sounds: a ? [{ asset: a, how: 'SQEX_EffectSeAttachData.Sound' }] : [], sound_id: 'SQEX_EffectSeAttachData.Sound', spatial: '3D', attach: 'attached to the particle component (bAttach default true)', follow: null,
           volume: null, pitch: null, volume_text: 'asset default', condition: 'GroupID ' + (pr.GroupID ?? 0), loop_stop: 'FadeOutTime ' + (pr.FadeOutTime ?? null) + (pr.bNoSeFadeAtTheEffectEnd ? '; bNoSeFadeAtTheEffectEnd' : '') + (pr.bPlayAtEnd ? '; bPlayAtEnd' : ''),
           evidence: 'asset', verdict: 'same-partial', ref: '/Game/' + r + ' :: ' + e.objectName + ' (played by 0x14425F080)', ref_addr: '0x14425F080', note: 'party D5: an effect the port spawns for the party (see PARTY_EXTRA_EFFECTS)',
@@ -403,6 +417,7 @@ function requestedAssets() {
     else if (v && typeof v === 'object') for (const k of Object.keys(v)) walk(strand, v[k], v.name || v.id || v.referenced_by || by);
   };
   for (const strand of ['actions', 'combat', 'magic', 'ui']) { const j = research(`requests_${strand}.json`, null); if (j) walk(strand, j, null); }
+  walk('keyblades', KEYBLADES.requests || [], 'a notify of a keyblade form clip or weapon clip (tools/sora_keyblades_pack.js)');
   return out;
 }
 
@@ -420,6 +435,10 @@ function build() {
         condition: '-', loop_stop: '-', evidence: 'asset', verdict: 'same-partial', ref: r.ref || '-', ref_addr: '-', note: r.note || '(ZETTA) a sound a party module plays by path' });
     }
   }
+  // (AUDIT-A) KH_AUDIO_EXTRA_TRIGGERS=<file.json> with --party-extra: whole trigger rows in the manifest's format (the
+  // notify rows of the keyblade forms' pawn clips: build/sora_tmp/weapons/AUDIT-A/stage/sound/pawn_triggers.js), added as
+  // they are; their sounds are packed. Without the variable nothing changes.
+  if (PARTY_EXTRA && process.env.KH_AUDIO_EXTRA_TRIGGERS) for (const r of readJson(path.resolve(process.env.KH_AUDIO_EXTRA_TRIGGERS))) triggers.push(r);
   const requests = PARTY_EXTRA ? [] : requestedAssets();
   // every asset path in play, with the English twin of each Japanese voice
   const want = new Map();
@@ -542,6 +561,7 @@ if (checkOnly) {
   const v = validate(OUT, manifest);
   manifest.validation = { wav_files_read_back: v.files, problems: v.bad, single_material_sounds_checked: v.sounds_checked, duration_mismatches: v.duration_mismatch, key_ons_of_empty_material_slots: v.silent_tracks };
   const mtext = JSON.stringify(manifest, null, 1) + '\n';
+  fs.mkdirSync(OUT, { recursive: true }); // (SETUP-TOOLS) a root with no new sound files still gets its manifest (--xsi-extra after the keyblades rows)
   fs.writeFileSync(P(OUT, 'manifest.json'), mtext);
   if (PARTY_EXTRA) {
     // (party D5) the party-only root: no sheets, no sheet_rows (the main pack's own outputs stay untouched)

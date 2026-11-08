@@ -35,7 +35,7 @@ fn the_follow_speed_is_khs_rule() {
     step(&mut party, &world, &sora, 2);
     let m = party.member(d).unwrap();
     let k = kh_party::locomotion::K;
-    let cx = |s: &SoraView| kh_party::locomotion::follow_speed(m, &kh_party::pawn::StepCtx { sora: s, members: &[], dt: DT, ice_rails: &[], zones: &[] /* (ZETTA) */ });
+    let cx = |s: &SoraView| kh_party::locomotion::follow_speed(m, &kh_party::pawn::StepCtx { sora: s, members: &[], dt: DT, ice_rails: &[], zones: &[], telegraphs: &[] /* (ZETTA) */ });
     assert!((cx(&sora).unwrap() - 980.0 * k.follow_in_view_rate).abs() < 1.0, "{:?}", cx(&sora));
     // out of view (the camera ahead of him, looking away): x 2.5
     sora.camera = Some(camera(Vec3::new(500.0, 0.0, 150.0)));
@@ -51,7 +51,7 @@ fn the_follow_speed_is_khs_rule() {
     party.set_in_battle(true);
     step(&mut party, &world, &sora, 1);
     let m = party.member(d).unwrap();
-    assert!(kh_party::locomotion::follow_speed(m, &kh_party::pawn::StepCtx { sora: &sora, members: &[], dt: DT, ice_rails: &[], zones: &[] /* (ZETTA) */ }).is_none());
+    assert!(kh_party::locomotion::follow_speed(m, &kh_party::pawn::StepCtx { sora: &sora, members: &[], dt: DT, ice_rails: &[], zones: &[], telegraphs: &[] /* (ZETTA) */ }).is_none());
 }
 
 #[test]
@@ -166,6 +166,7 @@ fn a_moveto_arrives_at_radius_5_10_15_at_the_run_speeds() {
             for chara in [Chara::Donald, Chara::Goofy] {
                 let mut party = Party::new(PartyConfig::test_level99());
                 let d = party.spawn(chara, Vec3::ZERO, 0.0);
+                party.gof.kh3_ai = true; // (GF-AI) the move itself: AI Goofy would go back to a leader 90 m off
                 party.set_in_battle(battle);
                 // out of battle the follow rule runs: a leader far ahead, out of view (2.5 x his 980 MaxWalkSpeed)
                 let sora = SoraView { position: Vec3::new(9000.0, 0.0, 0.0), max_speed: 980.0, camera: Some(camera(Vec3::new(8000.0, 0.0, 150.0))), ..SoraView::default() };

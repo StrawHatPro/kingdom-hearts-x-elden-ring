@@ -64,7 +64,7 @@ pub fn acts(env: usize) -> Vec<usize> {
     if !read(begin, &mut bytes) {
         return Vec::new();
     }
-    bytes.chunks_exact(8).map(|c| usize::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])).collect()
+    bytes.as_chunks::<8>().0.iter().map(|c| usize::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])).collect()
 }
 
 /// A UTF-16 name at a pointer (the act's object name, e.g. `c0000_0000`).
@@ -73,7 +73,7 @@ fn wide(at: usize) -> Option<String> {
     if !read(at, &mut b) {
         return None;
     }
-    let units: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|u| *u != 0).collect();
+    let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|u| *u != 0).collect();
     let s = String::from_utf16(&units).ok()?;
     (!s.is_empty() && s.chars().all(|c| c.is_ascii_graphic())).then_some(s)
 }
@@ -153,7 +153,7 @@ pub fn find(player_acts: &[usize]) -> Option<Figure> {
         if !read(asm + ASM_PARTS, &mut raw) {
             continue;
         }
-        let parts = raw.chunks_exact(8).map(|c| usize::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])).filter(|p| *p != 0).collect();
+        let parts = raw.as_chunks::<8>().0.iter().map(|c| usize::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])).filter(|p| *p != 0).collect();
         return Some(Figure { act: *act, model, asm, fg: word(asm + ASM_FG).unwrap_or(0), parts });
     }
     None
@@ -197,7 +197,7 @@ fn wide_any(at: usize) -> String {
     if !read(at, &mut b) {
         return String::new();
     }
-    let units: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|u| *u != 0).collect();
+    let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|u| *u != 0).collect();
     String::from_utf16_lossy(&units)
 }
 
@@ -206,7 +206,7 @@ fn f32s(at: usize, n: usize) -> Vec<f32> {
     if !read(at, &mut b) {
         return Vec::new();
     }
-    b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    b.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
 }
 
 /// (`dbg.figskel = ADDR of a CSFD4ModelItem`) everything of a model's skeleton into a text file: the FLVER's nodes
@@ -222,7 +222,7 @@ pub fn dump_skeleton(item: usize, out: &std::path::Path) {
         let e = nodes + k * 0x30;
         let mut raw = [0u8; 8];
         read(e + 0x28, &mut raw);
-        let links: Vec<i16> = raw.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
+        let links: Vec<i16> = raw.as_chunks::<2>().0.iter().map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
         let _ = writeln!(s, "node {k} {:?} links {links:?} A {:?} B {:?}", wide_any(word(e + 0x20).unwrap_or(0)), f32s(ma + k * 0x30, 12), f32s(mb + k * 0x30, 12));
     }
     let loc = word(item + 0x640).unwrap_or(0);
@@ -328,6 +328,7 @@ pub struct Rig {
     pub retarget: Retarget,
     /// (ER party S2) The rows the retarget was made from (indices into `ROWS`) when the target skeleton lacks some
     /// (Donald and Goofy: four fingers, Goofy no `kubi`); None = all of them (Sora's, as always).
+    #[cfg(feature = "party")]
     pub keep: Option<Vec<usize>>,
 }
 
@@ -335,7 +336,7 @@ pub struct Rig {
 /// Goofy's neck is `kubi1`); its aim is dropped (the bone keeps the turn the bind gives it) when the aim's target bone is
 /// not. Donald's fingers B - D have two joints (the third rows go), neither friend has the little finger (yubiE).
 /// Returns the rows and their `ROWS` indices.
-#[cfg_attr(not(feature = "party"), allow(dead_code))]
+#[cfg(any(test, feature = "party"))]
 pub fn rows_for(skeleton: &kh_anim::Skeleton) -> (Vec<MapRow>, Vec<usize>) {
     const ALIASES: [(&str, &str); 1] = [("kubi", "kubi1")];
     let resolve = |name: &'static str| -> Option<&'static str> {
@@ -357,7 +358,7 @@ pub fn rows_for(skeleton: &kh_anim::Skeleton) -> (Vec<MapRow>, Vec<usize>) {
 
 /// (ER party S2) A retarget onto any skeleton from the body's bind pose per `ROWS` row (KH3 axes, `Rig::source_binds`),
 /// with the rows that skeleton has (`rows_for`). Pure (the binds read once).
-#[cfg_attr(not(feature = "party"), allow(dead_code))]
+#[cfg(any(test, feature = "party"))]
 pub fn retarget_from_binds(binds: &[(Vec3, Quat)], skeleton: &kh_anim::Skeleton) -> Result<(Retarget, Vec<usize>), String> {
     if binds.len() != ROWS.len() {
         return Err(format!("{} binds for {} rows", binds.len(), ROWS.len()));
@@ -370,7 +371,6 @@ pub fn retarget_from_binds(binds: &[(Vec3, Quat)], skeleton: &kh_anim::Skeleton)
 
 impl Rig {
     /// (ER party S2) The bind pose of every `ROWS` source bone of a `CSFD4ModelItem` (KH3 axes), as `build` reads it.
-    #[cfg_attr(not(feature = "party"), allow(dead_code))]
     pub fn source_binds(item: usize) -> Result<Vec<(Vec3, Quat)>, String> {
         let flver = word(item + 0x68).filter(|f| *f != 0).ok_or("the model has no FLVER data")?;
         let n = u32_at(flver + 0x18).unwrap_or(0) as usize;
@@ -401,7 +401,7 @@ impl Rig {
 
     /// (ER party S2) `build` for a skeleton that may lack some rows' bones (a party member's): the retarget is made from
     /// the rows it has (`keep`); `read` still gives every row (pick the kept ones with `pick`).
-    #[cfg_attr(not(feature = "party"), allow(dead_code))]
+    #[cfg(feature = "party")]
     pub fn build_for(item: usize, skeleton: &kh_anim::Skeleton) -> Result<Rig, String> {
         let flver = word(item + 0x68).filter(|f| *f != 0).ok_or("the model has no FLVER data")?;
         let binds = Rig::source_binds(item)?;
@@ -455,7 +455,7 @@ impl Rig {
         };
         let retarget = Retarget::new(skeleton, &ROWS, &BODY, &bind)?;
         let nodes = ROWS.iter().map(|r| names[r.source]).collect();
-        Ok(Rig { flver, nodes, retarget, keep: None }) // (ER party S2) all rows
+        Ok(Rig { flver, nodes, retarget, #[cfg(feature = "party")] keep: None }) // (ER party S2) all rows
     }
 
     /// The rows' bones now, in Elden Ring's world (`CSFD4LocationMtx43ArrayEntity`: item + 0x640 -> + 0x70 = the
@@ -469,7 +469,7 @@ impl Rig {
         }
         let mut out = Vec::with_capacity(self.nodes.len());
         for node in &self.nodes {
-            let f: Vec<f32> = bytes[(node - lo) * 0x30..(node - lo + 1) * 0x30].chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+            let f: Vec<f32> = bytes[(node - lo) * 0x30..(node - lo + 1) * 0x30].as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
             let (p, q) = matrix(&f);
             if !p.is_finite() || !q.is_finite() || p.abs().max_element() > 1.0e6 {
                 return None;
@@ -487,6 +487,8 @@ pub struct Posed {
     /// Where Sora's pelvis goes, and his component (at the floor point under it, not turned).
     pub pelvis: Vec3,
     pub component_to_world: Trs,
+    /// (CUTSCENE-ANIM) The figure's measures (its FLVER's bind pose; None: not readable): cutfit.rs fits the leader with them.
+    pub body: Option<crate::cutfit::Body>,
 }
 
 /// The running scene, as last looked at.
@@ -501,8 +503,14 @@ pub struct Cut {
     rig: Option<Rig>,
     rig_refused: usize,
     /// (ER party S2) the figure's rig for a party leader's skeleton (FLVER, the skeleton's bone count) and the one refused
+    #[cfg(feature = "party")]
     rig_party: Option<(usize, usize, Rig)>,
+    #[cfg(feature = "party")]
     rig_party_refused: (usize, usize),
+    /// (CUTSCENE-ANIM) The figure's measures per FLVER (its bind pose read once).
+    body: Option<(usize, Option<crate::cutfit::Body>)>,
+    /// (CUTSCENE-ANIM) The figure's acts whose scene models were listed (`census`), at most `CENSUS_PER_SCENE` a scene.
+    censused: Vec<usize>,
     /// The scene whose models were listed in the log.
     listed: usize,
     /// For the log: flag words found set again, the time spent, the looks.
@@ -594,11 +602,6 @@ impl Cut {
         self.cleared.clear();
     }
 
-    /// The scene is over.
-    pub fn forget(&mut self) {
-        *self = Cut::default();
-    }
-
     /// The figure's pose for Sora (KH3 world through `frame`).
     pub fn posed(&mut self, skeleton: &kh_anim::Skeleton, frame: &crate::coords::Frame) -> Option<Posed> {
         let item = word(self.figure.as_ref()?.model + 0x10)?;
@@ -626,7 +629,24 @@ impl Cut {
         let source: Vec<(Vec3, Quat)> = er.iter().map(|(p, q)| (frame.pos_er_to_kh(*p), rotation_kh(*q))).collect();
         let under = frame.pos_er_to_kh(Vec3::new(er[0].0.x, floor_er, er[0].0.z));
         let pelvis = rig.retarget.pelvis_place(source[0].0, Vec3::Z, under.z);
-        Some(Posed { source, pelvis, component_to_world: Trs { translation: under, rotation: Quat::IDENTITY, scale: Vec3::ONE } })
+        let body = self.body_of(item, flver);
+        Some(Posed { source, pelvis, component_to_world: Trs { translation: under, rotation: Quat::IDENTITY, scale: Vec3::ONE }, body })
+    }
+
+    /// (CUTSCENE-ANIM) The figure's measures (cutfit.rs), read from its FLVER's bind once per FLVER.
+    fn body_of(&mut self, item: usize, flver: usize) -> Option<crate::cutfit::Body> {
+        if let Some((f, b)) = self.body {
+            if f == flver {
+                return b;
+            }
+        }
+        let b = Rig::source_binds(item).ok().and_then(|binds| crate::cutfit::tarnished(&binds));
+        match &b {
+            Some(b) => crate::erlog!("cutfig: (CUTSCENE-ANIM) the figure's measures: hips {:.0} cm, legs {:.0}, arms {:.0}, ankles {:.0}: the leader rests where it rests, at his own proportions", b.dims.hip_h, b.dims.limb[2], b.dims.limb[0], b.dims.ankle_h),
+            None => crate::erlog!("cutfig: (CUTSCENE-ANIM) the figure's measures are NOT readable: the leader is placed as before"),
+        }
+        self.body = Some((flver, b));
+        b
     }
 
     pub fn retarget(&self) -> Option<&Retarget> {
@@ -636,7 +656,7 @@ impl Cut {
     /// (ER party S2) `posed` for a FRIEND LEADING (U6: the leader stands in for the Tarnished): the figure retargeted onto
     /// his skeleton (the rows it has). Returns the pose (every row's source, the pelvis, the place), the retarget and the
     /// rows it keeps. Its own rig cache: Sora's (`rig`) is untouched.
-    #[cfg_attr(not(feature = "party"), allow(dead_code))]
+    #[cfg(feature = "party")]
     pub fn posed_party(&mut self, skeleton: &kh_anim::Skeleton, frame: &crate::coords::Frame) -> Option<(Posed, Retarget, Vec<usize>)> {
         let item = word(self.figure.as_ref()?.model + 0x10)?;
         let flver = word(item + 0x68)?;
@@ -663,7 +683,9 @@ impl Cut {
         let under = frame.pos_er_to_kh(Vec3::new(er[0].0.x, floor_er, er[0].0.z));
         let pelvis = rig.retarget.pelvis_place(all[0].0, Vec3::Z, under.z);
         let keep = rig.keep.clone().unwrap_or_else(|| (0..ROWS.len()).collect());
-        Some((Posed { source: all, pelvis, component_to_world: Trs { translation: under, rotation: Quat::IDENTITY, scale: Vec3::ONE } }, rig.retarget.clone(), keep))
+        let retarget = rig.retarget.clone();
+        let body = self.body_of(item, flver); // (CUTSCENE-ANIM)
+        Some((Posed { source: all, pelvis, component_to_world: Trs { translation: under, rotation: Quat::IDENTITY, scale: Vec3::ONE }, body }, retarget, keep))
     }
 }
 
@@ -686,6 +708,15 @@ pub fn phase(control: &crate::control::Control, tick: bool) {
     let mode = control.str("cut.sora").unwrap_or("retarget");
     let cut = guard.get_or_insert_with(Cut::default);
     cut.phase(matches!(mode, "retarget" | "hide"));
+    // (CUTSCENE-ANIM) the scene's models around the figure, listed once per figure act (read only; `cut.census = 0`: off)
+    if control.flag("cut.census") != Some(false) {
+        if let Some(f) = cut.figure.clone() {
+            if !cut.censused.contains(&f.act) && cut.censused.len() < CENSUS_PER_SCENE {
+                cut.censused.push(f.act);
+                census(&f, cut.env);
+            }
+        }
+    }
     if tick && cut.looks > 0 {
         crate::erlog!("cutfig: {} | cut.sora = {mode} | {} look(s) this second, {:.0} us each, {} flag word(s) found set again; slowest look {:?} us (whole, after env, acts, find; acts)", if cut.figure.is_some() { "THE SCENE'S FIGURE OF THE PLAYER IS THERE" } else { "no figure of the player in this cut" }, cut.looks, cut.spent.as_secs_f64() * 1.0e6 / cut.looks as f64, cut.rewrites, cut.worst);
         cut.worst = [0; 5];
@@ -702,5 +733,119 @@ pub fn release() {
             cut.show();
         }
         *guard = None;
+    }
+}
+// ---------------------------------------------------------------- (CUTSCENE-ANIM) the scene's models around the figure
+
+/// The figure's acts listed per scene (the census costs a few hundred checked reads: once, not every frame).
+pub const CENSUS_PER_SCENE: usize = 4;
+/// A model of the scene this near the figure's root (cm) is listed (a weapon held, a prop handed over).
+pub const CENSUS_NEAR_CM: f32 = 300.0;
+/// At most this many of the scene's acts are looked at.
+const CENSUS_ACTS: usize = 320;
+
+/// Where a model is (its location matrices' first node, Elden Ring's world, metres): item + 0x640 -> + 0x70 (MEASURED for the
+/// figure's viewer model, IMPL_ER16; for other models it is read through the system, so a different layout reads as nothing).
+fn place_of(model: usize) -> Option<Vec3> {
+    let item = word(model + 0x10).filter(|p| *p != 0)?;
+    let mats = word(word(item + 0x640).filter(|p| *p != 0)? + 0x70).filter(|p| *p != 0)?;
+    let f = f32s(mats, 12);
+    let p = Vec3::new(*f.get(3)?, *f.get(7)?, *f.get(11)?);
+    (p.is_finite() && p.abs().max_element() < 1.0e6).then_some(p)
+}
+
+/// What a model is called (its FLVER's name, lower case stem: `wp_a_0200`, `bd_m_1100`, `c0000`).
+fn model_label(model: usize) -> String {
+    word(model + 0x10).filter(|p| *p != 0).and_then(|item| dl_string(item + 0x6C0)).map(|n| kh_erfile::part_stem(&n)).unwrap_or_default()
+}
+
+/// A model's display flag words (`CSModelDispEntity` + 0x20, + 0x24; bit 0 of the first = drawn).
+fn disp_of(model: usize) -> Option<(u32, u32)> {
+    let disp = word(model + MODEL_DISP).filter(|d| *d != 0)?;
+    Some((u32_at(disp + DISP_FLAGS)?, u32_at(disp + DISP_FLAGS + 4)?))
+}
+
+/// Is a model's name a weapon's (Elden Ring's `WP_*` parts: held weapons, arrows and bolts; IMPL_ZDRAW: a c0000 wears
+/// `wp_a_0200` among its dressed parts)?
+pub fn weapon_like(label: &str) -> bool {
+    label.to_ascii_lowercase().starts_with("wp_")
+}
+
+/// The census line of one model (address, class, name, drawn or not, distance from the figure).
+fn census_line(model: usize, root: Option<Vec3>) -> String {
+    let label = model_label(model);
+    let away = match (place_of(model), root) {
+        (Some(p), Some(r)) => format!("{:.0} cm from the figure", (p - r).length() * 100.0),
+        _ => "place not readable".to_string(),
+    };
+    let disp = disp_of(model).map_or("display not readable".to_string(), |(a, b)| format!("display {a:#x} {b:#x} ({})", if a & 1 != 0 { "DRAWN" } else { "hidden" }));
+    format!("{model:#x} {} {label:?}{} | {disp} | {away}", class_of(model).unwrap_or_default(), if weapon_like(&label) { " = A WEAPON PART" } else { "" })
+}
+
+/// The non-empty model pointers of a dressing object's 27 part slots (slot, pointer).
+fn dressed(asm: usize) -> Vec<(usize, usize)> {
+    let mut raw = [0u8; PARTS * 8];
+    if asm == 0 || !read(asm + ASM_PARTS, &mut raw) {
+        return Vec::new();
+    }
+    raw.as_chunks::<8>().0.iter().enumerate().map(|(k, c)| (k, usize::from_le_bytes(*c))).filter(|(_, p)| *p != 0).collect()
+}
+
+/// (CUTSCENE-ANIM, the coordinator 2026-11-07: the Tarnished's crossbow seen by Sora's hand in the Rennala library scene) THE
+/// SCENE'S MODELS AROUND THE FIGURE, READ ONLY, written to the log once per figure act (at most `CENSUS_PER_SCENE` a scene):
+/// - the figure's 27 dressed parts (their FLVER names: a weapon is a `wp_*` part);
+/// - any other pointer the dressing object holds past them that the RTTI calls a model (a weapon kept apart);
+/// - every other act's model within `CENSUS_NEAR_CM` of the figure or named as a weapon (a prop of the scene);
+/// - the real player's own model and dressed parts.
+///
+/// Each with its class, its display flags (drawn or not) and its distance from the figure. Nothing is written into any object.
+pub fn census(f: &Figure, env: usize) {
+    let root = place_of(f.model);
+    crate::erlog!("cutfig: (CUTSCENE-ANIM census) THE FIGURE {:#x} {} {:?} act {:#x} {:?}, dressed by {:#x}, at {:?} (ER m); read only", f.model, class_of(f.model).unwrap_or_default(), model_label(f.model), f.act, word(f.act + ACT_NAME).and_then(wide).unwrap_or_default(), f.asm, root);
+    for (k, part) in dressed(f.asm) {
+        crate::erlog!("cutfig: (census)   part {k:2}: {}", census_line(part, root));
+    }
+    let mut extra = [0u8; 0x100];
+    if read(f.asm + ASM_PARTS + PARTS * 8, &mut extra) {
+        for (k, c) in extra.as_chunks::<8>().0.iter().enumerate() {
+            let p = usize::from_le_bytes(*c);
+            if p != 0 && class_of(p).is_some_and(|n| n.contains("Model")) {
+                crate::erlog!("cutfig: (census)   dressing + {:#x}: {}", ASM_PARTS + PARTS * 8 + k * 8, census_line(p, root));
+            }
+        }
+    }
+    let mut listed = 0;
+    for act in acts(env).into_iter().take(CENSUS_ACTS) {
+        if act == f.act || !is(act, &VT_ANIM_ACT, "CSRemoAnimAct@CS") {
+            continue;
+        }
+        let Some(model) = word(act + ACT_MODEL).filter(|m| *m != 0) else { continue };
+        let near = matches!((place_of(model), root), (Some(p), Some(r)) if (p - r).length() * 100.0 <= CENSUS_NEAR_CM);
+        if !near && !weapon_like(&model_label(model)) {
+            continue;
+        }
+        listed += 1;
+        crate::erlog!("cutfig: (census)   act {act:#x} {:?}: {}", word(act + ACT_NAME).and_then(wide).unwrap_or_default(), census_line(model, root));
+        if listed >= 40 {
+            break;
+        }
+    }
+    if let Some(player) = crate::game::player_mut() {
+        let model = crate::word!(player.chr_ins.chr_model_ins);
+        let asm = crate::word!(player.chr_asm_model_ins);
+        crate::erlog!("cutfig: (census)   THE REAL PLAYER's model: {}", census_line(model, root));
+        for (k, part) in dressed(asm) {
+            crate::erlog!("cutfig: (census)   real player's part {k:2}: {}", census_line(part, root));
+        }
+    }
+    crate::erlog!("cutfig: (census) end ({listed} other model(s) of the scene near the figure or named as weapons)");
+}
+
+#[cfg(test)]
+mod census_tests {
+    #[test]
+    fn weapon_parts_are_named_wp() {
+        assert!(super::weapon_like("wp_a_0200") && super::weapon_like("WP_A_4300"));
+        assert!(!super::weapon_like("bd_m_1100") && !super::weapon_like("c0000") && !super::weapon_like("aeg099_060"));
     }
 }

@@ -54,6 +54,40 @@ if (fs.existsSync(BP)) for (const file of fs.readdirSync(BP).sort()) {
     (entry.body = entry.body || []).includes(name) || entry.body.push(name);
   }
 }
+// (KBFX) EVERY OTHER PROJECTILE CLASS of Blueprints/Projectile (the keyblades' shotlocks TresProjSL_* / SE_* / LF_* / DF_* /
+// TF_*, the form projectiles, the magic variants ...) read from its own blueprint (its parents merged:
+// tools/sora_keyblades_pack.js `blueprint`): body = ParticleComp.Template, fire = MyFireEffects[].MyParticleSystem, hit /
+// map_hit = TresAtkColl*.m_HitEffects[].m_PawnHitEffect / m_MapHitEffect, PutEffect = m_PutEffect. Before, only classes that
+// are rows of the trigger table (Sora's own sheet: the Kingdom Key's shotlocks, his magic) had an entry, so every other
+// keyblade's shotlock bolt flew without its body effect. A class the trigger table has keeps exactly its rows.
+{
+  const { blueprint } = require('./sora_keyblades_pack.js');
+  const PROJ = path.join(root, 'assets_converted/packages/KINGDOM HEARTS III/Content/Blueprints/Projectile');
+  const files = [];
+  const walk = (d) => { for (const f of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) { if (f.isDirectory()) walk(path.join(d, f.name)); else if (f.name.endsWith('.uasset.json')) files.push(path.join(d, f.name)); } };
+  if (fs.existsSync(PROJ)) walk(PROJ);
+  // + the projectiles kept with the style pawns (StylePawn/Proj*: Counter Shield's ProjSHThunder, which w_so036 spawns)
+  const STYLE = path.join(PROJ, '..', 'StylePawn');
+  if (fs.existsSync(STYLE)) for (const f of fs.readdirSync(STYLE).sort()) if (/^Proj\w*\.uasset\.json$/.test(f)) files.push(path.join(STYLE, f));
+  const stem = (v) => (typeof v === 'string' && /^\/Game\/Effects\//.test(v) ? v.split('/').pop().split('.')[0] : null);
+  let added = 0;
+  for (const file of files) {
+    const cls = path.basename(file, '.uasset.json') + '_C';
+    if (projectiles[cls]) continue;
+    let b; try { b = blueprint('/Game/' + path.relative(path.join(root, 'assets_converted/packages/KINGDOM HEARTS III/Content'), file).split(path.sep).join('/').replace(/\.uasset\.json$/, '')); } catch { continue; }
+    if (!b.chain.length) continue;
+    const entry = {};
+    const add = (key, v) => { const n = stem(v); if (n) (entry[key] = entry[key] || []).includes(n) || entry[key].push(n); };
+    for (const c of Object.values(b.comps)) {
+      if (c.class === 'ParticleSystemComponent') add('body', c.Template);
+      for (const h of Array.isArray(c.m_HitEffects) ? c.m_HitEffects : []) { add('hit', h && h.m_PawnHitEffect); add('map_hit', h && h.m_MapHitEffect); }
+    }
+    add('PutEffect', b.cdo.m_PutEffect);
+    for (const f of Array.isArray(b.cdo.MyFireEffects) ? b.cdo.MyFireEffects : []) add('fire', f && f.MyParticleSystem);
+    if (Object.keys(entry).length) { projectiles[cls] = entry; added++; }
+  }
+  console.log(`(KBFX) ${added} projectile classes read from their own blueprints`);
+}
 // The Blizzard ice trail (docs/sora-magic-spec.md 4): class defaults of TresSplineMeshBlizzard_C (a
 // TresDecalMeshSplineActor) and the pack files of its meshes with their slot materials. The core announces every
 // rail node as the effect "TresRailSlideActor"; the app lays one trail piece between consecutive nodes.
@@ -110,7 +144,7 @@ const camera_shakes = {};
     };
   }
 }
-const doc = { format: 'kh3-sora-vfx-host/1', generator: 'tools/sora_vfx_host.js 1.3.0', actors, camera_shakes, note: 'host table of the effect renderer (crates/kh-app/src/vfx.rs): sockets, weapon sockets, projectile class -> effects', sockets, weapon_sockets, projectiles };
+const doc = { format: 'kh3-sora-vfx-host/1', generator: 'tools/sora_vfx_host.js 1.4.0', actors, camera_shakes, note: 'host table of the effect renderer (crates/kh-app/src/vfx.rs): sockets, weapon sockets, projectile class -> effects', sockets, weapon_sockets, projectiles };
 const text = JSON.stringify(doc, null, 1) + '\n';
 if (process.argv.includes('--check')) { const same = fs.existsSync(out) && fs.readFileSync(out, 'utf8') === text; console.log(same ? 'host.json: up to date' : 'host.json: DIFFERS'); process.exit(same ? 0 : 1); }
 fs.writeFileSync(out, text);

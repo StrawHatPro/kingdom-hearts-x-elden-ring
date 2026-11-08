@@ -9,6 +9,8 @@
 //!    Donald, joined or not (he joins with them): a boss beaten now shows his own BONUS! panel (KH3's magic icon on
 //!    magic, ER_PHASE_NOTES 2026-10-19) when he is in the party; the first look after a load is THE CATCH-UP of an older
 //!    save (every beaten boss once, one panel). Records are only added (`don:<row>`, beside `boss:` / `party:` / `xs:`).
+//!    (GF-STATS) The same poll gives the friends' raw HP / MP / slot steps and Goofy's ranks (kh-partyhost growth.rs, records
+//!    `donstat:<row>` and `gof:<row>`), the Crucible Knight and Erdtree Avatar groups from the game's defeat flags.
 //! 3. HIS AGGRO, THE HATE ROUTE ([`hate`], once a frame after the taunt): Elden Ring's enemies take as their target what
 //!    hurt them, so an enemy that would rather not choose Donald (Low Profile / Hide Behind by roll, Distraction, Out of
 //!    Sight) is given a minimal hit from the ally's Elden Ring body it should turn to (the route of Goofy's Over Here!,
@@ -57,6 +59,23 @@ pub fn panel_lines(grants: &[kh_party::donald::Grant]) -> Vec<String> {
     grants.iter().map(|g| if g.is_magic() { icon_line(LineIcon::Magic, &g.label(&d)) } else { side.bonus_lines[1].clone() }).collect()
 }
 
+/// (GF-STATS) The BONUS! panel's line of a friend's boss reward: KH3's own stat line (no icon), a rank after the ability sparkle
+/// ("Pinning Guard: Rank 2 ready"). `level`: Goofy's level, for that wording.
+pub fn growth_line(g: &kh_party::growth::GrowthGrant, level: u32) -> String {
+    kh_partyhost::growth::growth_line(g, level)
+}
+
+/// (GF-STATS) A friend's panels of one poll, per boss: the catch-up of an older save is one panel, a boss beaten now its lines.
+pub fn friend_panels(c: PartyChara, first: bool, per_boss: Vec<Vec<String>>) {
+    if first && per_boss.len() > 1 {
+        crate::partyui::friend_bonus(c, vec![format!("Rewards of {} bosses obtained", per_boss.len())]);
+        return;
+    }
+    for lines in per_boss {
+        crate::partyui::friend_bonus(c, lines);
+    }
+}
+
 /// ONCE A FRAME with the party's core (party/mod.rs `PartySlot::frame`): the tuning, his boss steps.
 #[cfg(windows)]
 pub fn frame(core: &mut super::glue::PartyCore, control: &Control, dt: f32) {
@@ -71,7 +90,7 @@ pub fn frame(core: &mut super::glue::PartyCore, control: &Control, dt: f32) {
     }
     // 2. his boss steps, twice a second
     st.poll_in -= dt;
-    if st.poll_in > 0.0 || control.flag("boss.rewards") == Some(false) {
+    if st.poll_in > 0.0 || control.flag("boss.rewards") == Some(false) || crate::partyui::load_waiting() {
         return;
     }
     st.poll_in = 0.5;
@@ -79,9 +98,30 @@ pub fn frame(core: &mut super::glue::PartyCore, control: &Control, dt: f32) {
     let mut records = crate::hud::records();
     let before = records.len();
     let got = core.rt.don_claim_due(&t.don, &mut records);
+    // (GF-STATS) the friends' raw steps and Goofy's rows; his groups read the defeat flags themselves (6000 / 6001: the game's
+    // constant flags, as bossreward.rs checks them: no flags, no group step)
+    let stats = core.rt.don_stat_claim_due(&t.don, &mut records);
+    use crate::bossreward::game_flag;
+    let readable = game_flag(6000) == Some(false) && game_flag(6001) == Some(true);
+    let gof = core.rt.gof_claim_due(t, &mut records, &|f| readable && game_flag(f) == Some(true));
     let first = !std::mem::replace(&mut st.looked, true);
     if records.len() != before {
         crate::hud::set_records(records);
+    }
+    let level = core.rt.goofy_level();
+    let name = |boss: &str| t.row(boss).map_or(boss.to_string(), |r| r.name.clone());
+    let present = crate::partyui::present(control);
+    for (boss, grants) in &gof {
+        erlog!("gof: {} beaten: Goofy's reward(s) {} (row gof.{boss}; recorded gof:{boss}; he has them joined or not)", name(boss), grants.iter().map(|g| g.label(level)).collect::<Vec<_>>().join(", "));
+    }
+    if present.contains(&PartyChara::Goofy) {
+        friend_panels(PartyChara::Goofy, first, gof.iter().map(|(_, grants)| grants.iter().map(|g| growth_line(g, level)).collect()).collect());
+    }
+    for (boss, grants) in &stats {
+        erlog!("don: {} beaten: Donald's reward(s) {} (row don.{boss}; recorded donstat:{boss}; he has them joined or not)", name(boss), grants.iter().map(|g| g.label(level)).collect::<Vec<_>>().join(", "));
+    }
+    if present.contains(&PartyChara::Donald) {
+        friend_panels(PartyChara::Donald, first, stats.iter().map(|(_, grants)| grants.iter().map(|g| growth_line(g, level)).collect()).collect());
     }
     if got.is_empty() {
         return;
@@ -90,8 +130,7 @@ pub fn frame(core: &mut super::glue::PartyCore, control: &Control, dt: f32) {
     for (boss, grants) in &got {
         erlog!("don: {} beaten: Donald's step(s) {} (row don.{boss}; recorded don:{boss}; he has them joined or not)", t.row(boss).map_or(boss.as_str(), |r| r.name.as_str()), grants.iter().map(|g| g.label(&d)).collect::<Vec<_>>().join(", "));
     }
-    let present = crate::partyui::present(control).contains(&PartyChara::Donald);
-    if !present {
+    if !present.contains(&PartyChara::Donald) {
         return;
     }
     if first && got.len() > 1 {
@@ -233,6 +272,9 @@ pub fn hate(core: Option<&super::glue::PartyCore>, player: eldenring::cs::FieldI
     let picked = plan(&input, &mut hit, &mut rolled);
     (st.hit, st.rolled) = (hit, rolled);
     let Some((id, to)) = picked else { return };
+    if !crate::targets::side_hit_allowed(id) {
+        return; // (PARTY-AI) Protect the slam: no 1-HP side bullet at a target a Breaker winds up on
+    }
     let Some(e) = targets.get(id).cloned() else { return };
     let leader = rt.leader_chara();
     let owner = if to == leader { Some((player, false)) } else { crate::allybody::handle(to).map(|h| (h, true)) };
@@ -249,6 +291,9 @@ pub fn hate(core: Option<&super::glue::PartyCore>, player: eldenring::cs::FieldI
     let attack = crate::bullet::Attack { phys: 1, poise: 0.0, stamina: 0, level: 0, carrier: Default::default(), sp_attribute: None, obj: None };
     let shape = targets.shape;
     let fired = if owned { targets.bullets.fire_owned(owner, Some(e.handle), from, towards, attack, shape) } else { targets.bullets.fire(owner, Some(e.handle), from, towards, attack, shape) };
+    if fired.is_ok() {
+        targets.note_side_hit(id, attack.phys as i32); // (2026-11-03) its take is its own, never a KH bullet's
+    }
     match fired {
         Ok(row) => erlog!("don: aggro: target {} c{:04} turned from Donald to {} (a 1-point hate hit from {}, bullet row {row}; never a hit moved)", id.0, e.npc_id, to.name(), if owned { "his ally body" } else { "the leader body" }),
         Err(why) => erlog!("don: aggro: the hate hit on target {} could not be fired ({why})", id.0),
@@ -259,6 +304,19 @@ pub fn hate(core: Option<&super::glue::PartyCore>, player: eldenring::cs::FieldI
 mod tests {
     use super::*;
     use kh_party::donald::DonAbility;
+
+    /// (GF-STATS) A friend's reward lines: KH3's own stat lines, a rank after the ability sparkle with its saved wording.
+    #[test]
+    fn gf_reward_panel_lines() {
+        use kh_party::growth::{GrowthGrant as G, RankLine, SlotKind};
+        assert_eq!(growth_line(&G::MaxHp(14), 1), "Max HP +14");
+        assert_eq!(growth_line(&G::MaxMp(4), 1), "Max MP +4");
+        assert_eq!(growth_line(&G::Slot(SlotKind::Armour), 1), "Armor slot unlocked!");
+        assert_eq!(growth_line(&G::Slot(SlotKind::Accessory), 1), "Accessory slot unlocked!");
+        assert_eq!(growth_line(&G::Slot(SlotKind::Item), 1), "Item slot unlocked!");
+        assert_eq!(growth_line(&G::Rank(RankLine::PinningGuard, 2), 10), "<icon(Ability)>Pinning Guard: Rank 2 ready");
+        assert_eq!(growth_line(&G::Rank(RankLine::PinningGuard, 2), 20), "<icon(Ability)>Pinning Guard: Rank 2");
+    }
 
     fn with(list: &[DonAbility]) -> DonAbilities {
         let mut a = DonAbilities::default();

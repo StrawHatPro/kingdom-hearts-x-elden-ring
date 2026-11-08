@@ -17,6 +17,7 @@
 
 pub mod alarm;
 pub mod autose;
+pub mod copies; // (MIMIC-FX) the Mimic Tears' copies: their own member ids, their own emitters
 pub mod driver;
 pub mod engine;
 pub mod mixer;
@@ -29,7 +30,7 @@ pub mod wav;
 
 pub use autose::{AutoSe, AutoSeEvent, BoneFrame, Motion, Part};
 pub use driver::{pan_of, ActiveSound, Driver, Listener, Note, PlayOutcome, PlayParams, SoundKey, VoiceCommand, VoiceId, VoiceParams};
-pub use engine::{ActiveLine, Anchor, Engine, LogLine, SeamPlay};
+pub use engine::{ActiveLine, Anchor, AssetPlay, AutoSeTick, Engine, LogLine, SeamPlay};
 pub use engine::VoiceLine; // (FACE) a party member's voice line for its face's lip-sync
 pub use mixer::{Materials, Mixer};
 pub use pack::Pack;

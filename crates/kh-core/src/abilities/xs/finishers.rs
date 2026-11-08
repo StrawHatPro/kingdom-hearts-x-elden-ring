@@ -11,12 +11,12 @@
 //! - GIANT STAMP (XS 2.6, 261; Elemer): against a STRONG (Heavy / Giant) body -> Hyper Hammer's `M_3416` (0xE6),
 //!   invincible `giant_stamp.invincible_from` .. `_to`, the shockwave StampL (ours) `giant_stamp.radius` in front.
 //! - CRIMSON BLAST (XS 2.12, Riskcharge's): the ground finisher while a Riskcharge runs (rage.rs).
-//! Precedence (ours): Crimson Blast, Giant Stamp, Zantetsuken, Spiral Rush, Event Horizon. Air finishers and Second
-//! Form's (ComboLimit) are KH3's.
+//!   Precedence (ours): Crimson Blast, Giant Stamp, Zantetsuken, Spiral Rush, Event Horizon. Air finishers and Second
+//!   Form's (ComboLimit) are KH3's.
 
 use glam::Vec3;
 
-use super::{has, kind, X};
+use super::{has, X};
 use crate::enums::ETresAbilityKind as A;
 use crate::host::{BodyReaction, TargetId};
 use crate::pawn::Ctx;
@@ -157,6 +157,3 @@ pub(crate) fn group_shape(cx: &Ctx, group: &str) -> Option<(Vec3, Vec3, f32)> {
 pub(crate) fn owns(attack_kind: u8) -> bool {
     matches!(attack_kind, SPIRAL_RUSH | ZANTETSUKEN | EVENT_HORIZON | GIANT_STAMP | CRIMSON_BLAST)
 }
-
-#[allow(dead_code)]
-const _: u8 = kind::DIVE;

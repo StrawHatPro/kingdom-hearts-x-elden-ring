@@ -81,6 +81,36 @@ pub struct HurtShape {
     pub part: u32,
 }
 
+/// (GOOFY) What kind of blow an enemy's attack is: the reading a parry technique answers
+/// (documentation/GOOFY_OVERHAUL.md 4.3; rulings R2 of build/sora_tmp/party/GOOFY/PLAN.md). The host classes
+/// it from what it knows of the attack; a host that knows nothing leaves [`AttackClass::Normal`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum AttackClass {
+    #[default]
+    Normal,
+    Thrust,
+    Sweep,
+    Grab,
+    Heavy,
+    Projectile,
+    Magic,
+}
+
+/// (GOOFY) The attack behind a hit, as far as the host could read it. The default is a `Normal` attack by
+/// nobody known, which changes nothing for a member that does not read it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub struct AttackInfo {
+    pub class: AttackClass,
+    /// The danger cue's rule: thrust, sweep, grab, unblockable heavy.
+    pub perilous: bool,
+    /// Who threw it (None: not known).
+    pub attacker: Option<TargetId>,
+}
+
+impl AttackInfo {
+    pub const NONE: AttackInfo = AttackInfo { class: AttackClass::Normal, perilous: false, attacker: None };
+}
+
 /// A hit, as the core delivers it. The numbers are whatever the combat / magic rules computed;
 /// this struct does not compute anything.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -113,6 +143,8 @@ pub struct HitRecord {
     /// The rest of the game's hit record (`FTresPointDamageEvent` + `TresDamageInfo`, combat
     /// strand C 8.7): what a victim needs to play its reaction.
     pub info: HitInfo,
+    /// (GOOFY) The attack's class and thrower, for the parry techniques. `attack` above is the row index.
+    pub attack_info: AttackInfo,
 }
 
 /// (enemy-reaction implementer, 2026-10-12) What a victim's reaction reads of the instigator pawn
@@ -232,7 +264,7 @@ impl Default for HitInfo {
 impl HitRecord {
     /// A record with neutral contents for `target`: no attack row, no damage, physical.
     pub const fn empty(target: TargetId) -> HitRecord {
-        HitRecord { target, part: 0, attack: u32::MAX, attack_name: "", position: Vec3::ZERO, direction: Vec3::X, damage: 0.0, damage_kind: ETresDamageKind::None, attribute: ETresDamageAttribute::Physical, impulse: Vec3::ZERO, attacker: HitAttacker::NONE, flags: 0, info: HitInfo::DEFAULT }
+        HitRecord { target, part: 0, attack: u32::MAX, attack_name: "", position: Vec3::ZERO, direction: Vec3::X, damage: 0.0, damage_kind: ETresDamageKind::None, attribute: ETresDamageAttribute::Physical, impulse: Vec3::ZERO, attacker: HitAttacker::NONE, flags: 0, info: HitInfo::DEFAULT, attack_info: AttackInfo::NONE }
     }
 }
 
@@ -312,10 +344,51 @@ pub struct TargetBody {
     pub rapid_fire_proof: bool,
     /// `ai.slot16(0x10)`: it may refuse hits of shapes that allow refusal (prim+0x984 bit 5).
     pub refuses: bool,
+    /// (THE USER 2026-11-02: "fix 'Shields don't count as guarding.' and in fact make the character who attacks a shield bounce
+    /// off playing their animation from KH3") A HOST'S RAISED SHIELD with the arc it covers: set together with `guarding` by a
+    /// host whose own game says the body guards now (Elden Ring: kh-er shieldguard.rs). It guards only a hit from inside its
+    /// arc (`seen_from`), and a guarded swing into it repels the attacker whatever the swing's clash bit (`classify`: KH3's
+    /// "no clash" rule keeps the first swing of a combo as the only one its own guards repel). `None`: KH3's own guard
+    /// (`guarding` alone), from every side.
+    pub shield: Option<Shield>,
+}
+
+/// (THE USER 2026-11-02) A raised shield's arc: the way it faces (`yaw`, degrees in the core's frame: forward = (cos, sin))
+/// and the half-angle it covers to either side (`half_arc`, degrees; 180 = all round).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Shield {
+    pub yaw: i16,
+    pub half_arc: u8,
+}
+
+impl Shield {
+    /// A blow from `from` on a body at `at` comes from inside the arc (on the horizontal; a blow from straight above or
+    /// from the body's own spot counts as in front).
+    pub fn covers(&self, from: Vec3, at: Vec3) -> bool {
+        let to = Vec3::new(from.x - at.x, from.y - at.y, 0.0);
+        if to.length_squared() < 1.0e-6 {
+            return true;
+        }
+        let yaw = (self.yaw as f32).to_radians();
+        let facing = Vec3::new(yaw.cos(), yaw.sin(), 0.0);
+        let cos = facing.dot(to.normalize()).clamp(-1.0, 1.0);
+        cos.acos().to_degrees() <= self.half_arc.min(180) as f32 + 1.0e-3
+    }
 }
 
 impl TargetBody {
-    pub const DEFAULT: TargetBody = TargetBody { has_body: true, reaction: BodyReaction::Default, guarding: false, armoured: false, weak: 0, nullified: 0, rapid_fire_proof: false, refuses: false };
+    pub const DEFAULT: TargetBody = TargetBody { has_body: true, reaction: BodyReaction::Default, guarding: false, armoured: false, weak: 0, nullified: 0, rapid_fire_proof: false, refuses: false, shield: None };
+
+    /// (THE USER 2026-11-02) THE BODY AS AN ATTACKER AT `from` MEETS IT (the body stands at `at`): a host's shield guards only
+    /// a blow from inside its arc; from outside it the body is not guarding at all (a plain hit, KH3's rules for an open
+    /// body). A body without a shield is returned as it is. Every attacker's classification asks this first (Sora's
+    /// combat/hit.rs, the friends' kh-party deliveries): one rule for every KH character.
+    pub fn seen_from(self, from: Vec3, at: Vec3) -> TargetBody {
+        match self.shield {
+            Some(s) if !s.covers(from, at) => TargetBody { guarding: false, shield: None, ..self },
+            _ => self,
+        }
+    }
 }
 
 impl Default for TargetBody {
@@ -496,8 +569,8 @@ pub trait Targets {
         self.defense(id).map(|d| d.resist)
     }
     /// (ZETTA) A SCRIPTED HOLD (Donald's Zettaflare; the user: "the enemy needs to freeze, look at Donald"): asked every
-    /// step while it lasts. `Some`: the target stays where it is (no movement, no turning but toward `face` at most
-    /// `turn_rate` deg/s, no attacks of its own); `None`: the hold is over, the target is the host's again (asked once,
+    /// step while it lasts. `Some`: the target stays where it is, or (F-POLISH) where `carry` puts it (no movement of its own,
+    /// no turning but toward `face` at most `turn_rate` deg/s, no attacks of its own); `None`: the hold is over, the target is the host's again (asked once,
     /// also for an id never held). A hit during the hold still lands (its reaction is the host's). The default: nothing (a
     /// host without it leaves the target alone).
     fn script_hold(&mut self, _id: TargetId, _hold: Option<ScriptHold>) {}
@@ -523,7 +596,72 @@ pub trait Targets {
     fn drawn_extent(&self, _id: TargetId) -> Option<(f32, f32)> {
         None
     }
+    /// (GOOFY) The Stagger book's questions to the host (kh-party goofy/stagger.rs; PLAN.md R6, R7): see [`StaggerAsk`]. The
+    /// answer is the host's yes or no. The default, a host with no reaction of its own to run, says yes to all of it.
+    fn stagger_ask(&mut self, _id: TargetId, _ask: StaggerAsk) -> bool {
+        true
+    }
+    /// (AUDIT-B W-FIN) THE BONE A HIT TOUCHED: KH3's FHitResult.BoneName (+0x78) of the hit component, which
+    /// ATresProjectileBase 0x141473E30 (m_bAttachToHitActor) passes to FUN_143E8FC60 as the socket the actor is attached to
+    /// (KeepWorldTransform). `at`: the contact point (world, cm). The host answers the bone of the target's skeleton that
+    /// carries the touched part there (Elden Ring: the model node nearest the contact); `None` is a host without bones:
+    /// the attached actor follows the target's origin and yaw.
+    /// (AUDIT-B) NO DEFAULT BODY: every implementor decides (a wrapper must forward to the host it wraps; a default once let
+    /// kh-partyhost's AuraTargets drop the bones silently).
+    fn hit_bone(&self, id: TargetId, at: Vec3) -> Option<TargetBone>;
+    /// (AUDIT-B W-FIN) A bone's world transform now (asked every step while something rides on it); `None`: not readable
+    /// this step (the rider keeps the target's origin and yaw for the step). (AUDIT-B) No default body, as `hit_bone`.
+    fn bone_pose(&self, id: TargetId, bone: TargetBone) -> Option<BonePose>;
 }
+
+/// (AUDIT-B W-FIN) A bone of a target's skeleton as its host numbers it (its own index; stable while the target lives).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TargetBone(pub u32);
+
+/// (AUDIT-B W-FIN) A bone's world transform: its place (cm, core axes) and its rotation (core axes).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BonePose {
+    pub position: Vec3,
+    pub rotation: glam::Quat,
+}
+
+/// (GOOFY) What the Stagger book asks of a target's host (PLAN.md R6, R7). The boss and size facts are the plain
+/// [`Targets::size_class`]; these are the moments of a break.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StaggerAsk {
+    /// The gauge is full: may the target break now, for `window` seconds? Yes: the host starts its own break. No (its chain
+    /// cap, its armour, an event): nothing happens to the target.
+    Break { window: f32 },
+    /// A Breaker runs: the break lasts at least `seconds` more.
+    Hold { seconds: f32 },
+    /// The break is over, by its clock or by the Breaker's slam (asked before that hit lands): the target gets up. A hit may
+    /// still juggle it for `juggle` seconds, within the host's own limits.
+    Release { juggle: f32 },
+    /// May a Breaker's hit defeat it now (R7: the host's no-death states, its events)? Whether the rule offers it at all
+    /// (non-boss, HP low) is kh-party's; a yes is answered by [`HIT_FLAG_BREAKER`].
+    MayDefeat,
+    /// (GF-POLISH) Pin Down: its next attack comes late, the target's own mind stands still for `seconds` (the swing it is in
+    /// plays on). No, and nothing happens: an event, a no-death state, nothing the host may touch. Asked again it runs from
+    /// the longer of the two. A body the host cannot find any more is forgotten after `lost` seconds.
+    Delay { seconds: f32, lost: f32 },
+    /// (THE USER 2026-11-02: "make non-boss enemies bounce off of Goofy's shield if they're not doing a long combo string when
+    /// Goofy successfully performs a perfect deflect") Goofy's perfect deflect turned its swing: the target plays the host's own
+    /// attack rebound (Elden Ring: a swing knocked back off a guard), the attack it is in ends and a short opening follows. The
+    /// host tries its ways in turn, `wait` seconds each, until that swing has ended. No, and nothing happens: a boss, an event,
+    /// a body another reaction holds, no swing running. Whether it is asked at all (perfect, not a boss, not mid-string) is
+    /// kh-party's (goofy/parry.rs `bounces`, seams.rs `on_bounce`).
+    Rebound { wait: f32 },
+}
+
+/// (GOOFY) A BREAKER'S DEFEAT (`HitRecord::flags`, PLAN.md R7): the hit is lethal and a host takes it through its own damage
+/// path past defence and negation, so its own death, credit and prizes follow. It is no [`HIT_FLAG_FORCE`]: reactions, the
+/// chain cap and every limit stay.
+pub const HIT_FLAG_BREAKER: u32 = 1 << 26;
+
+/// (GF-POLISH) A KNOCKDOWN (`HitRecord::flags`, Pratfall Toss, documentation/GOOFY_OVERHAUL.md 6.1): the reaction of a hit a body may
+/// take at all goes through in full, past the meter a host keeps for ordinary hits. An armoured body stays as it is: no
+/// [`HIT_FLAG_FORCE`], no limit of its is passed.
+pub const HIT_FLAG_KNOCKDOWN: u32 = 1 << 25;
 
 /// (ZETTA) What [`Targets::script_finale`] asks of a target's look this step.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -546,6 +684,22 @@ pub struct ScriptFinale {
 /// reaction past super armour, poise and any chain limit (its fall guard still applies). A host that cannot force one logs it.
 pub const HIT_FLAG_FORCE: u32 = 1 << 27;
 
+/// (PARTY-AI, THE USER 2026-11-03: "the party leader can hit friendly NPCs, but not AI allies") A hit THROWN BY AN AI: a party
+/// member no pad drives, AI Sora, Mimic Sora, any summon of ours, for every character now and to come. The player's leader
+/// (whoever leads) never sets it. Hosts read it through [`may_hit_friendly`].
+pub const HIT_FLAG_AI: u32 = 1 << 23;
+
+/// (PARTY-AI) THE ONE RULE for a friendly NPC: the player's leader hits it as the player's own character would (the host's
+/// consequences follow); a hit thrown by an AI ([`HIT_FLAG_AI`]) passes through it.
+pub fn may_hit_friendly(flags: u32) -> bool {
+    flags & HIT_FLAG_AI == 0
+}
+
+/// (PARTY-AI) The bit a hit of a character carries: [`HIT_FLAG_AI`] unless the player controls him.
+pub fn ai_hit_flag(player_controlled: bool) -> u32 {
+    if player_controlled { 0 } else { HIT_FLAG_AI }
+}
+
 /// (ZETTA) What [`Targets::script_hold`] asks of a target this step.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScriptHold {
@@ -559,6 +713,10 @@ pub struct ScriptHold {
     /// been hit: the host plays ITS OWN hurt / hit reaction (looping or held) through its damage-reaction route while it is
     /// held, never a frozen pose, until the silhouette or the throw takes over. False: its own idle (before the hit).
     pub hurt: bool,
+    /// (F-POLISH) CARRIED: `Some(origin)` = the target's origin (its `TargetInfo::position`, world cm) this step, put there by
+    /// the host (no gravity, the height too: KH3 links the caught actor to a socket, e.g. FINISH_DR's drill X_link_skt);
+    /// `None` = held where it stands, as above.
+    pub carry: Option<Vec3>,
 }
 
 /// A party member as Sora's team-attack code sees it (stream D seam).
@@ -622,6 +780,10 @@ pub struct TeamShot {
     pub life: f32,
     /// The particle to show at it ("" = none).
     pub effect: &'static str,
+    /// (COMBAT-FIX) Some(local): the sphere rides the link pawn that carries Sora (a shape on the pawn's socket, which KH3
+    /// moves with the pawn: 0x140647950): its centre is Sora's root + `local` turned by his yaw on every step of its life.
+    /// None: it stays where it was spawned.
+    pub follow: Option<Vec3>,
 }
 
 /// Sora's side -> the friends' side (relayed by the host, stream D seam).
@@ -701,5 +863,12 @@ impl Targets for NullTargets {
     fn hurt_shapes(&self, _id: TargetId, _out: &mut Vec<HurtShape>) {}
     fn apply_hit(&mut self, _hit: &HitRecord) -> HitResult {
         HitResult::default()
+    }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: crate::host::TargetId, _at: glam::Vec3) -> Option<crate::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: crate::host::TargetId, _bone: crate::host::TargetBone) -> Option<crate::host::BonePose> {
+        None
     }
 }

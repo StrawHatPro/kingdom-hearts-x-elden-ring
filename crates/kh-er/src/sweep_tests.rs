@@ -493,7 +493,7 @@ fn a_push_out_of_an_overlap_does_not_go_into_what_is_behind_him() {
     let before = sweep_first(&boxes, at, at - Vec3::Z * 5.0, 32.0, 32.0, &Options::ER23A).unwrap();
     assert!(before.start_penetrating && (before.penetration_depth - 3.0).abs() < 0.05, "as it was: 3 cm up, into the ceiling: {before:?}");
     // (the rule is off by default since a lift rose through him in the game: `w.clamp = 1`)
-    assert!(!Options::DEFAULT.clamp);
+    const { assert!(!Options::DEFAULT.clamp) };
     let clamp = Options { clamp: true, ..Options::DEFAULT };
     let now = sweep_first(&boxes, at, at - Vec3::Z * 5.0, 32.0, 32.0, &clamp).unwrap();
     assert!(now.start_penetrating && now.penetration_depth < 0.8, "cut short under the ceiling: {now:?}");

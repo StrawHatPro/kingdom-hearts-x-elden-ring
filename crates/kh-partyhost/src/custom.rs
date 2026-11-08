@@ -80,19 +80,34 @@ impl PartyRuntime {
     pub fn feed_leader_magic(&mut self, sora: &kh_core::Sora) {
         let s = sora.status();
         self.customs.blocks[LeaderKind::Donald as usize].don = self.don_book(); // (DON-UI) his block reads his own book
+        self.feed_goofy_arts(); // (GF-ARTS)
         self.customs.sync(MagicBook::of(s, sora.command().magic_slots));
         self.customs.stock = sora.magic().pouch.stock.iter().filter(|e| e.1 > 0).map(|e| e.0).collect(); // (EQ)
         // a team attack on offer in Sora's queue comes first on Y (the user's rule: the leader starts team attacks)
         // (YHUD) only one WITH THE LEADER (kh_party::yhud): Sora's other rows are never the leading friend's Y
-        let rows = self.leader_team_rows(sora);
+        let mut rows = self.leader_team_rows(sora);
+        // (GF-UI, R13) Y on a BROKEN enemy in reach is Goofy Breaker, ahead of the team rows: the row says so
+        if self.leader.is_some_and(|id| self.party.goofy_breaker_offered(id)) {
+            rows.insert(0, gof_breaker_row());
+        }
         let team = !rows.is_empty();
-        let feed = LeaderFeed { book: self.customs.book, sora_abilities: s.abilities.clone(), game_level: s.game_level, battle_level: s.battle_level, mp_cost_scale: s.mp_cost_scale, customs: self.customs.blocks, sora_team_offer: team };
+        let feed = LeaderFeed { book: self.customs.book, sora_abilities: s.abilities, game_level: s.game_level, battle_level: s.battle_level, mp_cost_scale: s.mp_cost_scale, customs: self.customs.blocks, sora_team_offer: team };
         self.party.set_leader_magic(Some(feed));
         if let Some(id) = self.leader {
             self.party.set_leader_team(id, rows); // (YHUD)
         }
-        self.party.set_lead_reference(Some((s.max_hp(), s.max_mp()))); // (GOOFY-BAL) a friend leader's HP / MP follow Sora's
         self.feed_don_menu(sora); // (DON-UI) Donald's menu: his block, the ally target list, the lock-on target, Y's team rows
+    }
+
+    /// (GF-ARTS) Goofy's block reads his ranks, and his two Arts reach him, leader or AI: while Sora leads there is no leader feed,
+    /// so `step` calls this too.
+    pub fn feed_goofy_arts(&mut self) {
+        let Some(book) = self.party.goofy_art_book() else { return };
+        let b = &mut self.customs.blocks[LeaderKind::Goofy as usize];
+        b.gof = book;
+        b.sync(LeaderKind::Goofy, &self.customs.book);
+        let arts = b.arts();
+        self.party.set_goofy_arts(arts);
     }
 
     /// A camp-menu edit of a leader's block (`PartyMenuEdit::Custom`); false = refused (the rules of kh-core
@@ -167,14 +182,25 @@ pub fn word(rt: &mut PartyRuntime, w: &[&str]) -> String {
     }
 }
 
-/// The MP costs of a friend's own list entries for the Customize help (Goofy's abilities by tier: their
-/// `TresAbilityData` m_UseMP, the same at every tier).
-pub fn costs(c: PartyChara) -> Vec<(u8, i32)> {
-    use kh_core::command::leader::goofy;
+/// The MP costs of a friend's own list entries for the Customize help (Goofy's Arts, at their ranks in `book`), with each one's
+/// cooldown in seconds (rows `art.*.cooldown`; Taunt 0: THE USER 2026-11-02, "...introduce a cooldown with a visible timer").
+pub fn costs(c: PartyChara, book: &kh_core::command::leader::goofy::ArtBook) -> Vec<(u8, i32, f32)> {
+    use kh_party::pad::goofy_arts::{cooldown, mp, Art};
     match c {
-        PartyChara::Goofy => (0..3u8).flat_map(|i| (1..=3u8).filter_map(move |t| kh_party::tables::ability_cost(goofy::ABILITY_ROWS[i as usize]).map(|(_, mp)| (goofy::id(i, t), mp)))).collect(),
+        PartyChara::Goofy => Art::ALL.into_iter().filter(|a| book.knows(a.id())).map(|a| (a.id(), mp(a, book.rank(a.id())), cooldown(a))).collect(),
         _ => Vec::new(),
     }
+}
+
+/// (GF-ARTS) DEBUG (`party-word x3g equip SLOT NAME`): his block's Art (`LeaderCustom::equip_art`), the name as the end of its
+/// display name, any case (`tornado`, `toss`).
+pub fn equip_word(rt: &mut PartyRuntime, slot: &str, name: &str) -> String {
+    use kh_core::command::leader::goofy;
+    let want = name.to_ascii_lowercase();
+    let Some(art) = goofy::ARTS.into_iter().find(|k| goofy::name(*k).to_ascii_lowercase().ends_with(&want)) else { return format!("goofy: no Art {name}") };
+    let b = &mut rt.customs.blocks[LeaderKind::Goofy as usize];
+    let ok = b.equip_art(slot.parse().unwrap_or(9), art);
+    format!("goofy: {} on slot {slot}: {}; arts {:?}", goofy::name(art), if ok { "set" } else { "refused" }, b.arts().map(goofy::name))
 }
 
 /// The record key in the save's party record.
@@ -206,7 +232,8 @@ mod tests {
         assert_eq!(b.shortcuts[1][0], 0, "Blizzard: he has none -> empty");
         assert_eq!(b.shortcuts[2][3], cmd::ETHER, "items kept");
         assert_eq!(b.slots(LeaderKind::Donald), vec![d::line1(0, 1), d::line1(3, 1), d::line1(5, 1)], "his Magic page: his elements");
-        assert_eq!(c.blocks[1].shortcuts[0], [195, 198, 201, 58], "Goofy untouched");
+        assert_eq!(c.blocks[1].arts(), [kh_core::command::leader::goofy::TORNADO, kh_core::command::leader::goofy::TURBO], "(GF-ARTS) Goofy's tiers became Arts, unfed: all kept");
+        assert_eq!(c.blocks[1].shortcuts[0][kh_core::command::leader::goofy::SLOT_ITEM], cmd::POTION);
     }
 
     #[test]
@@ -224,7 +251,7 @@ mod tests {
         old.sync(c.book);
         // (DON-UI) Donald's defaults are his own (the overhaul's start book: Fire, Flare, Water, Flood)
         assert_eq!(old.blocks[0].shortcuts[0], kh_core::command::leader::donald::default_shortcuts(&kh_core::command::leader::donald::DonBook::START)[0]);
-        assert_eq!(old.blocks[1].magic_slots[..3], [0xC3, 0xC6, 0xC9]);
+        assert_eq!(old.blocks[1].arts(), [kh_core::command::leader::goofy::CHARGE, 0], "(GF-ARTS) the start's Art");
     }
 }
 
@@ -241,19 +268,6 @@ fn kit_look(key: &str) -> (u8, &'static str) {
         "KIT_METEOR_FINALE" => (0, "With full MP, the ground finisher becomes\nMeteor Drop. Uses all MP."),
         "KIT_BLINK_STEP" => (1, "Chain a second Hop, and Air Blink\none more time per jump."),
         "KIT_AERO_FLOAT" => (1, "Hold the jump button while falling\nto float on the wind for a short time."),
-        "KIT_IRON_WALL" => (2, "Widens the timing of a Perfect Guard."),
-        "KIT_PAYBACK_BASH" => (0, "Shield bashes after a block deal\nmore damage and knock foes away."),
-        "KIT_SHIELD_CHARGE" => (1, "While guarding, push the stick and press\nthe attack button to charge with the shield up."), // (GOOFY-GK) the input is A
-        "KIT_STALWART" => (2, "Light hits no longer interrupt\nattacks or guarding."),
-        "KIT_RALLY" => (2, "Each Perfect Guard restores MP."),
-        "KIT_RICOCHET" => (2, "Goofy Discus bounces to one more target."),
-        "KIT_OVER_HERE" => (0, "A shield bash draws the attention of\nnearby enemies for a short time."),
-        "KIT_TORNADO_COPTER" => (1, "Hold the jump button while falling\nto glide in a spinning hover."),
-        // (GOOFY-GK) the tank rework's combo abilities (build/sora_tmp/party/GK_GOOFY_DESIGN.md section 8)
-        "KIT_COMBO_PLUS" | "KIT_COMBO_PLUS_2" => (0, "Adds one more hit to Goofy's\nground combo."),
-        "KIT_AIR_COMBO_PLUS" => (0, "Adds a shield bash to the end\nof Goofy's air combo."),
-        "KIT_SHIELD_QUAKE" => (0, "Hold the attack button on a combo's\nfinishing blow to slam the ground."),
-        "KIT_SHIELD_UPPER" => (0, "Hold the stick away from the target on a\nfinishing blow to launch it skyward."),
         _ => (2, ""),
     }
 }
@@ -273,7 +287,6 @@ pub fn don_category(k: kh_party::donald::DonAbility) -> u8 {
 pub fn kit_rows(s: &kh_party::FriendStatus) -> Vec<kh_host::party::KitRow> {
     use kh_core::enums::ETresAbilityKind as A;
     use kh_party::pad::donald_kit::KitAbility as D;
-    use kh_party::pad::goofy_kit::GoofyAbility as G;
     let row = |key: &str, name: &str, ap: i32, equipped: bool, kh3: Option<A>| {
         let (category, help) = kit_look(key);
         kh_host::party::KitRow { key: key.to_string(), name: name.to_string(), ap, category: if kh3.is_some() { 0 } else { category }, equipped, help: help.to_string(), kh3 }
@@ -295,13 +308,11 @@ pub fn kit_rows(s: &kh_party::FriendStatus) -> Vec<kh_host::party::KitRow> {
         };
         out.push(row(k.name(), k.label(), k.ap(), on, kh3));
     }
-    for (k, on) in s.goofy_kit.list() {
-        let kh3 = match k {
-            G::FusionSpin => Some(A::FusionSpin),
-            G::FusionRocket => Some(A::FusionRocket),
-            _ => None,
-        };
-        out.push(row(k.name(), k.label(), k.ap(), on, kh3));
+    // (GOOFY) Goofy's own abilities (GOOFY_OVERHAUL.md 11.3)
+    if let Some(g) = s.goofy.as_ref() {
+        for (k, on) in g.abilities.list() {
+            out.push(kh_host::party::KitRow { key: k.name(), name: k.label().to_string(), ap: k.ap(), category: k.category(), equipped: on, help: k.description().to_string(), kh3: None });
+        }
     }
     out
 }
@@ -339,6 +350,51 @@ pub fn leader_guard_hud(party: &kh_party::Party, id: kh_party::MemberId) -> Opti
     Some((values, look))
 }
 
+/// (GF-UI) The Y row of Goofy Breaker. Its serial is none of Sora's queue, so Y never forwards it (kh_party::yhud): his pad takes the
+/// press first (pad/goofy.rs `decide`).
+pub fn gof_breaker_row() -> kh_core::command::SituationRow {
+    kh_core::command::SituationRow { serial: 0x5900_0001, kind: 0, name: "Goofy Breaker", icon_type: 4, total: 0.0, remaining: 0.0, enabled: true, refreshed: 0 }
+}
+
+/// (GOOFY) The look of his HUD pieces (sheet `party-guard`).
+pub fn gof_look() -> kh_host::party::GoofyLook {
+    use kh_host::party::{GoofyLook, PerilLook, PerilWord, ResolveLook, StaggerLook};
+    let p = kh_party::guard::GP;
+    // (Danger Sense) the kinds' words, in `PerilKind::ALL`'s order (COMPOSED, the sheet's `hud.peril_word_*`)
+    let word = |text: &str, color: [f32; 4]| PerilWord { text: text.to_string(), color };
+    let words = [
+        word(p.hud_peril_word_normal, p.hud_peril_word_normal_color),
+        word(p.hud_peril_word_thrust, p.hud_peril_word_thrust_color),
+        word(p.hud_peril_word_sweep, p.hud_peril_word_sweep_color),
+        word(p.hud_peril_word_grab, p.hud_peril_word_grab_color),
+        word(p.hud_peril_word_heavy, p.hud_peril_word_heavy_color),
+        word(p.hud_peril_word_projectile, p.hud_peril_word_projectile_color),
+        word(p.hud_peril_word_magic, p.hud_peril_word_magic_color),
+    ];
+    GoofyLook {
+        resolve: ResolveLook { at: (p.hud_resolve_x, p.hud_resolve_y), pip_size: (p.hud_resolve_pip_w, p.hud_resolve_pip_h), pip_step: p.hud_resolve_pip_step, plate_pad: p.hud_resolve_plate_pad, plate_h: p.hud_resolve_plate_h, plate: p.hud_resolve_color_plate, lit: p.hud_resolve_color_lit, off: p.hud_resolve_color_off, zone: p.hud_resolve_color_zone, zone_hz: p.hud_resolve_zone_hz },
+        stagger: StaggerLook { at: (p.hud_stagger_x, p.hud_stagger_y), fill: p.hud_stagger_color_fill, loss: p.hud_stagger_color_loss, broken: p.hud_stagger_color_broken, blink_hz: p.hud_stagger_blink, label: p.hud_stagger_label.to_string(), label_at: (p.hud_stagger_label_x, p.hud_stagger_label_y), label_size: (p.hud_stagger_label_w, p.hud_stagger_label_h), panel_shift: p.hud_stagger_panel_shift },
+        peril: PerilLook { lead: p.hud_peril_lead, min_show: p.hud_peril_min_show, pop: p.hud_peril_pop, pop_scale: p.hud_peril_pop_scale, fade: p.hud_peril_fade, size: p.hud_peril_size, lift: p.hud_peril_lift, color: p.hud_peril_color, outline: p.hud_peril_outline, glow: p.hud_peril_glow, edge: p.hud_peril_edge, se: p.hud_peril_se as i32, se_gap: p.hud_peril_se_gap, word_h: p.hud_peril_word_h, word_gap: p.hud_peril_word_gap, word_max_w: p.hud_peril_word_max_w, words },
+    }
+}
+
+/// (GOOFY) Danger Sense: the word an attack's class gets under the red "!", one for every class the kit reads (the generic
+/// classifier's, kh-er attackread.rs: no per-enemy table). (THE USER 2026-11-02: "Danger Sense ability should indicate what kind
+/// of attack it will be")
+pub const fn peril_kind(c: kh_core::host::AttackClass) -> kh_host::party::PerilKind {
+    use kh_core::host::AttackClass as C;
+    use kh_host::party::PerilKind as P;
+    match c {
+        C::Normal => P::Normal,
+        C::Thrust => P::Thrust,
+        C::Sweep => P::Sweep,
+        C::Grab => P::Grab,
+        C::Heavy => P::Heavy,
+        C::Projectile => P::Projectile,
+        C::Magic => P::Magic,
+    }
+}
+
 /// (GOOFY-GG) DEBUG words for test runs (kh-app `party-word gg ...`) on Goofy's GUARD: `spend N`, `absorb N`, `drain N`
 /// (N points at once through `drain_per_sec`), `break`, `refill`, `show`.
 pub fn guard_word(rt: &mut PartyRuntime, words: &[&str]) -> String {
@@ -363,41 +419,36 @@ pub fn guard_word(rt: &mut PartyRuntime, words: &[&str]) -> String {
     format!("gg: {what}: GUARD {:.1} / {:.0} (level {}){}{}", g.value, g.max, g.level, if g.broken { " BROKEN" } else { "" }, if g.regenerating() { " regen" } else { "" })
 }
 
-/// THE LEADER'S AIM as Sora's shotlock aim shows it (kh-core `AimHud`, UI spec 7.3: the scope, a mark per lock, the
-/// lock counter): Goofy's Discus Barrage, Donald's Spell Volley. Mode 1 while aiming, 2 while the volley / the bouncing
-/// shield runs (the marks stay until it is over), else None (the HUD closes the scope).
-pub fn leader_aim(party: &kh_party::Party, id: kh_party::MemberId) -> Option<kh_core::ui_model::AimHud> {
-    use kh_core::ui_model::{AimHud, AimMark};
-    let m = party.member(id)?;
-    let pad = m.pad.as_ref()?;
-    let (aiming, fired, locks, focus, rate, max) = match m.chara {
-        kh_party::Chara::Goofy => {
-            let g = &pad.goofy;
-            let k = kh_party::pad::goofy_kit::K;
-            let aiming = party.goofy_locks(id).is_some();
-            let fired = !aiming && g.barrage && (m.state == kh_party::NpcStateId::Action || !g.queue.is_empty());
-            (aiming, fired, g.locks.clone(), g.focus, k.barrage_focus_rate, k.barrage_max_locks)
-        }
-        // (DON-UI) no shotlock for Donald (the user, 2026-10-22; DONALD_OVERHAUL.md 13): no aim
-        kh_party::Chara::Donald => return None,
-    };
-    if !aiming && !fired {
-        return None;
-    }
-    let mut marks: Vec<AimMark> = Vec::new();
-    for t in &locks {
-        match marks.iter_mut().find(|mk| mk.target == *t) {
-            Some(mk) => mk.count += 1,
-            None => marks.push(AimMark { target: *t, point: 0, count: 1, position: glam::Vec3::ZERO }),
-        }
-    }
-    Some(AimHud { mode: if aiming { 1 } else { 2 }, aim_time: focus * rate, total: locks.len() as i32, max: max as i32, locks: marks, airstep: Vec::new() })
+/// THE LEADER'S AIM (kh-core `AimHud`): no friend has a shotlock any more ((DON-UI) Donald's went with the user's word of
+/// 2026-10-22, (GOOFY, R11) Goofy's Discus Barrage with the old kit), so the HUD's scope stays closed.
+pub fn leader_aim(_party: &kh_party::Party, _id: kh_party::MemberId) -> Option<kh_core::ui_model::AimHud> {
+    None
 }
 
 impl PartyRuntime {
     /// (GOOFY-GG) The leader's GUARD bar for `Hud::set_guard` (None unless Goofy is the controlled leader).
     pub fn leader_guard_hud(&self) -> Option<(kh_host::party::GuardValues, kh_host::party::GuardLook)> {
         leader_guard_hud(&self.party, self.leader?)
+    }
+
+    /// (GOOFY) GOOFY'S HUD for `Hud::set_goofy` (None unless he is the controlled leader): his Resolve, the perilous attacks of
+    /// the telegraph list (which kind only with Danger Sense), Danger Sense's lead, the enemies' Stagger.
+    pub fn gof_hud_view(&self) -> Option<kh_host::party::GoofyHudView> {
+        let id = self.leader?;
+        let m = self.party.member(id)?;
+        if m.chara != kh_party::Chara::Goofy || m.pad.is_none() {
+            return None;
+        }
+        let st = m.status.goofy.as_ref()?;
+        let hud = self.party.goofy_hud(id)?;
+        // (THE USER 2026-11-02: "Danger Sense ability should indicate what kind of attack it will be") with it worn the cue names
+        // the class the generic sensor read; without it the plain "!" of 4.3
+        let named = kh_party::goofy::seams::danger_names_kind(st);
+        let peril = self.party.telegraphs().iter().filter(|t| t.perilous).map(|t| kh_host::party::PerilCue { key: t.attacker.0 as u64, eta: t.eta, active: t.active, kind: named.then_some(peril_kind(t.class)) }).collect();
+        // the gauge shows the lock-on target's, else the soft target's (as the cursors): their books (GF-BREAK's `Party::stagger_view`)
+        let targets = m.pad.as_ref().map_or([kh_core::TargetId::NONE; 2], |p| [p.lock, p.soft]);
+        let stagger = targets.into_iter().filter(|t| *t != kh_core::TargetId::NONE).filter_map(|t| self.party.stagger_view(t).map(|v| (t, kh_host::party::StaggerValues { value: v.value, max: v.max, broken: v.broken.is_some() }))).collect();
+        Some(kh_host::party::GoofyHudView { resolve: kh_host::party::ResolveValues { thirds: hud.thirds, in_zone: hud.in_zone }, stagger, peril, peril_extra: kh_party::goofy::seams::danger_lead(st), look: gof_look() })
     }
 
     /// (BN) Takes the kit abilities the level-up of `c` to `level` taught (their names; the window shows each after the
@@ -423,8 +474,8 @@ impl PartyRuntime {
             // (DON-UI) Donald's own abilities (DON_*): the AP check as KH3's (his AP in use, DON-PROG's `ap`)
             let fits = !on || s.donald.as_ref().is_some_and(|d| d.abilities.equipped(k)) || s.ap_in_use() + k.ap() <= s.max_ap();
             fits && s.donald.as_mut().is_some_and(|d| d.abilities.set_equipped(k, on))
-        } else if let Some(k) = kh_party::pad::goofy_kit::GoofyAbility::from_name(key) {
-            s.kit_goofy_equip(k, on)
+        } else if let Some(k) = kh_party::goofy::GoofyAbility::from_name(key) {
+            s.gof_equip(k, on) // (GOOFY)
         } else if let Some(k) = kh_party::pad::donald_kit::KitAbility::from_name(key) {
             if on && !s.kit.equipped(k) && s.ap_in_use() + k.ap() > s.max_ap() {
                 false
@@ -453,22 +504,22 @@ mod x2b_tests {
         let g = rt.id(PartyChara::Goofy).unwrap();
         // the kits as the test loadout gives them (everything owned and worn)
         rt.party.status_mut(d).unwrap().donald.as_mut().unwrap().abilities = kh_party::donald::DonAbilities::test_all(); // (DON-UI) his own abilities
-        rt.party.status_mut(g).unwrap().goofy_kit = kh_party::pad::goofy_kit::GoofyKit::test_all();
+        rt.party.status_mut(g).unwrap().goofy = Some(kh_party::goofy::GoofyState::test_loadout());
         // (DON-UI) Donald's page: his DonAbility rows (label, DON-PROG's description and AP), the old X3D kit gone
         let donald = kit_rows(rt.party.status(d).unwrap());
         assert_eq!(donald.len(), kh_party::donald::DonAbility::ALL.len());
         assert!(donald.iter().any(|r| r.key == "DON_DUAL_ATTUNEMENT" && r.name == "Dual Attunement" && r.category == 2));
         assert!(donald.iter().all(|r| r.equipped && !r.help.is_empty() && r.key.starts_with("DON_")));
         let goofy = kit_rows(rt.party.status(g).unwrap());
-        assert_eq!(goofy.len(), 15); // (GOOFY-GK) + Combo Plus x2, Air Combo Plus, Shield Quake, Shield Upper
-        assert!(goofy.iter().filter(|r| r.kh3.is_none()).all(|r| !r.help.is_empty()), "every Goofy kit ability has its help text (the Fusions use KH3's)");
-        assert!(goofy.iter().any(|r| r.name == "Over Here!" && r.category == 0));
+        assert_eq!(goofy.len(), kh_party::goofy::GoofyAbility::ALL.len()); // (GOOFY)
+        assert!(goofy.iter().all(|r| !r.help.is_empty() && r.key.starts_with("GOF_")), "every Goofy ability has its help text");
+        assert!(goofy.iter().any(|r| r.name == "Ally Guard" && r.category == 0));
         // off, then on again with the AP check (the test loadout is above his AP: on is refused until room is made)
-        assert!(rt.apply_kit_edit(PartyChara::Goofy, "KIT_STALWART", false));
-        assert!(!rt.party.status(g).unwrap().goofy_kit.equipped(kh_party::pad::goofy_kit::GoofyAbility::Stalwart));
+        assert!(rt.apply_kit_edit(PartyChara::Goofy, "GOF_SECOND_WIND", false));
+        assert!(!rt.party.status(g).unwrap().goofy.as_ref().unwrap().abilities.equipped(kh_party::goofy::GoofyAbility::SecondWind));
         let room = rt.party.status(g).unwrap().max_ap() - rt.party.status(g).unwrap().ap_in_use();
-        let back = rt.apply_kit_edit(PartyChara::Goofy, "KIT_STALWART", true);
-        assert_eq!(back, room >= kh_party::pad::goofy_kit::GoofyAbility::Stalwart.ap());
+        let back = rt.apply_kit_edit(PartyChara::Goofy, "GOF_SECOND_WIND", true);
+        assert_eq!(back, room >= kh_party::goofy::GoofyAbility::SecondWind.ap());
         assert!(rt.apply_kit_edit(PartyChara::Donald, "DON_SPELL_WEAVER", false));
         assert!(!rt.party.status(d).unwrap().donald.as_ref().unwrap().abilities.equipped(kh_party::donald::DonAbility::SpellWeaver));
         assert!(!rt.apply_kit_edit(PartyChara::Donald, "KIT_NOTHING", true));
@@ -488,8 +539,8 @@ mod x2b_tests {
 }
 
 /// (BN) THE KIT ABILITIES A CHARACTER LEARNS BY REACHING THE LEVELS `from` + 1 ..= `to` (his kit's own level table:
-/// Donald's `KitAbility::OWN`, Goofy's `GoofyAbility::OWN`, sheet rows `ability.*.level`): their names, in the order of
-/// their levels. What the pad's kit sync (`kit_sync_level` / `kit_goofy_sync_level`) then gives him; KH3 names a level's
+/// Donald's `KitAbility::OWN`, Goofy's `GoofyAbility::ALL`, sheet rows `ability.*.level`): their names, in the order of
+/// their levels. What the pad's kit sync (`kit_sync_level` / `gof_sync_level`) then gives him; KH3 names a level's
 /// ability on the LEVEL UP! window (`LevelUpDelta` kind 7).
 pub fn level_kit_abilities(c: PartyChara, from: u32, to: u32) -> Vec<String> {
     let reached = |lv: Option<u32>| lv.is_some_and(|lv| lv > from && lv <= to);
@@ -503,9 +554,9 @@ pub fn level_kit_abilities(c: PartyChara, from: u32, to: u32) -> Vec<String> {
             }
         }
         PartyChara::Goofy => {
-            for k in kh_party::pad::goofy_kit::GoofyAbility::OWN {
-                if reached(k.level()) {
-                    out.push((k.level().unwrap_or(0), k.label().to_string()));
+            for k in kh_party::goofy::GoofyAbility::ALL {
+                if reached(Some(k.level())) {
+                    out.push((k.level(), k.label().to_string()));
                 }
             }
         }
@@ -587,8 +638,9 @@ impl PartyRuntime {
     }
 
     /// (DON-UI) Donald's HUD this frame (kh-party `donald::hud::DonHud`): his rings, stars, tracker and his lock-on target's
-    /// statuses, the Scan gate; with his menu's side channel (the ally target list, Quick Cast) and each member's worn
-    /// Aero Barrier / Ball Lightning (the icon by the portrait). None unless Donald is the controlled leader.
+    /// statuses, the Scan gate; with his menu's side channel (the ally target list, Quick Cast). None unless Donald is the
+    /// controlled leader. (ALLY-BUFF) The members' worn Aero Barrier / Ball Lightning are no longer here (they showed only
+    /// while he led): [`PartyRuntime::ally_buffs_view`], whoever leads.
     pub fn don_hud(&self) -> Option<DonHudFeed> {
         let id = self.leader?;
         let m = self.party.member(id)?;
@@ -597,19 +649,40 @@ impl PartyRuntime {
         let lock = (pad.lock != kh_core::TargetId::NONE).then_some(pad.lock.0);
         let hud = kh_party::donald::hud::DonHud::with(st, &self.party.don.status, lock, self.customs.don_affinity, &kh_party::donald::data());
         let menu = pad.menu.don_view(m.chara, &m.status);
-        let mut worn = Vec::new();
-        for c in [PartyChara::Sora, PartyChara::Donald, PartyChara::Goofy] {
-            let member = if c == PartyChara::Sora { Some(kh_party::donald::cast::SORA_MEMBER) } else { self.id(c) };
-            if let Some(mid) = member {
-                let barrier = kh_party::donald::allyfx::barrier_of(&self.party, mid).is_some();
-                let orbs = kh_party::donald::allyfx::orbs_of(&self.party, mid).filter(|o| o.left > 0.0).map_or(0, |o| o.orbs); // active: balls and time left
-                if barrier || orbs > 0 {
-                    worn.push((c, barrier, orbs));
-                }
-            }
-        }
-        Some(DonHudFeed { hud, menu, worn })
+        Some(DonHudFeed { hud, menu })
     }
+
+    /// (ALLY-BUFF) EVERY MEMBER'S HELPFUL STATUSES FROM DONALD'S MAGIC, WHOEVER LEADS (the user, 2026-11-03: "Donald's
+    /// helpful spells like Aero shield should appear on whoever has it in the HUD regardless of who is party leader.
+    /// Positioning should all match Donald."), for `Hud::set_ally_buffs`: Sora (the player or AI Sora) and every member
+    /// of the party (a future character included: the list is the runtime's members, not a fixed roster), each with
+    /// [`ally_buffs_of`]'s icons; the look is Donald's sheet `party-don-hud` rows `worn.*`.
+    pub fn ally_buffs_view(&self) -> kh_host::party::AllyBuffsView {
+        let who = std::iter::once((PartyChara::Sora, kh_party::donald::cast::SORA_MEMBER)).chain(self.members.iter().copied().filter(|m| m.0 != PartyChara::Sora));
+        let buffs = who.flat_map(|(chara, id)| ally_buffs_of(&self.party, id).into_iter().map(move |(icon, left, total)| kh_host::party::AllyBuff { chara, icon: icon.to_string(), left, total })).collect();
+        kh_host::party::AllyBuffsView { buffs, look: Some(don_look_of(&don_hud_params()).ring.buff_look()) }
+    }
+}
+
+/// (ALLY-BUFF) ONE MEMBER'S HELPFUL STATUSES FROM DONALD'S MAGIC, in the HUD's order: (KH3 IconText icon, seconds left, of
+/// the whole). The worn spell first (one at a time, allyfx's rule): Aero Barrier = the Aero icon; Ball Lightning = the
+/// Thunder icon while it has a ball and time left, no count of the balls (the user, 2026-10-22: "have an icon on the
+/// HUD, but no need to specify how many balls there are"). Then Sanctuary's short invincibility = Light's icon (the
+/// element icon Donald's menus use for Light) while it lasts.
+pub fn ally_buffs_of(party: &kh_party::Party, id: kh_party::MemberId) -> Vec<(&'static str, f32, f32)> {
+    use kh_party::donald::allyfx;
+    use kh_party::donald::Element;
+    let mut out = Vec::new();
+    if let Some(b) = allyfx::barrier_of(party, id) {
+        out.push((kh_party::pad::menu::element_icon(Element::Aero), b.left, b.total));
+    } else if let Some(o) = allyfx::orbs_of(party, id).filter(|o| o.active) {
+        out.push((kh_party::pad::menu::element_icon(Element::Thunder), o.left, o.total));
+    }
+    if let Some(&(_, left)) = party.don_fx.worn.invincible.iter().find(|i| i.0 == id && i.1 > 0.0) {
+        let total = kh_party::donald::data().row("rel.light").map_or(left, |r| r.duration.max(left));
+        out.push((kh_party::pad::menu::element_icon(Element::Light), left, total));
+    }
+    out
 }
 
 /// (DON-UI) What the hosts hand the HUD for Donald (`kh_host::hud::Hud::set_don`).
@@ -617,8 +690,6 @@ impl PartyRuntime {
 pub struct DonHudFeed {
     pub hud: kh_party::donald::hud::DonHud,
     pub menu: Option<kh_party::pad::menu::DonMenuView>,
-    /// Members wearing Aero Barrier / Ball Lightning: (who, barrier, orbs left).
-    pub worn: Vec<(PartyChara, bool, u8)>,
 }
 
 /// (DON-UI) An element's colour (sheet `color.*`, 0xRRGGBB) as straight RGBA.
@@ -626,8 +697,7 @@ pub fn rgba(c: u32) -> [f32; 4] {
     [((c >> 16) & 0xFF) as f32 / 255.0, ((c >> 8) & 0xFF) as f32 / 255.0, (c & 0xFF) as f32 / 255.0, 1.0]
 }
 
-/// (DON-UI) kh-party's HUD snapshot as the HUD's view (kh-host `DonHudView`; the worn spells go by character, the HUD
-/// seats them).
+/// (DON-UI) kh-party's HUD snapshot as the HUD's view (kh-host `DonHudView`; the worn spells: `ally_buffs_view`).
 pub fn don_view_of(feed: &DonHudFeed, team: &[(u32, i64)]) -> kh_host::party::DonHudView {
     use kh_host::party::{ArcaneView, ResonanceView, RingLook, TargetIconsView, UltLook};
     use kh_party::donald::hud::StatusIcon;
@@ -653,7 +723,6 @@ pub fn don_view_of(feed: &DonHudFeed, team: &[(u32, i64)]) -> kh_host::party::Do
             })
             .collect(),
         attuning: h.attuning.map(|(e, c, share)| (element_icon(e).to_string(), rgba(c), share)),
-        worn: Vec::new(),
         leader_hp_frames: 0, // (the HUD fills it: its own HP track frame)
         stars: None,         // (the HUD fills it from `arcane`)
     };
@@ -683,7 +752,7 @@ pub fn don_view_of(feed: &DonHudFeed, team: &[(u32, i64)]) -> kh_host::party::Do
     let menu = feed.menu.as_ref();
     let targets = menu.and_then(|m| m.target.as_ref()).map(|(rows, cursor)| (rows.iter().map(|r| format!("{}  {} / {}", r.1, r.2.max(0), r.3.max(0))).collect(), *cursor));
     let quick_glow = menu.and_then(|m| m.quick).and_then(|q| q.1);
-    kh_host::party::DonHudView { ring, arcane, target, scan, targets, quick_glow, y_costs: menu.map(|m| m.y_costs.clone()).unwrap_or_default(), team_serials: team.to_vec(), list: menu.map_or(0, |m| m.list), worn: feed.worn.clone(), look: Some(don_look_of(&don_hud_params())) }
+    kh_host::party::DonHudView { ring, arcane, target, scan, targets, quick_glow, y_costs: menu.map(|m| m.y_costs.clone()).unwrap_or_default(), team_serials: team.to_vec(), list: menu.map_or(0, |m| m.list), look: Some(don_look_of(&don_hud_params())) }
 }
 
 impl PartyRuntime {
@@ -709,9 +778,8 @@ impl PartyRuntime {
 
 impl PartyRuntime {
     /// (DON-UI) DONALD'S HUD for `Hud::set_don` (None unless he is the controlled leader): his rings and pips, stars,
-    /// tracker, lock-on statuses and Scan, the ally target list and Quick Cast's mark, the worn spells by the portraits
-    /// (slot 0 = the leader's, then the friends' slots in formation order), Sora's team-attack rows (their names: the
-    /// HUD's pack).
+    /// tracker, lock-on statuses and Scan, the ally target list and Quick Cast's mark, Sora's team-attack rows (their
+    /// names: the HUD's pack). (ALLY-BUFF) The worn spells by the portraits: [`PartyRuntime::ally_buffs_view`].
     pub fn don_hud_view(&self, sora: &kh_core::Sora) -> Option<kh_host::party::DonHudView> {
         let feed = self.don_hud()?;
         let team: Vec<(u32, i64)> = sora.combat().situation.list.iter().filter(|e| e.class == kh_core::combat::situation::class::TEAM).map(|e| (e.serial, e.kind as i64)).collect();

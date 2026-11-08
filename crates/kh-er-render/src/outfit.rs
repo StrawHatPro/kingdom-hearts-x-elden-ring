@@ -431,6 +431,38 @@ impl std::fmt::Debug for Sim {
 /// (ER73) The bones the Keyblade hangs on (KH3's weapon sockets R_wep_skt / L_wep_skt sit on them).
 const WEAPON_BONES: [&str; 2] = ["R_buki", "L_buki"];
 
+/// (FORMWEP-FIX) How near (cm) a weapon's root must be to one of his form weapon mounts to be ON it (every form socket has no
+/// offset: the root is the bone's origin).
+const MOUNT_CM: f32 = 0.5;
+
+/// (FORMWEP-FIX) Which of his weapon places (`Retarget::weapon_places`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlaceKind {
+    /// R_buki / L_buki
+    Hand,
+    /// a form weapon mount (R_buki1 .. 8, a forearm's, a leg's)
+    Mount,
+}
+
+/// (FORMWEP-FIX) One weapon place of his: where it is (world) and the change (world) from his to the outfit's.
+struct WeaponPlace {
+    his: Vec3,
+    change: glam::Mat4,
+    kind: PlaceKind,
+}
+
+/// (FORMWEP-FIX) Whether bone `k` is `ancestor` or below it.
+fn below(skeleton: &kh_anim::Skeleton, k: usize, ancestor: usize) -> bool {
+    let mut a = Some(k);
+    while let Some(i) = a {
+        if i == ancestor {
+            return true;
+        }
+        a = skeleton.bones.get(i).and_then(|b| b.parent);
+    }
+    false
+}
+
 /// The outfit's skeleton driven by Sora's pose.
 #[derive(Clone, Debug)]
 pub struct Retarget {
@@ -453,6 +485,10 @@ pub struct Retarget {
     host_parent: Vec<Option<usize>>,
     /// His weapon sockets and the outfit's bones of the same name.
     hands: Vec<(usize, usize)>,
+    /// (FORMWEP-FIX) his form weapons' mounts (every `*buki*` bone but the hands, R_ashi2 / L_ashi2): (his bone, the bone of
+    /// his that the outfit has and that carries it (itself, else its nearest ancestor), that bone's outfit index, whether the
+    /// carrier's scale takes the body scale (an ancestor but the hands: `effect_component`'s rule)
+    mounts: Vec<(usize, usize, usize, bool)>,
     /// (the user: "for Sora's KH1 outfit, animations need to be adjusted for his skeleton as I believe it's shorter")
     /// THE BODY SCALE: the outfit's hip height (bone `koshi` in its reference, component space) over Sora's; his
     /// animated TRANSLATIONS (the hips' bob and crouch, a bone sliding) are scaled by it, so a shorter body's feet stay
@@ -540,7 +576,23 @@ impl Retarget {
             (Some(o), Some(h)) if o > 1.0 && h > 1.0 => (o / h).clamp(0.25, 4.0),
             _ => 1.0,
         };
-        Retarget { rigid: 0, sim: None, kine: None, clip: Vec::new(), guard: None, hand_ik: None, bones, names, host_reference: host.bones.iter().map(|b| b.reference).collect(), host_parent: host.bones.iter().map(|b| b.parent).collect(), hands, scale }
+        let mounts = host
+            .bones
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| (b.name.contains("buki") || b.name.ends_with("ashi2")) && !WEAPON_BONES.contains(&b.name.as_str()))
+            .filter_map(|(k, _)| {
+                let mut a = Some(k);
+                while let Some(i) = a {
+                    if let Some(o) = outfit.index_of(&host.bones[i].name) {
+                        return Some((k, i, o, i != k && !WEAPON_BONES.contains(&host.bones[i].name.as_str())));
+                    }
+                    a = host.bones[i].parent;
+                }
+                None
+            })
+            .collect();
+        Retarget { rigid: 0, sim: None, kine: None, clip: Vec::new(), guard: None, hand_ik: None, bones, names, host_reference: host.bones.iter().map(|b| b.reference).collect(), host_parent: host.bones.iter().map(|b| b.parent).collect(), hands, mounts, scale }
     }
 
     pub fn len(&self) -> usize {
@@ -573,20 +625,107 @@ impl Retarget {
     /// THE KEYBLADE IN THE OUTFIT'S HAND: the host hangs the weapon on HIS hand (`weapon_to_world`, game space); an
     /// outfit's arm has its own length, so a weapon within 30 cm of one of his weapon sockets (`R_buki`, `L_buki`) is
     /// moved by the change from his socket to the outfit's (the same bone of the outfit's pose `posed`). Else unchanged.
+    /// (FORMWEP-FIX) A form weapon on one of his OTHER mounts (Blizzard Blades' R_ashi2 / L_ashi2 skates and R_ude2_buki2
+    /// claws, Highwind's R_buki5, the R_buki1 .. 8 below his hand: every form socket has no offset, so its root is that bone's
+    /// origin) follows the outfit's bone there, before the hand rule (KH1's own R_buki5 holds Highwind 16 cm from where his
+    /// hand's change put it), as the effects on that bone do (`effect_component`).
     pub fn weapon_to_world(&self, weapon_to_world: &Trs, component: &[Trs], posed: &[Trs], component_to_world: &Trs) -> Trs {
-        let world = |t: &Trs| t.then(component_to_world);
-        let best = self
-            .hands
-            .iter()
-            .filter_map(|(h, o)| Some((world(component.get(*h)?), world(posed.get(*o)?))))
-            .map(|(his, its)| ((his.translation - weapon_to_world.translation).length(), his, its))
-            .filter(|(d, ..)| *d < 30.0)
-            .min_by(|a, b| a.0.total_cmp(&b.0));
-        let Some((_, his, its)) = best else { return *weapon_to_world };
+        let places = self.weapon_places(component, posed, component_to_world);
+        let at = |kind: PlaceKind, within: f32| places.iter().filter(|p| p.kind == kind).map(|p| ((p.his - weapon_to_world.translation).length(), p)).filter(|(d, _)| *d < within).min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, p)| p);
         let m = |t: &Trs| glam::Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.translation);
-        let moved = m(&its) * m(&his).inverse() * m(weapon_to_world);
-        let (scale, rotation, translation) = moved.to_scale_rotation_translation();
-        Trs { translation, rotation: rotation.normalize(), scale }
+        let moved = |change: &glam::Mat4, keep_scale: bool| {
+            let (scale, rotation, translation) = (*change * m(weapon_to_world)).to_scale_rotation_translation();
+            Trs { translation, rotation: rotation.normalize(), scale: if keep_scale { weapon_to_world.scale } else { scale } }
+        };
+        if let Some(p) = at(PlaceKind::Mount, MOUNT_CM) {
+            return moved(&p.change, true);
+        }
+        match at(PlaceKind::Hand, 30.0) {
+            Some(p) => moved(&p.change, false),
+            None => *weapon_to_world,
+        }
+    }
+
+    /// (FORMWEP-FIX) Every weapon place of his with this outfit on: his hands (R_buki / L_buki: the outfit's bone of the
+    /// name, from its pose `posed`) and his form weapons' other mounts (the outfit's bone of the name, else his nearest
+    /// ancestor's that the outfit has, carrying the mount rigidly and scaled by the body scale: `effect_component`'s rule):
+    /// where his is (world) and the change (world) from his to the outfit's.
+    fn weapon_places(&self, component: &[Trs], posed: &[Trs], component_to_world: &Trs) -> Vec<WeaponPlace> {
+        let world = |t: &Trs| t.then(component_to_world);
+        let m = |t: &Trs| glam::Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.translation);
+        let hands = self.hands.iter().filter_map(|(h, o)| {
+            let (his, its) = (world(component.get(*h)?), world(posed.get(*o)?));
+            Some(WeaponPlace { his: his.translation, change: m(&its) * m(&his).inverse(), kind: PlaceKind::Hand })
+        });
+        let mounts = self.mounts.iter().filter_map(|(k, a, o, scaled)| {
+            let his = world(component.get(*k)?);
+            let mut its = *posed.get(*o)?;
+            if *scaled {
+                its.scale *= self.scale;
+            }
+            let carrier = world(component.get(*a)?);
+            Some(WeaponPlace { his: his.translation, change: m(&world(&its)) * m(&carrier).inverse(), kind: PlaceKind::Mount })
+        });
+        hands.chain(mounts).collect()
+    }
+
+    /// (FORMWEP-FIX) THE POSE OF A WEAPON THAT STANDS IN HIS MESH SPACE (a form's transform unit at his mesh origin while it
+    /// plays its form-change clip: keyblade.rs `place_part`, `Part::on_mesh`) with this outfit on. Its root is at his feet, so
+    /// [`Retarget::weapon_to_world`]'s rule is taken PIECE BY PIECE: each piece of the unit (a bone named after a weapon model,
+    /// `w_so052` ..., with every bone below it and the bones named `w_so052_*`; without such bones the root's children) that
+    /// is shown follows the weapon place of his nearest to it (a hand, a mount): in full within 10 cm, fading out to 40 cm (a
+    /// flying piece docks without a jump). So every weapon the unit becomes ends where the outfit draws that weapon after the
+    /// cinematic, each hand's in its own hand. `skeleton`: the unit's; the result replaces `weapon_pose` (`weapon_to_world`
+    /// unchanged).
+    pub fn mesh_weapon_pose(&self, weapon_to_world: &Trs, weapon_pose: &[Trs], skeleton: &kh_anim::Skeleton, component: &[Trs], posed: &[Trs], component_to_world: &Trs) -> Vec<Trs> {
+        let mut out = weapon_pose.to_vec();
+        let n = skeleton.bones.len();
+        if n != weapon_pose.len() {
+            return out;
+        }
+        let places = self.weapon_places(component, posed, component_to_world);
+        let m = |t: &Trs| glam::Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.translation);
+        let to_unit = m(weapon_to_world);
+        let children = |p: usize| (0..n).filter(move |k| skeleton.bones[*k].parent == Some(p));
+        let is_model = |name: &str| name.len() == 7 && name.is_char_boundary(4) && name[..4].eq_ignore_ascii_case("w_so") && name[4..].bytes().all(|b| b.is_ascii_digit());
+        let mut pieces: Vec<usize> = (0..n).filter(|k| is_model(&skeleton.bones[*k].name)).collect();
+        if pieces.is_empty() {
+            let mut top = 0usize;
+            while children(top).count() == 1 {
+                top = children(top).next().unwrap_or(top);
+            }
+            pieces = children(top).collect();
+        }
+        for &piece in &pieces {
+            let b = &weapon_pose[piece];
+            if b.scale.min_element() < 0.5 {
+                continue;
+            }
+            let at = b.then(weapon_to_world).translation;
+            // as `weapon_to_world` decides: a mount the piece is on (within 10 cm), else the nearest place
+            let nearest = |kind: Option<PlaceKind>| places.iter().filter(|p| kind.is_none_or(|k| p.kind == k)).map(|p| ((p.his - at).length(), p.change)).min_by(|a, b| a.0.total_cmp(&b.0));
+            let Some((d, change)) = nearest(Some(PlaceKind::Mount)).filter(|(d, _)| *d < 10.0).or_else(|| nearest(None)) else { continue };
+            let w = (1.0 - (d - 10.0) / 30.0).clamp(0.0, 1.0);
+            if w <= 0.0 {
+                continue;
+            }
+            // the piece's root carried by the place's change, its size kept (the pieces keep theirs, as the weapons do): the rigid
+            // move of the piece in the unit's frame (root before -> root after), by the weight
+            let before = m(b);
+            let (_, rotation, translation) = (to_unit.inverse() * change * to_unit * before).to_scale_rotation_translation();
+            let after = glam::Mat4::from_scale_rotation_translation(b.scale, rotation, translation);
+            let (_, cr, ct) = (after * before.inverse()).to_scale_rotation_translation();
+            let change = glam::Mat4::from_rotation_translation(glam::Quat::IDENTITY.slerp(cr, w), Vec3::ZERO.lerp(ct, w));
+            // the piece, every bone below it (not another piece), and the bones named after it (Highwind's `w_so090_wheel1`)
+            let prefix = format!("{}_", skeleton.bones[piece].name.to_ascii_lowercase());
+            let mut stack: Vec<usize> = std::iter::once(piece).chain((0..n).filter(|k| skeleton.bones[*k].name.to_ascii_lowercase().starts_with(&prefix) && !pieces.iter().any(|p| below(skeleton, *k, *p)))).collect();
+            while let Some(k) = stack.pop() {
+                let (scale, rotation, translation) = (change * m(&weapon_pose[k])).to_scale_rotation_translation();
+                out[k] = Trs { translation, rotation: rotation.normalize(), scale };
+                stack.extend(children(k).filter(|c| !pieces.contains(c)));
+            }
+        }
+        out
     }
 
     /// Bones the outfit shares with Sora.
@@ -663,6 +802,24 @@ impl Retarget {
                     let weapon = WEAPON_BONES.contains(&bone.name.as_str());
                     *t = Trs { scale: if weapon { c.scale } else { c.scale * self.scale }, ..*c };
                 }
+            }
+        }
+        // (FINISH-AUDIT2) a bone of his the outfit LACKS (KH1 Sora has none of the form weapons' mounts R_buki1..9 /
+        // *_ude2_buki*): it rides its nearest ancestor the outfit has, rigidly, as the drawn weapons ride the outfit's hand
+        // (`weapon_to_world`); before, it stayed where HIS skeleton has it, off the drawn form weapon and its effects with it
+        let has: Vec<bool> = skeleton.bones.iter().map(|b| self.index_of(&b.name).is_some_and(|j| j < comps.len())).collect();
+        let m = |t: &Trs| glam::Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.translation);
+        for k in 0..skeleton.bones.len().min(out.len()).min(component.len()) {
+            if has[k] {
+                continue;
+            }
+            let mut a = skeleton.bones[k].parent;
+            while let Some(p) = a.filter(|p| !has[*p]) {
+                a = skeleton.bones[p].parent;
+            }
+            if let Some(p) = a.filter(|p| *p < out.len() && *p < component.len()) {
+                let (scale, rotation, translation) = (m(&out[p]) * m(&component[p]).inverse() * m(&component[k])).to_scale_rotation_translation();
+                out[k] = Trs { translation, rotation: rotation.normalize(), scale };
             }
         }
         out
@@ -954,6 +1111,35 @@ mod tests {
         }
         // a body bone's effect shrinks with him
         assert!((effect[1].scale.x - 0.8).abs() < 1.0e-6);
+    }
+
+    /// (FINISH-AUDIT2) A bone of his the outfit LACKS (a form weapon's mount, R_buki4 on R_buki: KH1 Sora has none): its
+    /// effect place rides the outfit's hand as the drawn form weapon does (`weapon_to_world` from his hand to the outfit's).
+    #[test]
+    fn a_mount_the_outfit_lacks_rides_its_drawn_weapon() {
+        let host = skel(r#"{"skeleton":{"bones":[
+            {"name":"root","parent":-1,"translation_ue":[0,0,0],"rotation_ue":[0,0,0,1],"scale_ue":[1,1,1]},
+            {"name":"koshi","parent":0,"translation_ue":[0,0,100],"rotation_ue":[0,0,0,1],"scale_ue":[1,1,1]},
+            {"name":"R_buki","parent":1,"translation_ue":[30,0,20],"rotation_ue":[0,0,0,1],"scale_ue":[1,1,1]},
+            {"name":"R_buki4","parent":2,"translation_ue":[5,3,0],"rotation_ue":[0,0,0.3826834,0.9238795],"scale_ue":[1,1,1]}]}}"#);
+        let outfit = skel(r#"{"skeleton":{"bones":[
+            {"name":"root","parent":-1,"translation_ue":[0,0,0],"rotation_ue":[0,0,0,1],"scale_ue":[1,1,1]},
+            {"name":"koshi","parent":0,"translation_ue":[0,0,80],"rotation_ue":[0,0,0,1],"scale_ue":[1,1,1]},
+            {"name":"R_buki","parent":1,"translation_ue":[24,0,16],"rotation_ue":[0,0,0,1],"scale_ue":[1,1,1]}]}}"#);
+        let r = Retarget::new(&outfit, &host);
+        let mut local = host.reference_pose();
+        local[1].rotation = Quat::from_rotation_z(0.7);
+        let component = chain(&host, &local);
+        let posed = r.pose(&local, &component);
+        let c2w = Trs { translation: Vec3::new(100.0, 50.0, 0.0), rotation: Quat::from_rotation_z(1.2), scale: Vec3::ONE };
+        let effect = r.effect_component(&host, &local, &component);
+        // the part drawn on his R_buki4 (within 30 cm of R_buki), moved to the outfit's hand; a socket 40 cm out on it
+        let drawn_root = r.weapon_to_world(&component[3].then(&c2w), &component, &posed, &c2w);
+        let socket = Trs { translation: Vec3::new(40.0, 0.0, 0.0), rotation: Quat::IDENTITY, scale: Vec3::ONE };
+        let drawn = socket.then(&drawn_root);
+        let effect_socket = socket.then(&effect[3]).then(&c2w);
+        assert!((drawn.translation - effect_socket.translation).length() < 1.0e-2, "{drawn:?} {effect_socket:?}");
+        assert!((component[3].then(&c2w).translation - effect_socket.translation).length() > 1.0, "it moved off his own skeleton's place");
     }
 
     /// (ER73) THE OUTFITS' OWN KINEDRIVER on the pack's data: in Sora's reference pose every bone it writes is where the

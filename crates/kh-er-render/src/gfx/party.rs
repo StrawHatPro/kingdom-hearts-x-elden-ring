@@ -10,8 +10,8 @@
 //! 3. `draw_pass` inside Sora's `for translucent` loop, after Sora's draws: colour, early depth (+ stencil), records for the
 //!    glow mask, the shaft mask and the G-buffer pass.
 //! 4. `glow_pass`, `shaft_pass`, `gbuffer_pass` after Sora's own; the velocity and the real shadow from `VeloFrame::party`.
-//! Every switch of the descriptor heap is put back to Sora's before his code goes on, so with no party draw the command
-//! lists are exactly Sora's.
+//!    Every switch of the descriptor heap is put back to Sora's before his code goes on, so with no party draw the command
+//!    lists are exactly Sora's.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -76,10 +76,13 @@ pub(super) struct Member {
     pub data_bound: usize,
     pub hy_views: [usize; 2],
     /// (r.shadow_real) the depth-only pipeline with HIS skin shader (the main pack's shadow.vs has 200 joints).
-    pub cast: Option<ID3D12PipelineState>,
+    /// (r.shadow_real) the depth-only pipeline: (unbiased for the KH caster maps, biased for the game's atlas: LIGHT-RT)
+    pub cast: Option<(ID3D12PipelineState, ID3D12PipelineState)>,
     pub cast_failed: bool,
     /// His bones by name (the thrown shadow's capsules, the bone-fed material values, the blood's places).
     pub bones: HashMap<String, usize>,
+    /// (BLOOD-RED) the whites of his eyes where they are his head's own surface (blood.rs `eye_whites`, from KH3's colour mask)
+    pub eye_whites: Option<crate::blood::EyeWhites>,
     /// (TEAM) a skinned prop drawn without a skeleton, in its bind pose: the matrix of every joint (party_team_pack.js's
     /// glbs keep UE centimetres under their `UE_to_glTF` root: x 0.01; a static prop is baked by model.rs: identity).
     pub prop_joint: HashMap<usize, Mat4>,
@@ -116,9 +119,21 @@ pub(super) fn rescale_block(frame: &mut [f32], level: f32) {
     }
 }
 
+/// (PARTY-NATIVE) The light level of every drawn KH character in the native mode: 1 / the native factor (light.rs `native_k`, the
+/// game's exposure alone), the out scale Sora's own native rig carries (`rig_native`). None outside the native mode (or before an
+/// exposure was read): the earlier rules (his probe, the shared level) apply.
+pub(super) fn native_level() -> Option<f32> {
+    native_level_of(crate::hybrid::native_now(), crate::light::native_k())
+}
+
+/// [`native_level`]'s rule, pure (tested).
+pub(super) fn native_level_of(native: bool, k: Option<f32>) -> Option<f32> {
+    k.filter(|k| native && k.is_finite() && *k > 0.0).map(|k| 1.0 / k)
+}
+
 /// (RSF2) A member's hybrid rows without Sora's outfit field (gfx.rs `hybrid::block` with `own_set` / `lift` of SORA's own set):
 /// the rig share is `r.hybrid_rig`, the lift `r.hybrid_lift` alone. A block with the hybrid off stays off.
-pub(super) fn member_hybrid_rows(frame: &mut [f32], s: &crate::hybrid::Settings) {
+pub(super) fn member_hybrid_rows(frame: &mut [f32], s: &crate::hybrid::Settings, bleed_fix: f32) {
     let n = frame.len();
     if n < crate::hybrid::BLOCK_FLOATS {
         return;
@@ -127,8 +142,14 @@ pub(super) fn member_hybrid_rows(frame: &mut [f32], s: &crate::hybrid::Settings)
     if frame[hy] == 0.0 {
         return;
     }
+    // (ER-NATIVE) the native rows (row 3.y < 0): no rig share, lift 1, no bleed fix: the game's light per texel as it is
+    if frame[hy + crate::hybrid::NATIVE_ROW * 4 + 1] < 0.0 {
+        frame[hy + 2] = 0.0;
+        frame[hy + 31] = 1.0;
+        return;
+    }
     frame[hy + 2] = s.rig;
-    frame[hy + 31] = s.lift.clamp(0.0, 8.0);
+    frame[hy + 31] = (s.lift * bleed_fix).clamp(0.0, 8.0); // (VIEWLIGHT) his own bleed fix (light.rs)
 }
 
 /// (RSF2) The light level of the drawn leader when Sora is not drawn: the own out scale of the member standing nearest `carrier`
@@ -186,7 +207,7 @@ pub(super) struct PartyKit {
     /// every member through the same paths, whoever he is (the log line proves it per character)
     pub tally: Vec<(&'static str, [u32; 8])>,
     /// (RSF2) per drawn character, the latest frame: his light level (out scale; own = from his own probe), Sora's, his reflection level
-    pub levels: Vec<(&'static str, f32, bool, f32, f32, Option<(f32, Vec3, Vec3)>)>,
+    pub levels: Vec<MemberLevel>,
     /// (RSF2) the leader's light level of the frame before (the shared level while Sora is not drawn)
     pub shared_level: Option<f32>,
     pub cast_draws: u32,
@@ -196,6 +217,9 @@ pub(super) struct PartyKit {
     pub micros_max: u64,
     pub waiting: &'static str,
 }
+
+/// One row of `levels`.
+type MemberLevel = (&'static str, f32, bool, f32, f32, Option<(f32, Vec3, Vec3)>);
 
 // SAFETY: as Core (D3D12 objects are free-threaded; the mapped pointers are only used under CORE's mutex).
 unsafe impl Send for PicKit {}
@@ -242,6 +266,11 @@ pub(super) struct Plan {
     pub glow: Vec<Rec>,
     pub gb: Vec<Rec>,
     pub drawn: u32,
+    /// (BLOOD-RED, the user 2026-11-07: "blood should not appear on Donald or Goofy's eyes") per plan member: the frame copies
+    /// his eyes / mouth (share 0) and his face (FACE_SHARE) draw with, and their upload offsets, by Sora's rule (blood.rs
+    /// `share`: KH3's `_E_mat` / `_M_mat` / Eye / Mouth / `_F_mat` slot names; Donald's and Goofy's eyes are their own
+    /// `n_ex00N_E_mat0` slot, SQEX_IrisTexEyeMaterial). Without blood both are his frame copy.
+    pub spared: Vec<[(u64, usize); 2]>,
 }
 
 /// (VeloFrame) what the velocity pass and the real shadow draw of the party: (member, frame constants, its models'
@@ -380,6 +409,7 @@ unsafe fn load_member(device: &ID3D12Device, pack: &Path, chara: u8) -> Result<M
     let mut by_mesh = HashMap::new();
     let mut prop_joint = HashMap::new();
     let mut body = None;
+    let mut eye_whites = None; // (BLOOD-RED)
     if chara == TEAM {
         // the props (party_team_pack.js): the meshes of the library's slots, drawn in their bind pose
         let meshes: Vec<String> = assets.library.slots.iter().map(|s| s.mesh.clone()).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
@@ -404,6 +434,9 @@ unsafe fn load_member(device: &ID3D12Device, pack: &Path, chara: u8) -> Result<M
     } else {
         let skeleton = skeleton_of(&dir.join("manifest.json"))?;
         body = Some(add_model(device, &mut assets, npc, &dir.join("model.glb"), Some(&skeleton))?);
+        // (BLOOD-RED) the whites of his eyes from his own mesh (the masked eye slots' rest-pose box)
+        eye_whites = Model::load(&dir.join("model.glb")).ok().and_then(|model| crate::blood::eye_whites(&model, &assets.library, npc));
+        rlog!("render: (BLOOD-RED) {npc}: eye whites on his head {eye_whites:?}");
         // his weapons: every weapon mesh his library has slots for (party.json's 14), each with its own skeleton
         let meshes: Vec<String> = assets.library.slots.iter().filter(|s| s.mesh != npc).map(|s| s.mesh.clone()).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
         for mesh in meshes {
@@ -415,7 +448,7 @@ unsafe fn load_member(device: &ID3D12Device, pack: &Path, chara: u8) -> Result<M
             }
         }
     }
-    Ok(Member { chara, npc, bones: assets.bones.clone(), assets, shaders: Arc::new(shaders), body, by_mesh, sets: HashMap::new(), failed: Vec::new(), glow: HashMap::new(), glow_failed: Vec::new(), prev_skin: HashMap::new(), velo_own: HashMap::new(), velo_own_failed: Vec::new(), data_bound: usize::MAX, hy_views: [usize::MAX; 2], cast: None, cast_failed: false, prop_joint, hy_read })
+    Ok(Member { chara, npc, eye_whites, bones: assets.bones.clone(), assets, shaders: Arc::new(shaders), body, by_mesh, sets: HashMap::new(), failed: Vec::new(), glow: HashMap::new(), glow_failed: Vec::new(), prev_skin: HashMap::new(), velo_own: HashMap::new(), velo_own_failed: Vec::new(), data_bound: usize::MAX, hy_views: [usize::MAX; 2], cast: None, cast_failed: false, prop_joint, hy_read })
 }
 
 /// THE WORKER'S PARTY JOB (gfx.rs `worker`, when nothing of Sora's waits): a member asked for and not made yet, then the
@@ -589,6 +622,8 @@ pub(super) struct LightIn {
 thread_local! {
     /// (RSF2) the latest own_light reading (taps, surface, scene) for the light-level line
     static PROBE_SEEN: std::cell::Cell<Option<(f32, Vec3, Vec3)>> = const { std::cell::Cell::new(None) };
+    /// (VIEWLIGHT) his bleed fix of this frame (light.rs `bleed_fix`), from own_light
+    static BLEED_FIX: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
 }
 
 /// (ER party I) HIS PROBE AND HIS LIGHT in his frame copy: `er.probe` at his feet (drawn into his row by gfx.rs), and when
@@ -609,11 +644,16 @@ fn own_light(frame: &mut [f32], chara: u8, feet: Vec3, li: &LightIn) -> (Option<
     let Some(light) = probe::steady(chara, &li.steady, feet) else { return (None, probe_row) };
     // (RSF2, for the log) what his probe measured at his feet: taps, surface colour, scene colour
     PROBE_SEEN.with(|p| p.set(Some((light.taps, light.albedo_px, light.scene_px))));
-    let r = crate::light::rig_for(&light, li.fallback, li.key_gain, li.ambient_gain, crate::light::open_level_now()); // (RSF2) the open level
+    let r = crate::light::rig_now(&light, li.fallback, li.key_gain, li.ambient_gain); // (RSF2) the open level; (ER-NATIVE) the native rig
+    // (VIEWLIGHT) his level eased as an eye adapts, his bleed fix for his hybrid rows
+    let r = crate::light::ease_rig(1 + chara as usize, r);
+    BLEED_FIX.with(|b| b.set(crate::light::bleed_fix(&light)));
     // (as gfx.rs's rows: out scale, lit key = key / pi x out scale (key tint 1 with the game's light), ambient, ambient up)
     frame[LIGHT_AT..LIGHT_AT + 3].copy_from_slice(&[r.out_scale; 3]);
     frame[LIGHT_AT + 4..LIGHT_AT + 8].copy_from_slice(&(r.key / std::f32::consts::PI * r.out_scale).extend(0.0).to_array());
-    frame[LIGHT_AT + 8..LIGHT_AT + 12].copy_from_slice(&(r.ambient * r.out_scale).extend(0.0).to_array());
+    // (HAIR-BLEED) .w KH3's eye adaptation over his own out scale (gfx.rs eye_row; 0 in Sora's block = off)
+    let eye = super::eye_row(r.out_scale, frame[LIGHT_AT + 11] > 0.0);
+    frame[LIGHT_AT + 8..LIGHT_AT + 12].copy_from_slice(&(r.ambient * r.out_scale).extend(eye).to_array());
     frame[LIGHT_AT + 12..LIGHT_AT + 16].copy_from_slice(&(r.ambient_up * r.out_scale).extend(0.0).to_array());
     (Some(r), probe_row)
 }
@@ -646,8 +686,8 @@ fn rig_of(pm: &PlanMember, cx: &PassCx) -> (kh_look::Rig, [Vec4; 8]) {
             let mut rig = cx.rig.clone();
             (rig.key, rig.ambient) = (r.key * q, r.ambient * q);
             let mut sh = rig.sh();
-            for c in 0..3 {
-                sh[c].z = r.ambient_up[c] * q / 1.023_328;
+            for (c, row) in sh.iter_mut().enumerate().take(3) {
+                row.z = r.ambient_up[c] * q / 1.023_328;
             }
             (rig, sh)
         }
@@ -817,7 +857,10 @@ pub(super) unsafe fn prepare(kit: &mut PartyKit, cx: &PrepCx, put: &mut dyn FnMu
     let mut kit_snaps = 0u32;
     let mut kit_levels = std::mem::take(&mut kit.levels);
     let shared_before = kit.shared_level;
-    for draw in &list {
+    for (nth_draw, draw) in list.iter().enumerate() {
+        // (MIMIC-BOSS) a second draw of the same character (a Mimic Tear boss's copy of a friend leader beside him): its own
+        // skin record of the frame before (its motion vectors never taken from the other one)
+        let twin = list[..nth_draw].iter().filter(|d| d.chara == draw.chara).count();
         let Some(mi) = kit.members.iter().position(|m| m.chara == draw.chara) else {
             kit.waiting = "a member's library is still being made";
             continue;
@@ -917,6 +960,13 @@ pub(super) unsafe fn prepare(kit: &mut PartyKit, cx: &PrepCx, put: &mut dyn FnMu
                     Some(body.component.get(bone)?.then(&body.component_to_world).translation)
                 });
                 frame[bl_at..bl_at + crate::blood::BLOCK_FLOATS].copy_from_slice(&block);
+                // (BLOOD-RED) the whites of his eyes: bl_blade_b = their ball, bl_face = their mask island (w negative); only with
+                // `blood.face` on (bl_face free) and no blade in his block (bl_blade_a.w = 0: the party draws no blade blood)
+                if let Some(w) = m.eye_whites.filter(|_| crate::blood::face() && block[19] <= 0.0) {
+                    let (ball, island) = w.rows();
+                    frame[bl_at + 20..bl_at + 24].copy_from_slice(&ball);
+                    frame[bl_at + 24..bl_at + 28].copy_from_slice(&island);
+                }
             } else {
                 frame[bl_at..bl_at + crate::blood::BLOCK_FLOATS].fill(0.0);
             }
@@ -932,9 +982,13 @@ pub(super) unsafe fn prepare(kit: &mut PartyKit, cx: &PrepCx, put: &mut dyn FnMu
                 }
             }
             // (ER party I) his own probe and light (gfx/party_probe.rs)
-            if let Some(li) = cx.light.as_ref().filter(|_| !cx.void) {
+            // (PARTY-NATIVE, the user 2026-11-05: "Donald and Goofy need to be rendering how Sora is rendering") not in the native
+            // mode: there his light is the game's per texel (the capture), at the one native mapping; no probe row, no rig of his
+            if let Some(li) = cx.light.as_ref().filter(|_| !cx.void && native_level().is_none()) {
                 PROBE_SEEN.with(|p| p.set(None));
                 (own, probe_row) = own_light(&mut frame, draw.chara, feet, li);
+            } else if frame.len() >= PROBE_AT + 4 {
+                frame[PROBE_AT..PROBE_AT + 4].fill(0.0);
             }
         } else {
             frame[xl_at..bl_at + crate::blood::BLOCK_FLOATS].fill(0.0);
@@ -955,6 +1009,8 @@ pub(super) unsafe fn prepare(kit: &mut PartyKit, cx: &PrepCx, put: &mut dyn FnMu
         // to his materials at that level (light_ratio): KH3's bands and colour table are not linear, so a character measured
         // darker than the others no longer comes out brighter and more saturated than them.
         let shared = if !crate::party::shared_level() { None } else if cx.sora_drawn { Some(cx.out_scale) } else { shared_before };
+        // (PARTY-NATIVE) the native mode: the one mapping of every KH object (light.rs `native_k`), Sora drawn or not
+        let shared = native_level().or(shared);
         let level = shared.filter(|s| s.is_finite() && *s > 0.0).or(own_scale).unwrap_or(cx.out_scale);
         let measured = own_scale.unwrap_or(cx.out_scale);
         let light_ratio = if measured.is_finite() && measured > 0.0 { measured / level } else { 1.0 };
@@ -969,7 +1025,7 @@ pub(super) unsafe fn prepare(kit: &mut PartyKit, cx: &PrepCx, put: &mut dyn FnMu
         }
         // (RSF2) the hybrid rows that belong to SORA'S outfit (an own set's field: its rig share `r.hybrid_rig_own` and its
         // light lift, cgfield.rs) are the plain ones for a member: his look is never Sora's outfit's
-        member_hybrid_rows(&mut frame, &crate::hybrid::settings());
+        member_hybrid_rows(&mut frame, &crate::hybrid::settings(), BLEED_FIX.with(|b| b.replace(1.0)));
         let env_level = match cx.env_light.as_ref() {
             Some(l) if !cx.void && (level - cx.out_scale).abs() > 1.0e-12 => Some(crate::light::env_level(l, level, cx.env_scale)),
             _ => None,
@@ -990,6 +1046,17 @@ pub(super) unsafe fn prepare(kit: &mut PartyKit, cx: &PrepCx, put: &mut dyn FnMu
         crate::camfade::write_block(&mut frame, crate::camfade::member_key(draw.chara));
         let velo_own = velocity_route(&mut frame, crate::taa::own_wanted() && m.velo_own.contains_key(&cx.key), &cx.prev_plain);
         let Some(frame_at) = put(&frame) else { break };
+        // (BLOOD-RED) his eyes' / mouth's and his face's copies of the block (blood amounts 0 / x FACE_SHARE)
+        let bleeding = frame.get(bl_at..bl_at + 2).is_some_and(|b| b.iter().any(|x| *x > 0.0));
+        let mut spared = [(frame_at, (frame_at - cx.upload_base) as usize); 2];
+        if bleeding {
+            for (k, scale) in [(0, 0.0), (1, crate::blood::FACE_SHARE)] {
+                let mut f = frame.clone();
+                f[bl_at..bl_at + 2].iter_mut().for_each(|v| *v *= scale);
+                let Some(at) = put(&f) else { break };
+                spared[k] = (at, (at - cx.upload_base) as usize);
+            }
+        }
         let early_at = if cx.early_hy_off {
             let mut e = frame.clone();
             e[n - crate::hybrid::BLOCK_FLOATS..].fill(0.0);
@@ -1015,7 +1082,7 @@ pub(super) unsafe fn prepare(kit: &mut PartyKit, cx: &PrepCx, put: &mut dyn FnMu
         let mut skin: Vec<f32> = Vec::with_capacity(SKIN_FLOATS);
         let mut seen: Vec<usize> = Vec::new();
         for (k, to_world, pose) in parts {
-            let instance = (k, seen.iter().filter(|s| **s == k).count());
+            let instance = (k, seen.iter().filter(|s| **s == k).count() + twin * 1000); // (MIMIC-BOSS) + the twin's own range
             seen.push(k);
             let model = &m.assets.models[k];
             skin.clear();
@@ -1043,6 +1110,7 @@ pub(super) unsafe fn prepare(kit: &mut PartyKit, cx: &PrepCx, put: &mut dyn FnMu
             m.prev_skin.insert(instance, PrevSkin { skin: skin.clone(), frame: cx.frame_no, to_world });
             models.push((k, now, before, to_world));
         }
+        plan.spared.push(spared);
         plan.members.push(PlanMember { member: mi, frame_at, early_at, models, glow_mask: draw.glow_mask, caps, feet, frame_offset: (frame_at - cx.upload_base) as usize, early_offset: (early_at - cx.upload_base) as usize, light: own, probe_row, velo_own, reach, env_level, light_ratio });
     }
     kit.snaps += kit_snaps;
@@ -1075,10 +1143,20 @@ pub(super) fn material_blocks(plan: &Plan, kit: &PartyKit) -> usize {
     plan.members.iter().map(|pm| pm.models.iter().map(|(k, ..)| kit.members[pm.member].assets.models.get(*k).map_or(0, |m| m.draws.len())).sum::<usize>()).sum()
 }
 
+/// The half of Sora's loop `draw_pass` joins, its lists and early-depth choice.
+pub(super) struct DrawPass<'a> {
+    pub translucent: bool,
+    pub list: &'a ID3D12GraphicsCommandList,
+    pub early_list: Option<&'a ID3D12GraphicsCommandList>,
+    pub early: Option<bool>,
+    pub stencil: Option<u8>,
+    pub hy_on: bool,
+}
+
 /// THE PARTY'S DRAWS OF ONE HALF OF SORA'S LOOP (opaque / masked, or translucent): colour into `list`, early depth (with
 /// the stencil when `early` says so) into `early_list`; the opaque draws recorded for the glow, shaft and G-buffer passes.
-#[allow(clippy::too_many_arguments)]
-pub(super) unsafe fn draw_pass(plan: &mut Plan, kit: &PartyKit, translucent: bool, list: &ID3D12GraphicsCommandList, early_list: Option<&ID3D12GraphicsCommandList>, early: Option<bool>, stencil: Option<u8>, hy_on: bool, cx: &PassCx, put: &mut dyn FnMut(&[f32]) -> Option<u64>) -> Result<(), ()> {
+pub(super) unsafe fn draw_pass(plan: &mut Plan, kit: &PartyKit, pass: &DrawPass, cx: &PassCx, put: &mut dyn FnMut(&[f32]) -> Option<u64>) -> Result<(), ()> {
+    let DrawPass { translucent, list, early_list, early, stencil, hy_on } = *pass;
     let mut any = false;
     if plan.early_per.len() != plan.members.len() {
         plan.early_per = vec![0; plan.members.len()];
@@ -1132,7 +1210,7 @@ pub(super) unsafe fn draw_pass(plan: &mut Plan, kit: &PartyKit, translucent: boo
                 if material.translucent != translucent {
                     continue;
                 }
-                let mut params = library.params(material, &object, &rig, m.assets.khs.as_ref().map(|(_, s)| s), cx.clock, cx.exposure, cx.debug);
+                let mut params = library.params(material, &object, &rig, m.assets.khs.as_ref().map(|(_, s)| s), kh_look::library::LookFrame { clock: cx.clock, exposure: cx.exposure, debug: cx.debug });
                 params.sh = sh; // (ER party I) his own light (rig_of)
                 params.khs.w = material.scalars.get(crate::outfit::INTERIOR_SCALAR).copied().unwrap_or(0.0);
                 params.env.y = pm.env_level.unwrap_or(cx.env_level); // (RSF2) his own level
@@ -1142,7 +1220,16 @@ pub(super) unsafe fn draw_pass(plan: &mut Plan, kit: &PartyKit, translucent: boo
                 list.SetPipelineState(&set[draw.slot]);
                 list.SetGraphicsRootConstantBufferView(1, material_constants);
                 list.SetGraphicsRootDescriptorTable(3, table);
+                // (BLOOD-RED) his eyes and mouth never take blood, his face its share (Sora's rule, blood.rs `share`)
+                let share = crate::blood::share(material);
+                let spared_at = plan.spared.get(pi).map(|s| if share <= 0.0 { s[0].0 } else { s[1].0 }).filter(|at| share < 1.0 && *at != pm.frame_at);
+                if let Some(at) = spared_at {
+                    list.SetGraphicsRootConstantBufferView(0, at);
+                }
                 list.DrawIndexedInstanced(draw.index_count, 1, draw.first_index, draw.base_vertex, 0);
+                if spared_at.is_some() {
+                    list.SetGraphicsRootConstantBufferView(0, pm.frame_at);
+                }
                 plan.drawn += 1;
                 let rec: Rec = (pi, *k, draw.slot, draw.index_count, draw.first_index, draw.base_vertex, *now, *before, material_constants);
                 if !translucent && pm.glow_mask {
@@ -1175,9 +1262,14 @@ pub(super) unsafe fn draw_pass(plan: &mut Plan, kit: &PartyKit, translucent: boo
     Ok(())
 }
 
-/// Draws recorded draws again with another state per slot (`pso(member, slot)`), each member's heap bound; Sora's heap put
-/// back afterwards. `frames`: true = each member's frame constants (the G-buffer pass reads the hybrid's block).
-unsafe fn redraw(plan: &Plan, kit: &PartyKit, recs: &[Rec], list: &ID3D12GraphicsCommandList, cx: &PassCx, frames: bool, scissor: Option<&dyn Fn(&PlanMember) -> Option<RECT>>, pso: &dyn Fn(&Member, usize) -> Option<ID3D12PipelineState>) -> (u32, Vec<u32>) {
+/// A member's scissor box for `redraw` (None: he is not drawn).
+type ScissorOf<'a> = dyn Fn(&PlanMember) -> Option<RECT> + 'a;
+/// The state of (member, slot) for `redraw`.
+type PsoOf<'a> = dyn Fn(&Member, usize) -> Option<ID3D12PipelineState> + 'a;
+
+/// Draws recorded draws again with another state per slot (`pso(member, slot)`), each member's heap and frame constants bound
+/// (the G-buffer pass reads the hybrid's block); Sora's heap put back afterwards.
+unsafe fn redraw(plan: &Plan, kit: &PartyKit, recs: &[Rec], list: &ID3D12GraphicsCommandList, cx: &PassCx, scissor: Option<&ScissorOf>, pso: &PsoOf) -> (u32, Vec<u32>) {
     let mut bound: Option<usize> = None;
     let mut model_bound: Option<(usize, usize)> = None;
     let mut n = 0;
@@ -1194,9 +1286,7 @@ unsafe fn redraw(plan: &Plan, kit: &PartyKit, recs: &[Rec], list: &ID3D12Graphic
                 }
             }
             list.SetDescriptorHeaps(&[Some(m.assets.srv_heap.clone()), Some(cx.sampler_heap.clone())]);
-            if frames {
-                list.SetGraphicsRootConstantBufferView(0, pm.frame_at);
-            }
+            list.SetGraphicsRootConstantBufferView(0, pm.frame_at);
             bound = Some(pi);
         }
         let model = &m.assets.models[k];
@@ -1216,9 +1306,7 @@ unsafe fn redraw(plan: &Plan, kit: &PartyKit, recs: &[Rec], list: &ID3D12Graphic
     }
     if bound.is_some() {
         list.SetDescriptorHeaps(&[Some(cx.sora_heap.clone()), Some(cx.sampler_heap.clone())]);
-        if frames {
-            list.SetGraphicsRootConstantBufferView(0, cx.frame_constants);
-        }
+        list.SetGraphicsRootConstantBufferView(0, cx.frame_constants);
     }
     (n, per)
 }
@@ -1261,7 +1349,7 @@ pub(super) fn tally_frame(plan: &Plan, kit: &mut PartyKit) {
 pub(super) unsafe fn glow_pass(plan: &Plan, kit: &mut PartyKit, gkey: PsoKey, list: &ID3D12GraphicsCommandList, cx: &PassCx) -> u32 {
     kit.glow_key = Some(gkey);
     // (RSF round 18) each friend with HIS OWN frame block (his camera fade, as his colour draw), not Sora's; Sora's put back
-    let (n, per) = redraw(plan, kit, &plan.glow, list, cx, true, None, &|m, slot| m.glow.get(&gkey).and_then(|s| s.get(slot)).cloned());
+    let (n, per) = redraw(plan, kit, &plan.glow, list, cx, None, &|m, slot| m.glow.get(&gkey).and_then(|s| s.get(slot)).cloned());
     list.SetGraphicsRootConstantBufferView(0, cx.frame_constants);
     kit.glow_draws += n;
     tally(kit, plan, 4, &per);
@@ -1272,7 +1360,7 @@ pub(super) unsafe fn glow_pass(plan: &Plan, kit: &mut PartyKit, gkey: PsoKey, li
 pub(super) unsafe fn shaft_pass(plan: &Plan, kit: &mut PartyKit, list: &ID3D12GraphicsCommandList, cx: &PassCx) -> u32 {
     let key = cx.key;
     // (RSF round 18) his own frame block, as glow_pass; Sora's put back
-    let (n, per) = redraw(plan, kit, &plan.glow, list, cx, true, None, &|m, slot| {
+    let (n, per) = redraw(plan, kit, &plan.glow, list, cx, None, &|m, slot| {
         let set = m.sets.get(&key)?;
         set.get(early_stencil_base(set.len(), m.assets.library.slots.len())? + slot).cloned()
     });
@@ -1282,11 +1370,21 @@ pub(super) unsafe fn shaft_pass(plan: &Plan, kit: &mut PartyKit, list: &ID3D12Gr
     n
 }
 
+/// The frame's view for the party's screen boxes: clip from game space, tan(half vertical fov), the target's size.
+#[derive(Clone, Copy)]
+pub(super) struct ScreenFit<'a> {
+    pub clip: &'a Mat4,
+    pub tan_y: f32,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// (ER78) THE G-BUFFER PASS over the party's draws (targets bound by the caller), each member's own scissor box.
-pub(super) unsafe fn gbuffer_pass(plan: &Plan, kit: &mut PartyKit, list: &ID3D12GraphicsCommandList, cx: &PassCx, clip: &Mat4, tan_y: f32, width: u32, height: u32) -> u32 {
+pub(super) unsafe fn gbuffer_pass(plan: &Plan, kit: &mut PartyKit, list: &ID3D12GraphicsCommandList, cx: &PassCx, fit: &ScreenFit) -> u32 {
+    let ScreenFit { clip, tan_y, width, height } = *fit;
     let key = cx.key;
     let scissor = |pm: &PlanMember| crate::hybrid::scissor_box(&pm.reach, clip, tan_y, width, height, 24.0).map(|s| RECT { left: s[0], top: s[1], right: s[2], bottom: s[3] });
-    let (n, per) = redraw(plan, kit, &plan.gb, list, cx, true, Some(&scissor), &|m, slot| {
+    let (n, per) = redraw(plan, kit, &plan.gb, list, cx, Some(&scissor), &|m, slot| {
         let set = m.sets.get(&key)?;
         set.get(gbuffer_base(set.len(), m.assets.library.slots.len())? + slot).cloned()
     });
@@ -1295,9 +1393,19 @@ pub(super) unsafe fn gbuffer_pass(plan: &Plan, kit: &mut PartyKit, list: &ID3D12
     n
 }
 
+/// Sora's blob pipeline and table for `contact_shadows`, the key light's direction, and whether the shadow is thrown.
+pub(super) struct ContactShadow<'a> {
+    pub pipeline: &'a ID3D12PipelineState,
+    pub table: D3D12_GPU_DESCRIPTOR_HANDLE,
+    pub key_dir: Vec3,
+    pub throw: bool,
+}
+
 /// The contact / thrown shadow under every member: Sora's blob pipeline and table (its depth and mask views written by
 /// the caller), each member's frame block (his feet, his capsules), a box around his feet and the throw.
-pub(super) unsafe fn contact_shadows(plan: &Plan, list: &ID3D12GraphicsCommandList, pipeline: &ID3D12PipelineState, table: D3D12_GPU_DESCRIPTOR_HANDLE, clip: &Mat4, tan_y: f32, width: u32, height: u32, key_dir: Vec3, throw: bool, cx: &PassCx) {
+pub(super) unsafe fn contact_shadows(plan: &Plan, list: &ID3D12GraphicsCommandList, shadow: &ContactShadow, fit: &ScreenFit, cx: &PassCx) {
+    let ContactShadow { pipeline, table, key_dir, throw } = *shadow;
+    let ScreenFit { clip, tan_y, width, height } = *fit;
     let mut any = false;
     for pm in &plan.members {
         let Some(feet) = pm.feet else { continue };
@@ -1338,8 +1446,10 @@ pub(super) unsafe fn contact_shadows(plan: &Plan, list: &ID3D12GraphicsCommandLi
 /// The hybrid's block of every member's frame copies set to zero (the G-buffer pass was planned but not recorded: the
 /// colour list reads today's light, as Sora's).
 pub(super) unsafe fn hybrid_off(plan: &Plan, mapped: *mut u8, frame_len: usize) {
-    for pm in &plan.members {
-        for offset in [pm.frame_offset, pm.early_offset] {
+    for (pi, pm) in plan.members.iter().enumerate() {
+        // (BLOOD-RED) + his eyes' / face's copies (the same offset twice when he has no blood: harmless)
+        let spared = plan.spared.get(pi).map_or([pm.frame_offset; 2], |s| [s[0].1, s[1].1]);
+        for offset in [pm.frame_offset, pm.early_offset, spared[0], spared[1]] {
             let at = offset + (frame_len - crate::hybrid::BLOCK_FLOATS) * 4;
             std::ptr::write_bytes(mapped.add(at), 0, crate::hybrid::BLOCK_FLOATS * 4);
         }
@@ -1389,7 +1499,10 @@ pub(super) unsafe fn velocity(kit: &mut PartyKit, party: &VeloParty, key: PsoKey
 
 /// (IMPL_ER17, r.shadow_real) THE PARTY IN THE GAME'S CASCADE: the members' opaque draws depth-only with their own skin
 /// (the caller has bound the cascade's viewport, the atlas and the data table of the light's matrices).
-pub(super) unsafe fn cast(kit: &mut PartyKit, party: &VeloParty, device: &ID3D12Device, root: &ID3D12RootSignature, list: &ID3D12GraphicsCommandList, frame_heap: &ID3D12DescriptorHeap, sampler_heap: &ID3D12DescriptorHeap) -> u32 {
+/// `heaps`: (the frame's view heap, the sampler heap). `atlas`: drawn into the game's atlas (the LIGHT-RT depth bias, so the
+/// game's sun mask does not band their own surfaces); false: into our KH caster maps (unbiased).
+pub(super) unsafe fn cast(kit: &mut PartyKit, party: &VeloParty, device: &ID3D12Device, root: &ID3D12RootSignature, list: &ID3D12GraphicsCommandList, heaps: (&ID3D12DescriptorHeap, &ID3D12DescriptorHeap), atlas: bool) -> u32 {
+    let (frame_heap, sampler_heap) = heaps;
     let mut n = 0;
     for (mi, frame, models, _) in party {
         let Some(m) = kit.members.get_mut(*mi) else { continue };
@@ -1397,7 +1510,7 @@ pub(super) unsafe fn cast(kit: &mut PartyKit, party: &VeloParty, device: &ID3D12
             m.cast = cast_pipeline(device, root, &m.npc_dir()).map_err(|e| rlog!("render: (ER party S4) {}: no real shadow ({e})", m.npc)).ok();
             m.cast_failed = m.cast.is_none();
         }
-        let Some(pipeline) = m.cast.as_ref() else { continue };
+        let Some(pipeline) = m.cast.as_ref().map(|(plain, biased)| if atlas { biased } else { plain }) else { continue };
         list.SetDescriptorHeaps(&[Some(frame_heap.clone()), Some(sampler_heap.clone())]);
         list.SetGraphicsRootConstantBufferView(0, *frame);
         list.SetGraphicsRootDescriptorTable(3, frame_heap.GetGPUDescriptorHandleForHeapStart());
@@ -1426,8 +1539,9 @@ impl Member {
     }
 }
 
-/// gfx.rs `make_cast_kit`'s depth-only pipeline with the member's own `shadow.vs.dxil` (320 joints).
-unsafe fn cast_pipeline(device: &ID3D12Device, root: &ID3D12RootSignature, dir: &Path) -> Result<ID3D12PipelineState, String> {
+/// gfx.rs `make_cast_kit`'s depth-only pipelines with the member's own `shadow.vs.dxil` (320 joints): (unbiased for the KH caster
+/// maps, with the LIGHT-RT depth bias for the game's atlas).
+unsafe fn cast_pipeline(device: &ID3D12Device, root: &ID3D12RootSignature, dir: &Path) -> Result<(ID3D12PipelineState, ID3D12PipelineState), String> {
     let file = dir.join("materials").join("er").join("shadow.vs.dxil");
     let vertex = std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
     let elements = layout();
@@ -1445,7 +1559,12 @@ unsafe fn cast_pipeline(device: &ID3D12Device, root: &ID3D12RootSignature, dir: 
         SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
         ..Default::default()
     };
-    device.CreateGraphicsPipelineState(&pso).map_err(|e| format!("CreatePipelineState: {e}"))
+    let plain: ID3D12PipelineState = device.CreateGraphicsPipelineState(&pso).map_err(|e| format!("CreatePipelineState: {e}"))?;
+    let plain_raster = pso.RasterizerState;
+    let mut biased_desc = pso;
+    biased_desc.RasterizerState = super::cast_rasterizer(plain_raster);
+    let biased: ID3D12PipelineState = device.CreateGraphicsPipelineState(&biased_desc).map_err(|e| format!("CreatePipelineState (atlas): {e}"))?;
+    Ok((plain, biased))
 }
 
 /// The once-a-second line (gfx.rs `status`).
@@ -1695,7 +1814,7 @@ impl Core {
                 if material.translucent != translucent {
                     continue;
                 }
-                let mut params = m.assets.library.params(material, &object, rig, kit.khs.as_ref().map(|(_, s)| s), input.clock, frame.exposure, 0.0);
+                let mut params = m.assets.library.params(material, &object, rig, kit.khs.as_ref().map(|(_, s)| s), kh_look::library::LookFrame { clock: input.clock, exposure: frame.exposure, debug: 0.0 });
                 params.sh = sh;
                 params.env.y = frame.env_level;
                 let material_constants = put(params.as_floats()).ok_or_else(overflow)?;
@@ -2060,7 +2179,20 @@ pub(super) mod rsf_tests {
         let mut frame = vec![0.0f32; n];
         let hy = n - crate::hybrid::BLOCK_FLOATS;
         (frame[hy], frame[hy + 2], frame[hy + 31]) = (1.0, s.rig_own, 3.5);
-        member_hybrid_rows(&mut frame, &s);
+        member_hybrid_rows(&mut frame, &s, 1.0);
         assert_eq!((frame[hy + 2], frame[hy + 31]), (s.rig, s.lift.clamp(0.0, 8.0)));
+    }
+
+    /// (PARTY-NATIVE) In the native mode every member is drawn at the one native mapping, the out scale of Sora's own native rig
+    /// (light.rs `rig_native`: 1 / k), whoever is drawn; outside it (or before an exposure) the earlier rules stay.
+    #[test]
+    fn party_native_every_member_takes_the_one_native_level() {
+        let k = crate::light::native_k_of(29.35);
+        let sora = crate::light::rig_native(&crate::light::GameLight::default(), Vec3::Y, k);
+        assert_eq!(native_level_of(true, Some(k)), Some(sora.out_scale), "Sora's native out scale");
+        assert_eq!(native_level_of(false, Some(k)), None, "r.hybrid_native 0: the earlier rules");
+        assert_eq!(native_level_of(true, None), None, "no exposure read yet");
+        assert_eq!(native_level_of(true, Some(0.0)), None);
+        assert_eq!(native_level_of(true, Some(f32::NAN)), None);
     }
 }

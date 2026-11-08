@@ -102,6 +102,9 @@ pub struct Queue {
     pub slot_a: Option<Entry>,
     pub slot_b: Option<Entry>,
     /// The finish command a reaction command pushed out of slot B (the stack at hud+0x820).
+    /// (P3) Read again: hud+0x820 is the form's own entry (its banner / time gauge, added by SetStyleHud 0x14140C040 ->
+    /// 0x14158D7D0 -> 0x14162EF30; AUTO_FINISH reads its remaining time); KH3 keeps the finish command in slot B under the
+    /// reaction prompt's overlay (`hud_has`). This field is the port's way of showing the prompt in slot B meanwhile.
     slot_b_stack: Option<Entry>,
     /// A finish extra shown in slot B over the finish command (`extra(cmd)`: 175 - 178).
     pub extra: Option<i32>,
@@ -140,6 +143,10 @@ pub fn class_of(kind: i32) -> u8 {
             (5, 25) => class::SHOTLOCK,
             _ => class::REACTION,
         },
+        // (weapons P3) the formchange (Type 4 Cate 14) and finish (Cate 15) commands of the forms that
+        // sora-combat-form-commands does not carry: from sora-keyblade-forms.
+        None if super::form::row_of(kind).is_some() => class::FORMCHANGE,
+        None if super::form::is_finish_kind(kind) => class::FINISH,
         // Rows the sheet does not carry: the reaction range 1 - 26 and the context commands.
         None => class::REACTION,
     }
@@ -173,6 +180,15 @@ impl Queue {
 
     pub fn has(&self, kind: i32) -> bool {
         self.find(kind).is_some()
+    }
+
+    /// (P3) THE HUD'S QUERY of AwardAtMax (0x141583BB0 -> 0x141621510: the list, slot A's command hud+0x778, slot B's
+    /// command hud+0x7D0). In KH3 the controller's reaction prompt (0x1414145C0, the guard counters) is shown through the
+    /// sub-command overlay (0x14158C180(hud, 0, kind) -> 0x14162A440: hud+0x9A8[0], the finish extras' labels) and never
+    /// replaces slot B's entry, so a finish command stays in hud+0x7D0 under it. Here the prompt is an ex-kind entry in
+    /// slot B with the finish command waiting in `slot_b_stack`: that one is still "in slot B" for this query.
+    pub fn hud_has(&self, kind: i32) -> bool {
+        self.has(kind) || self.slot_b_stack.as_ref().is_some_and(|e| !e.ex && e.kind == kind)
     }
 
     fn new_entry(&mut self, ex: bool, class: u8, kind: i32, t: f32) -> Entry {
@@ -370,7 +386,11 @@ fn kind_of(kind: i32) -> ETresCommandKind {
 pub(crate) fn enqueue(cx: &mut Ctx, kind: i32, time: f32) -> bool {
     let abilities = cx.pawn.status.abilities;
     let row = command_row(kind);
-    let mut t = row.filter(|r| r.cmd_type == 4 && r.param0 > 0.0).map_or(0.0, |r| r.param0);
+    let mut t = match row {
+        Some(r) => if r.cmd_type == 4 && r.param0 > 0.0 { r.param0 } else { 0.0 },
+        // (weapons P3) a formchange command the sheet does not carry: its Param0 from sora-keyblade-forms.
+        None => super::form::row_of(kind).map_or(0.0, |r| r.command_time),
+    };
     let mut time = time;
     match kind {
         // grand magic
@@ -535,7 +555,7 @@ pub(crate) fn tick(state: &mut StateData, cx: &mut Ctx, input: &Input, dt: f32) 
         cx.pawn.event(EventKind::SituationSelect { index: cx.pawn.combat.situation.selected });
     }
     // Triangle (controller slot 674 0x141404460: only with LB and RB up and no command cool-down).
-    if pad.pressed.has(PadButton::SITUATION) && !pad.held.has(PadButton::LeftShoulder) && !pad.held.has(PadButton::RightShoulder) && !(cx.pawn.combat.command_cooldown > 0.0) {
+    if pad.pressed.has(PadButton::SITUATION) && !pad.held.has(PadButton::LeftShoulder) && !pad.held.has(PadButton::RightShoulder) && cx.pawn.combat.command_cooldown.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
         use_selected(state, cx);
     }
 }
@@ -562,7 +582,7 @@ fn auto_finish(state: &mut StateData, cx: &mut Ctx) {
     }
     let form = cx.pawn.combat.form;
     let Some(kind) = cx.pawn.combat.situation.slot_b.map(|e| e.kind) else { return };
-    if form.cmd == 0 || !(form.time_left <= AUTO_FINISH_TIME) || matches!(kind, 0 | 0x6D | 0xB3 | 0xC0 | 0xD3 | 0xF1) || cx.pawn.combat.situation.extra.is_some() {
+    if form.cmd == 0 || form.time_left.partial_cmp(&AUTO_FINISH_TIME).is_none_or(std::cmp::Ordering::is_gt) || matches!(kind, 0 | 0x6D | 0xB3 | 0xC0 | 0xD3 | 0xF1) || cx.pawn.combat.situation.extra.is_some() {
         return;
     }
     if execute(state, cx, kind) {
@@ -593,6 +613,10 @@ pub(crate) fn use_selected(state: &mut StateData, cx: &mut Ctx) -> bool {
 /// The executor 0x14141B470 (`ExecuteCommand` writes ctrl+0x87C first), by command kind.
 pub(crate) fn execute(state: &mut StateData, cx: &mut Ctx, kind: i32) -> bool {
     use super::form;
+    // (NOCOMBAT) no situation command of any kind (formchanges, finishers, Rage, XS, team attacks, grand magic, counters)
+    if !crate::nocombat::allows(crate::nocombat::Fighter::Sora, crate::nocombat::act_of_situation(kind)) {
+        return false;
+    }
     let ok = match kind {
         // (XSI) ANCIENT LIGHT (XS 2.13): LM_UNIONDISCODE (174) outside a form is the XS offer.
         174 if cx.pawn.combat.form.cmd == 0 => crate::abilities::xs::ancient::execute(state, cx),
@@ -616,7 +640,11 @@ pub(crate) fn execute(state: &mut StateData, cx: &mut Ctx, kind: i32) -> bool {
         // (`TryAttack`); Triangle on the prompt makes the same request.
         1..=26 => {
             let target = cx.pawn.combat.lockon.current;
-            crate::states::attack::try_attack(state, cx, target)
+            // (weapons P3) in a form with a package of its own, the form's attack request (pawn slot 1337).
+            match super::forms::attack(state, cx, target) {
+                Some(accepted) => accepted,
+                None => crate::states::attack::try_attack(state, cx, target),
+            }
         }
         _ => false,
     };
@@ -749,5 +777,40 @@ mod tests {
         q.take(148);
         q.select();
         assert_eq!(q.current(), Some((Slot::B, 171)));
+    }
+
+    // (P3) THE ORDER OF THE Y SLOT between a formchange and the party's commands (a team attack FR_GOOFYSHOOT 195, a link
+    // command): KH3 has NO priority by class. Select 0x141627B70 takes slot A, then slot B, then among the list's ready
+    // entries the smallest serial (+0x34) when hud+0x9C4 == 1 ("Prioritize Older"), the largest when 0; +0x9C4 = !(config
+    // byte 2 bit 0) (0x141616C10), whose default is clear (byte 2 = (old & 0xE4) | 4): Older. A kind offered again is
+    // refreshed in place with its serial kept (0x141631600). So whichever was offered FIRST is on Y: a team attack the
+    // friend gauge gave before the formchange stays above it, as in KH3 (the round's F1 / F12 observation).
+    #[test]
+    fn the_y_slot_takes_the_oldest_offer_whatever_its_class() {
+        let ready = |q: &mut Queue| {
+            for e in &mut q.list {
+                e.appear = 0.0;
+            }
+            q.select();
+        };
+        // The team attack first, then the formchange (and a refresh of the team attack): the team attack is on Y.
+        let mut q = Queue::default();
+        q.insert(false, 195, 30.0, false);
+        q.insert(false, 148, 30.0, false);
+        q.insert(false, 195, 30.0, false);
+        ready(&mut q);
+        assert_eq!((class_of(195), class_of(148)), (class::TEAM, class::FORMCHANGE));
+        assert_eq!(q.current(), Some((Slot::List, 195)), "the older offer");
+        // The formchange first: it is on Y.
+        let mut q = Queue::default();
+        q.insert(false, 148, 30.0, false);
+        q.insert(false, 195, 30.0, false);
+        ready(&mut q);
+        assert_eq!(q.current(), Some((Slot::List, 148)));
+        // "Prioritize Newer": the other way round.
+        q.older_first = false;
+        q.select();
+        assert_eq!(q.current(), Some((Slot::List, 195)));
+        assert!(Queue::default().older_first, "the option's default is Prioritize Older");
     }
 }

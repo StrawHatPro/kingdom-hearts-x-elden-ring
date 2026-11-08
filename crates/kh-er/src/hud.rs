@@ -24,7 +24,7 @@
 //! What persists across a respawn (a new `SoraHost`) is in statics here: the movies, the rasterisers, Elden
 //! Ring's HUD state as the game last wrote it, the pause we hold.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -52,6 +52,20 @@ static GAMEOVER_HOLD: AtomicBool = AtomicBool::new(false);
 static GAMEOVER_MENU: AtomicBool = AtomicBool::new(false);
 /// Milliseconds (since `START`) of the latest `HudHost::frame`.
 static FRAME_AT: AtomicU64 = AtomicU64::new(0);
+/// (THE TESTER 2026-11-03: a bare frame, no HUD and no menu, in the camp menu's Equipment -> stock transition) [`er_phase`]
+/// calls since the latest `HudHost::frame`. The log of that run: four "Sora's frames stopped" in the open menu, each after
+/// about a second in which NO phase ran at all (the whole game stood: a hitch, a screenshot); the first phase after the
+/// stall saw more than 300 ms since the HUD's frame and took every layer off, and the next present was bare. Sora's frames
+/// have stopped only when the game's phases went on without them: the clock alone does not say so.
+static PHASES_SINCE_FRAME: AtomicU32 = AtomicU32::new(0);
+/// The phases without a HUD frame that mean his frames stopped (a few frames' worth of every phase of ours).
+const PHASES_STOPPED: u32 = 12;
+
+/// Sora's HUD frames have stopped: more than 300 ms since the latest one AND the game's phases went on meanwhile
+/// (`phases` of them; a stall of the whole game runs none).
+fn frames_stopped(ms_since_frame: u64, phases: u32) -> bool {
+    ms_since_frame > 300 && phases >= PHASES_STOPPED
+}
 static START: Mutex<Option<Instant>> = Mutex::new(None);
 /// The Sora pack's folder (its `ui` folder is read when the HUD is first switched on).
 static PACK: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
@@ -130,7 +144,14 @@ pub fn ask_load_screen() {
 /// (SV) The screens' switches in play: KH3's Delete (`saveload.delete`, default on), the running game's own slot refused,
 /// the load question (`saveload.confirm_load`, default on: the user asked for a confirmation).
 fn play_screen_options(hud: &mut Hud, control: &Control) {
-    hud.set_saveload_options(control.flag("saveload.delete") != Some(false), false, control.flag("saveload.confirm_load") != Some(false));
+    hud.set_saveload_options(screen_delete_on(control), false, control.flag("saveload.confirm_load") != Some(false));
+}
+
+/// (SV; SAVE-DELETE) KH3's Delete on the Save / Load screens: ONE switch for the save point's screens and the title's Load
+/// screen (THE USER 2026-11-07: "allow deleting save games from the load game screen from the title, same as save point
+/// menu"): `saveload.delete`, default on.
+fn screen_delete_on(control: &Control) -> bool {
+    control.flag("saveload.delete") != Some(false)
 }
 
 /// The screens are switched on (`saveload.kh`, with `hud.kh`) and the pack can show them.
@@ -184,8 +205,9 @@ fn slot_portrait(s: &crate::slots::SlotSummary) -> kh_ui::saveload::Portrait {
 }
 
 // ---------------------------------------------------------------------------------- (IMPL_ER15) KH3's game-over scene
-/// The overlay layer the sequence's plate lies under: "GameOver" (index 9 of `LAYERS`): over the cockpit, under the menu.
-const GAMEOVER_LAYER: usize = 9;
+/// The overlay layer the sequence's plate lies under: "GameOver" (of `LAYERS`, by name since INT-F): over the cockpit, under
+/// the menu.
+const GAMEOVER_LAYER: usize = kh_host::hud_layers::layer_index("GameOver");
 /// (IMPL_ER22) The same place for the boss finish's white plate (finish.rs): over the world and the cockpit.
 pub const PLATE_LAYER: usize = GAMEOVER_LAYER;
 
@@ -220,6 +242,11 @@ static PLATE_ON: AtomicBool = AtomicBool::new(false);
 /// the loaded one (MEASURED: slot 9's new-game choice menu stayed up over slot 0's Sora after a load: answering it
 /// would have rebuilt the WRONG character's start).
 static SESSION_LOAD: AtomicBool = AtomicBool::new(false);
+
+/// (LEADER RESET, THE USER 2026-11-02: "Make it so this kind of thing never happens loading from any character after dying as
+/// another character") A new character's HUD half began (`HudHost::new`: a load, the title's load, a new game, a restart):
+/// the shared HUD's next frame rebuilds the command menu and the leader's pieces for him (kh-host `Hud::new_character`).
+static NEW_CHARACTER: AtomicBool = AtomicBool::new(false);
 
 /// (savegate.rs) Every in-session load says so here (no lock is taken: the next HUD frame acts on it).
 pub fn on_session_load() {
@@ -347,6 +374,15 @@ pub fn borrowed() -> bool {
 #[cfg(test)]
 mod erui_borrowed_tests {
     use super::*;
+
+    /// (THE TESTER 2026-11-03: a bare frame in the camp menu) A second in which the whole game stood (no phase ran) does
+    /// not take the HUD off; phases going on without HUD frames for 300 ms (a death, a loading screen) do.
+    #[test]
+    fn a_stall_of_the_whole_game_is_not_sora_gone() {
+        assert!(!frames_stopped(900, 1), "the first phase after a stall: the HUD stays");
+        assert!(!frames_stopped(200, 40), "phases, but not 300 ms yet");
+        assert!(frames_stopped(400, PHASES_STOPPED), "phases went on without his frames: he is gone");
+    }
 
     /// (ERUI) The routing of a borrowed interaction: Start to our HUD (Pause screen), never Start / View to the game;
     /// with our Pause up the whole pad is ours; a window of the game's own keeps its pad; off = as before.
@@ -482,7 +518,16 @@ fn er_hud_phase(control: &Control) {
 /// `erlogser-hud-type.txt` holds the user's value meanwhile). It is the game's own selective switch: what its
 /// "HUD: Off" hides and keeps is the game's rule, and `hud_state` is not touched, so the detection of its menus,
 /// map, graces and cutscenes stays what it was.
-static ER_OPTION: Mutex<(Option<(u8, u8)>, Option<std::path::PathBuf>)> = Mutex::new((None, None));
+static ER_OPTION: Mutex<ErOption> = Mutex::new((None, None));
+/// (the user's value and ours, the marker file)
+type ErOption = (Option<(u8, u8)>, Option<std::path::PathBuf>);
+
+/// The latest step as the HUD frame reads it: Sora's output, the targets, the world's origin.
+pub struct HudStep<'a> {
+    pub out: &'a Output,
+    pub targets: &'a ErTargets,
+    pub origin: Vec3,
+}
 
 /// WHAT hud.er ASKS FOR while Sora's HUD is up (IMPL_ER8_STATE.md):
 /// absent / 0 (the default) = PART BY PART (erhud.rs): Elden Ring's compass, prompts, banners, popups and boss bars
@@ -525,6 +570,14 @@ const DEFAULT_HIDE: &str = crate::erhud::DEFAULT_HIDE;
 /// hud.er.option = 0 | 1 | 2 (one-shot): the game's HUD option is set to this AS THE USER'S OWN VALUE (the IMPL_ER7
 /// build left Off in the mod save; this puts On back without a walk through Elden Ring's menu). 255 = nothing asked.
 static OWN_ASKED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(255);
+
+/// (CAMP-OPTIONS) `hud.er.user_off` (written by the options screen's HUD row): the user's own HUD Off is not held at On.
+static ER_HUD_USER_OFF: AtomicBool = AtomicBool::new(false);
+
+/// (CAMP-OPTIONS) The options screen's HUD row: Off was the user's choice (eroptions.rs, every frame from the settings file).
+pub fn set_er_hud_user_off(off: bool) {
+    ER_HUD_USER_OFF.store(off, Ordering::Relaxed);
+}
 static OWN_KEY: Mutex<Option<OneShot>> = Mutex::new(None);
 
 fn hide_mask(control: &Control) -> u32 {
@@ -576,7 +629,8 @@ fn er_option_phase(mode: ErMode, want: bool) {
     // (the value this mode needs written over the user's own, if any)
     let needed = |own: u8| match mode {
         ErMode::OptionOff if want && own != 0 => Some(0u8),
-        ErMode::Select if want && own == 0 => Some(1u8),
+        // (CAMP-OPTIONS) ... unless the user chose Off on our options screen (Display > HUD): then the game's own Off stands
+        ErMode::Select if want && own == 0 && !ER_HUD_USER_OFF.load(Ordering::Relaxed) => Some(1u8),
         _ => None,
     };
     let stale = if st.0.is_none() { marker.as_ref().filter(|p| p.exists()).and_then(|p| read_marker(p)) } else { None };
@@ -793,9 +847,9 @@ struct Shared {
     backdrop: bool,
 }
 
-/// The overlay layer of the choice menu's backdrop: the cutscene pause menu's (index 11 of `LAYERS`, drawn under the
-/// choice menu's two layers 12 and 13; that menu cannot be open at the same time).
-const BACKDROP_LAYER: usize = 11;
+/// The overlay layer of the choice menu's backdrop: the cutscene pause menu's ("CutscenePause" of `LAYERS`, by name since
+/// INT-F, drawn under the choice menu's two layers "NewGameText" / "NewGameDialog"; that menu cannot be open at the same time).
+const BACKDROP_LAYER: usize = kh_host::hud_layers::layer_index("CutscenePause");
 
 static SHARED: Mutex<Option<Shared>> = Mutex::new(None);
 /// The loader thread's result.
@@ -838,22 +892,6 @@ pub fn set_inventory(inventory: kh_host::hud::Inventory) {
         Some(hud) => *hud.inventory_mut() = inventory,
         None => s.inventory = Some(inventory),
     }
-}
-
-/// (savepoint) Opens the KH3 save-point menu (savepoint.rs: Y at a discovered site of grace). False: the HUD is
-/// not up, or another menu is.
-pub fn open_savepoint(commands: &[kh_ui::savepoint::SavePointCommand], disabled: &[kh_ui::savepoint::SavePointCommand], texts: &[(kh_ui::savepoint::SavePointCommand, &str, &str)]) -> bool {
-    let Ok(mut guard) = SHARED.lock() else { return false };
-    // (no menu of ours on a loading screen)
-    if LOADING.load(Ordering::Relaxed) {
-        return false;
-    }
-    let Some(hud) = guard.as_mut().filter(|s| s.shown).and_then(|s| s.hud.as_mut()) else { return false };
-    let opened = hud.open_savepoint_with(commands, disabled, texts);
-    if opened {
-        MENU_OPEN.store(true, Ordering::Relaxed);
-    }
-    opened
 }
 
 /// (savepoint, IMPL_ER26) Opens the save-point menu with the entries of `kh_host::savepoint_menu` (Save / Select an Area
@@ -959,6 +997,11 @@ impl HudTargets for ErHudTargets<'_> {
         })
     }
 
+    /// (GOOFY) The top of the body, for the red "!": any size of enemy gets it over its head.
+    fn top(&self, id: TargetId) -> Option<Vec3> {
+        self.0.info(id).map(|i| i.position + Vec3::Z * (i.half_height * 2.0))
+    }
+
     /// (HUD2) The gauge reads the game's real HP, which still holds the HP before the hit when Sora's hit event comes
     /// (the bullet lands later): the gauge starts from what it reads, KH3's red lag then runs from there.
     fn hit_prev_hp(&self, _id: TargetId, _hp_after: f32, _damage_dealt: f32) -> Option<i32> {
@@ -996,6 +1039,10 @@ fn load_step(s: &mut Shared, control: &Control) -> bool {
         // (IMPL_ER23B) `hud.glyphs`: the pad set of the button icons (xboxone = default | windows = the generic set as before | ps4)
         if let Some(set) = control.str("hud.glyphs").map(str::trim).filter(|s| ["xboxone", "windows", "ps4"].contains(s)) {
             kh_ui::render::set_pad_glyphs(set);
+        }
+        // (BUTTON-ICONS) `hud.button_icons_lang`: the language of KH3 PC's keyboard glyphs (en default; de es fr it ja ko zh-Hant)
+        if let Some(lang) = control.str("hud.button_icons_lang").map(str::trim).filter(|s| ["en", "de", "es", "fr", "it", "ja", "ko", "zh-Hant"].contains(s)) {
+            kh_ui::glyphs::set_km_language(lang);
         }
         // (IMPL_ER23B) `hud.exp_unit = TEXT`: the unit after an EXP popup's number (default: the game's own "p")
         kh_ui::hud_target::set_exp_unit(control.str("hud.exp_unit").map(str::trim).filter(|s| !s.is_empty() && s.len() <= 8));
@@ -1067,6 +1114,12 @@ static TITLE: Mutex<Option<TitleHud>> = Mutex::new(None);
 /// The title mode is drawing (the per-phase "Sora's frames stopped" rule must not clear it).
 static TITLE_ON: AtomicBool = AtomicBool::new(false);
 
+/// (TITLE-AUDIO) One of our KH3 screens is up on the title (the Load screen, the settings screen, the new game's choices): it
+/// plays KH3's menu sounds itself, so titlemusic.rs does not map the game's sounds under it.
+pub fn title_mode_on() -> bool {
+    TITLE_ON.load(Ordering::Relaxed)
+}
+
 /// What a title-mode frame of the choice menu answers.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TitleChoice {
@@ -1090,6 +1143,7 @@ pub fn title_prepare(control: &Control) {
 /// (IMPL_ER12) ONE TITLE-MODE FRAME OF THE NEW-GAME CHOICE MENU (call once a frame from FRAME_BEGIN while it is wanted;
 /// the caller draws the black behind it). Opens the menu when it is not up.
 pub fn title_choice_frame(control: &Control) -> TitleChoice {
+    crate::remap_er::set_kh_screen(true); // (CAMP-OPTIONS) a KH screen has the input: KH3's default keys the table left free act too
     let Ok(mut guard) = SHARED.lock() else { return TitleChoice::Unavailable };
     let s = guard.get_or_insert_with(Shared::new);
     if !load_step(s, control) {
@@ -1173,6 +1227,85 @@ pub fn title_choice_frame(control: &Control) -> TitleChoice {
     answer
 }
 
+/// (CAMP-OPTIONS, THE USER 2026-11-05: "our new settings menu should also be the one used when selecting settings from the main
+/// menu") ONE TITLE-MODE FRAME OF THE OPTIONS SCREEN (the camp menu's Config alone, eroptions.rs): `open` = it is wanted (opened
+/// when it is not up). Answers true while it is up or being read; false once it has closed (or cannot be shown).
+pub fn title_options_frame(control: &Control, open: bool) -> (bool, bool) {
+    crate::remap_er::set_kh_screen(true); // (CAMP-OPTIONS) a KH screen has the input: KH3's default keys the table left free act too
+    let Ok(mut guard) = SHARED.lock() else { return (false, false) };
+    let s = guard.get_or_insert_with(Shared::new);
+    if !load_step(s, control) {
+        return (!s.failed, false);
+    }
+    let Ok(mut title_guard) = TITLE.lock() else { return (false, false) };
+    let t = title_guard.get_or_insert_with(|| {
+        let sora = Sora::new(kh_core::SORA_PARAMS, kh_core::Pose { position: Vec3::ZERO, yaw: 0.0 });
+        let out = sora.output();
+        TitleHud { menu_input: MenuInput::new(), held_before: PadButtons::NONE, last: None, pending: 0.0, reader: crate::pad::Reader::default(), sora, out, snapshot: UiSnapshot::default(), targets: ErTargets::new(crate::coords::Frame::at(Vec3::ZERO), crate::ermap::Params::default()) }
+    });
+    let Some(output) = kh_er_render::hud::output_size().filter(|(w, h)| *w >= 64 && *h >= 64) else { return (true, false) };
+    let resized = output != s.output;
+    s.output = output;
+    let started = Instant::now();
+    let dt = t.last.replace(started).map_or(1.0 / 60.0, |at| started.duration_since(at).as_secs_f32()).clamp(0.0, 0.25);
+    let (mut stick, mut held) = inputs::keyboard();
+    if let Some(pad) = t.reader.read() {
+        stick += pad.left;
+        held = PadButtons(held.0 | pad.buttons.0);
+    }
+    let pad = PadState::from_held(held, t.held_before);
+    t.held_before = held;
+    t.menu_input.step(&Input { move_stick: stick.clamp_length_max(1.0), ..Input::default() }.with_pad(pad), dt.max(0.001));
+    t.pending += dt;
+    let mut ticks = 0;
+    while t.pending + 1.0e-5 >= 1.0 / 60.0 && ticks < 6 {
+        t.pending -= 1.0 / 60.0;
+        ticks += 1;
+    }
+    if ticks == 6 {
+        t.pending = 0.0;
+    }
+    let (Some(hud), Some(layers)) = (s.hud.as_mut(), s.layers.as_mut()) else { return (false, false) };
+    crate::eroptions::install_host(hud, control, false);
+    crate::eroptions::kh_block(hud);
+    if hud.options_host.is_none() {
+        return (false, false);
+    }
+    let mut opened = false;
+    hud.settings_only = true; // (the title: nothing of the in-game HUD)
+    let options = kh_er_render::hud::HudOptions { on: true, gamma: control.on("hud.gamma"), linear_scale: control.f32("hud.scrgb").unwrap_or(1.0), opacity: 1.0 };
+    if options != s.options || !TITLE_ON.load(Ordering::Relaxed) {
+        kh_er_render::hud::set_options(options);
+        s.options = options;
+    }
+    TITLE_ON.store(true, Ordering::Relaxed);
+    if open && !hud.options_up() {
+        t.menu_input.clear();
+        if hud.open_options() {
+            opened = true;
+            erlog!("options: OUR SETTINGS SCREEN IS UP ON THE TITLE (Elden Ring's SYSTEM; no character is loaded: the per-character rows are not there)");
+        } else {
+            return (false, false);
+        }
+    }
+    let (root, _) = stage_root(output.0 as f32, output.1 as f32);
+    let (pressed, nav) = t.menu_input.take();
+    hud.gameover_on = false;
+    hud.set_cutscene(false);
+    hud.frame(&mut Frame { snapshot: &t.snapshot, sora: &t.sora, events: &[], state: t.out.state, step_dt: 1.0 / 60.0, play_seconds: 0, targets: &ErHudTargets(&t.targets), to_view: same, view: None, words: &[], dt, ticks, pressed, nav });
+    crate::fx::ui_sounds(hud.take_sounds().into_iter().map(|(command, _)| command).collect());
+    if let Some(pack) = PACK.lock().ok().and_then(|p| p.clone()) {
+        crate::fx::title_pump(&pack, dt, control.f32("snd.vol").unwrap_or(-6.0));
+    }
+    let closed = hud.take_options_closed();
+    layers.update(hud, &root, (output.0 as f32, output.1 as f32), resized, &mut |index, event| match event {
+        LayerEvent::Show { rect, rgba, dirty } => kh_er_render::hud::show_layer(index, rect, &rgba, dirty),
+        LayerEvent::Hide => kh_er_render::hud::hide_layer(index),
+    });
+    // (still up while the camp menu's own closing plays: the flow is idle again only once it has)
+    ((!closed && hud.options_up()) || hud.movie("CampMenu").is_some(), opened)
+}
+
 /// (IMPL_ER15) What a title-mode frame of KH3's Load screen answers.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TitleLoad {
@@ -1184,14 +1317,19 @@ pub enum TitleLoad {
     Open,
     /// A used slot was decided (no question, as in KH3): the screen shows "Loading...".
     Load(usize),
+    /// KH3's Delete confirmed on a slot (the Load screen's Triangle / Y, or the delete-only list's decide): the screen shows
+    /// "Deleting..." until [`title_delete_done`].
+    Delete(usize),
     /// B: the screen is gone.
     Cancel,
 }
 
 /// (IMPL_ER15) ONE TITLE-MODE FRAME OF KH3'S LOAD SCREEN (call once a frame from FRAME_BEGIN while it is wanted; the
 /// caller draws the black behind it and carries the load out). `open`: open the screen when it is not up (false
-/// after a slot was decided: the screen then only shows its "Loading..." message).
-pub fn title_load_frame(control: &Control, open: bool) -> TitleLoad {
+/// after a slot was decided: the screen then only shows its "Loading..." message). `delete_only` (NG delete): the screen
+/// opens as the new game's delete list (KH3's Delete on A and Y, nothing loads; the caller carries the delete out).
+pub fn title_load_frame(control: &Control, open: bool, delete_only: bool) -> TitleLoad {
+    crate::remap_er::set_kh_screen(true); // (CAMP-OPTIONS) a KH screen has the input: KH3's default keys the table left free act too
     let Ok(mut guard) = SHARED.lock() else { return TitleLoad::Unavailable };
     let s = guard.get_or_insert_with(Shared::new);
     if !load_step(s, control) {
@@ -1238,10 +1376,14 @@ pub fn title_load_frame(control: &Control, open: bool) -> TitleLoad {
     if open && !hud.saveload_open() {
         t.menu_input.clear();
         hud.saveload_background = true;
-        hud.set_saveload_options(false, false, false); // (SV) at the title: no Delete (the title's own flow carries only a load)
+        // (SAVE-DELETE) at the title's Load: KH3's Delete as on the save point's screens (Triangle / Y, the same question,
+        // the same `slots::delete_slot`: titleload.rs); no load question (as in KH3's title). (NG delete) the new game's
+        // list: Delete only
+        hud.set_saveload_options(delete_only || screen_delete_on(control), false, false);
+        hud.set_saveload_delete_only(delete_only);
         let slots = ui_slots();
         if hud.open_load(&slots) {
-            erlog!("saveload: KH3'S LOAD SCREEN IS UP ON THE TITLE ({} of {} slots in use; no world is loaded)", slots.iter().filter(|s| s.state == kh_ui::saveload::SlotState::Used).count(), slots.len());
+            erlog!("saveload: KH3'S {} IS UP ON THE TITLE ({} of {} slots in use; no world is loaded)", if delete_only { "DELETE LIST (a new game needs a free slot)" } else { "LOAD SCREEN" }, slots.iter().filter(|s| s.state == kh_ui::saveload::SlotState::Used).count(), slots.len());
         } else {
             return TitleLoad::Unavailable;
         }
@@ -1257,6 +1399,7 @@ pub fn title_load_frame(control: &Control, open: bool) -> TitleLoad {
     }
     let answer = match hud.take_saveload_result() {
         Some(kh_ui::saveload::SaveLoadResult::Load(slot)) => TitleLoad::Load(slot),
+        Some(kh_ui::saveload::SaveLoadResult::Delete(slot)) => TitleLoad::Delete(slot),
         Some(kh_ui::saveload::SaveLoadResult::Cancel) => TitleLoad::Cancel,
         _ => TitleLoad::Open,
     };
@@ -1267,8 +1410,20 @@ pub fn title_load_frame(control: &Control, open: bool) -> TitleLoad {
     answer
 }
 
+/// (NG delete; SAVE-DELETE) The title's Load screen / delete list was told how its delete went: done = the rows anew (the slot shows NO DATA) and
+/// the access-done sound; not done = KH3's failure message.
+pub fn title_delete_done(done: bool) {
+    let Ok(mut guard) = SHARED.lock() else { return };
+    let Some(hud) = guard.as_mut().and_then(|s| s.hud.as_mut()) else { return };
+    if done {
+        hud.set_saveload_slots(&ui_slots(), None);
+    }
+    hud.set_saveload_busy(if done { kh_ui::saveload::Progress::Done } else { kh_ui::saveload::Progress::Failed });
+}
+
 /// (IMPL_ER12) The title mode ends: the HUD's layers are taken off the screen (the caller's own cover layer is its own).
 pub fn title_end() {
+    crate::remap_er::set_kh_screen(false); // (CAMP-OPTIONS)
     if !TITLE_ON.swap(false, Ordering::Relaxed) {
         return;
     }
@@ -1277,6 +1432,8 @@ pub fn title_end() {
             if let Some(hud) = s.hud.as_mut() {
                 hud.close_newgame_choice();
                 hud.close_saveload(); // (IMPL_ER15) the title's Load screen
+                hud.new_character(); // (LEADER RESET) the title's frames ran the HUD on an empty snapshot: nothing of them stays
+                hud.settings_only = false; // (CAMP-OPTIONS)
             }
             for index in 0..kh_host::hud_layers::LAYERS.len() {
                 kh_er_render::hud::hide_layer(index);
@@ -1328,6 +1485,7 @@ impl HudHost {
         *PACK.lock().unwrap_or_else(|e| e.into_inner()) = Some(pack.to_path_buf());
         STOP.store(false, Ordering::Relaxed);
         // (a new Sora: no menu of the one before holds anything)
+        NEW_CHARACTER.store(true, Ordering::Relaxed); // (LEADER RESET)
         MENU_OPEN.store(false, Ordering::Relaxed);
         GAMEOVER_HOLD.store(false, Ordering::Relaxed);
         GAMEOVER_MENU.store(false, Ordering::Relaxed);
@@ -1346,8 +1504,14 @@ impl HudHost {
         // (the key repeat runs on the frame's real time: the game's own delta is 0 while we hold its speed)
         let dt = self.last.map_or(1.0 / 60.0, |at| at.elapsed().as_secs_f32()).clamp(0.001, 0.1);
         self.menu_input.step(&input, dt);
+        // (THE USER 2026-11-03: "right stick scroll") the right stick up / down (and Page Up / Page Down) on the descriptions
+        // that run past their box; Elden Ring's camera never sees it while a menu of ours is up (zeroed below, masked)
+        self.menu_input.step_scroll((right_stick.y + inputs::scroll_keys()).clamp(-1.0, 1.0), dt);
         #[cfg(feature = "party")]
         crate::unlock::note_pad(stick, held); // (ER party S8) Y talks while the prompt is up; a talk line takes the pad (after the HUD saw it: A goes on)
+        #[cfg(feature = "party")]
+        crate::moogle::note_pad(held); // (P8) Y talks to the Moogle while his prompt is up (hidden from Sora's situation command)
+        crate::gestureprompt::note_pad(held); // (EMOTE-PROMPTS) Y does a known gesture's event while its command is the first Y command
         crate::conv::note_pad(stick, right_stick, held); // (CV1) a conversation holds the leader (after the HUD saw the pad: the bubble has A / B / the D-pad)
         if menu_open() || GAMEOVER_MENU.load(Ordering::Relaxed) {
             *stick = Vec2::ZERO;
@@ -1356,11 +1520,10 @@ impl HudHost {
         }
     }
 
-    /// (hud) hook at the end of `pre_physics`' simulation part: one HUD frame from the latest step.
-    #[allow(clippy::too_many_arguments)]
+    /// (hud) hook at the end of `pre_physics`' simulation part: one HUD frame from the latest step (`HudStep`).
     /// `down` (DTH): the leader whose death wants KH3's game over (death.rs `Flow::gameover`: whoever leads; never AI Sora
     /// knocked out while a friend leads, never a scripted death).
-    pub fn frame(&mut self, sora: &mut Sora, out: &Output, targets: &ErTargets, origin: Vec3, control: &Control, ui: ErUi, down: Option<kh_host::party::PartyChara>) {
+    pub fn frame(&mut self, sora: &mut Sora, HudStep { out, targets, origin }: HudStep<'_>, control: &Control, ui: ErUi, down: Option<kh_host::party::PartyChara>) {
         let on = control.on("hud.kh");
         let gameover_on = on && control.on("gameover.kh") && !scripted_death();
         if !gameover_on && GAMEOVER_HOLD.swap(false, Ordering::Relaxed) {
@@ -1385,11 +1548,11 @@ impl HudHost {
             };
             *SCREEN_ASKED.lock().unwrap_or_else(|e| e.into_inner()) = Some((job, asked));
         }
-        // (IMPL_ER15) the game-over menu's Continue: the game's own load of the session's slot, asked here (outside the lock)
+        // (IMPL_ER15) the game-over menu's Continue: the game's own load of the slot it chose (CONT: the latest save), asked here (outside the lock)
         if let Some(slot) = GO_LOAD.lock().ok().and_then(|mut a| a.take()) {
             match crate::slots::load_slot(slot) {
                 Ok(()) => {
-                    erlog!("game over: THE LAST SAVE (slot {slot}) IS LOADED AGAIN by the game's own load; the black plate stays until the loaded Sora has the picture");
+                    erlog!("game over: THE LATEST SAVE (slot {slot}) IS LOADED by the game's own load (the Load screen's route); the black plate stays until the loaded character has the picture");
                     self.reload_deadline = Some(now_ms() + 25_000);
                 }
                 Err(why) => {
@@ -1407,10 +1570,10 @@ impl HudHost {
         // (DTH) WHOEVER LEADS: the down leader comes from the host's death flow (before: Sora's own Die state, also when AI
         // Sora was knocked out while a friend led, or the party's leader-down feed); a friend's feet from the party's feed
         #[cfg(feature = "party")]
-        let feet = crate::partyui::leader_feet(control);
+        let feet = crate::partyui::leader_feet(control).unwrap_or(out.position);
         #[cfg(not(feature = "party"))]
-        let feet: Option<Vec3> = None;
-        let fallen: Option<(kh_host::party::PartyChara, Vec3)> = down.filter(|c| *c != kh_host::party::PartyChara::Sora).map(|c| (c, feet.unwrap_or(out.position)));
+        let feet = out.position;
+        let fallen: Option<(kh_host::party::PartyChara, Vec3)> = down.filter(|c| *c != kh_host::party::PartyChara::Sora).map(|c| (c, feet));
         if gameover_on && s.hud.is_some() && down.is_some() && !self.died {
             self.died = true;
             GAMEOVER_CHOSEN.store(false, Ordering::Relaxed);
@@ -1479,6 +1642,7 @@ impl HudHost {
         let started = Instant::now();
         let dt = self.last.replace(started).map_or(1.0 / 60.0, |at| started.duration_since(at).as_secs_f32()).clamp(0.0, 0.25);
         FRAME_AT.store(now_ms(), Ordering::Relaxed);
+        PHASES_SINCE_FRAME.store(0, Ordering::Relaxed);
         // ELDEN RING'S FULL-SCREEN MENUS (IMPL_ER8): while its main menu, map, grace menu, a cutscene or a loading screen
         // has the screen (hud_state 1 or 0 with the input) Sora's HUD fades out (0.15 s) and comes back after (0.25 s);
         // a popup (hud_state 2: an item window, a tutorial) leaves it. hud.over_menus = 1: the old behaviour.
@@ -1497,6 +1661,11 @@ impl HudHost {
             s.opacity = 0.0;
         }
         LOADING.store(loading, Ordering::Relaxed);
+        // (GOS, THE USER 2026-11-03: "silence all music and other SFX when on death screen" / "(except for menu SFX, dont
+        // silence that)") the game over's silence, asked every HUD frame (gosound.rs): from the death (the hold) through the
+        // carried-out choice to the last plate; the game's loading screen takes the picture away. Before this frame's menu
+        // sounds go out, so the loop SE begun at the death above is spared.
+        crate::gosound::ask(control, gameover_on && (gameover_holds() || carried().is_some() || s.hud.as_ref().is_some_and(|h| h.gameover_active())), !loading);
         // (HUD2 round 2, the user's picture: our OBTAINED popup dimmed under Elden Ring's pickup window) while the popup is
         // up the overlay is never faded for a menu of the game's: KH3's popup is on top, fully drawn
         let covered = loading || if OBTAINED_UP.load(Ordering::Relaxed) { false } else if ui.cutscene { !cutscene_menu } else { ui.menu && ui.hud_state != 2 && !control.on("hud.over_menus") && !crate::conv::story_bubble_shown() /* (CV3) a driven story rest whose talk is our bubble: shown */ };
@@ -1537,6 +1706,13 @@ impl HudHost {
                 hud.close_newgame_choice();
                 erlog!("newgame: a load was asked for while the opening's choice menu was up: the menu is closed (the loaded character is another one)");
             }
+            hud.new_character(); // (LEADER RESET) nothing of the old session's menu meets the loaded character
+        }
+        // (LEADER RESET) a new character's first HUD frame: his command menu and pieces from scratch, whoever he follows (the
+        // shared HUD also does it by itself for every change of leader: kh-host `Hud::set_leader`)
+        if NEW_CHARACTER.swap(false, Ordering::Relaxed) {
+            hud.new_character();
+            erlog!("hud: a new character: the command menu and the leader's HUD pieces are rebuilt for him");
         }
         if !hud.paused() {
             s.play_seconds += dt as f64;
@@ -1550,7 +1726,8 @@ impl HudHost {
         let load_screen = screens && control.flag("saveload.gameover") != Some(false);
         // (savegate) with `save.points_only` Continue and Load both load the last save; Title Screen leaves without saving
         // (IMPL_ER14: with the Load screen the Load button is there for every character)
-        hud.gameover_disabled = if crate::savegate::points_only() || load_screen { let mut off = Vec::new(); if control.flag("gameover.title") == Some(false) /* (IMPL_ER23A) live by default */ { off.push(GameOverButton::TitleScreen); } if !crate::savegate::points_only() && !load_screen { off.push(GameOverButton::Load); } off } else { vec![GameOverButton::Load, GameOverButton::TitleScreen] };
+        hud.gameover_disabled = if crate::savegate::points_only() || load_screen { let mut off = Vec::new(); if control.flag("gameover.title") == Some(false) /* (IMPL_ER23A) live by default */ { off.push(GameOverButton::TitleScreen); }
+            if !crate::savegate::points_only() && !load_screen { off.push(GameOverButton::Load); } off } else { vec![GameOverButton::Load, GameOverButton::TitleScreen] };
         // THE SAVE SCREEN out of the save-point menu's Save (asked for by savepoint.rs earlier in this frame)
         if WANT_SAVE_SCREEN.swap(false, Ordering::Relaxed) {
             hud.saveload_background = false;
@@ -1612,6 +1789,11 @@ let (pressed, nav) = if loading || (ui.menu && !borrowed() && !(cutscene_menu &&
         if control.on("hud.perf") && (pressed != PadButtons::NONE || !nav.is_empty()) {
             erlog!("hudperf: {} ms | INPUT pressed {:?} nav {:?} (dt {:.1} ms, {ticks} stage tick(s))", now_ms(), pressed, nav, dt * 1000.0);
         }
+        // (THE USER 2026-11-03: "right stick scroll") the right stick's description lines, to a menu of ours only
+        let help_lines = self.menu_input.take_scroll();
+        if !loading && menu_open() {
+            hud.scroll_help(help_lines);
+        }
         // (ER party S6) the party into the HUD: the friends' slots, the leader's main slot (shrink / grow), the camp menu's
         // party pages, Customize's AI list, the Party Formation screen; a friend leading: his command menu over Sora's
         #[cfg(feature = "party")]
@@ -1624,12 +1806,18 @@ let (pressed, nav) = if loading || (ui.menu && !borrowed() && !(cutscene_menu &&
         // the first is the green bar Y answers, the others stack under it. `prompt.kh = 0`: the Save alone, as SP2 had it.
         if control.flag("prompt.kh") != Some(false) {
             let er_prompt = crate::erprompt::er_up().then(|| crate::erprompt::shown().and_then(|s| s.text));
-            let offers = crate::erprompt::YOffers { save: crate::savepoint::prompt_shown(), party_talks: crate::conv::party_talks_offered(), er_prompt };
+            let offers = crate::erprompt::YOffers { save: crate::savepoint::prompt_shown(), party_talks: crate::conv::party_talks_offered(), er_prompt, gesture: crate::gestureprompt::offer() /* (EMOTE-PROMPTS) */ };
             let list = crate::erprompt::reactions(&offers);
             crate::erprompt::log_change(&list);
             hud.set_host_reactions(&list);
+            // (INTERACT-MARK) KH3's green reaction-target marker on what the first of them is about (reactmark.rs); `prompt.mark = 0`: none
+            let space = crate::coords::Frame::at(origin);
+            let mark = (control.flag("prompt.mark") != Some(false)).then(|| crate::reactmark::target(offers.save, &crate::conv::talk_owners(), offers.er_prompt.is_some(), |p| space.pos_er_to_kh(p))).flatten();
+            crate::reactmark::log_change(mark, list.first().map(|r| if r.name.is_empty() { format!("command kind {}", r.kind.unwrap_or(-1)) } else { r.name.clone() }).as_deref());
+            hud.set_host_reaction_target(mark);
         } else {
             hud.set_host_command(crate::savepoint::prompt_shown().then_some(kh_host::hud::Hud::SAVE_COMMAND));
+            hud.set_host_reaction_target(None); // (INTERACT-MARK)
         }
         hud.frame(&mut Frame { snapshot: led.as_ref().unwrap_or(&self.keep.snapshot), sora, events: &out.events, state: out.state, step_dt: 1.0 / 60.0, play_seconds: s.play_seconds as u32, targets: &ErHudTargets(targets), to_view: same, view, words: &words, dt, ticks, pressed, nav });
         hud.apply_actions(sora);
@@ -1638,7 +1826,7 @@ let (pressed, nav) = if loading || (ui.menu && !borrowed() && !(cutscene_menu &&
         crate::partyui::hud_after(hud, control); // (ER party S6) the camp menu's party edits, a Party Formation change
         // (IMPL_ER15) KH3'S GAME-OVER SCENE: the plate, the void, the choice, the way back
         let born = self.born;
-        if let Some(deadline) = gameover_scene(hud, out, control, ui, dt, loading, s.opacity, born) {
+        if let Some(deadline) = gameover_scene(hud, out, control, ui, SceneFrame { dt, loading, opacity: s.opacity, born }) {
             self.reload_deadline = deadline;
         }
         point_load_cover(control, loading, born); // (SV)
@@ -1738,8 +1926,13 @@ let (pressed, nav) = if loading || (ui.menu && !borrowed() && !(cutscene_menu &&
                 None => {}
             }
         }
-        // (IMPL_ER21) KH3's Config screen drives Elden Ring's options (erconfig.rs; `config.kh = 0`: as before)
-        crate::erconfig::hud_frame(hud, control);
+        // (CAMP-OPTIONS) Elden Ring's options screen in KH3's look (eroptions.rs; `config.tabs = 0`: IMPL_ER21's KH3 rows)
+        if crate::eroptions::on(control) {
+            crate::eroptions::ingame(hud, control, ui.menu);
+        } else {
+            // (IMPL_ER21) KH3's Config screen drives Elden Ring's options (erconfig.rs; `config.kh = 0`: as before)
+            crate::erconfig::hud_frame(hud, control);
+        }
         if hud.take_config_change() {
             use kh_core::config::ConfigOption as O;
             let config = *hud.config();
@@ -1778,7 +1971,7 @@ let (pressed, nav) = if loading || (ui.menu && !borrowed() && !(cutscene_menu &&
             if backdrop {
                 let (w, h) = (output.0 as usize, output.1 as usize);
                 let mut rgba = vec![0u8; w * h * 4];
-                for px in rgba.chunks_exact_mut(4) {
+                for px in rgba.as_chunks_mut::<4>().0 {
                     px[3] = 255;
                 }
                 kh_er_render::hud::show_layer(BACKDROP_LAYER, (0, 0, w, h), &rgba, None);
@@ -1808,7 +2001,7 @@ let (pressed, nav) = if loading || (ui.menu && !borrowed() && !(cutscene_menu &&
         GAMEOVER_MENU.store(hud.gameover_open(), Ordering::Relaxed);
         // (IMPL_ER21) "Title Screen" of the camp menu (`menu.title = 0`: no such entry; the save-point menu's too)
         hud.title_entry = control.flag("menu.title") != Some(false);
-        crate::boc::camp(control, hud); // (IMPL_ER59) the Outfits entry (after talking to Boc), a choice made there
+        crate::boc::camp(control, hud); // (IMPL_ER59) the outfits Boc's screen offers, a choice made there ((THE USER 2026-11-02) no camp entry)
         if hud.take_title_request() {
             let asked = crate::savegate::quit_to_title("the camp menu's Title Screen");
             erlog!("ui: the Kingdom Hearts menu's TITLE SCREEN entry, confirmed: {}", if asked { "Elden Ring's title screen is asked for; NOTHING IS SAVED (the last Save at a save point stands)" } else { "the game's title request could not be made" });
@@ -1835,7 +2028,7 @@ let (pressed, nav) = if loading || (ui.menu && !borrowed() && !(cutscene_menu &&
         // (IMPL_ER14) LOAD = KH3's Load screen (a B there brings the game-over menu back: he is still dead)
         if gameover_choice == Some(GameOverButton::Load) && load_screen {
             hud.saveload_background = false;
-            hud.set_saveload_options(control.flag("saveload.delete") != Some(false), false, false); // (SV) Delete; no question (KH3)
+            hud.set_saveload_options(screen_delete_on(control), false, false); // (SV) Delete; no question (KH3)
             if hud.open_load(&ui_slots()) {
                 erlog!("game over: Load chosen: THE LOAD SCREEN is up (the Tarnished is kept alive meanwhile)");
                 gameover_choice = None;
@@ -1852,6 +2045,16 @@ let (pressed, nav) = if loading || (ui.menu && !borrowed() && !(cutscene_menu &&
                 false
             } else if choice == GameOverButton::TitleScreen {
                 crate::savegate::quit_to_title("game over: Title Screen")
+            } else if choice == GameOverButton::Continue {
+                // (CONT) the plain menu's Continue: the latest save too (slots.rs), else the session's slot as before
+                let (latest, dates) = crate::slots::latest_slot();
+                match latest.map(crate::slots::load_slot) {
+                    Some(Ok(())) => {
+                        erlog!("game over: Continue: THE LATEST SAVE (slot {latest:?}) is loaded ({dates})");
+                        true
+                    }
+                    _ => crate::savegate::reload("game over: Continue"),
+                }
             } else {
                 crate::savegate::reload("game over: Continue")
             };
@@ -1888,10 +2091,11 @@ let (pressed, nav) = if loading || (ui.menu && !borrowed() && !(cutscene_menu &&
             let sora_panel = Some((hud.camp_panels(), hud.camp_member()));
             #[cfg(not(feature = "party"))]
             let sora_panel = None;
-            crate::portrait::frame(control, hud.movie("CampMenu"), &root, output, dt, pack.as_deref(), camp, sora_panel);
+            let picture = crate::portrait::CampPicture { movie: hud.movie("CampMenu"), root: &root, output, dt, pack: pack.as_deref(), camp };
+            crate::portrait::frame(control, picture, sora_panel);
             // (ER party S4) the friends' pictures on their panels (their UI actors' captures and lights, the eyes open)
             #[cfg(feature = "party")]
-            crate::partydraw::camp(control, hud.movie("CampMenu"), &root, output, dt, pack.as_deref(), hud.camp_panels(), hud.camp_member(), camp);
+            crate::partydraw::camp(control, picture, hud.camp_panels(), hud.camp_member());
             crate::portrait::menu_trace(hud.camp_trace(), dt);
         }
         let pictures = pictures_started.elapsed().as_secs_f64();
@@ -1952,12 +2156,19 @@ fn scene_key(control: &Control) -> bool {
     control.flag("gameover.scene") != Some(false)
 }
 
+/// (IMPL_ER15) The frame as the game-over scene reads it: its time, the game's loading, the plate's opacity, when this Sora began.
+struct SceneFrame {
+    dt: f32,
+    loading: bool,
+    opacity: f32,
+    born: Instant,
+}
+
 /// (IMPL_ER15) KH3'S GAME-OVER SCENE, one frame (after the shared HUD's frame): the plate over the world and the cockpit
 /// (under the menu), the void (the renderer clears the picture to black and draws the posed Sora), the menu's choice
 /// carried out, and the way back: the plate stays black until the NEW Sora has the picture, then leaves in 0.5 s.
 /// `Some(deadline)`: the caller's "nothing came of the load" deadline is set / cleared.
-#[allow(clippy::too_many_arguments)]
-fn gameover_scene(hud: &mut Hud, out: &Output, control: &Control, ui: ErUi, dt: f32, loading: bool, opacity: f32, born: Instant) -> Option<Option<u64>> {
+fn gameover_scene(hud: &mut Hud, out: &Output, control: &Control, ui: ErUi, SceneFrame { dt, loading, opacity, born }: SceneFrame) -> Option<Option<u64>> {
     use kh_ui::gameover::GameOverResult as R;
     let mut deadline = None;
     // ---- the way back: the choice was carried out before this Sora began, and he has the picture now
@@ -1996,7 +2207,7 @@ fn gameover_scene(hud: &mut Hud, out: &Output, control: &Control, ui: ErUi, dt: 
             R::Load => {
                 // (the movie's own dark backdrop: the list is alone on the screen, as in KH3; the void waits under it)
                 hud.saveload_background = true;
-                hud.set_saveload_options(control.flag("saveload.delete") != Some(false), false, false); // (SV) Delete; no question (KH3)
+                hud.set_saveload_options(screen_delete_on(control), false, false); // (SV) Delete; no question (KH3)
                 if hud.open_load(&ui_slots()) {
                     erlog!("game over: Load chosen: THE LOAD SCREEN is up over the void (B brings the menu back)");
                 } else {
@@ -2024,13 +2235,19 @@ fn gameover_scene(hud: &mut Hud, out: &Output, control: &Control, ui: ErUi, dt: 
             }
             _ => {
                 // CONTINUE (and Retry / Prepare & Retry under `gameover.retry = load`) = the last save is loaded again
-                match crate::savegate::current_slot().filter(|s| *s >= 0) {
+                // (CONT, THE USER 2026-11-03: "make 'continue' simply load the latest save game as if it was selected from
+                // load game") ... THE LATEST SAVE OF ALL TEN SLOTS (slots.rs `latest_of`: the slot whose save was written
+                // last), by the Load screen's own route (slots::load_slot, at the next frame); before: always the session's
+                // slot (still the fallback when no listed slot has a dated save)
+                let session = crate::savegate::current_slot();
+                let (latest, dates) = crate::slots::latest_slot();
+                match crate::slots::continue_slot(latest, session) {
                     Some(slot) => {
-                        erlog!("game over: {result:?} chosen: the last save of slot {slot} is asked for at the next frame");
-                        *GO_LOAD.lock().unwrap_or_else(|e| e.into_inner()) = Some(slot as usize);
+                        erlog!("game over: {result:?} chosen: {} slot {slot} is asked for at the next frame (the session's slot {session:?}; {dates})", if latest == Some(slot) { "THE LATEST SAVE:" } else { "no dated save: the session's" });
+                        *GO_LOAD.lock().unwrap_or_else(|e| e.into_inner()) = Some(slot);
                     }
                     None => {
-                        erlog!("game over: {result:?} chosen: the session's slot is not known: Elden Ring's own death and respawn follow instead");
+                        erlog!("game over: {result:?} chosen: no save is known ({dates}; the session's slot {session:?}): Elden Ring's own death and respawn follow instead");
                         RETRY_RESPAWN.store(true, Ordering::Relaxed);
                         GAMEOVER_HOLD.store(false, Ordering::Relaxed);
                     }
@@ -2182,7 +2399,10 @@ pub fn er_phase(control: &Control) {
     let Some(s) = guard.as_mut() else { return };
     let now = now_ms();
     // Sora's frames stopped (he is gone: a death, a loading screen, another mode): nothing of ours stays on screen.
-    if s.shown && now.saturating_sub(FRAME_AT.load(Ordering::Relaxed)) > 300 {
+    // (THE TESTER 2026-11-03) ... only when the game's phases went on without them (`PHASES_SINCE_FRAME`), not after a
+    // stall of the whole game (it left a bare frame in an open menu)
+    let phases = PHASES_SINCE_FRAME.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+    if s.shown && frames_stopped(now.saturating_sub(FRAME_AT.load(Ordering::Relaxed)), phases) {
         kh_er_render::hud::clear();
         if let Some(layers) = s.layers.as_mut() {
             layers.invalidate();

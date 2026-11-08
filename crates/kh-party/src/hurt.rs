@@ -387,7 +387,7 @@ fn play(p: &mut NpcPawn, k: Pick, blend: f32) {
 /// damage.rs Setup; the friends' Small(index, variant) 0x1412646C0). kh-react's own flag flips on every hit since the
 /// pawn was made (its first hit would show the variant).
 pub fn kh3_variant(r: &kh_react::EnemyReaction) -> bool {
-    r.hits() % 2 == 0
+    r.hits().is_multiple_of(2)
 }
 
 /// The movement component follows the reaction's body: walking when it is on a floor, falling in the air (the pawn's

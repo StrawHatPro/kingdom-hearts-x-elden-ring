@@ -113,7 +113,13 @@ impl FriendLead {
         rt.spawn_one(PartyChara::Donald, Vec3::new(100.0, 0.0, 0.0), 0.0);
         rt.spawn_one(PartyChara::Goofy, Vec3::new(0.0, 100.0, 0.0), 0.0);
         rt.leader = rt.id(chara);
-        let mut f = FriendLead { rt, body: Default::default(), sora: real_sora(Vec3::new(0.0, -100.0, 0.15)), chara, world: kh_core::test_world::TestWorld::floor() };
+        // (HUD-REVIVE) the pad on him, as lead.rs's leader switch gives it (`set_pad`): the member the player drives; a downed
+        // AI ally gets up when the combat ends, the leader stays down (his KO is the game over)
+        let sora = real_sora(Vec3::new(0.0, -100.0, 0.15));
+        if let Some(id) = rt.leader {
+            rt.party.set_pad(id, Some(sora.tuning()));
+        }
+        let mut f = FriendLead { rt, body: Default::default(), sora, chara, world: kh_core::test_world::TestWorld::floor() };
         f.views();
         f
     }

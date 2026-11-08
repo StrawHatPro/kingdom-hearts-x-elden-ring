@@ -24,6 +24,44 @@ use crate::rng::XorShift;
 use crate::routes::{pick_voice, Context, Language, Resolved, Routes};
 use crate::rules::RULES;
 
+/// How a sound asset is started: its place, what it follows, and the trigger's mix.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AssetPlay {
+    pub position: Option<Vec3>,
+    pub anchor: Option<Anchor>,
+    pub volume: f32,
+    pub pitch: f32,
+    pub fade_in: f32,
+}
+
+impl AssetPlay {
+    /// At the given place, at full volume and normal pitch, with no fade-in.
+    pub fn at(position: Option<Vec3>, anchor: Option<Anchor>) -> AssetPlay {
+        AssetPlay { position, anchor, volume: 1.0, pitch: 1.0, fade_in: 0.0 }
+    }
+}
+
+/// One simulation step of the motion sounds (the detector of spec 4.2). `bone`: world position of a bone.
+#[derive(Clone, Copy)]
+pub struct AutoSeTick<'a> {
+    pub dt: f32,
+    pub frame: &'a BoneFrame,
+    pub surface: u32,
+    pub anim: Option<(&'a str, f32)>,
+    pub listener: &'a Listener,
+    pub bone: &'a dyn Fn(&str) -> Option<Vec3>,
+}
+
+/// A voice line asked of an outfit's table (ER77): the seam handle, why, the seam name, the KH3 line and its anim.
+#[derive(Clone, Copy)]
+struct OutfitVoiceAsk<'a> {
+    handle: Option<u32>,
+    cause: &'a str,
+    name: &'a str,
+    kh3_path: &'a str,
+    anim: Option<&'a str>,
+}
+
 /// What a 3D sound follows. The host resolves it to a point each step.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Anchor {
@@ -123,10 +161,14 @@ pub struct Engine {
     /// (ER77) The worn outfit's own voice (an index of `Pack::outfit_voices`): every voice line goes through its table.
     voice_outfit: Option<usize>,
     picker: crate::outfit::Picker,
+    /// (MIMIC-BOSS hotfix 3, MB3-AUDIO) A Sora copy's own outfit-voice picker, by driver scope (`picker` is the KH3 world's):
+    /// his combo steps and his no-repeat memory are his, so his lines never move the player's combo voice on, nor his the copy's.
+    copy_pickers: HashMap<u32, crate::outfit::Picker>,
     /// The engine clock (sum of the update steps), s.
     clock: f64,
     /// The outfit voices started since the last update: (the KH3 line, key, how specific the match was).
-    outfit_step: Vec<(String, SoundKey, u8)>,
+    /// (MIMIC-BOSS hotfix 3, MB3-AUDIO) Keyed by the driver scope too: a copy's line never stands in for the player's.
+    outfit_step: Vec<(u32, String, SoundKey, u8)>,
     /// (party stream E) The party members' own audio state, by member index (0 Donald, 1 Goofy).
     party: Vec<Option<PartyAudio>>,
     /// (FACE) The voice lines started (a `/VOICE/` asset) for the faces' lip-sync: who (a party member index, None =
@@ -136,6 +178,10 @@ pub struct Engine {
     last_voice: Option<SoundKey>,
     /// (FACE) Each party member's latest voice line (by member index).
     party_line: Vec<Option<SoundKey>>,
+    /// (THE USER 2026-11-02: "sometimes Audio from specifically our mod will become very loud") The live copies of each
+    /// asset that has UE concurrency data (`Asset::concurrency`), oldest first: `play_asset` holds them to its count.
+    /// (MIMIC-BOSS hotfix 3, MB3-AUDIO) Keyed (driver scope, bank, index): a copy's copies of an asset are counted apart from the player's.
+    concurrent: HashMap<(u32, u32, u32), Vec<SoundKey>>,
 }
 
 /// (FACE) A voice line as the engine keeps it.
@@ -193,7 +239,12 @@ pub fn party_owner(member: u8) -> Option<(&'static str, &'static str)> {
     match member {
         0 => Some(("n_ex001", "Donald")),
         1 => Some(("n_ex002", "Goofy")),
-        _ => None,
+        // (MIMIC-FX) a copy (crate::copies): the routes of the character it copies (a Sora copy: Sora's own, owner "")
+        m => match crate::copies::copy_of(m)? {
+            crate::copies::CopyOf::Donald => Some(("n_ex001", crate::copies::name(m))),
+            crate::copies::CopyOf::Goofy => Some(("n_ex002", crate::copies::name(m))),
+            crate::copies::CopyOf::Sora => Some(("", crate::copies::name(m))),
+        },
     }
 }
 
@@ -220,12 +271,14 @@ impl Engine {
             unknown: Vec::new(),
             voice_outfit: None,
             picker: crate::outfit::Picker::default(),
+            copy_pickers: HashMap::new(), // (MIMIC-BOSS hotfix 3, MB3-AUDIO)
             clock: 0.0,
             outfit_step: Vec::new(),
             party: Vec::new(),
             lines: HashMap::new(),     // (FACE)
             last_voice: None,          // (FACE)
             party_line: Vec::new(),    // (FACE)
+            concurrent: HashMap::new(),
         }
     }
 
@@ -252,10 +305,16 @@ impl Engine {
             self.party.resize_with(i + 1, || None);
         }
         if self.party[i].is_none() {
-            if !self.pack.triggers.iter().any(|t| t.owner.as_deref() == Some(owner)) {
-                return None;
-            }
-            self.party[i] = Some(PartyAudio { owner: owner.to_string(), name, routes: Routes::for_owner(&self.pack, owner), voice_group_no: 0, surface: 0, auto: AutoSe::new(), current_voice: None, anim: None, voice_memory: HashMap::new() });
+            // (MIMIC-FX) a Sora copy: Sora's own routes (his voice groups, his weapons' sets, his footstep table)
+            let routes = if owner.is_empty() {
+                Routes::new(&self.pack)
+            } else {
+                if !self.pack.triggers.iter().any(|t| t.owner.as_deref() == Some(owner)) {
+                    return None;
+                }
+                Routes::for_owner(&self.pack, owner)
+            };
+            self.party[i] = Some(PartyAudio { owner: owner.to_string(), name, routes, voice_group_no: 0, surface: 0, auto: AutoSe::new(), current_voice: None, anim: None, voice_memory: HashMap::new() });
         }
         self.party[i].as_mut()
     }
@@ -270,13 +329,20 @@ impl Engine {
         std::mem::swap(&mut self.surface, &mut p.surface);
         std::mem::swap(&mut self.auto, &mut p.auto);
         std::mem::swap(&mut self.voice_memory, &mut p.voice_memory);
-        let outfit = self.voice_outfit.take();
+        // (MIMIC-BOSS hotfix 3, MB3-AUDIO) a copy's sounds are of its own driver scope (its macros, pools and concurrency are its own)
+        let scope_before = self.driver.set_scope(crate::copies::scope(member));
+        // (MIMIC-FX) a Sora copy wears the outfit he copied (the worn one): its voice is his too
+        let outfit = self.voice_outfit;
+        if !crate::copies::is_sora_copy(member) {
+            self.voice_outfit = None;
+        }
         let first_log = self.log.len();
         let result = f(self);
         for line in &mut self.log[first_log..] {
             line.cause = format!("{} {}", p.name, line.cause);
         }
         self.voice_outfit = outfit;
+        self.driver.set_scope(scope_before); // (MIMIC-BOSS hotfix 3, MB3-AUDIO)
         std::mem::swap(&mut self.routes, &mut p.routes);
         std::mem::swap(&mut self.voice_group_no, &mut p.voice_group_no);
         std::mem::swap(&mut self.surface, &mut p.surface);
@@ -344,15 +410,25 @@ impl Engine {
         self.party(member).is_some_and(|p| p.routes.select_weapon(model))
     }
 
+    /// (MIMIC-FX) A Sora copy's swing / hit sets (kh-er kbdraw.rs `select_sounds`, the player's rule on HIS weapons): his
+    /// attack model's by KH3's rule (`Routes::select_weapon_kh3`), the LH_WEAPON aliases from his left hand's ("" none).
+    /// True: `model`'s own sets are in use.
+    pub fn set_party_sora_weapons(&mut self, member: u8, model: &str, left: &str) -> bool {
+        let Some(p) = self.party(member) else { return false };
+        let own = if p.routes.weapon.as_deref() != Some(model) { p.routes.select_weapon_kh3(model) } else { true };
+        p.routes.select_left_weapon(left);
+        own
+    }
+
     /// (party stream E) One simulation step of a party member's motion sounds (`SQEXSEADAutoSeComponent` with
     /// BoneSet_Sora1 and FsTable_Donald / _Goofy on both pawns [A]): the detector of spec 4.2 over the member's bones,
     /// the member's footstep table. `bone`: world position of a bone of THAT member.
-    #[allow(clippy::too_many_arguments)]
-    pub fn party_auto_se(&mut self, member: u8, dt: f32, frame: &BoneFrame, surface: u32, anim: Option<(&str, f32)>, listener: &Listener, bone: &dyn Fn(&str) -> Option<Vec3>) -> Vec<AutoSeEvent> {
+    pub fn party_auto_se(&mut self, member: u8, tick: AutoSeTick<'_>) -> Vec<AutoSeEvent> {
+        let AutoSeTick { dt, frame, surface, anim, listener, bone } = tick;
         let Some(name) = self.party(member).map(|p| p.name) else { return Vec::new() };
         self.as_member(member, |e| {
             e.surface = surface;
-            let enabled = anim.map_or(true, |(name, time)| e.routes.auto_se_enabled(name, time));
+            let enabled = anim.is_none_or(|(name, time)| e.routes.auto_se_enabled(name, time));
             let distance = (frame.base - listener.position).length() * 0.01;
             let events = e.auto.step(dt, frame, distance, enabled);
             for event in &events {
@@ -360,7 +436,7 @@ impl Engine {
                 match e.routes.motion_asset(event.motion, surface).map(str::to_string) {
                     Some(path) => {
                         let position = bone(event.part.bone()).unwrap_or(frame.base);
-                        e.play_asset(&path, &format!("{name} {cause}"), Some(position), Some(Anchor::PartyBone(member, event.part.bone())), event.volume.clamp(0.0, 1.0), 1.0, 0.0);
+                        e.play_asset(&path, &format!("{name} {cause}"), AssetPlay { volume: event.volume.clamp(0.0, 1.0), ..AssetPlay::at(Some(position), Some(Anchor::PartyBone(member, event.part.bone()))) });
                     }
                     None => e.silent("silent", &cause, "no table entry for this surface"),
                 }
@@ -393,6 +469,7 @@ impl Engine {
         if index != self.voice_outfit {
             self.voice_outfit = index;
             self.picker = crate::outfit::Picker::default();
+            self.copy_pickers.clear(); // (MIMIC-BOSS hotfix 3, MB3-AUDIO)
             let note = match (outfit, index) {
                 (Some(o), Some(_)) => format!("the {o} outfit's own voice replaces every voice line of Sora"),
                 (Some(o), None) => format!("the {o} outfit has no voice table in the pack: KH3's voice"),
@@ -411,8 +488,9 @@ impl Engine {
     /// (ER77) A VOICE LINE WHILE AN OUTFIT WITH ITS OWN VOICE IS WORN: the table's clip in place of `kh3_path` (the KH3
     /// line it would have been), with that line's asset volume and attenuation (3D, pan, distance as KH3's), or nothing
     /// (a silent event / no row). Never the KH3 line. `name`: the seam name (for the keys).
-    #[allow(clippy::too_many_arguments)]
-    fn outfit_voice_play(&mut self, outfit: usize, handle: Option<u32>, cause: &str, name: &str, kh3_path: &str, anim: Option<&str>, position: Option<Vec3>, anchor: Option<Anchor>, volume: f32, pitch: f32) -> Option<SoundKey> {
+    fn outfit_voice_play(&mut self, outfit: usize, ask: OutfitVoiceAsk<'_>, play: AssetPlay) -> Option<SoundKey> {
+        let OutfitVoiceAsk { handle, cause, name, kh3_path, anim } = ask;
+        let AssetPlay { position, anchor, volume, pitch, fade_in } = play;
         let pack = self.pack.clone();
         let ov = &pack.outfit_voices[outfit];
         let routes = &self.routes;
@@ -425,23 +503,26 @@ impl Engine {
         let specific = if key.contains('#') { 3 } else if key.starts_with("group:") { 2 } else if key.starts_with("anim:") { 1 } else { 0 };
         // The same KH3 line asked for twice in one step (a voice notify and the magic state's own play of it): KH3's
         // macro 106 cancels the copy; here the more specific match wins.
-        if let Some(i) = self.outfit_step.iter().position(|p| p.0 == line) {
-            if self.outfit_step[i].2 >= specific {
+        let scope = self.driver.scope(); // (MIMIC-BOSS hotfix 3, MB3-AUDIO)
+        if let Some(i) = self.outfit_step.iter().position(|p| p.0 == scope && p.1 == line) {
+            if self.outfit_step[i].3 >= specific {
                 self.silent("outfit-silent", cause, &format!("{} voice: {line} already started this step", ov.outfit));
                 return None;
             }
-            let (_, old, _) = self.outfit_step.remove(i);
+            let (_, _, old, _) = self.outfit_step.remove(i);
             self.driver.stop(old, Some(0.0));
         }
-        let Some(clip) = self.picker.pick(ov, rule, self.clock, &mut self.voice_rng) else {
+        // (MIMIC-BOSS hotfix 3, MB3-AUDIO) the picker of this scope: a copy's combo steps are his own
+        let picker = if scope == 0 { &mut self.picker } else { self.copy_pickers.entry(scope).or_default() };
+        let Some(clip) = picker.pick(ov, rule, self.clock, &mut self.voice_rng) else {
             self.silent("outfit-silent", cause, &format!("{} voice: {} ({}) is silent for {line} ({key})", ov.outfit, rule.id, rule.kind));
             return None;
         };
         let asset = pack.asset(kh3_path).cloned();
-        let attenuation = asset.as_ref().map_or(true, |a| a.attenuation);
+        let attenuation = asset.as_ref().is_none_or(|a| a.attenuation);
         let asset_volume = asset.as_ref().and_then(|a| a.volume).unwrap_or(ASSET_VOLUME_DEFAULT_ASSUMED);
         let spatial = position.filter(|_| attenuation);
-        let params = PlayParams { volume: volume * asset_volume, pitch, position: spatial, fade_in: 0.0 };
+        let params = PlayParams { volume: volume * asset_volume, pitch, position: spatial, fade_in };
         let clip_name = ov.clips.get(clip as usize).cloned().unwrap_or_default();
         let full_cause = format!("{cause} -> {} {} {clip_name}", ov.outfit, rule.id);
         match self.driver.play(ov.bank, clip, &params) {
@@ -450,7 +531,7 @@ impl Engine {
                 if let Some(handle) = handle {
                     self.seam.entry(handle).or_default().push(k);
                 }
-                self.outfit_step.push((line.clone(), k, specific));
+                self.outfit_step.push((scope, line.clone(), k, specific));
                 self.silent("outfit-voice", &full_cause, &format!("{} voice: {} ({}) clip {clip_name} for {line} ({key})", ov.outfit, rule.id, rule.kind));
                 Some(k)
             }
@@ -476,15 +557,39 @@ impl Engine {
 
     /// Starts a sound asset: the UE side of spec 3 (volume = trigger multiplier x asset Volume;
     /// 3D iff the asset has attenuation settings and a place is given).
-    pub fn play_asset(&mut self, path: &str, cause: &str, position: Option<Vec3>, anchor: Option<Anchor>, volume: f32, pitch: f32, fade_in: f32) -> Option<SoundKey> {
+    pub fn play_asset(&mut self, path: &str, cause: &str, play: AssetPlay) -> Option<SoundKey> {
+        let AssetPlay { position, anchor, volume, pitch, fade_in } = play;
         let Some(asset) = self.pack.asset(path).cloned() else {
             self.silent("unknown", cause, &format!("asset {path} is not in the pack"));
             return None;
         };
         let spatial = position.filter(|_| asset.attenuation);
+        // (THE USER 2026-11-02: "sometimes Audio from specifically our mod will become very loud") THE ASSET'S UE
+        // CONCURRENCY: at most `MaxCount` copies of it sound at once (KH3's own ConcurrencyOverrides); a further one is
+        // refused (PreventNew) or the oldest copy stops for it (the other rules; "farthest" is not weighed).
+        if let Some(c) = asset.concurrency {
+            let driver = &self.driver;
+            let live = self.concurrent.entry((driver.scope(), asset.bank, asset.index)).or_default();
+            live.retain(|k| driver.is_playing(*k));
+            if live.len() >= c.max_count as usize {
+                if c.prevent_new {
+                    let note = format!("concurrency: {} copies of this asset sound already (MaxCount {}, PreventNew): the new one is refused", live.len(), c.max_count);
+                    self.silent("silent", cause, &note);
+                    return None;
+                }
+                let oldest = live.remove(0);
+                self.driver.stop(oldest, Some(0.0));
+                // (ER-HITSFX-AUDIT) the only cut of the UE side: named in the log like the SEAD side's steals and macro stops
+                let note = format!("concurrency: MaxCount {} reached: the oldest copy of this asset (sound key {oldest}) stops for the new one", c.max_count);
+                self.silent("concurrency-stop", cause, &note);
+            }
+        }
         let params = PlayParams { volume: volume * asset.volume.unwrap_or(ASSET_VOLUME_DEFAULT_ASSUMED), pitch, position: spatial, fade_in };
         match self.driver.play(asset.bank, asset.index, &params) {
             PlayOutcome::Started(key) => {
+                if asset.concurrency.is_some() {
+                    self.concurrent.entry((self.driver.scope(), asset.bank, asset.index)).or_default().push(key);
+                }
                 self.tracked.insert(key, Tracked { cause: cause.to_string(), anchor: if spatial.is_some() { anchor } else { None }, stop_fade: asset.stop_fade.unwrap_or(0.0) });
                 // (FACE) a voice line: kept for the faces' lip-sync until its voice ends
                 if path.contains("/VOICE/") {
@@ -497,9 +602,52 @@ impl Engine {
                 self.silent("unknown", cause, &format!("sound {} of the asset is not in the pack", self.sound_label(asset.bank, asset.index)));
                 None
             }
-            // Cancelled / dropped: the driver's notes say so.
-            _ => None,
+            // (AUDIT-A SOUND) Cancelled / dropped by KH3's own SEAD rule: the driver's note (kind `cancel` / `drop`, logged
+            // at the next update without a cause) stays; this line names the request and the rule, so that every request of
+            // the seam leaves a line of its own (an arrowgun's bullets hitting within 0.067 s of each other: se02002_039's
+            // start macro 1)
+            PlayOutcome::Cancelled { by_macro } => {
+                let note = format!("SEAD start macro {by_macro} of sound {}: {}", self.sound_label(asset.bank, asset.index), self.macro_rule(by_macro));
+                self.silent("silent", cause, &note);
+                None
+            }
+            PlayOutcome::Dropped => {
+                let note = format!("SEAD category pool full of sounds of higher priority: sound {} is dropped", self.sound_label(asset.bank, asset.index));
+                self.silent("silent", cause, &note);
+                None
+            }
         }
+    }
+
+    /// (AUDIT-A SOUND) A start macro of the pack in words (spec 2.1), e.g. macro 1: "the same sound, started <= 0.067 s ago,
+    /// count >= 1: the new one is cancelled".
+    fn macro_rule(&self, number: u32) -> String {
+        use crate::pack::{Cmp, MacroCmd, MacroField};
+        let sym = |c: Cmp| match c {
+            Cmp::Eq => "==",
+            Cmp::Ne => "!=",
+            Cmp::Gt => ">",
+            Cmp::Ge => ">=",
+            Cmp::Lt => "<",
+            Cmp::Le => "<=",
+        };
+        let Some(commands) = self.pack.macros.get(&number) else { return "not in the pack's macros".to_string() };
+        let mut parts = Vec::new();
+        for command in commands {
+            parts.push(match *command {
+                MacroCmd::End => break,
+                MacroCmd::ResetSet => "all sounds again".to_string(),
+                MacroCmd::Filter { field: MacroField::SoundId, cmp: Cmp::Eq, relative: true, value: 0 } => "the same sound".to_string(),
+                MacroCmd::Filter { field, cmp, relative, value } => format!("{} {field:?} {} {value}", if relative { "own - other" } else { "other" }, sym(cmp)),
+                MacroCmd::FilterElapsed { cmp, value } => format!("started {} {value} s ago", sym(cmp)),
+                MacroCmd::FilterUnread => "an unread filter".to_string(),
+                MacroCmd::ActionUnread => "an unread action".to_string(),
+                MacroCmd::StopOthers { count, fade } => format!("count {} {}: the others stop ({fade} s)", sym(count.0), count.1),
+                MacroCmd::CancelSelf { count } => format!("count {} {}: the new one is cancelled", sym(count.0), count.1),
+                MacroCmd::SelfVolume { count, volume, fade } => format!("count {} {}: own volume {volume} ({fade} s)", sym(count.0), count.1),
+            });
+        }
+        parts.join(", ")
     }
 
     fn context<'a>(&self, anim: Option<(&'a str, f32)>) -> Context<'a> {
@@ -509,6 +657,15 @@ impl Engine {
     /// A sound of the audio seam. `handle` is the seam handle (for `seam_stop` and for following
     /// its attach point: `Anchor::Seam(handle)`).
     pub fn seam_play(&mut self, handle: u32, play: &SeamPlay) -> Option<SoundKey> {
+        // (MIMIC-BOSS hotfix 3, MB3-AUDIO) a copy's sound that reached the seam outside its member's call (one on its victim, a hit at the
+        // point): the copy's own routes (his weapon's sets), animation and driver scope, never the player's
+        if self.driver.scope() == 0 {
+            if let Some(member) = crate::copies::of_handle(handle) {
+                if self.party(member).is_some() {
+                    return self.party_seam_play(member, handle, &SeamPlay { anim: None, ..*play }, None);
+                }
+            }
+        }
         let cause = format!("seam {}", play.name.rsplit('/').next().unwrap_or(play.name));
         let resolved = self.routes.resolve(&self.pack, play.name, &self.context(play.anim));
         // (ER77) an outfit with its own voice is worn: every voice line goes through its table, KH3's is never played
@@ -519,7 +676,8 @@ impl Engine {
                 _ => None,
             };
             if let Some(kh3) = kh3 {
-                return self.outfit_voice_play(outfit, Some(handle), &cause, play.name, &kh3, play.anim.map(|a| a.0), play.spatial.then_some(play.position), Some(Anchor::Seam(handle)), play.volume.clamp(0.0, 1.0), play.pitch);
+                let ask = OutfitVoiceAsk { handle: Some(handle), cause: &cause, name: play.name, kh3_path: &kh3, anim: play.anim.map(|a| a.0) };
+                return self.outfit_voice_play(outfit, ask, AssetPlay { volume: play.volume.clamp(0.0, 1.0), pitch: play.pitch, ..AssetPlay::at(play.spatial.then_some(play.position), Some(Anchor::Seam(handle))) });
             }
         }
         let (path, voice) = match resolved {
@@ -532,6 +690,9 @@ impl Engine {
                     return None;
                 };
                 self.voice_memory.insert(index, pick);
+                // (AUDIT-A) which entry KH3's draw gave, for a host's log and the audits (`kh_host::audit_a`)
+                let note = format!("random voice: entry {} of {} (list {})", pick + 1, entries.len(), self.routes.random_voices[index].id);
+                self.silent("random-voice", &cause, &note);
                 (crate::routes::localized(&entries[pick].0, self.language), true)
             }
             Resolved::Silent(why) => {
@@ -554,7 +715,7 @@ impl Engine {
         }
         // Voice notifies: volume clamp(scale x multiplier, 0, 1), Sora's scale 1.0 [I].
         let volume = if voice { play.volume.clamp(0.0, 1.0) } else { play.volume };
-        let key = self.play_asset(&path, &cause, play.spatial.then_some(play.position), Some(Anchor::Seam(handle)), volume, play.pitch, 0.0)?;
+        let key = self.play_asset(&path, &cause, AssetPlay { volume, pitch: play.pitch, ..AssetPlay::at(play.spatial.then_some(play.position), Some(Anchor::Seam(handle))) })?;
         self.seam.entry(handle).or_default().push(key);
         Some(key)
     }
@@ -572,6 +733,11 @@ impl Engine {
     /// `PlaySoundAtLocation`), and the sounds carried by the class's own hit / map-hit effects
     /// (spec 5.5). `handle`: the seam handle the hit sound came under, when there is one.
     pub fn actor_hit(&mut self, handle: Option<u32>, class: &str, map: bool, position: Vec3) -> Option<SoundKey> {
+        self.in_handle_scope(handle, |e| e.actor_hit_scoped(handle, class, map, position)) // (MIMIC-BOSS hotfix 3, MB3-AUDIO)
+    }
+
+    /// (MIMIC-BOSS hotfix 3, MB3-AUDIO) [`Engine::actor_hit`] under the driver scope already set.
+    fn actor_hit_scoped(&mut self, handle: Option<u32>, class: &str, map: bool, position: Vec3) -> Option<SoundKey> {
         let what = if map { "map hit" } else { "hit" };
         let Some(actor) = self.pack.actor(class).cloned() else {
             if !self.unknown.iter().any(|n| n == class) {
@@ -584,7 +750,7 @@ impl Engine {
         let mut first = None;
         match if map { &actor.map_hit_se } else { &actor.pawn_hit_se } {
             Some(asset) => {
-                first = self.play_asset(asset, &cause, Some(position), None, 1.0, 1.0, 0.0);
+                first = self.play_asset(asset, &cause, AssetPlay::at(Some(position), None));
                 if let (Some(key), Some(handle)) = (first, handle) {
                     self.seam.entry(handle).or_default().push(key);
                 }
@@ -594,7 +760,7 @@ impl Engine {
         let role = if map { "map_hit" } else { "hit" };
         for (_, effect) in actor.effects.iter().filter(|(r, _)| r == role) {
             for se in self.routes.effect_sounds(effect).to_vec().into_iter().filter(|se| !se.at_end) {
-                let key = self.play_asset(&se.asset, &format!("{cause} effect {effect}"), Some(position), None, 1.0, 1.0, 0.0);
+                let key = self.play_asset(&se.asset, &format!("{cause} effect {effect}"), AssetPlay::at(Some(position), None));
                 first = first.or(key);
             }
         }
@@ -605,10 +771,28 @@ impl Engine {
     /// the actor's hit effect itself on the effect seam, whose SeAttach then plays through effect_spawned: playing the hit
     /// effects' sounds here too would double them). None: no such class, or it has no SE for this.
     pub fn actor_hit_se(&mut self, handle: Option<u32>, class: &str, map: bool, position: Vec3) -> Option<SoundKey> {
+        self.in_handle_scope(handle, |e| e.actor_hit_se_scoped(handle, class, map, position)) // (MIMIC-BOSS hotfix 3, MB3-AUDIO)
+    }
+
+    /// (MIMIC-BOSS hotfix 3, MB3-AUDIO) Runs `f` under the driver scope of the copy whose seam / effect handle `handle` is (nothing changes for any
+    /// other handle, or inside a member's call, whose scope is already set).
+    fn in_handle_scope<R>(&mut self, handle: Option<u32>, f: impl FnOnce(&mut Engine) -> R) -> R {
+        let scope = handle.and_then(crate::copies::of_handle).map_or(0, crate::copies::scope);
+        if scope == 0 || self.driver.scope() != 0 {
+            return f(self);
+        }
+        let before = self.driver.set_scope(scope);
+        let result = f(self);
+        self.driver.set_scope(before);
+        result
+    }
+
+    /// (MIMIC-BOSS hotfix 3, MB3-AUDIO) [`Engine::actor_hit_se`] under the driver scope already set.
+    fn actor_hit_se_scoped(&mut self, handle: Option<u32>, class: &str, map: bool, position: Vec3) -> Option<SoundKey> {
         let actor = self.pack.actor(class).cloned()?;
         let what = if map { "map hit" } else { "hit" };
         let asset = if map { actor.map_hit_se.as_ref() } else { actor.pawn_hit_se.as_ref() }?;
-        let key = self.play_asset(asset, &format!("actor {} {what}", actor.class), Some(position), None, 1.0, 1.0, 0.0)?;
+        let key = self.play_asset(asset, &format!("actor {} {what}", actor.class), AssetPlay::at(Some(position), None))?;
         if let Some(handle) = handle {
             self.seam.entry(handle).or_default().push(key);
         }
@@ -632,9 +816,10 @@ impl Engine {
     /// what it found from `FsTable_Sora` for `surface`. `anim`: the animation shown (for the
     /// enable windows). `bone`: world position of a bone, cm. Returns the events (for logs and
     /// tests).
-    pub fn auto_se(&mut self, dt: f32, frame: &BoneFrame, surface: u32, anim: Option<(&str, f32)>, listener: &Listener, bone: &dyn Fn(&str) -> Option<Vec3>) -> Vec<AutoSeEvent> {
+    pub fn auto_se(&mut self, tick: AutoSeTick<'_>) -> Vec<AutoSeEvent> {
+        let AutoSeTick { dt, frame, surface, anim, listener, bone } = tick;
         self.surface = surface;
-        let enabled = anim.map_or(true, |(name, time)| self.routes.auto_se_enabled(name, time));
+        let enabled = anim.is_none_or(|(name, time)| self.routes.auto_se_enabled(name, time));
         let distance = (frame.base - listener.position).length() * 0.01;
         let events = self.auto.step(dt, frame, distance, enabled);
         for event in &events {
@@ -642,7 +827,7 @@ impl Engine {
             match self.routes.motion_asset(event.motion, surface).map(str::to_string) {
                 Some(path) => {
                     let position = bone(event.part.bone()).unwrap_or(frame.base);
-                    self.play_asset(&path, &cause, Some(position), Some(Anchor::Bone(event.part.bone())), event.volume.clamp(0.0, 1.0), 1.0, 0.0);
+                    self.play_asset(&path, &cause, AssetPlay { volume: event.volume.clamp(0.0, 1.0), ..AssetPlay::at(Some(position), Some(Anchor::Bone(event.part.bone()))) });
                 }
                 None => self.silent("silent", &cause, "no table entry for this surface"),
             }
@@ -657,9 +842,9 @@ impl Engine {
         let path = crate::routes::localized(self.routes.voice_group_asset(group, number)?, self.language);
         if let Some(outfit) = self.voice_outfit {
             let name = format!("{group}:{number}");
-            return self.outfit_voice_play(outfit, None, &format!("voice group {group} no {number}"), &name, &path, None, Some(position), anchor, 1.0, 1.0);
+            return self.outfit_voice_play(outfit, OutfitVoiceAsk { handle: None, cause: &format!("voice group {group} no {number}"), name: &name, kh3_path: &path, anim: None }, AssetPlay::at(Some(position), anchor));
         }
-        self.play_asset(&path, &format!("voice group {group} no {number}"), Some(position), anchor, 1.0, 1.0, 0.0)
+        self.play_asset(&path, &format!("voice group {group} no {number}"), AssetPlay::at(Some(position), anchor))
     }
 
     /// A UI static SE by its `ETresStaticSE` id (spec 5.6): 2D, volume 1. A loop (9, 21, 34) is
@@ -670,7 +855,7 @@ impl Engine {
             self.silent("silent", &cause, "this static SE id is not in the pack");
             return None;
         };
-        let key = self.play_asset(&path, &cause, None, None, 1.0, 1.0, 0.0)?;
+        let key = self.play_asset(&path, &cause, AssetPlay::at(None, None))?;
         if self.pack.asset(&path).is_some_and(|a| a.looping) {
             if let Some(old) = self.statics.insert(id, key) {
                 self.driver.stop(old, Some(0.0));
@@ -736,14 +921,19 @@ impl Engine {
     /// The effect seam spawned an effect: the sounds its particle system carries play attached
     /// to it (spec 5.5). `name`: the effect asset name or path.
     pub fn effect_spawned(&mut self, handle: u32, name: &str, position: Vec3) {
+        self.in_handle_scope(Some(handle), |e| e.effect_spawned_scoped(handle, name, position)); // (MIMIC-BOSS hotfix 3, MB3-AUDIO)
+    }
+
+    /// (MIMIC-BOSS hotfix 3, MB3-AUDIO) [`Engine::effect_spawned`] under the driver scope already set.
+    fn effect_spawned_scoped(&mut self, handle: u32, name: &str, position: Vec3) {
         // A spell / shot ACTOR (the effect seam names it by its class): its fire SE at the place
         // it is spawned (`MyFireEffects[].MySoundCue`, rows `code.projectile`), and the sounds
         // its fire and body particle systems carry, attached to it: they follow the actor and
         // end with it (`effect_stopped`: FadeOutTime, loops included).
-        if let Some(actor) = self.pack.actor(name.rsplit(|c| c == '/' || c == '.').next().unwrap_or(name)).cloned() {
+        if let Some(actor) = self.pack.actor(name.rsplit(['/', '.']).next().unwrap_or(name)).cloned() {
             let cause = format!("actor {}", actor.class);
             if let Some(asset) = &actor.fire_se {
-                self.play_asset(asset, &format!("{cause} fire"), Some(position), None, 1.0, 1.0, 0.0);
+                self.play_asset(asset, &format!("{cause} fire"), AssetPlay::at(Some(position), None));
             }
             for (role, effect) in actor.effects.iter().filter(|(r, _)| r == "fire" || r == "body") {
                 for se in self.routes.effect_sounds(effect).to_vec() {
@@ -751,7 +941,7 @@ impl Engine {
                         self.effect_ends.entry(handle).or_insert_with(|| (effect.clone(), position));
                         continue;
                     }
-                    if let Some(key) = self.play_asset(&se.asset, &format!("{cause} {role} effect {effect}"), Some(position), Some(Anchor::Effect(handle)), 1.0, 1.0, 0.0) {
+                    if let Some(key) = self.play_asset(&se.asset, &format!("{cause} {role} effect {effect}"), AssetPlay::at(Some(position), Some(Anchor::Effect(handle)))) {
                         let fade = self.end_fade(&se);
                         self.effects.entry(handle).or_default().push((key, fade));
                     }
@@ -763,8 +953,8 @@ impl Engine {
             self.effect_ends.insert(handle, (name.to_string(), position));
         }
         for se in sounds.into_iter().filter(|se| !se.at_end) {
-            let cause = format!("effect {}", name.rsplit(|c| c == '/' || c == '.').next().unwrap_or(name));
-            if let Some(key) = self.play_asset(&se.asset, &cause, Some(position), Some(Anchor::Effect(handle)), 1.0, 1.0, 0.0) {
+            let cause = format!("effect {}", name.rsplit(['/', '.']).next().unwrap_or(name));
+            if let Some(key) = self.play_asset(&se.asset, &cause, AssetPlay::at(Some(position), Some(Anchor::Effect(handle)))) {
                 let fade = self.end_fade(&se);
                 self.effects.entry(handle).or_default().push((key, fade));
             }
@@ -782,9 +972,14 @@ impl Engine {
     /// The effect ended: its sounds fade out over their `FadeOutTime`, unless
     /// `bNoSeFadeAtTheEffectEnd` (they play out).
     pub fn effect_stopped(&mut self, handle: u32) {
+        self.in_handle_scope(Some(handle), |e| e.effect_stopped_scoped(handle)); // (MIMIC-BOSS hotfix 3, MB3-AUDIO)
+    }
+
+    /// (MIMIC-BOSS hotfix 3, MB3-AUDIO) [`Engine::effect_stopped`] under the driver scope already set.
+    fn effect_stopped_scoped(&mut self, handle: u32) {
         if let Some((name, position)) = self.effect_ends.remove(&handle) {
             for se in self.routes.effect_sounds(&name).to_vec().into_iter().filter(|se| se.at_end) {
-                self.play_asset(&se.asset, &format!("effect end {}", name.rsplit(|c| c == '/' || c == '.').next().unwrap_or(&name)), Some(position), None, 1.0, 1.0, 0.0);
+                self.play_asset(&se.asset, &format!("effect end {}", name.rsplit(['/', '.']).next().unwrap_or(&name)), AssetPlay::at(Some(position), None));
             }
         }
         for (key, fade) in self.effects.remove(&handle).unwrap_or_default() {

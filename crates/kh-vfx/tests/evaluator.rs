@@ -19,8 +19,15 @@ fn module(class: &str, params: Value) -> Value {
     json!({"class": class, "enabled": true, "params": params})
 }
 
-/// One emitter in the pack's shape. `time` = (start, loop_time, loop_duration, duration_time).
-fn emitter(name: &str, kind: &str, loops: u32, time: (f32, f32, f32, f32), rate: f32, bursts: Value, modules: Vec<Value>, extra: Value) -> Value {
+/// How an emitter runs: its loops, and `time` = (start, loop_time, loop_duration, duration_time).
+struct Timing {
+    loops: u32,
+    time: (f32, f32, f32, f32),
+}
+
+/// One emitter in the pack's shape.
+fn emitter(name: &str, kind: &str, timing: Timing, rate: f32, bursts: Value, modules: Vec<Value>, extra: Value) -> Value {
+    let Timing { loops, time } = timing;
     let mut required = json!({
         "material": "/Game/Effects/test/mat/m_test.m_test", "screen_alignment": "PSA_Square", "use_local_space": false,
         "kill_on_completed": false, "duration": time.3, "loops": loops,
@@ -71,7 +78,7 @@ fn drawn(world: &World) -> DrawList {
 
 #[test]
 fn burst_lifetime_and_end_of_a_one_shot() {
-    let def = effect("one_shot", vec![emitter("e", "sprite", 1, (0.0, 0.0, 0.1, 0.1), 0.0, json!([{"count": 5, "count_low": -1, "time": 0.0}]), vec![module("ParticleModuleLifetime", json!({"Lifetime": constant(json!(0.5))})), module("ParticleModuleSize", json!({"StartSize": constant(json!([20.0, 20.0, 20.0]))}))], json!({}))]);
+    let def = effect("one_shot", vec![emitter("e", "sprite", Timing { loops: 1, time: (0.0, 0.0, 0.1, 0.1) }, 0.0, json!([{"count": 5, "count_low": -1, "time": 0.0}]), vec![module("ParticleModuleLifetime", json!({"Lifetime": constant(json!(0.5))})), module("ParticleModuleSize", json!({"StartSize": constant(json!([20.0, 20.0, 20.0]))}))], json!({}))]);
     let mut world = world_with(def);
     let id = world.spawn("one_shot", Xform::at(Vec3::new(100.0, 0.0, 50.0)), SpawnOptions::default()).unwrap();
     world.step(DT);
@@ -99,8 +106,7 @@ fn spawn_rate_velocity_acceleration_and_drag() {
         vec![emitter(
             "e",
             "sprite",
-            1,
-            (0.0, 0.0, 1.0, 1.0),
+            Timing { loops: 1, time: (0.0, 0.0, 1.0, 1.0) },
             30.0,
             json!([]),
             vec![
@@ -133,8 +139,7 @@ fn drag_slows_a_particle() {
         vec![emitter(
             "e",
             "sprite",
-            1,
-            (0.0, 0.0, 0.1, 0.1),
+            Timing { loops: 1, time: (0.0, 0.0, 0.1, 0.1) },
             0.0,
             json!([{"count": 1, "count_low": -1, "time": 0.0}]),
             vec![module("ParticleModuleLifetime", json!({"Lifetime": constant(json!(5.0))})), module("ParticleModuleSize", json!({"StartSize": constant(json!([1.0, 1.0, 1.0]))})), module("ParticleModuleVelocity", json!({"StartVelocity": constant(json!([100.0, 0.0, 0.0]))})), module("ParticleModuleAccelerationDrag", json!({"DragCoefficientRaw": constant(json!(2.0))}))],
@@ -157,8 +162,7 @@ fn over_life_curves_scale_size_and_colour() {
         vec![emitter(
             "e",
             "sprite",
-            1,
-            (0.0, 0.0, 0.1, 0.1),
+            Timing { loops: 1, time: (0.0, 0.0, 0.1, 0.1) },
             0.0,
             json!([{"count": 1, "count_low": -1, "time": 0.0}]),
             vec![
@@ -183,7 +187,7 @@ fn over_life_curves_scale_size_and_colour() {
 
 #[test]
 fn a_looping_emitter_runs_until_loop_end_then_plays_out() {
-    let def = effect("loop", vec![emitter("e", "sprite", 0, (0.0, 0.1, 0.3, 0.5), 60.0, json!([]), vec![module("ParticleModuleLifetime", json!({"Lifetime": constant(json!(0.1))})), module("ParticleModuleSize", json!({"StartSize": constant(json!([1.0, 1.0, 1.0]))}))], json!({}))]);
+    let def = effect("loop", vec![emitter("e", "sprite", Timing { loops: 0, time: (0.0, 0.1, 0.3, 0.5) }, 60.0, json!([]), vec![module("ParticleModuleLifetime", json!({"Lifetime": constant(json!(0.1))})), module("ParticleModuleSize", json!({"StartSize": constant(json!([1.0, 1.0, 1.0]))}))], json!({}))]);
     assert!(def.endless());
     let mut world = world_with(def);
     let id = world.spawn("loop", Xform::IDENTITY, SpawnOptions::default()).unwrap();
@@ -204,7 +208,7 @@ fn a_looping_emitter_runs_until_loop_end_then_plays_out() {
 
 #[test]
 fn start_time_delays_an_emitter() {
-    let def = effect("late", vec![emitter("e", "sprite", 1, (0.5, 0.0, 0.1, 0.1), 0.0, json!([{"count": 3, "count_low": -1, "time": 0.0}]), vec![module("ParticleModuleLifetime", json!({"Lifetime": constant(json!(0.2))})), module("ParticleModuleSize", json!({"StartSize": constant(json!([1.0, 1.0, 1.0]))}))], json!({}))]);
+    let def = effect("late", vec![emitter("e", "sprite", Timing { loops: 1, time: (0.5, 0.0, 0.1, 0.1) }, 0.0, json!([{"count": 3, "count_low": -1, "time": 0.0}]), vec![module("ParticleModuleLifetime", json!({"Lifetime": constant(json!(0.2))})), module("ParticleModuleSize", json!({"StartSize": constant(json!([1.0, 1.0, 1.0]))}))], json!({}))]);
     let mut world = world_with(def);
     world.spawn("late", Xform::IDENTITY, SpawnOptions::default()).unwrap();
     run(&mut world, 28);
@@ -221,8 +225,7 @@ fn node_tracks_move_rotate_and_glue_particles() {
         vec![emitter(
             "e",
             "mesh",
-            1,
-            (0.0, 0.0, 2.0, 2.0),
+            Timing { loops: 1, time: (0.0, 0.0, 2.0, 2.0) },
             0.0,
             json!([{"count": 1, "count_low": -1, "time": 0.0}]),
             vec![
@@ -259,12 +262,11 @@ fn node_tracks_move_rotate_and_glue_particles() {
 
 #[test]
 fn a_parent_creates_its_child_emitters_at_their_times() {
-    let child = emitter("kid", "sprite", 1, (0.0, 0.0, 0.2, 0.2), 0.0, json!([{"count": 2, "count_low": -1, "time": 0.0}]), vec![module("ParticleModuleLifetime", json!({"Lifetime": constant(json!(0.2))})), module("ParticleModuleSize", json!({"StartSize": constant(json!([1.0, 1.0, 1.0]))}))], json!({"auto_add": false}));
+    let child = emitter("kid", "sprite", Timing { loops: 1, time: (0.0, 0.0, 0.2, 0.2) }, 0.0, json!([{"count": 2, "count_low": -1, "time": 0.0}]), vec![module("ParticleModuleLifetime", json!({"Lifetime": constant(json!(0.2))})), module("ParticleModuleSize", json!({"StartSize": constant(json!([1.0, 1.0, 1.0]))}))], json!({"auto_add": false}));
     let parent = emitter(
         "ctl",
         "sqex_control",
-        1,
-        (0.0, 0.0, 1.0, 1.0),
+        Timing { loops: 1, time: (0.0, 0.0, 1.0, 1.0) },
         0.0,
         json!([]),
         vec![module("ParticleModuleSQEX_Parent", json!({"AllLoopEndTime": 0, "ChildrenData": [{"GenerationConditions": "ESQEX_CREATE_GENERATE_TYPE_TIME", "GenerateEmitterName": "kid", "MaxGenerateCount": 0, "TimeDatas": [{"GenerateTime": 0.25, "GenerateNumber": 3}], "LoopNumber": 1, "LoopEndTime": 0, "OffsetPosition": {"x": 0, "y": 0, "z": 40}, "OffsetRotation": {"pitch": 0, "yaw": 0, "roll": 0}, "OffsetScale": {"x": 1, "y": 1, "z": 1}, "bUseSpawnModule": false}]}))],
@@ -291,8 +293,7 @@ fn range_and_ring_place_particles_on_their_shapes() {
         emitter(
             "e",
             "sprite",
-            1,
-            (0.0, 0.0, 0.1, 0.1),
+            Timing { loops: 1, time: (0.0, 0.0, 0.1, 0.1) },
             0.0,
             json!([{"count": 64, "count_low": -1, "time": 0.0}]),
             vec![module("ParticleModuleLifetime", json!({"Lifetime": constant(json!(1.0))})), module("ParticleModuleSize", json!({"StartSize": constant(json!([1.0, 1.0, 1.0]))})), module(class, params)],
@@ -338,7 +339,7 @@ fn range_and_ring_place_particles_on_their_shapes() {
 
 #[test]
 fn an_anim_trail_is_a_ribbon_between_the_sockets() {
-    let def = effect("trail", vec![emitter("e", "anim_trail", 1, (0.0, 0.05, 0.08, 0.18), 20.0, json!([]), vec![module("ParticleModuleLifetime", json!({"Lifetime": constant(json!(0.2))})), module("ParticleModuleSize", json!({"StartSize": constant(json!([25.0, 25.0, 25.0]))})), module("ParticleModuleColor", json!({"StartColor": constant(json!([3.0, 3.0, 3.0])), "StartAlpha": constant(json!(1.0))}))], json!({}))]);
+    let def = effect("trail", vec![emitter("e", "anim_trail", Timing { loops: 1, time: (0.0, 0.05, 0.08, 0.18) }, 20.0, json!([]), vec![module("ParticleModuleLifetime", json!({"Lifetime": constant(json!(0.2))})), module("ParticleModuleSize", json!({"StartSize": constant(json!([25.0, 25.0, 25.0]))})), module("ParticleModuleColor", json!({"StartColor": constant(json!([3.0, 3.0, 3.0])), "StartAlpha": constant(json!(1.0))}))], json!({}))]);
     let mut world = world_with(def);
     let id = world.spawn("trail", Xform::IDENTITY, SpawnOptions::default()).unwrap();
     for k in 0..30 {
@@ -368,7 +369,7 @@ fn an_anim_trail_is_a_ribbon_between_the_sockets() {
 fn an_unknown_module_is_skipped_and_logged_once() {
     let def = effect(
         "odd",
-        vec![emitter("e", "sprite", 1, (0.0, 0.0, 0.1, 0.1), 0.0, json!([{"count": 1, "count_low": -1, "time": 0.0}]), vec![module("ParticleModuleLifetime", json!({"Lifetime": uniform(json!(0.2), json!(0.4))})), module("ParticleModuleSQEX_NobodyKnows", json!({"Strength": 3})), module("ParticleModuleSQEX_NobodyKnows", json!({"Strength": 4}))], json!({}))],
+        vec![emitter("e", "sprite", Timing { loops: 1, time: (0.0, 0.0, 0.1, 0.1) }, 0.0, json!([{"count": 1, "count_low": -1, "time": 0.0}]), vec![module("ParticleModuleLifetime", json!({"Lifetime": uniform(json!(0.2), json!(0.4))})), module("ParticleModuleSQEX_NobodyKnows", json!({"Strength": 3})), module("ParticleModuleSQEX_NobodyKnows", json!({"Strength": 4}))], json!({}))],
     );
     assert_eq!(def.unknown(), vec![("e".to_string(), "SQEX_NobodyKnows".to_string())]);
     let mut world = World::new();
@@ -395,8 +396,7 @@ fn the_same_spawns_give_the_same_particles() {
             vec![emitter(
                 "e",
                 "sprite",
-                1,
-                (0.0, 0.0, 0.5, 0.5),
+                Timing { loops: 1, time: (0.0, 0.0, 0.5, 0.5) },
                 40.0,
                 json!([]),
                 vec![module("ParticleModuleLifetime", json!({"Lifetime": uniform(json!(0.2), json!(0.6))})), module("ParticleModuleSize", json!({"StartSize": uniform(json!([1.0, 0.0, 0.0]), json!([9.0, 0.0, 0.0]))})), module("ParticleModuleVelocity", json!({"StartVelocity": uniform(json!([-50.0, -50.0, 0.0]), json!([50.0, 50.0, 90.0]))}))],
@@ -478,7 +478,7 @@ fn centers(list: &DrawList) -> Vec<Vec3> {
 fn burst_of(count: u32, modules: Vec<Value>, extra: Value) -> Value {
     let mut all = vec![module("ParticleModuleLifetime", json!({"Lifetime": constant(json!(5.0))})), module("ParticleModuleSize", json!({"StartSize": constant(json!([1.0, 1.0, 1.0]))}))];
     all.extend(modules);
-    emitter("e", "sprite", 1, (0.0, 0.0, 0.1, 0.1), 0.0, json!([{"count": count, "count_low": -1, "time": 0.0}]), all, extra)
+    emitter("e", "sprite", Timing { loops: 1, time: (0.0, 0.0, 0.1, 0.1) }, 0.0, json!([{"count": count, "count_low": -1, "time": 0.0}]), all, extra)
 }
 
 #[test]
@@ -544,7 +544,7 @@ fn a_quadrangle_puts_points_on_the_faces_of_its_box() {
 #[test]
 fn the_noise_is_perlins_reference() {
     // 0x1443B8F30 with the table at 0x147763A50 = Ken Perlin's improved noise; his reference value.
-    assert!((kh_vfx::perlin(3.14, 42.0, 7.0) - 0.136_919_96).abs() < 1.0e-5, "{}", kh_vfx::perlin(3.14, 42.0, 7.0));
+    assert!((kh_vfx::perlin(f32::from_bits(0x4048_f5c3), 42.0, 7.0) - 0.136_919_96).abs() < 1.0e-5, "{}", kh_vfx::perlin(f32::from_bits(0x4048_f5c3), 42.0, 7.0));
     assert_eq!(kh_vfx::perlin(1.0, 2.0, 3.0), 0.0);
     assert!(kh_vfx::perlin(0.5, 0.25, 0.75).abs() <= 1.0);
 }
@@ -577,12 +577,11 @@ fn a_child_hangs_on_its_parents_matrix_without_its_scale() {
     // 0x144290A60: the child's position goes through the parent's local matrix (rotation and
     // translation); the parent's scale reaches the child's offset only through the child's own
     // world scale with bIsUseTransformScale.
-    let child = emitter("kid", "sprite", 1, (0.0, 0.0, 1.0, 1.0), 0.0, json!([{"count": 1, "count_low": -1, "time": 0.0}]), vec![module("ParticleModuleLifetime", json!({"Lifetime": constant(json!(1.0))})), module("ParticleModuleSize", json!({"StartSize": constant(json!([1.0, 1.0, 1.0]))}))], json!({"auto_add": false}));
+    let child = emitter("kid", "sprite", Timing { loops: 1, time: (0.0, 0.0, 1.0, 1.0) }, 0.0, json!([{"count": 1, "count_low": -1, "time": 0.0}]), vec![module("ParticleModuleLifetime", json!({"Lifetime": constant(json!(1.0))})), module("ParticleModuleSize", json!({"StartSize": constant(json!([1.0, 1.0, 1.0]))}))], json!({"auto_add": false}));
     let parent = emitter(
         "ctl",
         "sqex_control",
-        1,
-        (0.0, 0.0, 1.0, 1.0),
+        Timing { loops: 1, time: (0.0, 0.0, 1.0, 1.0) },
         0.0,
         json!([]),
         vec![
@@ -628,7 +627,7 @@ fn a_decal_with_the_scale_rot_flag_has_its_size_in_the_nodes_axes() {
     // 0x144281110: |size x R(DecalRotation)|; (1100, 1100, 500) turned by (0, -90, 0) projects
     // 500 deep (the decal's X) over 1100 x 1100.
     let decal = |flag: bool| {
-        let mut e = emitter("d", "sqex_decal", 1, (0.0, 0.0, 1.0, 1.0), 0.0, json!([]), vec![], json!({}));
+        let mut e = emitter("d", "sqex_decal", Timing { loops: 1, time: (0.0, 0.0, 1.0, 1.0) }, 0.0, json!([]), vec![], json!({}));
         e["typedata"]["params"] = json!({"DecalMaterial": "/Game/Effects/test/mat/m_decal.m_decal", "DecalSize": constant(json!([1100.0, 1100.0, 500.0])), "DecalRotation": constant(json!([0.0, -90.0, 0.0])), "bItUseScaleRotMatrixTransfrom": flag});
         let mut world = world_with(effect("decal", vec![e]));
         world.spawn("decal", Xform::IDENTITY, SpawnOptions::default()).unwrap();
@@ -649,7 +648,7 @@ fn a_decal_with_the_scale_rot_flag_has_its_size_in_the_nodes_axes() {
 #[test]
 fn a_camera_shake_is_asked_for_once() {
     // 0x1442FC5E0: from ShakePlayTime on, once per instance, with the scale of the emitter time.
-    let def = effect("shake", vec![emitter("c", "sqex_control", 1, (0.0, 0.0, 1.0, 1.0), 0.0, json!([]), vec![module("ParticleModuleSQEX_CameraShake", json!({"Shake": "/Game/Effects/x/BP_cam0.BP_cam0_C", "ShakePlayTime": 0.1, "CameraShakeScale": constant(json!(0.5)), "OverrideOscillationDuration": false, "ShakeScaleDistance": 2000.0, "ShakeScaleDistanceOffset": 1000.0, "ShakeScaleDistanceMin": 0.2}))], json!({}))]);
+    let def = effect("shake", vec![emitter("c", "sqex_control", Timing { loops: 1, time: (0.0, 0.0, 1.0, 1.0) }, 0.0, json!([]), vec![module("ParticleModuleSQEX_CameraShake", json!({"Shake": "/Game/Effects/x/BP_cam0.BP_cam0_C", "ShakePlayTime": 0.1, "CameraShakeScale": constant(json!(0.5)), "OverrideOscillationDuration": false, "ShakeScaleDistance": 2000.0, "ShakeScaleDistanceOffset": 1000.0, "ShakeScaleDistanceMin": 0.2}))], json!({}))]);
     let mut world = world_with(def);
     world.spawn("shake", Xform::at(Vec3::new(5.0, 0.0, 0.0)), SpawnOptions::default()).unwrap();
     run(&mut world, 5);
@@ -670,8 +669,7 @@ fn a_held_variant_keeps_its_emitters_frozen_until_stopped() {
         emitter(
             name,
             "sprite",
-            1,
-            (0.0, 0.0, 0.1, 0.1),
+            Timing { loops: 1, time: (0.0, 0.0, 0.1, 0.1) },
             0.0,
             json!([{"count": 1, "count_low": -1, "time": 0.0}]),
             vec![
@@ -707,7 +705,7 @@ fn a_held_variant_keeps_its_emitters_frozen_until_stopped() {
 /// next sample starts a new ribbon at the blade.
 #[test]
 fn a_trail_head_follows_the_sockets_and_a_cut_drops_the_history() {
-    let def = effect("trail", vec![emitter("e", "anim_trail", 1, (0.0, 0.05, 0.08, 0.18), 20.0, json!([]), vec![module("ParticleModuleLifetime", json!({"Lifetime": constant(json!(0.2))})), module("ParticleModuleSize", json!({"StartSize": constant(json!([25.0, 25.0, 25.0]))}))], json!({}))]);
+    let def = effect("trail", vec![emitter("e", "anim_trail", Timing { loops: 1, time: (0.0, 0.05, 0.08, 0.18) }, 20.0, json!([]), vec![module("ParticleModuleLifetime", json!({"Lifetime": constant(json!(0.2))})), module("ParticleModuleSize", json!({"StartSize": constant(json!([25.0, 25.0, 25.0]))}))], json!({}))]);
     let mut world = world_with(def);
     let id = world.spawn("trail", Xform::IDENTITY, SpawnOptions::default()).unwrap();
     for k in 0..5 {

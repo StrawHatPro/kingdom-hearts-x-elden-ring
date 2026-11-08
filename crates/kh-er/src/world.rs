@@ -64,11 +64,14 @@ pub struct ErWorld {
     /// (IMPL_ER52) The graces' mounds (graceflame.rs `mound_body`) are passed through: None = as `grace.mound_collision`
     /// says (Sora's world), Some = this world's own rule (the save point's ground trace).
     pub mounds: Cell<Option<bool>>,
+    /// (NOKRON-WALLS) THE INVISIBLE WALLS of a boss arena while its fight runs (arena_walls.rs, KH3 space; set once a frame by
+    /// `arena_walls::frame` on Sora's world only: the camera's world never has them). Every cast meets them too.
+    pub arena: RefCell<Vec<crate::arena_walls::Panel>>,
 }
 
 impl ErWorld {
     pub fn new(frame: Frame) -> Self {
-        Self { frame, filter: havok::FILTER_PLAYER /* (WALLS) */, reject: RefCell::new(Vec::new()), seen: RefCell::new(std::collections::BTreeMap::new()), scratch: RefCell::new(Vec::new()), casts: Cell::new(0), flat: Cell::new(None), walls: RefCell::new(Default::default()), log_walls: Cell::new(false), radius_cap: Cell::new(f32::MAX), opts: Cell::new(sweep::Options::DEFAULT), floor_filter: Cell::new(0), scratch2: RefCell::new(Vec::new()), second: RefCell::new(Vec::new()), casts2: Cell::new(0), taken2: Cell::new(0), ik_floor: Cell::new(None), mounds: Cell::new(None) }
+        Self { frame, filter: havok::FILTER_PLAYER /* (WALLS) */, reject: RefCell::new(Vec::new()), seen: RefCell::new(std::collections::BTreeMap::new()), scratch: RefCell::new(Vec::new()), casts: Cell::new(0), flat: Cell::new(None), walls: RefCell::new(Default::default()), log_walls: Cell::new(false), radius_cap: Cell::new(f32::MAX), opts: Cell::new(sweep::Options::DEFAULT), floor_filter: Cell::new(0), scratch2: RefCell::new(Vec::new()), second: RefCell::new(Vec::new()), casts2: Cell::new(0), taken2: Cell::new(0), ik_floor: Cell::new(None), mounds: Cell::new(None), arena: RefCell::new(Vec::new()) }
     }
 }
 
@@ -108,6 +111,8 @@ impl SphereCaster for ErWorld {
             }
             out.push(Contact { fraction: h.fraction.clamp(0.0, 1.0), point: self.frame.pos_er_to_kh(h.position), normal, body: h.body + 1 });
         }
+        // (NOKRON-WALLS) a fight's invisible walls, met like any wall of the game
+        crate::arena_walls::cast(&self.arena.borrow(), start, delta, radius, out);
     }
 
     /// (IMPL_ER24) The cast, and with it the floor layer's: the same sphere once more with the second filter word; of what
@@ -150,8 +155,28 @@ impl World for ErWorld {
         sweep::line_first(self, start, end, &self.opts.get())
     }
 
+    /// (AUDIT-C TF) KH3's own overlap test (FUN_141403130: the sphere swept 0.2 cm; UE reports what it starts inside): the
+    /// same sphere cast through Havok, uncapped (`radius_cap` limits only his own sweeps), 0.2 cm down onto its centre. Havok
+    /// reports a body the cast STARTS in as a contact at fraction 0 (the follow mode's `flat_contact` answers alike), so any
+    /// contact is an overlap; the reject words and characters are left out as in every cast of his.
+    fn overlap_sphere(&self, center: Vec3, radius: f32) -> bool {
+        let mut out = Vec::new();
+        SphereCaster::cast(self, center + Vec3::Z * 0.2, Vec3::Z * -0.2, radius, &mut out);
+        !out.is_empty()
+    }
+
     fn sweep_capsule_all(&self, start: Vec3, end: Vec3, radius: f32, half_height: f32) -> Vec<Hit> {
         sweep::sweep_all(self, start, end, radius.min(self.radius_cap.get()), half_height, &self.opts.get())
+    }
+
+    /// (NOKRON-WALLS) A fight's invisible walls carry no traversal flag (no wall kick off them, no hanging from their top);
+    /// every other body keeps the mesh default, as before.
+    fn surface_flags(&self, component: u32) -> u32 {
+        if crate::arena_walls::is_wall_body(component) {
+            0
+        } else {
+            kh_core::surface::MESH_DEFAULT
+        }
     }
 }
 
@@ -191,6 +216,17 @@ pub fn flat_contact(floor: f32, start: Vec3, delta: Vec3, radius: f32) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// (AUDIT-C TF) Ultimate Finish's 300 cm ball (FUN_141403130) on the follow mode's floor: resting 2 cm above it the ball
+    /// is free, sunk into it the ball overlaps; his own sweeps' radius cap does not shrink it.
+    #[test]
+    fn the_overlap_query_sees_a_ball_it_starts_inside() {
+        let world = ErWorld::new(Frame::at(Vec3::ZERO));
+        world.flat.set(Some(0.0));
+        world.radius_cap.set(40.0);
+        assert!(!world.overlap_sphere(Vec3::new(0.0, 0.0, 302.0), 300.0), "2 cm above the floor: free");
+        assert!(world.overlap_sphere(Vec3::new(0.0, 0.0, 250.0), 300.0), "50 cm into the floor: an overlap");
+    }
 
     #[test]
     fn the_flat_floor_answers_like_a_cast() {

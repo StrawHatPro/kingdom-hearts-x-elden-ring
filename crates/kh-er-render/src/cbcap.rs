@@ -198,6 +198,7 @@ unsafe extern "system" fn draw_hook(this: *mut c_void, count: u32, instances: u3
             crate::survey::fullscreen(this as usize, Table { heaps: now.1, handle: now.2 });
         }
     }
+    fog_watch(this as usize);
     if active() {
         record(this as usize, Ev::Draw { indexed: false, count, instances });
     }
@@ -209,7 +210,28 @@ unsafe extern "system" fn draw_hook(this: *mut c_void, count: u32, instances: u3
     original(this, count, instances, a, b)
 }
 
+/// (PARTY-NATIVE) At any draw of the game (the watch): its fog composite hands over its buffers and volume (ffx.rs).
+#[inline]
+fn fog_watch(list: usize) {
+    if watching() && !is_ours() {
+        let f = fogw(list);
+        if crate::ffx::is_fog_composite(f.1) {
+            crate::ffx::fog_seen(crate::ffx::FogBind { heaps: current(list).1, buffers: f.2, textures: f.3 });
+        }
+        // (PARTY-NATIVE-LIGHT) the game's light inputs (ffx.rs): the tile lighting, the particle pass, the irradiance regions
+        if let Some(kind) = crate::ffx::lit_kind(f.1) {
+            // (PARTY-NATIVE-LIGHT round 2) a discovery role's draw: logged with its tables (ffx.rs discover_status)
+            if kind == crate::ffx::LitKind::Discover {
+                crate::ffx::discover_draw(f.1, current(list).1, litw(list).1);
+            } else {
+                crate::ffx::lit_seen(kind, current(list).1, litw(list).1);
+            }
+        }
+    }
+}
+
 unsafe extern "system" fn draw_indexed_hook(this: *mut c_void, count: u32, instances: u32, a: u32, b: i32, c: u32) {
+    fog_watch(this as usize);
     if active() {
         record(this as usize, Ev::Draw { indexed: true, count, instances });
     }
@@ -218,6 +240,13 @@ unsafe extern "system" fn draw_indexed_hook(this: *mut c_void, count: u32, insta
 }
 
 unsafe extern "system" fn dispatch_hook(this: *mut c_void, x: u32, y: u32, z: u32) {
+    // (PARTY-NATIVE-LIGHT round 2, discovery) a recognised volume builder's dispatch with its compute tables (ffx.rs)
+    if watching() && !is_ours() {
+        let pso = fogw(this as usize).1;
+        if crate::ffx::is_discover(pso) {
+            crate::ffx::discover_dispatch(pso, current(this as usize).1, clitw(this as usize).1);
+        }
+    }
     if active() {
         record(this as usize, Ev::Dispatch(x, y, z));
     }
@@ -268,6 +297,11 @@ unsafe extern "system" fn pso_hook(this: *mut c_void, object: *mut c_void) {
     if !is_ours() {
         crate::shaft::on_pso(this as usize, object as usize);
     }
+    // (PARTY-NATIVE) the watch's pipeline state of this list (the fog composite: ffx.rs)
+    if watching() && !is_ours() {
+        let now = fogw(this as usize);
+        FOGW.with(|c| c.set((now.0, object as usize, now.2, now.3)));
+    }
     if active() {
         record(this as usize, Ev::Pso(object as usize));
     }
@@ -283,6 +317,19 @@ unsafe extern "system" fn gtable_hook(this: *mut c_void, slot: u32, value: u64) 
         let now = current(this as usize);
         CURRENT.with(|c| c.set((now.0, now.1, value)));
     }
+    // (PARTY-NATIVE) the pixel-stage tables of b0..b3 / t0..t3 (the fog composite: ffx.rs)
+    if (slot as usize == PS_CBV_LOW || slot as usize == PS_SRV_LOW) && watching() && !is_ours() {
+        let now = fogw(this as usize);
+        FOGW.with(|c| c.set(if slot as usize == PS_CBV_LOW { (now.0, now.1, value, now.3) } else { (now.0, now.1, now.2, value) }));
+    }
+    // (PARTY-NATIVE-LIGHT) the tables the game's light inputs bind (ffx.rs LIT_PARAMS: PS 28 / 29 / 32, GS 22 / 24, (round 3) DS 14 / 17)
+    if watching() && !is_ours() {
+        if let Some(k) = crate::ffx::LIT_PARAMS.iter().position(|p| *p == slot) {
+            let mut now = litw(this as usize);
+            now.1[k] = value;
+            LITW.with(|c| c.set(now));
+        }
+    }
     if slot as usize == VS_CBV_HIGH && casting() && !is_ours() {
         let now = cast(this as usize);
         CAST.with(|c| c.set((now.0, value, now.2, now.3)));
@@ -293,7 +340,34 @@ unsafe extern "system" fn gtable_hook(this: *mut c_void, slot: u32, value: u64) 
     let original: SlotFn = std::mem::transmute(O_GTABLE.load(Ordering::Relaxed));
     original(this, slot, value)
 }
-slot_hook!(ctable_hook, O_CTABLE, Ev::CTable);
+unsafe extern "system" fn ctable_hook(this: *mut c_void, slot: u32, value: u64) {
+    // (PARTY-NATIVE-LIGHT round 2, discovery) the compute tables 0..7 of the list (the volume builders' dispatches)
+    if slot < 8 && watching() && !is_ours() {
+        let mut now = clitw(this as usize);
+        now.1[slot as usize] = value;
+        CLITW.with(|c| c.set(now));
+    }
+    if active() {
+        record(this as usize, Ev::CTable(slot, value));
+    }
+    let original: SlotFn = std::mem::transmute(O_CTABLE.load(Ordering::Relaxed));
+    original(this, slot, value)
+}
+
+thread_local! {
+    /// (PARTY-NATIVE-LIGHT round 2) the list this thread records and its compute tables 0..7 (the discovery watch).
+    static CLITW: std::cell::Cell<(usize, [u64; 8])> = const { std::cell::Cell::new((0, [0; 8])) };
+}
+
+#[inline]
+fn clitw(list: usize) -> (usize, [u64; 8]) {
+    let now = CLITW.with(|c| c.get());
+    if now.0 == list {
+        now
+    } else {
+        (list, [0; 8])
+    }
+}
 
 /// Hooks the entries (after hook::install; undone by hook::remove with the others).
 pub fn install() -> Result<(), String> {
@@ -359,12 +433,40 @@ pub fn stream(list: usize) -> Vec<Ev> {
 
 /// Root parameters followed (the game's graphics root signature has 36).
 pub const SLOTS: usize = 40;
-/// The game's ONE graphics root signature (read from the RTS0 chunk of its shaders, 2.7.1.0):
-/// per stage seven tables (CBV b0-3, CBV b4-13, SRV t0-3, SRV t4-19, SRV t20-65, samplers s0-3,
-/// samplers s4-15), stages in the order VS 0.., HS 7.., DS 14.., GS 21.., PS 28..; 35 = UAVs.
-pub const PS_CBV_LOW: usize = 28;
 pub const PS_CBV_HIGH: usize = 29;
-pub const PS_SRV_HIGH: usize = 32;
+/// (PARTY-NATIVE) The GX root signature's pixel-stage tables of b0..b3 and t0..t3 (the fog composite's CB_SHADER_COMMON_PARAM and
+/// g_InScatterTex: ffx.rs).
+pub const PS_CBV_LOW: usize = 28;
+pub const PS_SRV_LOW: usize = 30;
+
+thread_local! {
+    /// (PARTY-NATIVE) the list this thread records, its pipeline state and its pixel-stage tables 28 / 30 (the watch).
+    static FOGW: std::cell::Cell<(usize, usize, u64, u64)> = const { std::cell::Cell::new((0, 0, 0, 0)) };
+}
+
+#[inline]
+fn fogw(list: usize) -> (usize, usize, u64, u64) {
+    let now = FOGW.with(|c| c.get());
+    if now.0 == list {
+        now
+    } else {
+        (list, 0, 0, 0)
+    }
+}
+thread_local! {
+    /// (PARTY-NATIVE-LIGHT) the list this thread records and its tables of ffx.rs `LIT_PARAMS` (the watch).
+    static LITW: std::cell::Cell<(usize, [u64; crate::ffx::LIT_N])> = const { std::cell::Cell::new((0, [0; crate::ffx::LIT_N])) };
+}
+
+#[inline]
+fn litw(list: usize) -> (usize, [u64; crate::ffx::LIT_N]) {
+    let now = LITW.with(|c| c.get());
+    if now.0 == list {
+        now
+    } else {
+        (list, [0; crate::ffx::LIT_N])
+    }
+}
 pub const VS_CBV_HIGH: usize = 1;
 
 /// The binding state while a stream is replayed.
@@ -469,6 +571,7 @@ pub fn describe(submission: u32, lists: &[usize], resource: &dyn Fn(usize) -> St
         let mut big = 0u32;
         let mut per_slot: Vec<Vec<u64>> = vec![Vec::new(); SLOTS];
         let mut depth_state: HashMap<usize, i32> = HashMap::new();
+        let mut roles_listed = 0u32; // (PARTY-NATIVE)
         let flush = |lines: &mut Vec<String>, big: &mut u32, per_slot: &mut Vec<Vec<u64>>| {
             if *big > 0 {
                 let mut text = format!("      {} larger draws; tables per root parameter:", *big);
@@ -509,7 +612,14 @@ pub fn describe(submission: u32, lists: &[usize], resource: &dyn Fn(usize) -> St
                     depth_state.iter().map(|(r, s)| format!("{} {}", resource(*r), crate::survey::state_text(*s))).collect::<Vec<_>>().join(" | ")
                 ));
             }
+            // (PARTY-NATIVE) the game's lit / fogged effects and its fog composite, by name (ffx.rs), every draw of theirs with its tables
+            let role = crate::ffx::role_text(b.pso);
             match *ev {
+                Ev::Draw { indexed, count, instances } if !role.is_empty() && roles_listed < 400 => {
+                    roles_listed += 1;
+                    lines.push(format!("      draw {}{count} x{instances} pso {:#x} [{role}] root {:#x} heaps {:#x} {:#x} tables {{{}}} cbv {{{}}}", if indexed { "indexed " } else { "" }, b.pso, b.groot, b.heaps[0], b.heaps[1], slots(&b.gtable), slots(&b.gcbv)));
+                    want(&b, &mut wanted);
+                }
                 Ev::Draw { indexed, count, instances } => {
                     if count <= 6 {
                         lines.push(format!("      draw {}{count} x{instances} pso {:#x} root {:#x} heaps {:#x} {:#x} tables {{{}}}", if indexed { "indexed " } else { "" }, b.pso, b.groot, b.heaps[0], b.heaps[1], slots(&b.gtable)));
@@ -528,7 +638,9 @@ pub fn describe(submission: u32, lists: &[usize], resource: &dyn Fn(usize) -> St
                     }
                 }
                 Ev::Dispatch(x, y, z) => {
-                    lines.push(format!("      dispatch {x}x{y}x{z} pso {:#x} root {:#x} tables {{{}}}", b.pso, b.croot, slots(&b.ctable)));
+                    // (PARTY-NATIVE-LIGHT round 2) with its recognised role (the volume builders: ffx.rs)
+                    let named = if role.is_empty() { String::new() } else { format!(" [{role}]") };
+                    lines.push(format!("      dispatch {x}x{y}x{z} pso {:#x}{named} root {:#x} tables {{{}}}", b.pso, b.croot, slots(&b.ctable)));
                 }
                 _ => {}
             }
@@ -542,7 +654,7 @@ pub fn describe(submission: u32, lists: &[usize], resource: &dyn Fn(usize) -> St
 pub fn rows_text(title: &str, words: &[u32]) -> Vec<String> {
     let mut lines = vec![format!("---- constant buffer {title}")];
     let mut zeros = 0u32;
-    for (k, row) in words.chunks_exact(4).enumerate() {
+    for (k, row) in words.as_chunks::<4>().0.iter().enumerate() {
         if row.iter().all(|w| *w == 0) {
             zeros += 1;
             continue;

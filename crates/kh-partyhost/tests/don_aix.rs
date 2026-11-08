@@ -5,9 +5,9 @@
 //! - range: an enemy closing in makes him retreat; the attunement picks (the target's weakness, Water when Sora uses
 //!   Thunder, Light when the party is low); the Cure line by KH3's MetaAI; Aero Barrier / Ball Lightning targets;
 //! - never a Release; the test level's enemy choice with his aggro abilities (Low Profile, Distraction, Taunt Pass).
-//! The casts themselves are DON-MAGIC's (`cast::begin`): until it lands they are refused, so a choice is measured as
-//! CHOSEN (`DonProgState::ai[..].chosen`, `last`), the attunement as DONE (its core runs here).
-//! `cargo test -p kh-partyhost --test don_aix -- --nocapture` prints each scenario's numbers.
+//!   The casts themselves are DON-MAGIC's (`cast::begin`): until it lands they are refused, so a choice is measured as
+//!   CHOSEN (`DonProgState::ai[..].chosen`, `last`), the attunement as DONE (its core runs here).
+//!   `cargo test -p kh-partyhost --test don_aix -- --nocapture` prints each scenario's numbers.
 
 use kh_core::host::{HitResult, HurtShape, TargetDefense, TargetFlags, TargetInfo};
 use kh_core::status::LoadoutValue;
@@ -97,6 +97,13 @@ impl kh_core::Targets for Foes {
     }
     fn engaged_count(&self) -> u32 {
         self.list.len() as u32
+    }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
     }
 }
 

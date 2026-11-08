@@ -22,19 +22,24 @@
 #![forbid(unsafe_code)]
 
 pub mod actions;
-pub mod balance; // (GOOFY-BAL) the friend leaders' stats and damage taken, balanced like Sora
+pub mod balance; // (GF-STATS) the friends' own stats and the damage they take
 #[cfg(feature = "ai")]
 pub mod ai_body;
 pub mod boosts; // (IT) the roster's permanent stat boosts (one total for every character, unlocked or not)
+pub mod growth; // (GF-STATS) what the bosses gave each friend, raw amounts; Goofy's banked rank steps
 pub mod donald; // (DON1) the Donald overhaul's shared foundation (documentation/DONALD_OVERHAUL.md; build/sora_tmp/party/DON_PLAN.md)
 pub mod anim;
 pub mod command;
 pub mod hitfx; // (AUD) a friend's melee hit: its sound and effect on contact (the audit found none)
 pub mod guard; // (GOOFY-GG) Goofy's GUARD gauge (his block's meter; the silver HUD bar above MP)
+pub mod goofy; // (GOOFY) the Goofy overhaul: parries, counters, Resolve, ranks (documentation/GOOFY_OVERHAUL.md)
 pub mod host;
-pub mod face; // (ZETTA) a member's face-clip slot (any face clip over the body pose; the FACE stream builds on it)
+pub mod freeze_fx; // (FREEZE-FX) KH3's frozen look on a member while his BadStatFreeze runs
+pub mod face;// (ZETTA) a member's face-clip slot (any face clip over the body pose; the FACE stream builds on it)
 pub mod hurt; // (GOOFY-HR) the hit reactions of every playable character (hurt / blow / down / get-up / air recovery)
+pub mod repel; // (THE USER 2026-11-02) every member bounces off a raised shield with his own KH3 Reflect clip
 pub mod ids;
+pub mod mp_rule; // (THE USER 2026-11-02) one MP rule for every member: the last MP buys a move, then MP Charge ("MP reserve")
 pub mod notify_seam;
 // (party P) stream P owns src/pad/** (the playable members)
 pub mod pad;
@@ -57,6 +62,7 @@ pub mod leader_magic; // (party X2) a friend leader casts Sora's magic; Customiz
 pub mod locomotion; // (party K1) the AI members' follow speed and locomotion
 pub mod view;
 pub mod yhud; // (YHUD) the Y stack and the player's Y belong to the controlled character
+pub mod weapon_draw; // (PARTY-WEAPONS) the friends' weapon out in combat / away out of it, as KH3 (and Sora's Keyblade)
 
 pub use command::{ActionDef, CommandStatus, CommandTicket, ItemKind, LocomotionDef, MemberCommand, MoveGoal, TargetRef};
 pub use host::{NullPartyHost, PartyHost};
@@ -66,4 +72,5 @@ pub use states::NpcStateId;
 pub use ladder::{LadderJump, Leap};
 pub use status::FriendStatus;
 pub use guard::{Guard, GuardView}; // (GOOFY-GG)
+pub use goofy::Telegraph; // (GOOFY) the host's feed of attacks that are coming
 pub use view::{ActionCooldowns, AnimView, ItemSlot, MemberView, PartyCamera, PartyEvent, PartyEventKind, PartyOutput, SoraHeal, SoraView};

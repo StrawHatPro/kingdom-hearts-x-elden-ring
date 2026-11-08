@@ -1,8 +1,7 @@
 //! C3 (2026-10-15): the node bodies transcribed from the decompiled C. Pure checks on the action
 //! definitions' validation (ValidateAction 0x14047FB20 -> CDO slots 125 / 127 / 129) with the
 //! game's own definition classes from the pack, plus tree-level checks of the field follow.
-mod common;
-use common::*;
+use crate::common::*;
 use glam::Vec3;
 use kh_ai::api::{ActorRef, ActorView};
 use kh_ai::nodes::validate::{norm, ActionCheck, CheckWorld, Me};

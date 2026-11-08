@@ -12,7 +12,7 @@ use crate::api::{ActorRef, ActorView, AiCommand, AiCommandStatus, AiGoal};
 use crate::bb::{is_valid_location, BbObject, BbValue};
 use crate::bt::{AbortMode, Ctx, DecoEffect, DecoratorNode, Mem, Res, ServiceNode, TaskNode};
 use crate::eqs::{self, Params, Querier};
-use crate::pack::{enum_value, parr, passet, pb, pf, pi, pkey, pnative, pobj, ps, ptag, AiPack, Props};
+use crate::pack::{enum_value, parr, passet, pb, pf, pi, pkey, pobj, ps, ptag, AiPack, Props};
 use glam::Vec3;
 
 pub mod validate;
@@ -1604,8 +1604,8 @@ impl ServiceNode for FindAttackLocationService {
 /// - FollowInFormationPreference = (dot(player forward, camera forward) + 1) / 2
 ///   * ForwardPreferencePlayerNotMovingCurve(player TimeMotionless),
 /// - WaterSurfaceLocation only while both swim (movement mode 4) [not modelled: nobody swims].
-/// The TimeMotionless / average-direction accumulators are the movement components'
-/// FUN_140591690 (C4: `controller::MotionTrack` of the player and of this pawn).
+///   The TimeMotionless / average-direction accumulators are the movement components'
+///   FUN_140591690 (C4: `controller::MotionTrack` of the player and of this pawn).
 #[derive(Debug)]
 struct InterpretPlayerIntent {
     intent: Option<String>,
@@ -2012,9 +2012,4 @@ pub fn service_default_deviation(class: &str) -> f32 {
         "TresBTService_GameplayFocus" => 0.0,
         _ => 0.1,
     }
-}
-
-/// Is the class's `pnative` context known (for the report).
-pub fn _unused(p: &Props) -> Option<String> {
-    pnative(p, "Context")
 }

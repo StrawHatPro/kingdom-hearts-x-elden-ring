@@ -7,7 +7,7 @@
 
 use kh_core::{PadButtons, Sora, TargetId, Vec3};
 use kh_host::hud::{Frame, Hud, HudTargets, TargetView};
-use kh_host::hud_layers::{draw_movie_in, stage_root, Draw, Drawn, Perf};
+use kh_host::hud_layers::{draw_movie_in, stage_root, Draw, DrawArea, Drawn, Perf};
 use kh_host::party::{PartyChara, PartyHudSlot};
 
 struct NoTargets;
@@ -33,7 +33,7 @@ fn picture(fonts: &kh_ui::Fonts, movie: &kh_ui::Movie) -> Vec<u8> {
     let (stage, view) = stage_root(1920.0, 1080.0);
     let mut draw = Draw::default();
     let mut renderer = kh_ui::render::Renderer::new(fonts.clone());
-    let rect = match draw_movie_in(&mut draw, &mut renderer, movie, &stage, (1920.0, 1080.0), true, Perf::default(), Some(view)) {
+    let rect = match draw_movie_in(&mut draw, &mut renderer, movie, &stage, DrawArea { size: (1920.0, 1080.0), clip: Some(view) }, true, Perf::default()) {
         Drawn::Picture(rect, _) => rect,
         _ => panic!("the command menu drew nothing"),
     };
@@ -51,7 +51,7 @@ fn picture(fonts: &kh_ui::Fonts, movie: &kh_ui::Movie) -> Vec<u8> {
     }
     // straight-alpha over a dark red-brown floor (the reference's room)
     let mut out = vec![0u8; 1920 * 1080 * 4];
-    for (i, (o, p)) in out.chunks_exact_mut(4).zip(layer.chunks_exact(4)).enumerate() {
+    for (i, (o, p)) in out.as_chunks_mut::<4>().0.iter_mut().zip(layer.as_chunks::<4>().0).enumerate() {
         let y = (i / 1920) as f32 / 1080.0;
         let bg = [60.0 + 40.0 * y, 30.0 + 10.0 * y, 22.0];
         let a = p[3] as f32 / 255.0;
@@ -99,7 +99,7 @@ fn the_save_point_prompt_is_kh3s_save_reaction_command_for_every_leader() {
     save("prompt_1_save.png", 1920, 1080, &shown);
     // what it adds: a green bar over the command menu, bottom left
     let (mut x0, mut y0, mut x1, mut y1, mut n, mut green) = (1920usize, 1080usize, 0usize, 0usize, 0usize, 0usize);
-    for (i, (a, b)) in before.chunks_exact(4).zip(shown.chunks_exact(4)).enumerate() {
+    for (i, (a, b)) in before.as_chunks::<4>().0.iter().zip(shown.as_chunks::<4>().0).enumerate() {
         if a.iter().zip(b).take(3).any(|(p, q)| p.abs_diff(*q) > 24) {
             let (x, y) = (i % 1920, i / 1920);
             (x0, y0, x1, y1, n) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y), n + 1);
@@ -145,7 +145,7 @@ fn the_save_point_prompt_is_kh3s_save_reaction_command_for_every_leader() {
     let m = hud.movie("HudCommand").unwrap();
     assert!(matches!(m.current_label(EV), Some("out" | "off")), "taken off with KH3's out (then off): {:?}", m.current_label(EV));
     let after = picture(&fonts, m);
-    let green_left = after.chunks_exact(4).enumerate().filter(|(i, p)| i % 1920 < 960 && i / 1920 > 540 && p[1] as i32 > p[0] as i32 + 60 && p[1] as i32 > p[2] as i32 + 60).count();
+    let green_left = after.as_chunks::<4>().0.iter().enumerate().filter(|(i, p)| i % 1920 < 960 && i / 1920 > 540 && p[1] as i32 > p[0] as i32 + 60 && p[1] as i32 > p[2] as i32 + 60).count();
     assert!(green_left < green / 10, "no green bar left ({green_left} px)");
     save("prompt_3_gone.png", 1920, 1080, &after);
 }

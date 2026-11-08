@@ -46,9 +46,24 @@ use crate::rig::loadout::{at_test_level, new_game, parse_test_levels, TestLevel}
 /// byte for byte what the code before S6 wrote (a host without the party, or with it switched off, changes nothing;
 /// an older build still reads those files). A version-5 file is refused by an older build (`Loaded::Refused`: it is
 /// never overwritten there), so the friends' progression cannot be lost to a downgrade.
-pub const VERSION: u32 = 5;
+///
+/// 6 (2026-11-03, weapons P1; documentation/KH3_WEAPONS_PLAN.md 1.2) = the `weapons` block is kept
+/// ([`crate::weapons::WeaponsState`]: the Keyblades owned and their Forge levels, Sora's three Keyblade slots and the one
+/// in hand, the Moogle Workshop's record: goals, photo missions, the recipes' "new" marks seen, made counts, Items Created,
+/// materials ever obtained by kind and in total, ranks seen, materials made buyable, the Moogle level, its stock). The same
+/// rule as version 5: a file is WRITTEN as version 6 only when the block holds something an older file cannot say (a
+/// Keyblade level above what `weapon_upgrade` gives, a slot or the one in hand set, a material used up, a goal ...), i.e.
+/// when it is not what the migration would make of the file's own older fields ([`SoraSave::written_version`]); otherwise
+/// as version 5 / 4 without the block, byte for byte as before. A version-6 file is refused by an older build
+/// (`Loaded::Refused`, never overwritten there). Reading a file of version 5 or older makes the block by the MIGRATION
+/// (`WeaponsState::from_legacy`: the Kingdom Key's level from `weapon_upgrade`, "ever obtained" back-filled from the
+/// stock, nothing achieved; P6a's goals are evaluated on load through `weapons::set_load_hook`; P9b's catch-up finds no
+/// `kb:` / `wsrc:` record and gives what is due).
+pub const VERSION: u32 = 6;
 /// (ER party S6) The version a file without the friends record is written as.
 pub const VERSION_WITHOUT_FRIENDS: u32 = 4;
+/// (weapons P1) The version a file with the friends record but without the weapons block is written as.
+pub const VERSION_WITHOUT_WEAPONS: u32 = 5;
 pub const EXTENSION: &str = "khsave";
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -107,6 +122,10 @@ pub struct SoraSave {
     /// (XSI, 2026-10-16) The Customize screen's Shotlock choice (`CommandState::shotlock`: 0 the Keyblade's own, 11
     /// Spectral Rays). Additive: a save without it reads 0.
     pub shotlock: u8,
+    /// (Summon, THE USER 2026-11-02: "make a new area for him to equip spirit ashes (4)") The four equipped spirit ashes
+    /// (`CommandState::spirit_ashes`: Elden Ring goods ids at level 0, 0 = empty), in the "command" block. ADDITIVE, no
+    /// version change (as `shotlock`): a save without it reads four empty slots; an older build ignores the field.
+    pub spirit_ashes: [u32; 4],
     // ---- the pouch
     pub pouch_filled: bool,
     pub pouch_slots: Vec<PouchSlotSave>,
@@ -124,6 +143,9 @@ pub struct SoraSave {
     /// DF) reads as "" = the difficulty of the base loadout, which is what such a file was made at (STANDARD); an older build
     /// ignores the field. See [`SoraSave::switch_difficulty`] for an existing character.
     pub difficulty: String,
+    /// (version 6, weapons P1) THE WEAPONS BLOCK: the running record of `crate::weapons` when captured (with every
+    /// Keyblade the legacy fields show owned); for a file of version 5 or older, what the migration makes of it.
+    pub weapons: crate::weapons::WeaponsState,
 }
 
 /// Why a save text was not accepted.
@@ -177,11 +199,11 @@ pub fn grant(sora: &mut Sora, reward: Reward) -> RewardOutcome {
     sora.grant(reward)
 }
 
-/// [`grant`], and the save of `key` in `dir` is written at once when something changed.
-pub fn grant_and_write(sora: &mut Sora, reward: Reward, inventory: &Inventory, dir: &Path, key: &str, character: &str, play_seconds: u64, host_play_ms: u64) -> std::io::Result<RewardOutcome> {
+/// [`grant`], and the save at `path` ([`save_path`]) is written at once when something changed.
+pub fn grant_and_write(sora: &mut Sora, reward: Reward, inventory: &Inventory, path: &Path, character: &str, play_seconds: u64, host_play_ms: u64) -> std::io::Result<RewardOutcome> {
     let outcome = sora.grant(reward);
     if outcome.changed {
-        write(&save_path(dir, key), &SoraSave::capture(sora, inventory, character, play_seconds, host_play_ms))?;
+        write(path, &SoraSave::capture(sora, inventory, character, play_seconds, host_play_ms))?;
     }
     Ok(outcome)
 }
@@ -239,6 +261,7 @@ impl SoraSave {
             shortcuts: command.shortcuts,
             shortcut_page: command.shortcut_page,
             shotlock: command.shotlock, // (XSI)
+            spirit_ashes: command.spirit_ashes, // (Summon)
             pouch_filled: pouch.filled,
             pouch_slots: pouch.slots.iter().map(|s| PouchSlotSave { item: s.item.map(|i| i.name().to_string()), exists: s.exists, fixed: s.fixed, auto_reload: s.auto_reload, used: s.used }).collect(),
             pouch_stock: pouch.stock.iter().map(|(item, n)| (item.name().to_string(), *n)).collect(),
@@ -247,6 +270,9 @@ impl SoraSave {
             records: inventory.records.clone(),
             party: Value::Null, // (party P) the host fills it
             difficulty: status.game_level.name().to_string(), // (DF)
+            // (weapons P1) what the older fields say; the host puts the running record in (`take_running_weapons`), as it
+            // fills `party`
+            weapons: crate::weapons::WeaponsState::from_legacy(&status.weapon, status.weapon_upgrade, &inventory.spare_weapons, &inventory.equipment, 0),
         }
     }
 
@@ -314,6 +340,7 @@ impl SoraSave {
             (command.magic_slots, command.tier_chosen, command.shortcuts, command.shortcut_page) = (self.magic_slots, self.tier_chosen, self.shortcuts, self.shortcut_page.min(2));
         }
         sora.command_mut().shotlock = self.shotlock; // (XSI)
+        sora.command_mut().spirit_ashes = self.spirit_ashes; // (Summon)
         if self.pouch_filled {
             let pouch = &mut sora.magic_mut().pouch;
             for (to, from) in pouch.slots.iter_mut().zip(&self.pouch_slots) {
@@ -327,11 +354,39 @@ impl SoraSave {
         inventory.records = self.records.clone();
     }
 
-    /// (ER party S6) THE VERSION THIS SAVE IS WRITTEN AS: 5 when its party record holds the friends record (an array
-    /// `party.friends`), else 4 (what the code before the friends record wrote; see [`VERSION`]).
+    /// (weapons P1) THE HOST'S CAPTURE STEP FOR THE WEAPONS (as it fills `party`): the running record of `crate::weapons`
+    /// goes into this save, with every Keyblade its own fields show owned (in hand, in a spare slot, in the stock) and the
+    /// Kingdom Key in hand at least at `weapon_upgrade`.
+    pub fn take_running_weapons(&mut self) {
+        self.weapons = crate::weapons::snapshot().with_held(&self.weapon, self.weapon_upgrade, &self.spare_weapons, &self.stock_equipment);
+    }
+
+    /// (weapons P1) THE HOST'S APPLY STEP FOR THE WEAPONS (beside [`SoraSave::apply`], as `set_formation_record` is): this
+    /// save's weapons record runs from now on (then P6a's load hook, `weapons::set_load_hook`). A new game calls
+    /// `crate::weapons::begin_new_game` instead.
+    pub fn run_weapons(&self) {
+        crate::weapons::restore(self.weapons.clone());
+    }
+
+    /// (weapons P1) What the migration makes of this save's own older fields (the Keyblade in hand and its upgrade, the
+    /// spare weapons, the stock): the weapons block a file without one stands for.
+    pub fn legacy_weapons(&self) -> crate::weapons::WeaponsState {
+        crate::weapons::WeaponsState::from_legacy(&self.weapon, self.weapon_upgrade, &self.spare_weapons, &self.stock_equipment, self.version.min(VERSION_WITHOUT_WEAPONS))
+    }
+
+    /// (weapons P1) Does the weapons block hold more than the older fields say (then the file must be version 6)?
+    pub fn weapons_need_block(&self) -> bool {
+        !self.weapons.same_progress(&self.legacy_weapons())
+    }
+
+    /// (ER party S6) THE VERSION THIS SAVE IS WRITTEN AS: (weapons P1) 6 when its weapons block holds more than its older
+    /// fields say ([`SoraSave::weapons_need_block`]); else 5 when its party record holds the friends record (an array
+    /// `party.friends`); else 4 (what the code before the friends record wrote; see [`VERSION`]).
     pub fn written_version(&self) -> u32 {
-        if self.party.get("friends").is_some_and(Value::is_array) {
+        if self.weapons_need_block() {
             VERSION
+        } else if self.party.get("friends").is_some_and(Value::is_array) {
+            VERSION_WITHOUT_WEAPONS
         } else {
             VERSION_WITHOUT_FRIENDS
         }
@@ -358,7 +413,7 @@ impl SoraSave {
     ///   / `m_CriticalHaveAbility`: Critical Counter, Critical Recharge, Critical Converter); entering it gives one owned
     ///   copy (not equipped: the player installs them) of each `sora-critical-start` row's ability (at most three).
     ///   The `m_Critical*` set itself is given by `Status::from_loadout` at every load on Critical (equipped).
-    /// Returns what changed, one line per change (empty = nothing to do).
+    ///   Returns what changed, one line per change (empty = nothing to do).
     pub fn switch_difficulty(&mut self, from: GameLevel, to: GameLevel) -> Vec<String> {
         let mut out = Vec::new();
         if from == to {
@@ -405,8 +460,9 @@ impl SoraSave {
     }
 
     pub fn to_json(&self) -> String {
-        let value = json!({
-            "version": self.written_version(), // (ER party S6) 5 only with the friends record
+        let version = self.written_version();
+        let mut value = json!({
+            "version": version, // (ER party S6) 5 only with the friends record; (weapons P1) 6 only with the weapons block
             "character": self.character,
             "play_seconds": self.play_seconds,
             "host_play_ms": self.host_play_ms,
@@ -429,7 +485,7 @@ impl SoraSave {
             "shortcut_names": self.shortcut_names,
             "item_slots": self.item_slots,
             "items": self.items.iter().map(|(item, count)| json!({ "item": item, "count": count })).collect::<Vec<_>>(),
-            "command": { "filled": self.command_filled, "magic_slots": self.magic_slots, "tier_chosen": self.tier_chosen, "shortcuts": self.shortcuts, "shortcut_page": self.shortcut_page, "shotlock": self.shotlock },
+            "command": { "filled": self.command_filled, "magic_slots": self.magic_slots, "tier_chosen": self.tier_chosen, "shortcuts": self.shortcuts, "shortcut_page": self.shortcut_page, "shotlock": self.shotlock, "spirit_ashes": self.spirit_ashes },
             "pouch": {
                 "filled": self.pouch_filled,
                 "slots": self.pouch_slots.iter().map(|s| json!({ "item": s.item, "exists": s.exists, "fixed": s.fixed, "auto_reload": s.auto_reload, "used": s.used })).collect::<Vec<_>>(),
@@ -441,6 +497,10 @@ impl SoraSave {
             "party": self.party,
             "difficulty": self.difficulty, // (DF)
         });
+        // (weapons P1) the block only in a version-6 file (a version-5 / 4 file stays byte for byte what it was)
+        if version == VERSION {
+            value["weapons"] = self.weapons.to_value(&self.weapons.slots_or(&self.weapon, &self.spare_weapons));
+        }
         serde_json::to_string_pretty(&value).unwrap_or_default()
     }
 
@@ -467,7 +527,7 @@ impl SoraSave {
         }
         let tiers = command["tier_chosen"].as_array().filter(|a| a.len() == 6).ok_or(SaveError::Field("command.tier_chosen"))?;
         let spare = list("spare_weapons")?;
-        Ok(SoraSave {
+        let mut save = SoraSave {
             version: VERSION,
             character: v["character"].as_str().unwrap_or("").to_string(),
             play_seconds: v["play_seconds"].as_u64().unwrap_or(0),
@@ -498,6 +558,8 @@ impl SoraSave {
             shortcuts,
             shortcut_page: command["shortcut_page"].as_u64().unwrap_or(0).min(2) as u8,
             shotlock: command["shotlock"].as_u64().filter(|k| *k <= 255).unwrap_or(0) as u8, // (XSI) additive
+            // (Summon) additive: missing (an older save) or odd = four empty slots; a slot that is not a goods id = empty
+            spirit_ashes: [0, 1, 2, 3].map(|k| command["spirit_ashes"][k].as_u64().and_then(|id| u32::try_from(id).ok()).unwrap_or(0)),
             pouch_filled: pouch["filled"].as_bool().ok_or(SaveError::Field("pouch.filled"))?,
             pouch_slots: pouch["slots"].as_array().ok_or(SaveError::Field("pouch.slots"))?.iter().map(|s| PouchSlotSave { item: s["item"].as_str().map(str::to_string), exists: s["exists"].as_bool().unwrap_or(false), fixed: s["fixed"].as_bool().unwrap_or(false), auto_reload: s["auto_reload"].as_bool().unwrap_or(false), used: s["used"].as_bool().unwrap_or(false) }).collect(),
             pouch_stock: pouch["stock"].as_array().ok_or(SaveError::Field("pouch.stock"))?.iter().map(|i| Some((i["item"].as_str()?.to_string(), i["count"].as_u64()?.min(255) as u8))).collect::<Option<Vec<_>>>().ok_or(SaveError::Field("pouch.stock"))?,
@@ -509,7 +571,16 @@ impl SoraSave {
             party: v["party"].clone(),
             // (DF) none in a file written before the difficulty was kept
             difficulty: v["difficulty"].as_str().filter(|d| kh_core::status::GameLevel::from_name(d).is_some()).map(str::to_ascii_uppercase).unwrap_or_default(),
-        })
+            weapons: crate::weapons::WeaponsState::start(),
+        };
+        // (weapons P1) a version-6 file's own block (missing or odd: the file is not usable, the backup is tried); an older
+        // file's block is what the migration makes of its own fields (5 -> 6 of [`upgrade`])
+        save.weapons = if version >= VERSION {
+            crate::weapons::WeaponsState::from_value(&v["weapons"]).ok_or(SaveError::Field("weapons"))?
+        } else {
+            crate::weapons::WeaponsState::from_legacy(&save.weapon, save.weapon_upgrade, &save.spare_weapons, &save.stock_equipment, version)
+        };
+        Ok(save)
     }
 }
 
@@ -549,6 +620,13 @@ fn upgrade(value: &mut Value, from: u32) -> Result<(), SaveError> {
         // record itself is kept as it is.
         if step == 4 && value.get("party").is_none() {
             value["party"] = Value::Null;
+        }
+        // 5 -> 6 (weapons P1): no weapons block was kept before. It is made from the file's own fields once they are read
+        // (`SoraSave::from_json`: `WeaponsState::from_legacy`), not here; a stray block in an older file is not trusted.
+        if step == 5 {
+            if let Some(object) = value.as_object_mut() {
+                object.remove("weapons");
+            }
         }
     }
     value["version"] = json!(VERSION);
@@ -776,7 +854,6 @@ pub fn slot_summary_of(index: usize, save: &SoraSave) -> kh_ui::saveload::SlotSu
         // (party P) the picture of the party leader who made the save (the user's request); a save without a party
         // record (every save before version 4) reads as Sora
         // (SV, ERT4) the leader the record names once it is true to its unlocks (a Goofy start's title-time file named Sora);
-        // any roster character has a picture (his roster key: a new character needs no new case)
         portrait: portrait_of(crate::formation::record_leader(&save.party)),
         // (DF) KH3's row shows the difficulty (kh3_menu.save.difficulty_N) for a save that is not Standard; a Standard save
         // (every save before DF) keeps the row as it was (dec032: "keep everything as it was on 'normal' mode")
@@ -795,8 +872,6 @@ pub fn portrait_of(leader: Option<crate::party::PartyChara>) -> kh_ui::saveload:
         None | Some(C::Sora) => kh_ui::saveload::Portrait::Sora,
         Some(C::Donald) => kh_ui::saveload::Portrait::Donald,
         Some(C::Goofy) => kh_ui::saveload::Portrait::Goofy,
-        #[allow(unreachable_patterns)]
-        Some(other) => kh_ui::saveload::Portrait::Chara(crate::formation::key_of(other)),
     }
 }
 
@@ -1476,7 +1551,7 @@ mod newgame_tests {
         // Through the file and back into a fresh Sora built from the level-99 sheet.
         let dir = std::env::temp_dir().join(format!("khsave_newgame_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let outcome = grant_and_write(&mut sora, Reward::Ability { kind: A::Glide, copies: 1 }, &Inventory::default(), &dir, "k", "Tarnished", 5, 6).unwrap();
+        let outcome = grant_and_write(&mut sora, Reward::Ability { kind: A::Glide, copies: 1 }, &Inventory::default(), &save_path(&dir, "k"), "Tarnished", 5, 6).unwrap();
         assert!(outcome.changed);
         let Loaded::Save(save) = load(&dir, "k", &mut |_| {}) else { panic!("no save") };
         assert_eq!((save.version, save.desire.as_str(), save.ability_path, save.choice()), (VERSION, "wisdom", 2, choice));
@@ -1663,5 +1738,252 @@ mod party_v5_tests {
             other => panic!("{other:?}"),
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------- (Summon)
+/// (Summon, THE USER 2026-11-02: "make a new area for him to equip spirit ashes (4)") The equipped spirit ashes ride in the
+/// "command" block: the round trip through the text and through `apply`, and an older file without the field.
+#[cfg(test)]
+mod spirit_ash_tests {
+    use super::*;
+
+    fn base() -> Loadout {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../sheets/port/sora-loadout-99.json");
+        crate::rig::loadout::parse(path, &std::fs::read_to_string(path).expect("the loadout sheet")).expect("parse").0
+    }
+
+    fn sora(base: &Loadout) -> Sora {
+        let mut sora = Sora::new(kh_core::SORA_PARAMS, kh_core::Pose { position: glam::Vec3::ZERO, yaw: 0.0 }).with_status(Status::from_loadout(&new_game_loadout(base, None)));
+        kh_core::command::customize::ensure(&mut sora);
+        sora
+    }
+
+    #[test]
+    fn summon_the_four_equipped_ashes_round_trip_with_soras_save() {
+        let base = base();
+        let mut one = sora(&base);
+        one.command_mut().spirit_ashes = [200000, 0, 207000, 213000];
+        let save = SoraSave::capture(&one, &Inventory::default(), "Tarnished", 60, 1000);
+        assert_eq!(save.spirit_ashes, [200000, 0, 207000, 213000]);
+        let text = save.to_json();
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["command"]["spirit_ashes"], json!([200000, 0, 207000, 213000]), "in the command block");
+        assert_eq!(value["version"], json!(save.written_version()), "no version change");
+        let back = SoraSave::from_json(&text).unwrap();
+        assert_eq!(back, save);
+        // restored on load
+        let mut two = sora(&base);
+        back.apply(&base, &mut two, &mut Inventory::default());
+        assert_eq!(two.command().spirit_ashes, [200000, 0, 207000, 213000]);
+    }
+
+    #[test]
+    fn summon_an_older_save_without_the_field_loads_with_four_empty_slots() {
+        let base = base();
+        let mut one = sora(&base);
+        one.command_mut().spirit_ashes = [200000, 0, 0, 0];
+        let mut value: Value = serde_json::from_str(&SoraSave::capture(&one, &Inventory::default(), "Tarnished", 60, 1000).to_json()).unwrap();
+        value["command"].as_object_mut().unwrap().remove("spirit_ashes");
+        let old = SoraSave::from_json(&value.to_string()).unwrap();
+        assert_eq!(old.spirit_ashes, [0; 4]);
+        let mut two = sora(&base);
+        two.command_mut().spirit_ashes = [1, 2, 3, 4];
+        old.apply(&base, &mut two, &mut Inventory::default());
+        assert_eq!(two.command().spirit_ashes, [0; 4], "the save's empty slots, not what was there");
+        // an odd value (a string, a number too large for a goods id): that slot reads empty
+        value["command"]["spirit_ashes"] = json!(["x", 5_000_000_000u64, 213000]);
+        assert_eq!(SoraSave::from_json(&value.to_string()).unwrap().spirit_ashes, [0, 0, 213000, 0]);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------- (weapons P1)
+/// (weapons P1, documentation/KH3_WEAPONS_PLAN.md 1.2) The version-6 weapons block: written only when needed, the round
+/// trip, the migration of REAL older saves (copies in tests/saves_old: the user's deployed saves of versions 3, 4 and 5),
+/// the back-fill of "ever obtained", and the refusal of a version-6 file by an older build.
+#[cfg(test)]
+mod weapons_v6_tests {
+    use super::*;
+    use crate::weapons::{self, OwnedKeyblade, WeaponsState, KINGDOM_KEY};
+
+    const OLD: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/saves_old/");
+
+    fn base() -> Loadout {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../sheets/port/sora-loadout-99.json");
+        crate::rig::loadout::parse(path, &std::fs::read_to_string(path).expect("the loadout sheet")).expect("parse").0
+    }
+
+    fn new_game_save() -> SoraSave {
+        let mut sora = Sora::new(kh_core::SORA_PARAMS, kh_core::Pose { position: glam::Vec3::ZERO, yaw: 0.0 }).with_status(Status::from_loadout(&new_game_loadout(&base(), None)));
+        kh_core::command::customize::ensure(&mut sora);
+        SoraSave::capture(&sora, &Inventory::default(), "Tarnished", 60, 1000)
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("khsave_v6_{}_{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The real older saves: (file name, its JSON).
+    fn old_saves() -> Vec<(String, Value)> {
+        let mut out: Vec<(String, Value)> = std::fs::read_dir(OLD).expect("tests/saves_old").flatten().map(|e| (e.file_name().to_string_lossy().to_string(), serde_json::from_str(&std::fs::read_to_string(e.path()).unwrap()).unwrap())).collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(out.len(), 4);
+        out
+    }
+
+    /// The older build's own rule (save.rs before version 6: `VERSION` 5): a file of a version above what it knows is refused.
+    fn an_older_build_refuses(text: &str) -> bool {
+        const OLDER_VERSION: u64 = 5;
+        serde_json::from_str::<Value>(text).ok().and_then(|v| v["version"].as_u64()).is_some_and(|v| v > OLDER_VERSION)
+    }
+
+    /// A new game and a character without weapons progress: written as before (version 4 / 5, no `weapons` key), so an older
+    /// build still reads it.
+    #[test]
+    fn without_weapons_progress_a_save_is_written_as_before() {
+        let mut save = new_game_save();
+        assert_eq!(save.weapons, WeaponsState::start());
+        assert_eq!(save.written_version(), VERSION_WITHOUT_FRIENDS);
+        let value: Value = serde_json::from_str(&save.to_json()).unwrap();
+        assert!(value.get("weapons").is_none() && value["version"] == 4);
+        // the running record of a new game, picked up by the host: nothing more than the older fields say
+        weapons::begin_new_game();
+        save.take_running_weapons();
+        assert!(!save.weapons_need_block());
+        // materials picked up (ever obtained = held) still need no block
+        save.stock_equipment.push(("MAT_ITEM07".to_string(), 3));
+        weapons::note_material_gain("MAT_ITEM07", 3);
+        save.take_running_weapons();
+        assert_eq!(save.weapons.workshop.obtained_of("MAT_ITEM07"), 3);
+        assert_eq!(save.written_version(), 4, "the stock says it all");
+        assert_eq!(SoraSave::from_json(&save.to_json()).unwrap(), save);
+    }
+
+    /// Progress the older fields cannot say makes the file version 6 with the block; it reads back the same, through the
+    /// file too, and the host's apply step runs it again. An older build refuses it.
+    #[test]
+    fn weapons_progress_makes_a_version_6_file_that_round_trips() {
+        let _door = crate::items::TEST_DOOR.lock().unwrap_or_else(|e| e.into_inner());
+        let mut save = new_game_save();
+        weapons::begin_new_game();
+        assert_eq!(weapons::give_key("WEP_KEYBLADE_SO_03", 1), weapons::Gift::Given(1)); // Favorite Deputy, +1 when obtained
+        assert!(weapons::set_level(KINGDOM_KEY, 3));
+        weapons::set_slots([Some(KINGDOM_KEY.to_string()), Some("WEP_KEYBLADE_SO_03".to_string()), None], 1);
+        weapons::note_material_gain("MAT_ITEM01", 4); // obtained, then used up: none in the stock
+        weapons::with_workshop(|w| {
+            w.goals.push("IC_1".to_string());
+            w.photos.push("IM_3".to_string());
+            w.recipes_seen.push("IS_0".to_string());
+            w.created.insert("IS_0".to_string(), 2);
+            w.items_created = 2;
+            w.ranks_seen.push(1);
+            w.buy_unlocked.push("MAT_ITEM01".to_string());
+            w.raise_moogle_level(2);
+            w.stock.insert("MAT_ITEM02".to_string(), 12);
+        });
+        crate::items::take_given();
+        save.take_running_weapons();
+        assert!(save.weapons_need_block());
+        assert_eq!(save.written_version(), VERSION);
+        let text = save.to_json();
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["version"], 6);
+        assert_eq!(value["weapons"]["keyblades"], json!([{ "key": KINGDOM_KEY, "level": 3 }, { "key": "WEP_KEYBLADE_SO_03", "level": 1 }]));
+        assert_eq!((value["weapons"]["current"].as_u64(), value["weapons"]["slots_set"].as_bool()), (Some(1), Some(true)));
+        assert_eq!(value["weapons"]["workshop"]["obtained"], json!([{ "id": "MAT_ITEM01", "count": 4 }]));
+        assert_eq!(value["weapons"]["workshop"]["moogle_level"], 2);
+        assert!(an_older_build_refuses(&text), "a version-6 file is refused by an older build");
+        let back = SoraSave::from_json(&text).unwrap();
+        assert_eq!(back, save);
+        // through the file (and its backup), and into the running record of another session
+        let dir = scratch("round");
+        let key = character_key("Tarnished", 6);
+        write(&save_path(&dir, &key), &save).unwrap();
+        write(&save_path(&dir, &key), &save).unwrap();
+        let Loaded::Save(read) = load(&dir, &key, &mut |_| {}) else { panic!("not read") };
+        assert_eq!(read, save);
+        weapons::begin_new_game();
+        read.run_weapons();
+        assert_eq!((weapons::level(KINGDOM_KEY), weapons::level("WEP_KEYBLADE_SO_03"), weapons::current_slot()), (Some(3), Some(1), 1));
+        assert_eq!(weapons::workshop(), save.weapons.workshop);
+        let mut again = read.clone();
+        again.take_running_weapons();
+        assert_eq!(again.to_json(), save.to_json(), "byte-identical when written again");
+        // a damaged block: the file is not usable, the backup is used
+        let mut broken = value.clone();
+        broken["weapons"]["workshop"] = json!(7);
+        assert_eq!(SoraSave::from_json(&broken.to_string()), Err(SaveError::Field("weapons")));
+        std::fs::write(save_path(&dir, &key), broken.to_string()).unwrap();
+        assert!(matches!(load(&dir, &key, &mut |_| {}), Loaded::Backup(b) if b == save));
+        // a newer file than this code is refused as before
+        let mut newer = value;
+        newer["version"] = json!(VERSION + 1);
+        assert_eq!(SoraSave::from_json(&newer.to_string()), Err(SaveError::Newer(VERSION + 1)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THE MIGRATION OF REAL OLDER SAVES (versions 3, 4, 5): every field reads as before; the block is made from the file's
+    /// own fields (the Kingdom Key at `weapon_upgrade`, the friends' weapons left in the stock, "ever obtained" = the
+    /// materials held, nothing achieved); written back without progress the file is what it was (version and fields); with
+    /// progress it is version 6 and round-trips.
+    #[test]
+    fn real_older_saves_migrate_to_version_6() {
+        let _door = crate::items::TEST_DOOR.lock().unwrap_or_else(|e| e.into_inner());
+        for (name, value) in old_saves() {
+            let version = value["version"].as_u64().unwrap() as u32;
+            assert!(version < VERSION, "{name}");
+            let text = serde_json::to_string(&value).unwrap();
+            let save = SoraSave::from_json(&text).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!((save.version, save.weapons.migrated_from), (VERSION, version), "{name}");
+            // the Keyblades: the Kingdom Key (in hand in all of them) at the file's upgrade, nothing else
+            assert_eq!(save.weapons.keyblades, vec![OwnedKeyblade { key: KINGDOM_KEY.to_string(), level: save.weapon_upgrade }], "{name}");
+            assert_eq!((save.weapons.slots.clone(), save.weapons.current), (None, 0), "{name}");
+            // back-fill: each of KH3's 60 materials held counts as obtained that often; nothing else is counted
+            let mut held: Vec<(String, u32)> = save.stock_equipment.iter().filter(|e| weapons::is_goal_material(&e.0) && e.1 > 0).cloned().collect();
+            held.sort();
+            let w = save.weapons.workshop.clone();
+            assert_eq!(w.obtained.iter().map(|(k, n)| (k.clone(), *n)).collect::<Vec<_>>(), held, "{name}");
+            assert_eq!(w.total_obtained, held.iter().map(|e| e.1).sum::<u32>(), "{name}");
+            assert!(w.goals.is_empty() && w.photos.is_empty() && w.created.is_empty() && w.moogle_level == 1, "{name}");
+            // the friends' weapons (from Elden Ring staves / shields) stay in the stock
+            let friend = |k: &str| k.starts_with("WEP_DONALD_") || k.starts_with("WEP_GOOFY_");
+            let friends_before = value["stock_equipment"].as_array().unwrap().iter().filter(|e| e["id"].as_str().is_some_and(friend)).count();
+            assert_eq!(save.stock_equipment.iter().filter(|e| friend(&e.0)).count(), friends_before, "{name}");
+            // written back without progress: the version the older rule gives, no block, still readable by the build before
+            let written: Value = serde_json::from_str(&save.to_json()).unwrap();
+            assert_eq!(written["version"], if version >= 5 { 5 } else { 4 }, "{name}");
+            assert!(written.get("weapons").is_none(), "{name}");
+            assert!(!an_older_build_refuses(&save.to_json()), "{name}");
+            assert_eq!(SoraSave::from_json(&save.to_json()).unwrap(), save, "{name}");
+            // the host's apply step: the migrated record runs (the load hook sees `migrated_from`)
+            save.run_weapons();
+            assert_eq!(weapons::snapshot().migrated_from, version, "{name}");
+            // progress after the migration: a Keyblade, a material used up -> version 6, and back
+            let mut on = save.clone();
+            assert_eq!(weapons::give_key("WEP_KEYBLADE_SO_01", 1), weapons::Gift::Given(1), "{name}");
+            if let Some((key, _)) = held.first() {
+                on.stock_equipment.retain(|e| e.0 != *key);
+            }
+            on.take_running_weapons();
+            assert_eq!(on.written_version(), VERSION, "{name}");
+            let v6 = on.to_json();
+            assert!(an_older_build_refuses(&v6), "{name}");
+            let back = SoraSave::from_json(&v6).unwrap();
+            assert_eq!(back, on, "{name}");
+            assert!(back.weapons.owns("WEP_KEYBLADE_SO_01") && back.weapons.workshop.total_obtained == w.total_obtained, "{name}: ever obtained is kept after use");
+            // every older field of the version-6 file is the migrated file's (the block is added, nothing else changes)
+            let mut a: Value = serde_json::from_str(&v6).unwrap();
+            let mut b: Value = serde_json::from_str(&SoraSave { weapons: on.legacy_weapons(), ..on.clone() }.to_json()).unwrap();
+            for v in [&mut a, &mut b] {
+                let o = v.as_object_mut().unwrap();
+                o.remove("version");
+                o.remove("weapons");
+            }
+            assert_eq!(a, b, "{name}");
+            crate::items::take_given();
+        }
     }
 }

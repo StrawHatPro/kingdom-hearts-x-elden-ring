@@ -119,11 +119,11 @@ impl DonAbility {
             DonAbility::CastGuard => "Gives a 30% chance that being hit does not interrupt your spell.",
             DonAbility::SecondChance => kh_gendata::line("kh3_system.ability.detail_sup_0210"),
             DonAbility::WithstandCombo => kh_gendata::line("kh3_system.ability.detail_sup_0220"),
-            DonAbility::FireBoost => "Deal 20% more damage with fire attacks.",
-            DonAbility::BlizzardBoost => kh_gendata::line("kh3_system.ability.detail_sup_0120"),
-            DonAbility::ThunderBoost => kh_gendata::line("kh3_system.ability.detail_sup_0130"),
-            DonAbility::WaterBoost => kh_gendata::line("kh3_system.ability.detail_sup_0140"),
-            DonAbility::AeroBoost => "Deal 20% more damage with aero attacks.",
+            DonAbility::FireBoost => "Fire attacks deal 20% more damage.",
+            DonAbility::BlizzardBoost => "Blizzard attacks deal 20% more damage.",
+            DonAbility::ThunderBoost => "Thunder attacks deal 20% more damage.",
+            DonAbility::WaterBoost => "Water attacks deal 20% more damage.",
+            DonAbility::AeroBoost => "Aero attacks deal 20% more damage.",
             DonAbility::CureBoost => "Restore 20% more HP with healing magic.",
             DonAbility::MpHaste => kh_gendata::line("kh3_system.ability.detail_sup_0380"),
             DonAbility::MpHastera => kh_gendata::line("kh3_system.ability.detail_sup_0390"),
@@ -147,7 +147,7 @@ impl DonAbility {
             DonAbility::TauntPass => "In a party, when an ally blocks or guards, enemies near you turn on that ally.",
             DonAbility::OutOfSight => "In a party, enemies lose interest in you while you stand still and cast from over 15 m away.",
             DonAbility::AuraRangePlus => "Your attunement's party aura reaches farther.",
-            DonAbility::LuckyLucky => "Increase how often enemies drop items.",
+            DonAbility::LuckyLucky => "Enemies drop items more often.",
             DonAbility::TreasureMagnet => kh_gendata::line("kh3_system.ability.detail_sup_0170"),
             DonAbility::ItemBoost => kh_gendata::line("kh3_system.ability.detail_sup_0570"),
             DonAbility::AeroFloat => "Hold the jump button while falling to float down slowly.",
@@ -227,7 +227,7 @@ impl crate::status::FriendStatus {
             return None;
         }
         let (_, use_mp) = crate::tables::ability_cost(key)?;
-        Some(self.mp_charge_left <= 0.0 && if use_mp < 0 { self.mp > 0 } else { self.mp >= use_mp })
+        Some(self.mp_charge_left <= 0.0 && crate::mp_rule::may_pay(self, use_mp)) // (THE USER 2026-11-02) the party's MP rule: any MP above 0
     }
 
     /// (DON-PROG) `HasAbility:DONALD_*` of his tree (C3, pawn vt+0x14F0): his overhaul magic answers it (he knows some of

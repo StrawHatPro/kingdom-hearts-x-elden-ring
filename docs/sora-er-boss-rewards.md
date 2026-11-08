@@ -169,7 +169,9 @@ keys, log): `crates/kh-er/src/bossreward.rs`. Sheet writer: `build/sora_tmp/er/e
 sheet). State note: `build/sora_tmp/er/IMPL_ER31_STATE.md`. The 2026-10-12 draft's inventory of what KH3 hands out (94
 rewards) is in `build/sora_tmp/er/boss_rewards_proposal.json`.
 
-## 10. The friends: Donald's and Goofy's rewards (ER party S6, 2026-10-15): A DRAFT FOR YOU TO EDIT
+## 10. The friends: Donald's and Goofy's rewards
+
+**Replaced on 2026-11-02.** The friends now have their own boss lists: `don.*` rows (DONALD_OVERHAUL.md section 9) and `gof.*` rows (GOOFY_OVERHAUL.md section 11.4), with once-records `don:<row>`, `donstat:<row>` and `gof:<row>`. The `party.*` rows keep only abilities: their `bonus:*` tokens are gone, because HP, MP and slots now come from `friend_growth`. Never run `make_party_boss_rows.js` again, since it would put them back. The rest of this section is the old draft, kept for history.
 
 Your answer to U3 was "yes, using a draft table the user can edit". The draft uses KH3's OWN friend victory bonuses
 (`TresVBonusData`: 13 rows give Donald something, 14 give Goofy something; the two debug rows `vbonus_debug_status_*` are

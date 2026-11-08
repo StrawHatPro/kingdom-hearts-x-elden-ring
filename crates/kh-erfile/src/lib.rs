@@ -8,6 +8,7 @@ pub mod bnd4;
 pub mod dcx;
 pub mod emevd; // (ZETTA 2026-10-24) the map events read for Zettaflare's whole kill of a two-phase boss
 pub mod flver;
+pub mod tae; // (GF-SENSOR) a character's attack windows read at run time
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -66,6 +67,11 @@ impl Library {
     /// Every file of a character's binder (`cNNNN`, e.g. `c4311`): (name, bytes).
     pub fn character_files(&mut self, chr: &str) -> Result<Vec<bnd4::BndFile>, String> {
         self.binder(&format!("/chr/{chr}.chrbnd.dcx"), &archive::CHR_ARCHIVES)
+    }
+
+    /// (GF-SENSOR) Every file of a character's animation binder (`cNNNN.anibnd.dcx`): its `.tae` files and `.hkx` clips.
+    pub fn animation_files(&mut self, chr: &str) -> Result<Vec<bnd4::BndFile>, String> {
+        self.binder(&format!("/chr/{chr}.anibnd.dcx"), &archive::CHR_ARCHIVES)
     }
 
     /// A character's model: its binder's FLVER named `cNNNN.flver` (or the first FLVER in it).

@@ -64,7 +64,31 @@ pub struct MenuRow {
     pub quantity: u32,
     /// The row's change flash (Sneeze replaced it, a renamed slot).
     pub flash: bool,
+    /// (GOOFY) A shortcut entry that is recharging (THE USER 2026-11-02: "...introduce a cooldown with a visible timer"):
+    /// (seconds left, its full length); (0, 0) = ready. Drawn by [`CommandDisplay`] on the panel. `enabled` leaves the wait
+    /// out, so a waiting entry stays lit over its gauge, as KH3 draws a timed command (grey text and a greyed count would not
+    /// read on the gauge); whatever else greys it still does.
+    pub cooldown: (f32, f32),
+    /// (Summon) A list row's own number text, shown in KH3's sub-row number field (where an item's "x3" stands) instead
+    /// of the quantity text when set (the sub lists only; the shortcut panel keeps its own numbers): a spirit ash's MP cost (THE USER 2026-11-02: "these equipped spirit ashes are what appears
+    /// in the Summon command menu"; the cost there is COMPOSED, KH3's rows show no cost).
+    pub number: Option<String>,
+    /// (ASH-ROWS, THE USER 2026-11-05: "make the bubble dynamically extend to show the whole name (only for spirit ashes)")
+    /// A row of the Summon list built from an equipped spirit ash (the host's flag, from the row's command kind): its
+    /// plate grows to show the whole name before its number ([`ash_row_width`]) instead of the name being cut.
+    pub spirit_ash: bool,
 }
+
+/// (GOOFY) The seconds of a recharging entry in its number field (where an item's "x3" stands), counted up to the whole
+/// second as a cooldown is: "6" just used, "1" in its last second. Whole seconds fit the field; seconds and tenths overran
+/// the entry's plate.
+pub fn recharge_text(left: f32) -> String {
+    format!("{}", left.max(0.0).ceil() as u32)
+}
+
+/// (GOOFY) The colour of KH3's command timer gauge on a recharging entry: `actGg`'s `magic` (KH3's violet of a grand-magic
+/// situation command): the white name and the count read on it, and it is not the orange of a live situation command.
+pub const RECHARGE_COLOR: &str = "magic";
 
 impl MenuRow {
     pub fn new(text: &str) -> MenuRow {
@@ -72,7 +96,143 @@ impl MenuRow {
     }
 }
 
-/// How a sub list was left (decides the call and the sound).
+/// The open list's row texts; a row with its own number (MenuRow::number) fitted before it ([`fit_before_number`]).
+/// (ASH-ROWS) A list with spirit-ash rows first widens them ([`ash_row_width`]): every ash row of the list takes the widest
+/// one's width (KH3's lists are one column of equal plates, their numbers one column), its whole name shown; every other
+/// row clip of the list is set back to its authored width (the clips are shared by all lists).
+fn sub_texts(hud: &mut HudCommand, model: &CommandModel) -> Vec<String> {
+    let list = model.list;
+    let rows: Vec<&MenuRow> = model.lists[list].iter().take(hc::SUB_COMMAND_MAX).collect();
+    let wide = rows.iter().enumerate().filter(|(_, r)| r.spirit_ash).filter_map(|(row, r)| r.number.as_deref().map(|n| ash_row_width(hud, list, row, &r.text, n))).fold(AshWidth::default(), |a, b| AshWidth { name: a.name.max(b.name), plate: a.plate.max(b.plate) });
+    let room: Vec<Option<NameRoom>> = rows.iter().enumerate().map(|(row, r)| r.number.as_deref().and_then(|n| name_room(hud, list, row, n))).collect();
+    for row in 0..hc::SUB_COMMAND_MAX {
+        let by = if rows.get(row).is_some_and(|r| r.spirit_ash) { wide } else { AshWidth::default() };
+        hud.set_sub_row_width(list as i32, row, by.plate, by.name);
+    }
+    rows.iter()
+        .enumerate()
+        .map(|(row, r)| match (r.number.as_deref(), room[row]) {
+            (Some(_), Some(at)) => cut_to_room(hud, &r.text, at.room + if r.spirit_ash { wide.name / at.scale } else { 0.0 }),
+            _ => r.text.clone(),
+        })
+        .collect()
+}
+
+/// (Summon, ASH-ROWS) THE ROOM A ROW'S NAME HAS BEFORE ITS NUMBER, at the row's authored width ([`NameRoom`]), measured from the movie's own fields (the row clip's `cmdText1.txCmdName...coCmdName`
+/// and `cmdText1.cmdNumber...cmdNumberTxt`, their matrices and the fonts): from the name's left edge to a space before the
+/// number's text (its left edge by the field's alignment, 2 px gutter as Flash lays a field out). None without the fields
+/// or the fonts.
+fn name_room(hud: &HudCommand, list: usize, row: usize, number: &str) -> Option<NameRoom> {
+    let clip = hud.sub_row_clip(list as i32, row);
+    // the matrix from the row's text clip (`cmdText1`) down to a field, and the field's definition
+    let field = |rel: &str| -> Option<(crate::geom::Matrix, std::sync::Arc<crate::def::TextDef>)> {
+        let mut path = format!("{clip}.cmdText1");
+        let mut m = crate::geom::Matrix::IDENTITY;
+        // (both are KH3's `TextFieldAdjust` clips: the text is their child `textField`)
+        for part in rel.split('.').chain(["textField"]) {
+            path = format!("{path}.{part}");
+            let node = hud.movie.node(&path)?;
+            m = m.mul(&node.matrix);
+            if let crate::player::Kind::Text(t) = &node.kind {
+                return Some((m, t.def.clone()));
+            }
+        }
+        None
+    };
+    let ((name_m, name_def), (num_m, num_def)) = (field("txCmdName.txCmdNameCol.coCmdName")?, field("cmdNumber.cmdNumCol.txCmdNumber.cmdNumberTxt")?);
+    let (name_font, num_font) = (hud.fonts.get(name_def.font_class.as_deref())?, hud.fonts.get(num_def.font_class.as_deref())?);
+    let num_w = num_font.text_width(number, num_def.size);
+    let num_x = match num_def.align {
+        crate::def::Align::Left => num_def.bounds.x0 + 2.0,
+        crate::def::Align::Right => num_def.bounds.x1 - 2.0 - num_w,
+        crate::def::Align::Center => (num_def.bounds.x0 + num_def.bounds.x1 - num_w) / 2.0,
+    };
+    // (ASH-ROWS) at the authored width: a widened row's number stands `sub_row_number_shift` further right
+    let shift = hud.sub_row_number_shift(list as i32, row);
+    let num_left = num_m.apply(num_x, 0.0).0 - shift;
+    let name_left = name_m.apply(name_def.bounds.x0 + 2.0, 0.0).0;
+    let scale = name_m.a.abs().max(1.0e-3);
+    let gap = name_font.text_width(" ", name_def.size);
+    // the field's right end (its 2 px gutter): an "x3" ends well inside it, a three-digit cost runs past
+    let overflow = (num_m.apply(num_x + num_w, 0.0).0 - num_m.apply(num_def.bounds.x1 - 2.0, 0.0).0).max(0.0);
+    Some(NameRoom { room: (num_left - name_left) / scale - gap, scale, overflow })
+}
+
+/// (ASH-ROWS) What [`name_room`] measures: the room in the name field's own units, the field's x scale, and how far the
+/// number's text runs past its field's right end (row pixels).
+#[derive(Clone, Copy, Debug)]
+struct NameRoom {
+    room: f32,
+    scale: f32,
+    overflow: f32,
+}
+
+/// (ASH-ROWS) How much wider a spirit-ash row is drawn ([`ash_row_width`]), row pixels: `name` = the name's growth (the
+/// number moves right by it), `plate` = the plate's (the name's growth and the count's overrun of its field).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AshWidth {
+    pub name: f32,
+    pub plate: f32,
+}
+
+/// The name field's text width (its font and size; row 0's field stands for every row: they are one symbol).
+fn name_width(hud: &HudCommand, name: &str) -> Option<f32> {
+    let clip = hud.sub_row_clip(1, 0);
+    let Some(crate::player::Node { kind: crate::player::Kind::Text(t), .. }) = hud.movie.node(&format!("{clip}.cmdText1.txCmdName.txCmdNameCol.coCmdName.textField")) else { return None };
+    hud.fonts.get(t.def.font_class.as_deref()).map(|font| font.text_width(name, t.def.size))
+}
+
+/// A name cut with "..." (as `render::fit_text` ends a cut text) so it fits `room`, its upgrade level (" +5") kept whole.
+fn cut_to_room(hud: &HudCommand, name: &str, room: f32) -> String {
+    let width = |t: &str| name_width(hud, t).unwrap_or(0.0);
+    if room <= 0.0 || width(name) <= room {
+        return name.to_string();
+    }
+    // the upgrade level (" +5") is kept whole: the cut falls in the name before it
+    let (head, tail) = match name.rsplit_once(" +") {
+        Some((head, level)) if !level.is_empty() && level.chars().all(|c| c.is_ascii_digit()) => (head, format!(" +{level}")),
+        _ => (name, String::new()),
+    };
+    let mut chars: Vec<char> = head.chars().collect();
+    while !chars.is_empty() {
+        chars.pop();
+        let cut = format!("{}...{tail}", chars.iter().collect::<String>().trim_end());
+        if width(&cut) <= room {
+            return cut;
+        }
+    }
+    name.to_string()
+}
+
+/// (Summon) A row name that would run into the row's number: KH3's number field sits at a fixed place on the plate and
+/// KH3's names with a count are short ("Potion" x3), but Elden Ring's spirit-ash names are not ("Black Knife Tiche +5"
+/// ran into its "66" and read "+566"; KH3's `TextFieldAdjust` squeeze to 0.8 only fits the name to its own field, which
+/// reaches under the number). The name is cut with "..." (as `render::fit_text` ends a cut text), its " +N" level kept,
+/// so it ends a space before the number's text ([`name_room`]). LOCAL: KH3's native code was not read for such a case.
+/// Without the fields or the font: the name unchanged. (ASH-ROWS) Spirit-ash rows are widened instead
+/// ([`ash_row_width`]); this stays for any other row with its own number.
+pub fn fit_before_number(hud: &HudCommand, list: usize, row: usize, name: &str, number: &str) -> String {
+    name_room(hud, list, row, number).map_or_else(|| name.to_string(), |at| cut_to_room(hud, name, at.room))
+}
+
+/// (ASH-ROWS) The most a spirit-ash row's plate grows past its authored 246 px (a name longer than that is cut with "..."
+/// before the number as before; none of Elden Ring's ashes is: "Nightmaiden & Swordstress Puppets +10", the longest,
+/// needs far less). Chosen so the widest plate stays left of the stage's middle at the Summon list's place, clear of the
+/// party's and the spirit's gauges in the bottom right at every aspect ratio (the stage keeps 16:9).
+pub const ASH_ROW_MAX_EXTRA: f32 = 320.0;
+
+/// (ASH-ROWS, THE USER 2026-11-05: "For the ash summons, make the bubble dynamically extend to show the whole name (only
+/// for spirit ashes)") HOW MUCH WIDER a spirit-ash row is drawn (row pixels, whole; 0 = the name fits the authored plate):
+/// what the whole name needs past its room before the number ([`name_room`]): the number stands a space after the name
+/// and the plate's end as far after the number as KH3's; a count wider than its field (a three-digit cost) widens the
+/// plate by its overrun as well. Held to [`ASH_ROW_MAX_EXTRA`]. LOCAL: KH3's rows have fixed plates.
+pub fn ash_row_width(hud: &HudCommand, list: usize, row: usize, name: &str, number: &str) -> AshWidth {
+    let (Some(at), Some(width)) = (name_room(hud, list, row, number), name_width(hud, name)) else { return AshWidth::default() };
+    let grow = ((width - at.room) * at.scale).max(0.0).ceil().min(ASH_ROW_MAX_EXTRA);
+    AshWidth { name: grow, plate: grow + at.overflow.ceil() }
+}
+
+// How a sub list was left (decides the call and the sound).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CloseKind {
     /// Cancel: `setSubCommand(2, 0)`, the main cursor returns to Attack, static SE 3.
@@ -195,6 +355,9 @@ pub struct CommandModel {
     pub mode: Option<ModePanel>,
     /// (remaining, total) seconds of the form gauge.
     pub form_gauge: Option<(f32, f32)>,
+    /// (F-HUD) The style of the form that is on (its logo on the title plate, the logo gauge): `setStyle` in when it
+    /// appears or changes kind, out when it goes ([`crate::forms_hud_style`]).
+    pub form_style: Option<crate::forms_hud_style::FormStyle>,
     pub legacy_mode: bool,
     pub events: Vec<MenuEvent>,
 }
@@ -225,6 +388,7 @@ impl Default for CommandModel {
             shoot_flow: None,
             mode: None,
             form_gauge: None,
+            form_style: None, // (F-HUD)
             legacy_mode: false,
             events: Vec::new(),
         }
@@ -291,6 +455,13 @@ struct ShownSituation {
     text_label: &'static str,
 }
 
+/// (GOOFY, R19) THE TWO-ROW LIST (Attack / Items): a nameless Magic row under a named Items row. (LEADER RESET, THE USER
+/// 2026-11-02) a model with no names at all (the title's frames run the HUD on an empty snapshot) is no two-row list: before,
+/// it moved the Items row up for whoever was loaded next.
+fn two_rows(model: &CommandModel) -> bool {
+    model.main[1].text.is_empty() && !model.main[2].text.is_empty()
+}
+
 /// The display half of `UTresUIP_HudCommand`.
 #[derive(Clone, Debug, Default)]
 pub struct CommandDisplay {
@@ -314,6 +485,8 @@ pub struct CommandDisplay {
     hidden: bool,
     /// The bad-status text on the Attack slot (`setMainCommandTextBadStatus`), when shown.
     attack_bad: Option<String>,
+    /// (F-HUD) The form style sent with `setStyle` (None = NORMAL).
+    style_shown: Option<crate::forms_hud_style::FormStyle>,
 }
 
 impl CommandDisplay {
@@ -365,7 +538,8 @@ impl CommandDisplay {
                 self.inited = true;
                 let t: Vec<&str> = model.main.iter().map(|r| if r.text.is_empty() { strings.unknown.as_str() } else { r.text.as_str() }).collect();
                 hud.init_main_command(t[0], t[1], t[2], t[3]);
-                let mode = match (now, model.mode.is_some()) {
+                hud.set_main_two_rows(two_rows(model)); // (LEADER RESET) the list's shape from its first frame
+                let mode = match (now, model.mode.is_some() || model.form_style.is_some()) { // (F-HUD) a form is on: style in
                     (MenuState::Vehicle, _) => hc::STATE_MODE_VEHICLE_IN,
                     (_, true) => hc::STATE_MODE_STYLE_IN,
                     _ => hc::STATE_MODE_IN,
@@ -388,6 +562,7 @@ impl CommandDisplay {
                     hud.set_main_command_text(slot as i32, &b.text, b.flash);
                 }
             }
+            hud.set_main_two_rows(two_rows(model)); // (GOOFY, R19) Attack / Items: a nameless Magic row is hidden
             if model.link_none != before.link_none {
                 hud.set_link_command_none(model.link_none);
             }
@@ -426,6 +601,9 @@ impl CommandDisplay {
         }
 
         if self.inited {
+            // (F-HUD) the form style in / out: the formchange (or its end) the state update of this frame carried out
+            // (0x14162EF30 / 0x14161C3F0, called from the command's execution inside step (4)).
+            self.form_style(hud, model);
             // (5) setBattleMode: every change; keepTitle while the title shows something else.
             if model.battle_mode != before.battle_mode || before.state == MenuState::In || (was == MenuState::Wait && !hide) {
                 let keep_title = matches!(now, MenuState::Shortcut | MenuState::ShootFlow) || model.mode.is_some();
@@ -448,7 +626,10 @@ impl CommandDisplay {
                     self.form_gauge_shown = true;
                 }
                 None if self.form_gauge_shown => {
-                    hud.hide_logo_gauge(true);
+                    // (F-HUD) not when the style's end already took the gauge out (`setStyle(0, ...)`: out / off)
+                    if !matches!(hud.movie.current_label("cmdMenu.cmdActLogoGg.cmdActLogoGgShort"), Some("out" | "off")) {
+                        hud.hide_logo_gauge(true);
+                    }
                     self.form_gauge_shown = false;
                 }
                 None => {}
@@ -461,6 +642,38 @@ impl CommandDisplay {
         self.shown = Some(shown);
     }
 
+    /// (F-HUD) The form style (docs/sora-ui-spec.md 5.8, `forms_hud_style` for the trace). In: `setStyle(styleIn,
+    /// styleOut, 1, iconType, total > 0, logoPath)` (styleOut = the form it replaces, else 0 = NORMAL), then
+    /// `setActionSelect(0 | 12)`, `(10)` and, for a first style, `(2)` (0x14162EF30). Out: `setStyle(0, styleOut, mode)`
+    /// (0x14161C3F0); the logo gauge goes with it (so step (9) does not hide it again).
+    fn form_style(&mut self, hud: &mut HudCommand, model: &CommandModel) {
+        if self.style_shown.as_ref().map(|s| &s.kind) == model.form_style.as_ref().map(|s| &s.kind) {
+            return;
+        }
+        let before = self.style_shown.take();
+        match &model.form_style {
+            Some(style) => {
+                if let Some(logo) = &style.logo {
+                    hud.provide_logo(logo.def.clone());
+                }
+                let out = before.as_ref().map_or(0, |s| s.style);
+                hud.set_style(style.style, out, hc::StyleArgs { a3: 1, a4: style.icon_type, a5: style.total > 0.0, a6: style.logo_path.as_deref(), a7: 0 });
+                hud.set_action_select(if model.situation_restricted { hc::ACTION_COMMAND_DISABLE_IN } else { hc::ACTION_COMMAND_IN }, 0, 0);
+                hud.set_action_select(hc::ACTION_COMMAND_FINISH_IN, 0, 0);
+                if before.is_none() {
+                    hud.set_action_select(hc::ACTION_COMMAND_PUSH_UP, 0, 0);
+                }
+                self.style_shown = Some(style.clone());
+            }
+            None => {
+                if let Some(old) = before {
+                    hud.set_style(0, old.style, hc::StyleArgs { a3: crate::forms_hud_style::style_out_mode(model.state), ..hc::StyleArgs::default() });
+                }
+                self.form_gauge_shown = false;
+            }
+        }
+    }
+
     fn sub_lists(&mut self, hud: &mut HudCommand, before: &CommandModel, model: &CommandModel, sounds: &mut Vec<UiSound>) {
         let (was, now) = (before.state == MenuState::SubSel, model.state == MenuState::SubSel);
         let rows = |m: &CommandModel| m.lists.get(m.list).map_or(0, |l| l.len().min(hc::SUB_COMMAND_MAX));
@@ -470,7 +683,8 @@ impl CommandDisplay {
                 hud.select_main_command(model.list as i32, -1, false);
             }
             hud.init_sub_command(model.list as i32, rows(model) as i32);
-            let texts: Vec<&str> = model.lists[model.list].iter().take(hc::SUB_COMMAND_MAX).map(|r| r.text.as_str()).collect();
+            let texts = sub_texts(hud, model);
+            let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
             hud.set_sub_command_text(&texts);
             hud.set_sub_command(hc::SUB_COMMAND_IN, model.row_cursor as i32);
             sounds.push(UiSound::Play(SE_OPEN));
@@ -526,7 +740,8 @@ impl CommandDisplay {
                 if model.lists[model.list] .iter().map(|r| &r.text).ne(before.lists[before.list].iter().map(|r| &r.text)) {
                     // The list was rebuilt while open (0x14161F300).
                     hud.init_sub_command(model.list as i32, rows(model) as i32);
-                    let texts: Vec<&str> = model.lists[model.list].iter().take(hc::SUB_COMMAND_MAX).map(|r| r.text.as_str()).collect();
+                    let texts = sub_texts(hud, model);
+                    let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
                     hud.set_sub_command_text(&texts);
                     self.row_label = [("", ""); hc::SUB_COMMAND_MAX];
                     self.numbers.clear();
@@ -576,7 +791,8 @@ impl CommandDisplay {
             return;
         }
         let rows = &model.lists[model.list];
-        let numbers: Vec<String> = rows.iter().take(hc::SUB_COMMAND_MAX).map(|r| strings.quantity_text(r.quantity)).collect();
+        // (Summon) a row's own number (a spirit ash's MP cost) before the quantity text
+        let numbers: Vec<String> = rows.iter().take(hc::SUB_COMMAND_MAX).map(|r| r.number.clone().unwrap_or_else(|| strings.quantity_text(r.quantity))).collect();
         let battle = model.battle_mode == 2;
         if numbers != self.numbers || battle != self.numbers_battle {
             let refs: Vec<&str> = numbers.iter().map(String::as_str).collect();
@@ -634,7 +850,13 @@ impl CommandDisplay {
             }
             self.shortcut_label[row] = labels;
         }
-        let numbers: Vec<String> = model.shortcut.iter().map(|r| strings.quantity_text(r.quantity)).collect();
+        // (GOOFY, THE USER 2026-11-02: "...a cooldown with a visible timer") a recharging entry: KH3's situation timer gauge
+        // draining on its plate and its seconds in the entry's own number field (where an item's count stands)
+        for (row, r) in model.shortcut.iter().enumerate() {
+            let frame = (r.cooldown.0 > 0.0).then(|| situation_gauge_frame(r.cooldown.0, r.cooldown.1.max(r.cooldown.0)));
+            hud.set_shortcut_recharge(row, frame, RECHARGE_COLOR);
+        }
+        let numbers: Vec<String> = model.shortcut.iter().map(|r| if r.cooldown.0 > 0.0 { recharge_text(r.cooldown.0) } else { strings.quantity_text(r.quantity) }).collect();
         if numbers != self.shortcut_numbers {
             let refs: Vec<&str> = numbers.iter().map(String::as_str).collect();
             hud.set_shortcut_command_num_text(model.battle_mode == 2, &refs);

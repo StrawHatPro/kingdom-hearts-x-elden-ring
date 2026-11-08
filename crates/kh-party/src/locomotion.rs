@@ -341,7 +341,7 @@ pub fn sm_sync(loco: &mut AiLoco, speed: f32) {
 /// (SM) The eased view (1 in view .. 0 out) after this step.
 fn sm_view_step(pw: &mut NpcPawn, cx: &StepCtx) {
     let lv = cx.sora;
-    let seen = lv.camera.map_or(true, |c| c.sees(pw.capsule_centre(), pw.params.capsule_radius + pw.params.capsule_half_height));
+    let seen = lv.camera.is_none_or(|c| c.sees(pw.capsule_centre(), pw.params.capsule_radius + pw.params.capsule_half_height));
     let to = if seen { 1.0 } else { 0.0 };
     let v = pw.loco.sm_view.unwrap_or(to);
     let step = cx.dt / SM_VIEW_TIME.max(1e-3);
@@ -364,7 +364,7 @@ pub fn follow_speed_with(pw: &NpcPawn, cx: &StepCtx, view: Option<f32>, continuo
     let min = tables::cparam(pw.chara, "loco.move1.min_speed");
     let dist = horizontal(lv.position - pw.position()).length();
     // +0x35C: in the drawn camera's view (no camera known: in view, the lower factor)
-    let in_view = view.unwrap_or_else(|| if lv.camera.map_or(true, |c| c.sees(pw.capsule_centre(), pw.params.capsule_radius + pw.params.capsule_half_height)) { 1.0 } else { 0.0 });
+    let in_view = view.unwrap_or_else(|| if lv.camera.is_none_or(|c| c.sees(pw.capsule_centre(), pw.params.capsule_radius + pw.params.capsule_half_height)) { 1.0 } else { 0.0 });
     let mut rate = K.follow_out_view_rate + (K.follow_in_view_rate - K.follow_out_view_rate) * in_view.clamp(0.0, 1.0);
     let range = K.follow_same_speed_range;
     if dist <= range {
@@ -440,11 +440,11 @@ pub fn begin_move(pw: &mut NpcPawn, cx: &StepCtx, host: &PartyHost, was_moving: 
     pw.loco.phase = 0.0;
     pw.loco.pose = None;
     pw.loco.sub = 0;
-    let slow = walk || locomotion == LocomotionDef::MoveSlow;
+    let slow = breaker_run(pw).is_none() && (walk || locomotion == LocomotionDef::MoveSlow); // (FINAL-FIX) the run to a BROKEN enemy is never a walk
     // (FOL2) the reaction delay: the leader just set off and he is near and had settled (stood a second): he stands a moment
     // longer (sub-step 5), then sets off (`start_from_standing`); a re-start while the party runs takes none
     let lv = horizontal(cx.sora.velocity).length();
-    pw.loco.fol_delay = if fol2() && !slow && pw.motionless >= 1.0 && lv > 60.0 && horizontal(cx.sora.position - pw.position()).length() < 700.0 { fol2_react(pw.id.0 as u32) } else { 0.0 };
+    pw.loco.fol_delay = if fol2() && !slow && breaker_run(pw).is_none() && pw.motionless >= 1.0 && lv > 60.0 && horizontal(cx.sora.position - pw.position()).length() < 700.0 { fol2_react(pw.id.0 as u32) } else { 0.0 };
     if pw.loco.fol_delay > 0.0 {
         pw.loco.standing = true;
         let idle = if pw.in_battle { "IdleB" } else { "IdleN" };
@@ -458,14 +458,22 @@ pub fn begin_move(pw: &mut NpcPawn, cx: &StepCtx, host: &PartyHost, was_moving: 
     true
 }
 
+/// (FINAL-FIX, THE USER 2026-11-05: "do option 1") AI Goofy's way to a BROKEN enemy (goofy/ai.rs rule 3, `GoofyRun::ai_chase`)
+/// is a RUN at his own run speed (`move.run`, as when he leads), in his battle set: never a walk (his tree's MoveTo turned to the
+/// enemy may be a `m_bWalk` one) and never the follow rule's speed of a standing leader (FINAL-FIX launch 1: 1.2 m in 1.4 s and
+/// the 2.5 s window ran out). The steering round what blocks him and the mates' avoidance stay as they are. None: any other move.
+fn breaker_run(pw: &NpcPawn) -> Option<f32> {
+    (pw.pad.is_none() && pw.status.goofy.as_ref().is_some_and(|s| s.run.ai_chase.is_some())).then_some(crate::goofy::K.move_run)
+}
+
 /// The start from standing: KH3's run start clip (K1), or (FOL2) for a walk the loop from standing after a turn on the spot.
 fn start_from_standing(pw: &mut NpcPawn, cx: &StepCtx, locomotion: LocomotionDef, walk: bool, d: Vec3) {
-    let slow = walk || locomotion == LocomotionDef::MoveSlow;
-    let battle = pad::battle_set(pw);
+    let slow = breaker_run(pw).is_none() && (walk || locomotion == LocomotionDef::MoveSlow); // (FINAL-FIX)
+    let battle = pad::set_of(pw); // (PARTY-WEAPONS) the start's set: N / W / B
     // (FOL2) the run start only for a run: the follow speed now a run and the goal far enough; a walk sets off in the loop
     // (the speed spring from standing), turning on the spot first when the goal is well off his facing
     let max = tables::cparam(pw.chara, "loco.move1.max_speed");
-    let begin_speed = if slow { 0.0 } else if locomotion == LocomotionDef::Move1 { follow_speed_with(pw, cx, pw.loco.sm_view, true).unwrap_or(max) } else { max };
+    let begin_speed = if let Some(run) = breaker_run(pw) { run } else if slow { 0.0 } else if locomotion == LocomotionDef::Move1 { follow_speed_with(pw, cx, pw.loco.sm_view, true).unwrap_or(max) } else { max };
     let runs = !fol2() || (begin_speed >= FOL2_RUN_START_SPEED && d.length() >= FOL2_RUN_START_DIST);
     if !runs && d.length() > 1.0 {
         let delta = wrap180(yaw_of(d) - pw.yaw);
@@ -491,14 +499,15 @@ fn start_from_standing(pw: &mut NpcPawn, cx: &StepCtx, locomotion: LocomotionDef
 pub fn move_tick(pw: &mut NpcPawn, cx: &StepCtx, locomotion: LocomotionDef, walk: bool, d: Vec3, goal_dist: f32) {
     let dt = cx.dt;
     fol2_measure_leader(pw, cx);
-    let slow = walk || locomotion == LocomotionDef::MoveSlow;
+    let run = breaker_run(pw); // (FINAL-FIX) AI Goofy to a BROKEN enemy: his own run speed, no walk, no follow rule
+    let slow = run.is_none() && (walk || locomotion == LocomotionDef::MoveSlow);
     let (min, max) = (tables::cparam(pw.chara, "loco.move1.min_speed"), tables::cparam(pw.chara, "loco.move1.max_speed"));
     // the speed: Move_Slow / walk 140; Move1 the follow rule while following, else m_MaxSpeed
     // (SM) the rule's edges eased (the view over SM_VIEW_TIME, the range continuous)
     sm_view_step(pw, cx);
-    let follow = if slow || locomotion != LocomotionDef::Move1 { None } else { follow_speed_with(pw, cx, pw.loco.sm_view, true) };
+    let follow = if slow || run.is_some() || locomotion != LocomotionDef::Move1 { None } else { follow_speed_with(pw, cx, pw.loco.sm_view, true) };
     pw.loco.following = follow.is_some();
-    let mut speed = if slow { min } else { follow.unwrap_or(max) };
+    let mut speed = if let Some(run) = run { run } else if slow { min } else { follow.unwrap_or(max) };
     // KH3's stop (FollowPlayer tick 0x141215A00): toward the end of the path the speed eases from the follow speed to
     // m_MinSpeed over m_DecelerationTime (+0x350 = -(speed - min) / 0.5); the port puts it as a speed envelope on the
     // goal's distance (KH3 starts it at the path's end after a navmesh raycast FUN_143ED09B0 [inf]): he arrives at the
@@ -751,18 +760,17 @@ pub fn move_tick(pw: &mut NpcPawn, cx: &StepCtx, locomotion: LocomotionDef, walk
     // (FOL2) a reversal at a walk: standing nearly still -> the turn on the spot; else the damped turn (an arc), no run start
     // (FOL2) the run-start reversal only toward a far goal at a run; nearer or slower: the arc, or the turn on the spot
     let walking = fol2() && (speed < FOL2_RUN_START_SPEED || goal_dist < FOL2_RUN_START_DIST);
-    if walking && hd.abs() >= 135.0 && pw.loco.side <= 0.0 {
-        if actual < 40.0 && fol2_turn_clip(pw, wrap180(want_yaw - pw.yaw)) {
+    if walking && hd.abs() >= 135.0 && pw.loco.side <= 0.0
+        && actual < 40.0 && fol2_turn_clip(pw, wrap180(want_yaw - pw.yaw)) {
             pw.cmc.stop_movement();
             pw.loco.pose = None;
             pw.loco.sub = 4;
             return;
         }
-    }
     // (K1) a reversal: KH3's Run plays "SharpTurnL/R" over 135 degrees (0x140442430), which Donald's and Goofy's sets
     // do not have; the port turns round with the start blend space at the delta (its 180-degree samples), as the
     // player's turn-around (0x1413AF8E0) and the pad friends' do, instead of a wide arc at the catch-up speed
-    let battle = pad::battle_set(pw);
+    let battle = pad::set_of(pw); // (PARTY-WEAPONS) the start's set: N / W / B
     if !near && !walking && hd.abs() >= 135.0 && pw.loco.side <= 0.0 && K.k1_start_clip != 0.0 && pad::start_length(pw.chara, battle, 0.0).is_some() {
         let delta = wrap180(want_yaw - pw.yaw);
         pw.cmc.stop_movement();
@@ -815,7 +823,7 @@ fn start_tick(pw: &mut NpcPawn, dt: f32) {
         sm_sync(&mut pw.loco, horizontal(pw.cmc.displacement_velocity).length()); // (SM)
         return;
     }
-    let battle = pad::battle_set(pw);
+    let battle = pad::set_of(pw); // (PARTY-WEAPONS) the start's set: N / W / B
     let len = pw.anim.clip.length.max(1e-4);
     let t1 = (pw.anim.time / len).clamp(0.0, 1.0);
     let a = pad::start_root(pw.chara, battle, pw.loco.start_axis, pw.loco.root_t);
@@ -850,7 +858,8 @@ fn loop_pose(pw: &mut NpcPawn, dt: f32, yaw0: f32, actual: f32, min: f32, max: f
         pw.loco.slow_for = 0.0;
     }
     if pw.loco.slow_for >= K.k1_stand_after {
-        if !pw.loco.standing || pw.anim.clip.name != idle {
+        // (PARTY-WEAPONS) a put-away clip of KH3's (BattleEnd, IdleBreakW) plays out before the stand clip comes back
+        if (!pw.loco.standing || pw.anim.clip.name != idle) && !crate::weapon_draw::holds_clip(pw, true) {
             pw.loco.standing = true;
             pw.loco.pose = None;
             pw.play(idle, 0.2);
@@ -861,6 +870,12 @@ fn loop_pose(pw: &mut NpcPawn, dt: f32, yaw0: f32, actual: f32, min: f32, max: f
         return;
     }
     pw.loco.standing = false;
+    // (PARTY-WEAPONS) KH3's RunBattleEnd (the weapon's put-away after a battle) plays out before the speed-matched loop
+    if crate::weapon_draw::holds_clip(pw, false) {
+        pw.loco.pose = None;
+        pw.anim.speed = 1.0;
+        return;
+    }
     let (walk_seq, walk_len, runs, run_len, lean) = pad::loco_set(pw);
     let (walk_speed, run_speed) = (K.k1_walk_speed.max(1.0).min(min.max(1.0)), max);
     let weight = ((actual - walk_speed) / (run_speed - walk_speed).max(1.0)).clamp(0.0, 1.0);

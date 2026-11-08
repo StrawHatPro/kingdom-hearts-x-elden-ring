@@ -39,7 +39,7 @@ fn fx5_a_far_enemy_that_fights_the_party_or_is_the_leaders_lock_stays_a_threat()
     // range 0 = the rule off (every hostile, as before FX5)
     assert!(threatens(&archer, &leader, TargetId::NONE, 0.0, &NOBODY));
     // a non-enemy actor is never filtered
-    assert!(threatens(&ActorView { actor: ActorRef::Player, ..archer.clone() }, &leader, TargetId::NONE, THREAT_RANGE, &NOBODY));
+    assert!(threatens(&ActorView { actor: ActorRef::Player, ..archer }, &leader, TargetId::NONE, THREAT_RANGE, &NOBODY));
 }
 
 #[test]

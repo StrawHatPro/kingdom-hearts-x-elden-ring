@@ -194,7 +194,7 @@ fn scene_physics(pp: &PlayerPlace, map: &str, local: Vec3, reach: f32) -> Option
 
 /// The boss bar shows this character.
 fn on_boss_bar(chr: &ChrIns) -> bool {
-    crate::erhud::boss_bar_handles().iter().any(|h| *h == chr.field_ins_handle)
+    crate::erhud::boss_bar_handles().contains(&chr.field_ins_handle)
 }
 
 /// The current animation of a character is an attack (3000 - 3999 of its own numbering).
@@ -278,7 +278,7 @@ impl Targets for StageTargets {
         if let Some(who) = self.who {
             let power = match hit.damage_kind.value() {
                 0 => 1,
-                k => (k as i32).clamp(1, 6),
+                k => k.clamp(1, 6),
             };
             if let Ok(mut q) = HITS_OUT.lock() {
                 if q.len() < 8 {
@@ -310,6 +310,13 @@ impl Targets for StageTargets {
     }
     fn friends(&self, _out: &mut Vec<Friend>) {}
     fn friend_link(&mut self, _req: FriendLinkRequest) {}
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
+    }
 }
 
 impl kh_partyhost::PartyTargets for StageTargets {
@@ -461,7 +468,9 @@ static STAGED_MASK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::n
 /// The staged friends' hits on the boss (fired by their bodies at the next party step) and the boss's blows on their
 /// bodies (applied at 0 damage at the next party step).
 static HITS_OUT: Mutex<Vec<Shot>> = Mutex::new(Vec::new());
-static BODY_HITS: Mutex<Vec<(PartyChara, HitRecord, kh_core::states::HitOnPlayer, i32, i32)>> = Mutex::new(Vec::new());
+static BODY_HITS: Mutex<Vec<BodyHit>> = Mutex::new(Vec::new());
+/// The boss's blow on a staged friend's body.
+type BodyHit = (PartyChara, HitRecord, kh_core::states::HitOnPlayer, i32, i32);
 
 /// A staged friend's hit on the boss, to be fired by his body.
 #[derive(Clone, Copy, Debug)]
@@ -787,10 +796,33 @@ fn boss_info(chr: &ChrIns, world: &ErWorld) -> TargetInfo {
     TargetInfo { id: STAGE_BOSS, position: pos, center: pos + glam::Vec3::Z * h * 0.5, velocity: Vec3::ZERO, yaw, radius: r, half_height: (h * 0.5).max(r), flags: TargetFlags(TargetFlags::ALIVE | TargetFlags::HITTABLE | TargetFlags::LOCKABLE | TargetFlags::ENEMY | TargetFlags::PRIORITY_HIGH), hp: data.hp as f32, hp_max: data.max_hp as f32 }
 }
 
+/// What the party step gives the unlock rule: `pack` / `sheets` = the party host's folders, the rest as `after_sora_step` has it.
+pub struct UnlockStep<'a> {
+    pub pack: &'a Path,
+    pub sheets: &'a Path,
+    pub out: &'a Output,
+    pub dt: f32,
+    pub world: &'a ErWorld,
+    pub targets: &'a mut ErTargets,
+    pub fx: &'a mut crate::fx::Fx,
+    pub now: f64,
+}
+
+/// What a step of the unlock rule has read for its scenes (`Director::step`).
+#[derive(Clone, Copy)]
+struct StepSeen<'a> {
+    unlocks: &'a Unlocks,
+    pp: &'a PlayerPlace,
+    readable: bool,
+    hidden: bool,
+    leader_down: bool,
+    in_battle: bool,
+    log_now: bool,
+}
+
 /// (party/mod.rs `after_sora_step`, every party step) THE UNLOCK RULE'S STEP: who is in the party, the scenes, the
-/// celebration, the testing aids. `pack` / `sheets` = the party host's folders.
-#[allow(clippy::too_many_arguments)]
-pub fn party_step(core: &mut PartyCore, pack: &Path, sheets: &Path, sora: &mut Sora, out: &Output, dt: f32, world: &ErWorld, targets: &mut ErTargets, fx: &mut crate::fx::Fx, now: f64) {
+/// celebration, the testing aids.
+pub fn party_step(core: &mut PartyCore, sora: &mut Sora, UnlockStep { pack, sheets, out, dt, world, targets, fx, now }: UnlockStep<'_>) {
     let keys = {
         let mut k = KEYS.lock().unwrap_or_else(|e| e.into_inner());
         let taken = k.clone();
@@ -984,8 +1016,9 @@ impl Director {
         let in_battle = crate::conv::leader_combat(!core.sora_skipped(), sora.actions().battle, core.rt.current.iter().any(|v| v.in_battle));
         // ---- the fights
         let mut draws = Vec::new();
+        let seen = StepSeen { unlocks: &unlocks, pp: &pp, readable, hidden, leader_down, in_battle, log_now };
         for k in 0..self.fights.len() {
-            self.fight_step(k, core, ctx, &unlocks, &pp, readable, hidden, leader_down, sora, log_now, fx);
+            self.fight_step(k, core, ctx, seen, sora);
         }
         // ---- the staged friend's stage runtime (his target: the boss's double, else the original)
         if let Some(stage) = self.staged.as_mut() {
@@ -1005,7 +1038,7 @@ impl Director {
         }
         if self.sora_stage.is_some() {
             let o = sora.output();
-            wants.push(kh_partyhost::AllyWant { chara: PartyChara::Sora, feet: o.position, yaw: o.yaw, capsule: kh_partyhost::SORA_CAPSULE, hittable: sora.status().hp > 0, invulnerable: false, ko: sora.status().hp <= 0 });
+            wants.push(kh_partyhost::AllyWant { chara: PartyChara::Sora, feet: o.position, yaw: o.yaw, capsule: kh_partyhost::SORA_CAPSULE, hittable: sora.status().hp > 0, invulnerable: false, ko: sora.status().hp <= 0, mimic: false });
             mask |= 1 << PartyChara::Sora as u8;
         }
         STAGED_MASK.store(mask, Ordering::Relaxed);
@@ -1013,7 +1046,7 @@ impl Director {
             *w = wants;
         }
         // ---- Donald at the crone
-        self.donald_step(core, ctx, &unlocks, &pp, hidden, in_battle, out, fx, &mut draws, targets);
+        self.donald_step(core, ctx, seen, out, fx, &mut draws);
         // ---- joins where the stage put them
         self.joins_step(core);
         // ---- the celebration
@@ -1056,8 +1089,7 @@ impl Director {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn fight_step(&mut self, k: usize, core: &mut PartyCore, ctx: &Ctx, unlocks: &Unlocks, pp: &PlayerPlace, readable: bool, hidden: bool, leader_down: bool, sora: &mut Sora, log_now: bool, _fx: &mut crate::fx::Fx) {
+    fn fight_step(&mut self, k: usize, core: &mut PartyCore, ctx: &Ctx, StepSeen { unlocks, pp, readable, hidden, leader_down, log_now, .. }: StepSeen<'_>, sora: &mut Sora) {
         let chara = self.fights[k].chara;
         let Some(scene) = self.sheet.fight(chara).cloned() else { return };
         if scene.boss_entity == 0 {
@@ -1475,8 +1507,7 @@ impl Director {
 
     // ------------------------------------------------------------------------------------------- Donald at the crone
 
-    #[allow(clippy::too_many_arguments)]
-    fn donald_step(&mut self, core: &mut PartyCore, ctx: &Ctx, unlocks: &Unlocks, pp: &PlayerPlace, hidden: bool, in_battle: bool, out: &Output, fx: &mut crate::fx::Fx, draws: &mut Vec<StageDraw>, _targets: &mut ErTargets) {
+    fn donald_step(&mut self, core: &mut PartyCore, ctx: &Ctx, StepSeen { unlocks, pp, hidden, in_battle, .. }: StepSeen<'_>, out: &Output, fx: &mut crate::fx::Fx, draws: &mut Vec<StageDraw>) {
         let scene = self.sheet.donald.clone();
         if scene.crone_entity == 0 {
             return;
@@ -1716,6 +1747,8 @@ impl Director {
             if let (Some(id), Some(v)) = (self.conv, view.as_ref()) {
                 crate::conv::place(id, 1, crate::conv::Pose { feet_kh: v.position, yaw: v.yaw, height_cm: crate::conv::height_of(PartyChara::Donald) });
             }
+            // (INTERACT-MARK) KH3's reaction-target marker on him while his talk is offered: his body's middle (reactmark.rs)
+            crate::reactmark::set_talk_point(DONALD_OWNER, view.as_ref().filter(|_| self.prompt_up).map(|v| v.position + Vec3::Z * (crate::conv::height_of(PartyChara::Donald) * 0.5)));
             let head = view.map(|v| v.position + Vec3::Z * 120.0);
             if let Some(at) = head.and_then(|h| to_stage(frame.pos_kh_to_er(h))) {
                 if self.prompt_up && FLOAT_PROMPT.load(std::sync::atomic::Ordering::Relaxed) /* (RC) */ {
@@ -1868,7 +1901,7 @@ fn stage_step(s: &mut Stage, boss: Option<*mut ChrIns>, ctx: &Ctx, fx: &mut crat
     let mut targets = StageTargets { boss: boss_info, swallowed: 0, who: Some(s.chara) };
     let out = s.stand_in.output();
     let _ = s.core.route(&mut s.stand_in, &Input::default(), ctx.dt, ctx.world, &targets, ctx.now);
-    s.core.step(&mut s.stand_in, &out, ctx.dt, TargetId::NONE, ctx.world, &StageIk(ctx.world), &mut targets, &mut fx.audio, &mut fx.effects, None, ctx.now);
+    s.core.step(&mut s.stand_in, crate::party::glue::CoreStep { out: &out, dt: ctx.dt, lock_on: TargetId::NONE, world: ctx.world, ik: &StageIk(ctx.world), targets: &mut targets, audio: &mut fx.audio, effects: &mut fx.effects, sora_look: None, now: ctx.now });
     // the first step put him beside the stand-in: he goes to his spot
     if fresh {
         if let Some(id) = s.core.rt.id(s.chara) {

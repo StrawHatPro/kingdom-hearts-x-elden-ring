@@ -15,29 +15,29 @@
 //! - a pixel is its when the snapshot's stencil has that value's upper four bits (and, when that value is the ground's, it
 //!   stands 8 cm above its feet); the scene depth now is not nearer (Sora, Donald, Goofy, an opaque effect are never painted);
 //!   the position it gives lies within its reach (wide enough for its death fall) and nearer its capsule than any neighbour's.
-//! The look (ZETTA's state, kh-app fixtures `zetta_look` in the test level): `silhouette` = pure black, unlit; `crumble`
-//! 0..1 = broken away from the top down along a noise fixed to its body (seeded by the host's id of it: no state field), a
-//! glowing rim, white light where it is gone; otherwise `immerse` 0..1 = engulfed in white.
-//! THE BREAKING APART (round 3, the user: "it needs to look like the silhouette is actually breaking apart"; kh-app
-//! zetta_crumble.rs mirrored: `timeline`, `crack_reveal`, `fly` below and their shader twins): while it is a silhouette not yet
-//! crumbling, a SNAPSHOT of its own pixels (finale_snap.ps.dxil: each texel's place relative to its feet and its footprint)
-//! is kept; from its first crumble the host hides its body (`breaks_apart`, kh-er zfinale.rs) and finale_frag.vs/ps draw the
-//! snapshot as camera-facing splats at their places NOW (a moving camera sees them stay in the world): Voronoi cells of a
-//! jittered lattice fixed to its body (seeded by its id), glowing cracks along the cells' borders (0 .. 0.2, from the side the
-//! beam strikes), the cells released top-first (0.16 .. 0.66, 70 % height / 30 % noise) on `push`, tumbling under gravity,
-//! landing, each splitting into three fragments 0.1 later, which shrink away (about 0.82 .. 1) shedding ash and embers.
-//! Nothing at 1. Without a snapshot (its value never learnt) the earlier look stays (the noise dissolve, the fade below).
-//! THE FADE: once it has crumbled the host hides its body (`hidden_for`); the last white shape (written into a ghost target by
-//! finale_g.ps.dxil while it crumbles) fades out over `r.finale_fade` seconds (default 0.3) over the game's own picture.
-//! THE PARTICLES OVER IT: the effects whose material name holds one of `r.finale_over`'s words (kh-er sheet / ctl; vfx.rs
-//! `Stage::OverFinale`) are held back while a finale is drawn and drawn after it: ZETTA's crumble fragments stay visible over
-//! the black.
-//! FALLBACK (graceful): when its value has never been seen (no sample of it yet), no snapshot this frame, a depth without
-//! stencil, `r.finale 2`, or none of the taps over its box finds it (decided on the GPU, every pixel alike), the pass draws a
-//! WHITE-OUT of its screen box (an ellipse behind whatever is nearer than its front) that dissolves with `crumble`.
-//! Nothing is drawn without a fresh finale state (`set` every frame; older than 0.5 s = gone), so any exit of the finale
-//! leaves the picture as the game's. Keys (kh-er frame.rs): `r.finale` 0 off, 1 auto (default), 2 the white-out only, 3 the
-//! mask as a debug view; `r.finale_white` the white (x the effects' scale, default 4); `r.finale_fade` (s); `r.finale_over`.
+//!   The look (ZETTA's state, kh-app fixtures `zetta_look` in the test level): `silhouette` = pure black, unlit; `crumble`
+//!   0..1 = broken away from the top down along a noise fixed to its body (seeded by the host's id of it: no state field), a
+//!   glowing rim, white light where it is gone; otherwise `immerse` 0..1 = engulfed in white.
+//!   THE BREAKING APART (round 3, the user: "it needs to look like the silhouette is actually breaking apart"; kh-app
+//!   zetta_crumble.rs mirrored: `timeline`, `crack_reveal`, `fly` below and their shader twins): while it is a silhouette not yet
+//!   crumbling, a SNAPSHOT of its own pixels (finale_snap.ps.dxil: each texel's place relative to its feet and its footprint)
+//!   is kept; from its first crumble the host hides its body (`breaks_apart`, kh-er zfinale.rs) and finale_frag.vs/ps draw the
+//!   snapshot as camera-facing splats at their places NOW (a moving camera sees them stay in the world): Voronoi cells of a
+//!   jittered lattice fixed to its body (seeded by its id), glowing cracks along the cells' borders (0 .. 0.2, from the side the
+//!   beam strikes), the cells released top-first (0.16 .. 0.66, 70 % height / 30 % noise) on `push`, tumbling under gravity,
+//!   landing, each splitting into three fragments 0.1 later, which shrink away (about 0.82 .. 1) shedding ash and embers.
+//!   Nothing at 1. Without a snapshot (its value never learnt) the earlier look stays (the noise dissolve, the fade below).
+//!   THE FADE: once it has crumbled the host hides its body (`hidden_for`); the last white shape (written into a ghost target by
+//!   finale_g.ps.dxil while it crumbles) fades out over `r.finale_fade` seconds (default 0.3) over the game's own picture.
+//!   THE PARTICLES OVER IT: the effects whose material name holds one of `r.finale_over`'s words (kh-er sheet / ctl; vfx.rs
+//!   `Stage::OverFinale`) are held back while a finale is drawn and drawn after it: ZETTA's crumble fragments stay visible over
+//!   the black.
+//!   FALLBACK (graceful): when its value has never been seen (no sample of it yet), no snapshot this frame, a depth without
+//!   stencil, `r.finale 2`, or none of the taps over its box finds it (decided on the GPU, every pixel alike), the pass draws a
+//!   WHITE-OUT of its screen box (an ellipse behind whatever is nearer than its front) that dissolves with `crumble`.
+//!   Nothing is drawn without a fresh finale state (`set` every frame; older than 0.5 s = gone), so any exit of the finale
+//!   leaves the picture as the game's. Keys (kh-er frame.rs): `r.finale` 0 off, 1 auto (default), 2 the white-out only, 3 the
+//!   mask as a debug view; `r.finale_white` the white (x the effects' scale, default 4); `r.finale_fade` (s); `r.finale_over`.
 
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
@@ -196,12 +196,20 @@ pub fn reach(body: &Capsule) -> (f32, f32) {
     ((body.radius * 2.0 + 40.0).max(height * 1.05 + 20.0).max(body.radius * 3.5), height * 1.3 + 40.0)
 }
 
-/// The screen box (pixels: x0, y0, x1, y1) of a box around `feet` (horizontal half size, from `below` under its feet to `top`
-/// over them). A box wholly behind the camera: `None`. One that crosses the camera plane: the whole target when `crossing`
+/// A box around `feet` (horizontal half size, from `below` under its feet to `top` over them).
+#[derive(Clone, Copy, Debug)]
+pub struct FeetBox {
+    pub feet: Vec3,
+    pub horizontal: f32,
+    pub below: f32,
+    pub top: f32,
+}
+
+/// The screen box (pixels: x0, y0, x1, y1) of `around`. A box wholly behind the camera: `None`. One that crosses the camera plane: the whole target when `crossing`
 /// is true, else the box of its corners in front (the white-out's ellipse never fills the screen for a corner behind).
 /// `None` when it lies off the screen.
-#[allow(clippy::too_many_arguments)]
-pub fn screen_box(clip: &Mat4, feet: Vec3, horizontal: f32, below: f32, top: f32, width: u32, height: u32, crossing: bool) -> Option<[i32; 4]> {
+pub fn screen_box(clip: &Mat4, around: FeetBox, width: u32, height: u32, crossing: bool) -> Option<[i32; 4]> {
+    let FeetBox { feet, horizontal, below, top } = around;
     let (w, h) = (width as f32, height as f32);
     let (mut lo, mut hi) = (glam::Vec2::splat(f32::MAX), glam::Vec2::splat(f32::MIN));
     let mut behind = 0;
@@ -254,15 +262,26 @@ pub fn fade_alpha(hidden_for: f32, fade: f32) -> f32 {
     x * x * (3.0 - 2.0 * x)
 }
 
-/// One target's draw: its scissor box and the shader's block. `slot`: its pixel of the probe's memory; `isolate`: the
-/// snapshot (depth + stencil) of this frame is bound; `live`: the scene depth now is bound. `None`: it is off the screen.
-#[allow(clippy::too_many_arguments)]
-pub fn plan(t: &FinaleTarget, view: &View, slot: usize, mode: u32, white: f32, fade: f32, isolate: bool, live: bool) -> Option<([i32; 4], [f32; ROWS * 4])> {
+/// The frame's settings of a target's draw (`plan`). `isolate`: the snapshot (depth + stencil) of this frame is bound; `live`:
+/// the scene depth now is bound.
+#[derive(Clone, Copy, Debug)]
+pub struct Look {
+    pub mode: u32,
+    pub white: f32,
+    pub fade: f32,
+    pub isolate: bool,
+    pub live: bool,
+}
+
+/// One target's draw: its scissor box and the shader's block. `slot`: its pixel of the probe's memory. `None`: it is off the
+/// screen.
+pub fn plan(t: &FinaleTarget, view: &View, slot: usize, look: Look) -> Option<([i32; 4], [f32; ROWS * 4])> {
+    let Look { mode, white, fade, isolate, live } = look;
     let body = &t.body;
     let (horizontal, top) = reach(body);
-    let scissor = screen_box(&view.clip, body.feet, horizontal, 40.0, top, view.width, view.height, true)?;
+    let scissor = screen_box(&view.clip, FeetBox { feet: body.feet, horizontal, below: 40.0, top }, view.width, view.height, true)?;
     let height = 2.0 * body.half_height.max(body.radius).max(1.0);
-    let core = screen_box(&view.clip, body.feet, body.radius * 1.2 + 10.0, 10.0, height * 1.12 + 15.0, view.width, view.height, false).unwrap_or(scissor);
+    let core = screen_box(&view.clip, FeetBox { feet: body.feet, horizontal: body.radius * 1.2 + 10.0, below: 10.0, top: height * 1.12 + 15.0 }, view.width, view.height, false).unwrap_or(scissor);
     let tan_x = 1.0 / view.proj00.max(1e-4);
     let tan_y = tan_x * view.height as f32 / view.width.max(1) as f32;
     let centre = body.feet + Vec3::Z * (height * 0.5);
@@ -779,9 +798,6 @@ unsafe fn make_kit(device: &ID3D12Device) -> Result<Kit, String> {
 pub(crate) struct FinaleCx<'a> {
     pub device: &'a ID3D12Device,
     pub list: &'a ID3D12GraphicsCommandList,
-    /// (the caller's root signature: the finale draws with its own and the caller sets its own again afterwards)
-    #[allow(dead_code)]
-    pub root: &'a ID3D12RootSignature,
     pub slot: usize,
     pub target_view: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub target_format: DXGI_FORMAT,
@@ -871,13 +887,13 @@ pub(crate) unsafe fn draw(cx: &FinaleCx) -> bool {
         let mut at: *mut c_void = std::ptr::null_mut();
         if rb.Map(0, Some(&D3D12_RANGE { Begin: 0, End: 128 }), Some(&mut at)).is_ok() && !at.is_null() {
             let v = std::slice::from_raw_parts(at as *const f32, (MEMORY_WIDTH * 4) as usize);
-            let learnt: Vec<u32> = v.chunks_exact(4).filter(|t| t[0] >= 0.0 && t[1] > 0.0).map(|t| t[1] as u32).collect();
+            let learnt: Vec<u32> = v.as_chunks::<4>().0.iter().filter(|t| t[0] >= 0.0 && t[1] > 0.0).map(|t| t[1] as u32).collect();
             if let Ok(mut g) = LEARNT_GROUND.lock() {
                 // (ZDRAW) x the value, y the id, z the ground's value around its feet (-1 none)
-                *g = v.chunks_exact(4).filter(|t| t[0] >= 0.0 && t[1] > 0.0 && t[2] >= 0.0 && ((t[0] as u32) & 0xF0) == ((t[2] as u32) & 0xF0)).map(|t| t[1] as u32).collect();
+                *g = v.as_chunks::<4>().0.iter().filter(|t| t[0] >= 0.0 && t[1] > 0.0 && t[2] >= 0.0 && ((t[0] as u32) & 0xF0) == ((t[2] as u32) & 0xF0)).map(|t| t[1] as u32).collect();
             }
             if let Ok(mut lv) = LEARNT_VALUES.lock() {
-                *lv = v.chunks_exact(4).filter(|t| t[0] >= 0.0 && t[1] > 0.0).map(|t| (t[1] as u32, t[0], t[3])).collect();
+                *lv = v.as_chunks::<4>().0.iter().filter(|t| t[0] >= 0.0 && t[1] > 0.0).map(|t| (t[1] as u32, t[0], t[3])).collect();
             }
             rb.Unmap(0, Some(&D3D12_RANGE { Begin: 0, End: 0 }));
             if let Ok(mut l) = LEARNT.lock() {
@@ -964,7 +980,7 @@ pub(crate) unsafe fn draw(cx: &FinaleCx) -> bool {
     // the blocks of this frame
     let mut blocks: Vec<(usize, &FinaleTarget, [i32; 4], u64, bool)> = Vec::new();
     for (k, t) in targets.iter().enumerate() {
-        let Some((scissor, mut block)) = plan(t, &cx.view, k, mode, white, fade, isolate, true) else { continue };
+        let Some((scissor, mut block)) = plan(t, &cx.view, k, Look { mode, white, fade, isolate, live: true }) else { continue };
         let mut pieces = false;
         if Some(t.id) == breaker && isolate {
             if t.crumble <= 0.0 && learnt.contains(&t.id) {
@@ -1153,11 +1169,12 @@ pub(crate) unsafe fn draw(cx: &FinaleCx) -> bool {
     if let (true, Some(g)) = (writing, ghost.as_ref()) {
         list.ResourceBarrier(&[transition(g, D3D12_RESOURCE_STATE_RENDER_TARGET, shader_state)]);
     }
+    let own_pass = crate::zdraw::PassIn { device: cx.device, list, root: &kit.root, slot: cx.slot, view: &cx.view };
     // (ZDRAW) the bodies in the light from their own models: the test level's light grey, into the scene target
     if !zd_light.is_empty() {
         list.OMSetRenderTargets(1, Some(&cx.target_view), false, None);
         list.RSSetScissorRects(&[RECT { left: 0, top: 0, right: w as i32, bottom: h as i32 }]);
-        if !crate::zdraw::draw_light(cx.device, list, &kit.root, cx.slot, cx.target_format, &cx.view, cx.scale, table(1), &zd_light).is_empty() {
+        if !crate::zdraw::draw_light(&own_pass, cx.target_format, cx.scale, table(1), &zd_light).is_empty() {
             list.SetGraphicsRootDescriptorTable(2, table(1));
         }
     }
@@ -1165,7 +1182,7 @@ pub(crate) unsafe fn draw(cx: &FinaleCx) -> bool {
     if mask.is_some() && !zd_mask.is_empty() {
         list.OMSetRenderTargets(1, Some(&rtv(RTV_MASK)), false, None);
         list.RSSetScissorRects(&[RECT { left: 0, top: 0, right: w as i32, bottom: h as i32 }]);
-        if !crate::zdraw::draw_mask(cx.device, list, &kit.root, &kit.heap, cx.slot, &cx.view, &zd_mask, rtv(RTV_MASK), w, h).is_empty() {
+        if !crate::zdraw::draw_mask(&own_pass, &kit.heap, &zd_mask, rtv(RTV_MASK), w, h).is_empty() {
             list.SetGraphicsRootDescriptorTable(2, table(1));
         }
     }
@@ -1234,7 +1251,7 @@ mod tests {
     fn zfin_reach_covers_a_fallen_body_and_raised_arms() {
         let human = Capsule { feet: Vec3::ZERO, radius: 40.0, half_height: 90.0 };
         let (h, top) = reach(&human);
-        assert!(h >= 180.0 && h < 260.0, "{h}");
+        assert!((180.0..260.0).contains(&h), "{h}");
         assert!(top >= 230.0, "{top}");
         // a giant: its reach grows with it
         let giant = Capsule { feet: Vec3::ZERO, radius: 150.0, half_height: 400.0 };
@@ -1244,15 +1261,15 @@ mod tests {
     #[test]
     fn zfin_screen_box_is_around_the_target_and_off_screen_is_none() {
         let v = view();
-        let b = screen_box(&v.clip, Vec3::ZERO, 50.0, 0.0, 180.0, v.width, v.height, true).unwrap();
+        let b = screen_box(&v.clip, FeetBox { feet: Vec3::ZERO, horizontal: 50.0, below: 0.0, top: 180.0 }, v.width, v.height, true).unwrap();
         assert!(b[0] < 960 && b[2] > 960 && b[1] < 540 + 100 && b[3] > 540, "{b:?}");
         assert!(b[2] - b[0] < 400, "{b:?}");
         // wholly behind the camera: nothing; across the camera plane: the whole screen for the pass, the front part for the ellipse
-        assert_eq!(screen_box(&v.clip, Vec3::new(-2000.0, 0.0, 0.0), 50.0, 0.0, 180.0, v.width, v.height, true), None);
-        assert_eq!(screen_box(&v.clip, Vec3::new(-600.0, 0.0, 0.0), 300.0, 0.0, 180.0, v.width, v.height, true), Some([0, 0, 1920, 1080]));
-        let front = screen_box(&v.clip, Vec3::new(-600.0, 0.0, 0.0), 300.0, 0.0, 180.0, v.width, v.height, false).unwrap();
+        assert_eq!(screen_box(&v.clip, FeetBox { feet: Vec3::new(-2000.0, 0.0, 0.0), horizontal: 50.0, below: 0.0, top: 180.0 }, v.width, v.height, true), None);
+        assert_eq!(screen_box(&v.clip, FeetBox { feet: Vec3::new(-600.0, 0.0, 0.0), horizontal: 300.0, below: 0.0, top: 180.0 }, v.width, v.height, true), Some([0, 0, 1920, 1080]));
+        let front = screen_box(&v.clip, FeetBox { feet: Vec3::new(-600.0, 0.0, 0.0), horizontal: 300.0, below: 0.0, top: 180.0 }, v.width, v.height, false).unwrap();
         assert!(front[0] >= 0 && front[2] <= 1920);
-        assert_eq!(screen_box(&v.clip, Vec3::new(0.0, 5000.0, 0.0), 50.0, 0.0, 180.0, v.width, v.height, true), None);
+        assert_eq!(screen_box(&v.clip, FeetBox { feet: Vec3::new(0.0, 5000.0, 0.0), horizontal: 50.0, below: 0.0, top: 180.0 }, v.width, v.height, true), None);
     }
 
     #[test]
@@ -1269,7 +1286,7 @@ mod tests {
             push: Vec3::X,
             dark: 1.0,
         };
-        let (scissor, f) = plan(&t, &v, 2, 1, 4.0, 0.3, true, true).unwrap();
+        let (scissor, f) = plan(&t, &v, 2, Look { mode: 1, white: 4.0, fade: 0.3, isolate: true, live: true }).unwrap();
         assert!(scissor[2] > scissor[0]);
         assert_eq!(&f[24..28], &[0.0, 0.0, 0.0, 40.0]); // feet + radius
         assert_eq!(&f[28..32], &[90.0, 0.5, 1.0, 0.25]);
@@ -1280,10 +1297,10 @@ mod tests {
         // the clip rows (the probe projects its points with them) and the memory slot / fade / id
         assert_eq!(&f[108..124], &v.clip.to_cols_array());
         assert_eq!(&f[124..128], &[2.0, 1.0, 0.0, 7.0]);
-        let (_, f2) = plan(&t, &v, 0, 2, 4.0, 0.3, false, true).unwrap();
+        let (_, f2) = plan(&t, &v, 0, Look { mode: 2, white: 4.0, fade: 0.3, isolate: false, live: true }).unwrap();
         assert_eq!((f2[3], f2[23]), (2.0, 0.0));
         let hidden = FinaleTarget { hidden_for: Some(0.15), ..t };
-        let (_, f3) = plan(&hidden, &v, 0, 1, 4.0, 0.3, true, true).unwrap();
+        let (_, f3) = plan(&hidden, &v, 0, Look { mode: 1, white: 4.0, fade: 0.3, isolate: true, live: true }).unwrap();
         assert!((f3[125] - 0.5).abs() < 1e-4, "half way through the fade: {}", f3[125]);
     }
 

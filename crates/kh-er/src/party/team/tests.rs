@@ -136,7 +136,7 @@ impl Targets for ErStub {
         if !hit.takes_hp() {
             return HitResult { accepted: true, damage_dealt: 0.0, hp_after: e.hp as f32, killed: false, guarded: true };
         }
-        let kind = hit.damage_kind.value() as i32;
+        let kind = hit.damage_kind.value();
         let role = outcome.as_ref().map_or(Role::None, |o| puppets.role_of(e.id, o, airborne_before));
         let level = puppets.level_for(e.npc_id, role);
         let poise = puppets.poise_for(params, &e, params.reaction(kind).poise * params.poise_scale, hit.info.reaction_power);
@@ -165,6 +165,13 @@ impl Targets for ErStub {
     }
     fn push_body(&self, id: TargetId) -> Option<PushBody> {
         self.t.push_body(id)
+    }
+    // (AUDIT-B) forwarded: the hit's bone and its pose are the wrapped host's
+    fn hit_bone(&self, id: kh_core::TargetId, at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        self.t.hit_bone(id, at)
+    }
+    fn bone_pose(&self, id: kh_core::TargetId, bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        self.t.bone_pose(id, bone)
     }
 }
 
@@ -346,7 +353,7 @@ impl Bench {
         self.core.camera.position = self.view.position;
         self.core.camera.rotation = self.view.rotation;
         let lock = self.sora.combat().lockon.current;
-        self.core.step(&mut self.sora, &self.out, STEP, lock, &self.world, &kh_anim::NoIkWorld, &mut self.er, &mut self.null.audio, &mut self.null.effects, None, self.t);
+        self.core.step(&mut self.sora, crate::party::glue::CoreStep { out: &self.out, dt: STEP, lock_on: lock, world: &self.world, ik: &kh_anim::NoIkWorld, targets: &mut self.er, audio: &mut self.null.audio, effects: &mut self.null.effects, sora_look: None, now: self.t });
         self.t += STEP as f64;
         self.events.extend(self.out.events.iter().map(|e| e.kind));
         // the bodies' want list: a friend in an FR state is asked invulnerable (S3 makes the body unhittable)
@@ -383,7 +390,7 @@ impl Bench {
         }
         let lock_at = rig.locked().and_then(|id| self.er.t.info(TargetId(id))).map(|i| i.position + Vec3::Z * i.half_height);
         let mut view = rig.step(STEP, &CameraInput::default(), &target, lock_at, &self.world);
-        let stick = CameraInput { right_stick: right_stick, recentre: false, extra_rotation: Vec2::ZERO };
+        let stick = CameraInput { right_stick, recentre: false, extra_rotation: Vec2::ZERO };
         // (the control run: no collision pass for the team cameras, to show what the pass prevents)
         let empty = TestWorld::default();
         let cam_world: &TestWorld = if self.no_team_collision { &empty } else { &self.world };

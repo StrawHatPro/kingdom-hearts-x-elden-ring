@@ -116,9 +116,11 @@ pub struct PartyRuntime {
     /// (BN) The kit abilities a level-up taught (character, new level, the abilities' names), not yet shown: the host adds
     /// them to that level-up's LEVEL UP! window with the ability sparkle ([`PartyRuntime::take_level_abilities`]).
     pub level_abilities: Vec<(PartyChara, i32, Vec<String>)>,
+    /// (GF-UI) The BONUS! panels the test level's boss words queued ([`PartyRuntime::take_bonus_panels`]).
+    pub bonus_panels: Vec<(PartyChara, Vec<String>)>,
     victims: Vec<(u32, Victim)>,
     pub trace: bool,
-    last_exp: i32,
+    pub(crate) last_exp: i32,
     /// The friends' AI settings changed (Customize, words): the AI (stream C) is told.
     pub ai_dirty: bool,
     /// (stream D) the team attacks' friend side, stepped after the party (contract D.3).
@@ -133,8 +135,12 @@ pub struct PartyRuntime {
     pub ai_pack: Option<Arc<kh_ai::AiPack>>,
     pub ai_pack_source: Option<AiPackSource>,
     pub ai: Vec<(PartyChara, kh_ai::AiController)>,
+    /// (GRABS) the AI-driven characters an Elden Ring throw holds or who get up from one (caught.rs): no action meanwhile
+    pub caught: crate::caught::CaughtGate,
     pub ai_shared: kh_ai::AiShared,
     last_trace: [String; 2],
+    /// (FINAL-FIX) The members' time rates last logged (`Party::rate_note`).
+    rates_said: Vec<(MemberId, f32)>,
     /// (stream D) the team attacks' state-event cameras (contract D.4) and the actor actions of the last team step.
     pub cams: kh_camera::camera_anim::StateEventCameras,
     actor_actions: Vec<u8>,
@@ -166,6 +172,12 @@ pub struct PartyRuntime {
     enemy_centres: Vec<(TargetId, kh_core::Vec3)>,
     /// Sora's team abilities were equipped (sheet party-test sora.team_abilities), once.
     sora_team_done: bool,
+    /// (HUD-REVIVE-COMBAT) THE PARTY'S COMBAT STATE as the last step set it (`party_combat`), and while a friend leads the party
+    /// aggro it counted (`party_aggro`), which AI Sora's own flag adds through `SoraTargets::engaged_count`.
+    combat: bool,
+    combat_aggro: u32,
+    /// (HUD-REVIVE) AI Sora's KO timer in party combat (s left; None: he is not down): progression.rs `ai_sora_revive_step`.
+    pub(crate) sora_ko_left: Option<f32>,
     /// (party P) the member the pad controls (None = Sora leads); which friends the party formation has in the
     /// active party (Donald, Goofy); the speed-matched loop's last run time per friend (lead.rs).
     pub leader: Option<MemberId>,
@@ -195,6 +207,11 @@ pub struct PartyRuntime {
     pub don_learned: kh_party::donald::DonLearned,
     /// (DON1) the loaded party record had no `donald_magic` (a save older than the overhaul): the host rebuilds the steps once.
     pub don_unrecorded: bool,
+    /// (GOOFY) The test level's fake attacks (goofy.rs).
+    pub gof_fake: Vec<crate::goofy::FakeAttack>,
+    /// (GF-STATS) WHAT THE BOSSES GAVE THE ROSTER, Donald and Goofy (crate::growth): raw amounts, joined or not; copied onto their
+    /// statuses; saved once in the party record (`friend_growth`).
+    pub friend_growth: [kh_party::growth::Growth; 2],
     /// (party X2) both friend leaders' Customize blocks (they outlive the party's respawns) and Sora's book (custom.rs).
     pub customs: crate::custom::Customs,
 }
@@ -240,6 +257,7 @@ impl PartyRuntime {
             level_ups: Vec::new(),
             guard_ups: Vec::new(), // (GOOFY-GG)
             level_abilities: Vec::new(), // (BN)
+            bonus_panels: Vec::new(), // (GF-UI)
             victims: Vec::new(),
             trace: false,
             last_exp: -1,
@@ -250,8 +268,10 @@ impl PartyRuntime {
             ai_pack,
             ai_pack_source,
             ai: Vec::new(),
+            caught: Default::default(), // (GRABS)
             ai_shared: kh_ai::AiShared::new(),
             last_trace: Default::default(),
+            rates_said: Vec::new(), // (FINAL-FIX)
             cams: kh_camera::camera_anim::StateEventCameras::new(),
             actor_actions: Vec::new(),
             team_fov: None,
@@ -267,6 +287,9 @@ impl PartyRuntime {
             sora_look_point: None,
             enemy_centres: Vec::new(),
             sora_team_done: false,
+            combat: false, // (HUD-REVIVE-COMBAT)
+            combat_aggro: 0,
+            sora_ko_left: None, // (HUD-REVIVE)
             leader: None,
             active_friends: [true; 2],
             loco_time: [0.0; 3],
@@ -280,6 +303,8 @@ impl PartyRuntime {
             roster_unrecorded: false, // (IT)
             don_learned: kh_party::donald::DonLearned::start(), // (DON1)
             don_unrecorded: false, // (DON1)
+            gof_fake: Vec::new(), // (GOOFY)
+            friend_growth: Default::default(), // (GF-STATS)
             customs: Default::default(), // (party X2)
         }
     }
@@ -406,6 +431,7 @@ impl PartyRuntime {
         self.apply_test_loadout(c);
         self.sync_roster(); // (IT) he joins with every permanent boost the roster received (before his gauges are filled)
         self.sync_donald(); // (DON1) Donald joins with every magic step the roster earned
+        self.sync_growth(); // (GF-STATS) he joins with every boss reward the roster earned
         // (ER party S6) the real progression: he joins at the level the shared total gives him (the user's rule)
         if self.progression {
             let _ = chara;
@@ -560,7 +586,8 @@ impl PartyRuntime {
         say!("party: {} AI settings: {}", c.name(), ai.describe());
     }
 
-    fn views(&self) -> Vec<MemberView> {
+    // (MIMIC-BOSS) pub(crate): mimicboss.rs refreshes the views after the solo fight's formation changes
+    pub(crate) fn views(&self) -> Vec<MemberView> {
         self.members.iter().filter_map(|(_, id)| self.party.view(*id)).collect()
     }
 
@@ -569,7 +596,8 @@ impl PartyRuntime {
     pub fn threat_points(&self, leader: kh_core::Vec3, sora: &Output) -> Vec<kh_core::Vec3> {
         let mut at = vec![leader];
         at.extend(self.current.iter().filter(|v| !v.ko).map(|v| v.position));
-        if self.leader.is_some() && self.lead.sora_active {
+        // (HUD-REVIVE) a downed AI Sora is no place to measure from, as a downed friend is not
+        if self.leader.is_some() && self.lead.sora_active && sora.state != kh_core::StateId::Die {
             at.push(sora.position);
         }
         at
@@ -605,10 +633,22 @@ impl PartyRuntime {
         let mut actors = Vec::new();
         targets.ai_actors(&mut actors);
         let mut at: Vec<kh_core::Vec3> = self.current.iter().filter(|v| !v.ko).map(|v| v.position).collect();
-        if self.lead.sora_active {
+        // (HUD-REVIVE) a downed AI Sora (his KO hover) engages nothing, as a downed friend does not: an enemy idling by his body
+        // would hold the party's combat and with it his revive at the combat's end (kh-er sora.rs `party_marks` leaves him out too)
+        if self.lead.sora_active && sora.state != kh_core::StateId::Die {
             at.push(sora.position);
         }
         actors.iter().filter(|a| a.alive && a.hostile && at.iter().any(|p| (a.position - *p).truncate().length() - a.radius <= crate::lead::PARTY_AGGRO_RANGE)).count() as u32
+    }
+
+    /// (HUD-REVIVE-COMBAT, THE USER 2026-11-07: "if an enemy is actively fighting the party leader or any party member, the
+    /// whole party should still be in combat. Combat only ends when no enemy is targetting the party") THE PARTY'S COMBAT STATE,
+    /// one for every character: the value the last `step` passed to `Party::set_in_battle` (Sora leading: his battle flag; a
+    /// friend leading: `Leadership::battle_step`), both fed by the host's engaged count, which is the whole party's (any enemy
+    /// in range of a member, fighting one, or whose AI targets one), with KH3's 1.0 s linger (`stance.battle_linger`,
+    /// 0x140EA0B20) and the forced flag. With no member out: Sora's own flag.
+    pub fn party_combat(&self) -> bool {
+        self.combat
     }
 
     /// (ZETTA round 5c) THE ALLIES WAIT OUT ZETTAFLARE (the user: "If there is only one target (and they're being targeted by
@@ -640,11 +680,16 @@ impl PartyRuntime {
         } else if !self.wanted && !self.members.is_empty() {
             self.despawn();
         }
+        self.feed_goofy_arts(); // (GF-ARTS) his two Arts, whoever leads
         if self.members.is_empty() {
+            self.combat = sora.actions().battle; // (HUD-REVIVE-COMBAT) Sora alone: his own flag is the party's
+            self.combat_aggro = 0;
             return StepOut::default();
         }
         self.sync_roster(); // (IT) the roster's boosts on every friend (a load or a reset may have rebuilt a status)
         self.sync_donald(); // (DON1) the roster's learned magic onto Donald (the same reasons)
+        self.sync_growth(); // (GF-STATS) the roster's boss rewards onto the friends (the same reasons)
+        self.ai_sora_revive_step(sora, dt); // (HUD-REVIVE) AI Sora's KO: the party combat's end (last step's state) or the 60 s timer
         let status = sora.status();
         // THE SHARED EXP (stats spec 5.2): each friend checks its own table against Sora's total.
         if status.exp < self.last_exp {
@@ -666,6 +711,7 @@ impl PartyRuntime {
                 // (BN) the kit abilities this level taught (his kit's own level table): on the same LEVEL UP! window
                 let mut learned = crate::custom::level_kit_abilities(c, from, to);
                 learned.extend(crate::donald::level_abilities(c, from, to)); // (DON-PROG) Donald's level tree (his overhaul abilities)
+                learned.extend(self.gof_level_lines(c, from, to)); // (GF-UI) his techniques and Arts, with their saved ranks
                 if !learned.is_empty() {
                     say!("party: t={now:.3}s {} learned by level: {}", c.name(), learned.join(", "));
                     self.level_abilities.push((c, to as i32, learned));
@@ -700,7 +746,9 @@ impl PartyRuntime {
             // leader; Elden Ring: kh-er party/aiworld.rs ErPartyTargets), with KH3's 1.0 s linger and forced flag (the
             // same rule as Sora's own flag: kh-core actions.rs pawn_tick, 0x140EA0B20). Sora's own flag is frozen while he
             // is out of the party (not stepped: the friends never entered battle) and is measured round AI Sora otherwise.
-            in_battle: if self.leader.is_some() { let n = kh_core::Targets::engaged_count(&*targets) + self.party_aggro(&*targets, out); self.lead.battle_step(n, sora.actions().battle_forced, dt) } else { sora.actions().battle },
+            // (HUD-REVIVE-COMBAT) THE ONE PARTY-WIDE STATE in both cases: the host's engaged count is the whole party's (Elden
+            // Ring: kh-er targets.rs `engages_the_party`), so Sora's flag leading = a friend leader's flag = the members' state
+            in_battle: if self.leader.is_some() { self.combat_aggro = self.party_aggro(&*targets, out); let n = kh_core::Targets::engaged_count(&*targets) + self.combat_aggro; self.lead.battle_step(n, sora.actions().battle_forced, dt) } else { self.combat_aggro = 0; sora.actions().battle },
             lock_on,
             total_exp: status.exp,
             game_level: status.game_level,
@@ -714,14 +762,17 @@ impl PartyRuntime {
             analog: if out.movement_state == kh_core::MovementState::Walk { sora.params().speed_walk_rate } else { 1.0 },
             // (party AIX) AI Sora as the friends' ally (a friend leading, Sora in the party): their Cures / items reach him
             ai_sora: (self.leader.is_some() && self.lead.sora_active).then_some((MemberId(crate::aiworld::SORA_ACTOR), out.position)),
+            ai_sora_hp: status.hp as f32 / status.max_hp().max(1) as f32, // (GF-ARTS)
         };
         // (party P) a friend leading: the party's "player" is the leader (lead.rs leader_view)
         let view = self.leader_view(view);
+        self.combat = view.in_battle; // (HUD-REVIVE-COMBAT) `party_combat`
         self.party.set_in_battle(view.in_battle);
         for (id, amount, effect) in std::mem::take(&mut self.pending_heals) {
             let healed = self.party.heal(id, amount, effect);
             say!("party: t={now:.3}s Sora heals member {}: +{healed} HP", id.0);
         }
+        self.caught_step(dt); // (GRABS) the caught friends' get-ups and the stale-hold guards, before the trees tick
         // (stream C) THE AI: each member's controller ticks before the party's step (contract C.1)
         if self.ai_dirty {
             self.ai_dirty = false;
@@ -754,8 +805,9 @@ impl PartyRuntime {
                     }
                     let fr = self.party.view(member).is_some_and(|v| matches!(v.state, kh_party::NpcStateId::Fr(_)));
                     // (ZETTA round 5c) waiting out Zettaflare: the tree rests, the party walks him to his place (zettaflare::step_out)
-                    ctl.set_stop_ai(fr || !self.party.don_zetta.wait_spots.is_empty());
-                    ctl.tick(dt, &mut kh_party::ai_body::PartyBody { party: &mut self.party, member }, &world_view, &mut self.ai_shared);
+                    ctl.set_stop_ai(fr || !self.party.don_zetta.wait_spots.is_empty() || self.caught.stops(*c) /* (GRABS) caught or getting up */);
+                    let rate = self.party.member_rate(member); // (PARTY-AI, AUDIT-A WORLDTIME) his tree at his own time rate (KH3 FRIEND)
+                    ctl.tick(dt * rate, &mut kh_party::ai_body::PartyBody { party: &mut self.party, member }, &world_view, &mut self.ai_shared);
                 }
             }
         } else if !self.ai.is_empty() {
@@ -778,8 +830,9 @@ impl PartyRuntime {
                 let Some(member) = self.members.iter().find(|m| m.0 == *c).map(|m| m.1) else { continue };
                 // D: the tree pauses while a team attack owns the pawn
                 let fr = self.party.view(member).is_some_and(|v| matches!(v.state, kh_party::NpcStateId::Fr(_)));
-                ctl.set_stop_ai(fr);
-                ctl.tick(dt, &mut kh_party::ai_body::PartyBody { party: &mut self.party, member }, &world_view, &mut self.ai_shared);
+                ctl.set_stop_ai(fr || self.caught.stops(*c) /* (GRABS) caught or getting up */);
+                let rate = self.party.member_rate(member); // (PARTY-AI, AUDIT-A WORLDTIME) his tree at his own time rate (KH3 FRIEND)
+                ctl.tick(dt * rate, &mut kh_party::ai_body::PartyBody { party: &mut self.party, member }, &world_view, &mut self.ai_shared);
                 if self.trace {
                     let t = ctl.trace();
                     // the trees on the active path (n_ex00x_BT and every RunBehavior / dynamic subtree by name).
@@ -810,6 +863,14 @@ impl PartyRuntime {
         let mut aura_targets = crate::donald::AuraTargets::new(&mut *targets, &self.party); // (DON-PROG) the Fire aura on the party's hits
         let mut host = PartyHost { world, targets: &mut aura_targets, audio, effects };
         let output = self.party.step(dt, &view, &mut host);
+        // (FINAL-FIX) AI Goofy's word on each BROKEN enemy (goofy/ai.rs break_verdict) and the members' time rates when they
+        // change (Party::rate_note: KH3's [FRIEND] x0.4 during Sora's shotlock aim)
+        for note in std::mem::take(&mut self.party.gof.ai_notes) {
+            say!("party: t={now:.3}s {note}");
+        }
+        if let Some(note) = self.party.rate_note(&mut self.rates_said) {
+            say!("party: t={now:.3}s {note}");
+        }
         self.zetta_allies_back(now); // (ZETTA 2026-10-23) the clean slate at Zettaflare's hand-back; the move-loop guard
         // (DON-MAGIC part A) TEST / DEBUG: Donald held on his spot (`party don-warp`)
         if let (Some((at, yaw)), Some(id)) = (self.don_hold, self.first_donald()) {
@@ -890,7 +951,7 @@ impl PartyRuntime {
     pub fn hud_slots(&self) -> Vec<PartyHudSlot> {
         self.members
             .iter()
-            .filter_map(|(c, id)| self.party.view(*id).map(|v| PartyHudSlot { chara: *c, hp: v.hp, hp_max: v.hp_max, mp: v.mp, mp_max: v.mp_max, mp_charging: v.mp_charging, mp_charge_value: v.mp_charge, in_battle: v.in_battle, focus: if self.leader == Some(*id) { crate::custom::leader_focus(&self.party, *id) } else { None } /* (party X2-b) */ }))
+            .filter_map(|(c, id)| self.party.view(*id).map(|v| PartyHudSlot { chara: *c, hp: v.hp, hp_max: v.hp_max, mp: v.mp, mp_max: v.mp_max, mp_charging: v.mp_charging, mp_charge_value: kh_party::mp_rule::hud_charge_value(v.mp_charging, v.mp_charge, v.mp_max) /* (THE USER 2026-11-02) KH3's charge value (MP still to refill), not the 0..1 progress that held the pink gauge at its first frame */, in_battle: v.in_battle, focus: if self.leader == Some(*id) { crate::custom::leader_focus(&self.party, *id) } else { None } /* (party X2-b) */ }))
             .collect()
     }
 
@@ -929,12 +990,13 @@ impl PartyRuntime {
                     abilities,
                     ai: self.ai_settings(*c),
                     custom: self.customs.block(*c).copied(), // (party X2)
-                    custom_costs: crate::custom::costs(*c), // (party X2)
+                    custom_costs: crate::custom::costs(*c, &self.customs.block(*c).map(|b| b.gof).unwrap_or_default()), // (party X2)
                     kit: crate::custom::kit_rows(s), // (party X2-b)
                     guard: s.guard_view().map(|g| (g.value.round() as i32, g.max.round() as i32)), // (GOOFY-GG)
                     // (EQ) the slots' Auto-Reload and the used ones waiting for their refill (Sora's "used" rows)
                     item_reload: (0..s.item_slots as usize).map(|k| s.item_reload.get(k).copied().unwrap_or(false)).collect(),
                     item_spent: s.items.iter().zip(s.item_reload).take(s.item_slots as usize).map(|(i, r)| i.item.filter(|_| !i.present && r)).collect(),
+                    parry: crate::parry_page::of_status(c.name(), s), // (GOOFY, THE USER 2026-11-02) his Parry Techniques page
                 })
             })
             .collect()
@@ -944,6 +1006,11 @@ impl PartyRuntime {
     /// Sora's settings ([`PartyRuntime::set_sora_ai_settings`]); the host routes it there.
     pub fn apply_edit(&mut self, edit: &PartyMenuEdit) {
         let c = edit.chara();
+        // (weapons P11) a boost item reaches a friend's own record whether he has joined or not (THE USER: "Whole party")
+        if let PartyMenuEdit::Boost { stat, .. } = edit {
+            self.apply_boost_item(c, *stat);
+            return;
+        }
         let Some(id) = self.id(c) else { return };
         match edit {
             PartyMenuEdit::Weapon { id: key, .. } => {
@@ -1004,6 +1071,7 @@ impl PartyRuntime {
             PartyMenuEdit::Ai { settings, .. } => self.set_ai_settings(c, *settings),
             PartyMenuEdit::Custom { edit, .. } => drop(self.apply_custom_edit(c, *edit)), // (party X2)
             PartyMenuEdit::Kit { key, on, .. } => drop(self.apply_kit_edit(c, key, *on)), // (party X2-b)
+            PartyMenuEdit::Boost { .. } => {} // (weapons P11) handled above, joined or not
         }
     }
 
@@ -1034,8 +1102,12 @@ impl PartyRuntime {
     /// The victim by the rules before (ZETTA round 5) Zettaflare's shield ([`PartyRuntime::victim`]).
     fn victim_rule(&self, dummy: u32, from: kh_core::Vec3, sora: kh_core::Vec3) -> Victim {
         let rule = self.victims.iter().find(|v| v.0 == dummy).map_or(Victim::Near, |v| v.1);
-        // (DON-PROG) Donald's aggro (5.4): whom the enemy chooses (Taunt Pass, his weight, Distraction); never a hit moved
+        // (GF-THREAT) Goofy's Taunt and the threat book, then (DON-PROG) Donald's aggro (5.4): whom the enemy chooses (Taunt Pass,
+        // his weight, Distraction); never a hit moved
         if rule == Victim::Near {
+            if let Some(v) = self.gof_victim(dummy, from) {
+                return v;
+            }
             if let Some(v) = self.don_victim(dummy, from, sora) {
                 return v;
             }
@@ -1072,6 +1144,19 @@ impl PartyRuntime {
         ids.into_iter().find(|i| self.party.status(*i).is_some_and(|s| s.donald.is_some()))
     }
 
+    /// (PARTY-AI) The wearer a `party don-cast ID WHO` word names: `sora` (Sora, or AI Sora when a friend leads), `goofy`,
+    /// `donald`, or `leader` (the friend who leads, else Sora). None: not in the party.
+    fn debug_wearer(&self, who: &str) -> Option<MemberId> {
+        let sora = kh_party::donald::cast::SORA_MEMBER;
+        match who {
+            "sora" => Some(sora),
+            "goofy" => self.party.find(Chara::Goofy),
+            "donald" => self.first_donald(),
+            "leader" => Some(self.party.members().find(|id| self.party.member(*id).is_some_and(|m| m.pad.is_some())).unwrap_or(sora)),
+            _ => None,
+        }
+    }
+
     pub fn set_victim(&mut self, dummy: u32, victim: Victim) {
         self.victims.retain(|v| v.0 != dummy);
         self.victims.push((dummy, victim));
@@ -1092,13 +1177,17 @@ impl PartyRuntime {
 
     /// A test dummy's fixture attack on a friend: the fixture's plain amount (as on Sora: ceil(max(60 - Defense, 1) x
     /// power) with a dummy attack of 60), at most the friend's per-hit cap (`m_DamageMax` 24, stats spec 7).
-    pub fn hit_friend(&mut self, c: PartyChara, dummy: TargetId, from: kh_core::Vec3, kind: kh_core::enums::ETresDamageKind, power: f32, now: f64) {
+    pub fn hit_friend(&mut self, c: PartyChara, dummy: TargetId, from: kh_core::Vec3, hit: crate::goofy::FixtureHit, now: f64) {
+        let crate::goofy::FixtureHit { kind, power, class } = hit;
         let Some(id) = self.id(c) else { return };
         let Some(defender) = self.party.defender(id) else { return };
         let amount = (((60 - defender.defense).max(1) as f32 * power).ceil()).min(if defender.damage_max > 0 { defender.damage_max as f32 } else { f32::MAX });
         let at = self.party.view(id).map_or(from, |v| v.position);
         let direction = (at - from).normalize_or_zero();
-        let record = kh_core::HitRecord { position: at, direction, damage: amount, damage_kind: kind, attack_name: "fixture.dummy", ..kh_core::HitRecord::empty(TargetId::NONE) };
+        // (GOOFY) the attacker and the attack's class reach the friend, as the Elden Ring host's sensors give them
+        let attack_info = kh_core::host::AttackInfo { class, perilous: matches!(class, kh_core::host::AttackClass::Thrust | kh_core::host::AttackClass::Sweep | kh_core::host::AttackClass::Grab | kh_core::host::AttackClass::Heavy), attacker: Some(dummy) };
+        let attacker = kh_core::host::HitAttacker { position: from, yaw: 0.0, radius: 50.0, valid: true };
+        let record = kh_core::HitRecord { position: at, direction, damage: amount, damage_kind: kind, attack_name: "fixture.dummy", attacker, attack_info, ..kh_core::HitRecord::empty(TargetId::NONE) };
         let result = self.party.receive_hit(id, &record);
         say!("fixture: t={now:.3}s dummy {} attacks {}: {} for {amount}: {} HP left{}", dummy.0, c.name(), kind.name(), result.hp_after, if result.killed { " (KO)" } else { "" });
     }
@@ -1189,6 +1278,8 @@ impl kh_core::Targets for SoraTargets<'_> {
             return kh_core::host::HitResult::default();
         }
         let hit = crate::donald::aura_hit(&self.runtime.party.don_prog.aura, hit); // (DON-PROG) the Fire aura on Sora's hits
+        // (PARTY-AI, THE USER 2026-11-03: "the party leader can hit friendly NPCs, but not AI allies") AI Sora (a friend leads)
+        let hit = kh_core::HitRecord { flags: hit.flags | kh_core::host::ai_hit_flag(self.runtime.leader.is_none()), ..hit };
         // (DON-MAGIC) SORA'S HITS THROUGH DONALD'S REACTION RULE (documentation/DONALD_OVERHAUL.md 4.5): on an enemy with a
         // status, the reaction (his Thunder on a Wet enemy Conducts, Frozen + Thunder / Aero Shatters, a hit Exposes a
         // Revealed one) and its damage factor, Exposed's x1.25 (everyone's hits), and DON-KIT's x1.2 on Donald's team rows at
@@ -1220,7 +1311,9 @@ impl kh_core::Targets for SoraTargets<'_> {
         self.targets.lock_on_range(id)
     }
     fn engaged_count(&self) -> u32 {
-        self.targets.engaged_count()
+        // (HUD-REVIVE-COMBAT) a friend leading, AI Sora's own flag counts what the party's does: the host's count + the party
+        // aggro of the last party step (`PartyRuntime::party_aggro`), so his stance, put-away and battle-end clips follow the party
+        self.targets.engaged_count() + if self.runtime.leader.is_some() { self.runtime.combat_aggro } else { 0 }
     }
     fn body(&self, id: TargetId, part: u32) -> kh_core::host::TargetBody {
         self.targets.body(id, part)
@@ -1277,8 +1370,18 @@ impl kh_core::Targets for SoraTargets<'_> {
     fn size_class(&self, id: TargetId) -> u8 {
         self.targets.size_class(id)
     }
+    fn stagger_ask(&mut self, id: kh_core::TargetId, ask: kh_core::host::StaggerAsk) -> bool {
+        self.targets.stagger_ask(id, ask) // (GF-BREAK)
+    }
     fn element_affinity(&self, id: TargetId) -> Option<[i32; 8]> {
         self.targets.element_affinity(id)
+    }
+    // (AUDIT-B) forwarded: the hit's bone and its pose are the wrapped host's
+    fn hit_bone(&self, id: kh_core::TargetId, at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        self.targets.hit_bone(id, at)
+    }
+    fn bone_pose(&self, id: kh_core::TargetId, bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        self.targets.bone_pose(id, bone)
     }
 }
 
@@ -1396,10 +1499,20 @@ impl PartyRuntime {
             ["party", "don-cast", id] => match kh_party::donald::SpellRef::from_id(id) {
                 Some(s) => {
                     self.party.don_fx.debug_casts.push(s);
-                    format!("party: Donald casts {id} at the next step")
+                    // (PARTY-AI 2026-11-03) where it goes: `l1.aero.N` is the ATTACK Aero, the buff is `l2.aero.N` (Aero Barrier)
+                    let on = if matches!(s, kh_party::donald::SpellRef::Line1(kh_party::donald::Element::Light, _)) {
+                        "on himself (the Cure line)"
+                    } else if s.ally_target() { "on himself (an ally spell: `party don-cast ID sora|goofy|donald|leader` for another wearer)" } else { "at the nearest foe (an attack spell, no wearer)" };
+                    format!("party: Donald casts {id} {on} at the next step")
                 }
                 None => format!("party: don-cast {id}: no such spell row"),
             },
+            // (GF-INGAME) TEST / DEBUG: `party gof-art SLOT ID`: Art id (0xCA ..= 0xCF as a number) on LB + A (0) / LB + B (1), by Customize's rule
+            ["party", "gof-art", slot, art] => {
+                let b = &mut self.customs.blocks[kh_core::command::leader::LeaderKind::Goofy as usize];
+                let done = b.equip_art(slot.parse().unwrap_or(9), art.parse().unwrap_or(0));
+                format!("party: gof-art {slot} {art}: {done}, now {:?}", b.arts())
+            }
             // (ZETTA) TEST / DEBUG: `party don-zetta-ready`: every Donald meets Zettaflare's condition now (it learned, every learned
             // element at Resonance 3 in this fight, a full Arcane Flow, his MP up to its price): `party don-cast y.zettaflare.1`
             // then casts it by the rules (kh_party::donald::zettaflare::debug_make_ready)
@@ -1560,6 +1673,22 @@ impl PartyRuntime {
                     format!("party: Donald casts {id} on Sora at the next step")
                 }
                 None => format!("party: don-cast {id}: no such spell row"),
+            },
+            // (PARTY-AI 2026-11-03) `party don-cast ID goofy|donald|leader`: an ally spell on that member (`leader`: whoever
+            // leads, Sora included), so a buff can be put on any wearer whoever leads (the ALLY-BUFF HUD check)
+            ["party", "don-cast", id, who] => match (kh_party::donald::SpellRef::from_id(id), self.debug_wearer(who)) {
+                (None, _) => format!("party: don-cast {id}: no such spell row"),
+                (Some(s), _) if !s.ally_target() => format!("party: don-cast {id} {who}: an attack spell has no wearer (the ally spells are l2.aero.N Aero Barrier and l2.thunder.N Ball Lightning)"),
+                (Some(_), None) => format!("party: don-cast {id} {who}: no such member in the party (sora | goofy | donald | leader)"),
+                (Some(s), Some(w)) => {
+                    self.party.don_fx.debug_casts.push(s);
+                    if w == kh_party::donald::cast::SORA_MEMBER {
+                        self.party.don_fx.debug_on_sora = true;
+                    } else {
+                        self.party.don_fx.debug_on_member = Some(w);
+                    }
+                    format!("party: Donald casts {id} on {who} (member {}) at the next step", w.0)
+                }
             }, // (party X2) the leader's magic: debug words
             _ => format!("party: {text}: not a party word (party on|off, party-hp, party-ko, party-style, party-ability, party-cure, party-trace, party-recover, dummy-target; party-word and team-gauge are answered by the streams' own debug words)"),
         }
@@ -1581,11 +1710,8 @@ impl PartyRuntime {
             self.cams.on_actor_action(a);
         }
         let field_fov = kh_camera::projection(&kh_camera::CAMERA_PARAMS).0;
-        // (party X3G-b) a leading Goofy's solo Shield Guardian mode: shield_01 on him (fed as the accompany pawn while no
-        // team attack has one); its end hands back to the field camera
-        let pad_shield = if self.team.accompany().is_none() { self.leader.and_then(|id| self.party.goofy_mode_actor(id)) } else { None };
-        self.cams.pad_shield(pad_shield.is_some());
-        let targets = kh_camera::camera_anim::CameraTargets { sora: (sora.position, sora.yaw), accompany: self.team.accompany().or(pad_shield), friend_camera_target: self.team.camera_target(), field: kh_camera::camera_anim::AnimView { location: field.position, rotation: field.rotation, fov: field_fov }, stick }; // (D3) + stick: shield_01 is steered; (party D4) sora = his actor origin (feet), as KH3's camera base
+        self.cams.pad_shield(false); // (GOOFY, R11) his solo Shield Guardian mode is gone
+        let targets = kh_camera::camera_anim::CameraTargets { sora: (sora.position, sora.yaw), accompany: self.team.accompany(), friend_camera_target: self.team.camera_target(), field: kh_camera::camera_anim::AnimView { location: field.position, rotation: field.rotation, fov: field_fov }, stick }; // (D3) + stick: shield_01 is steered; (party D4) sora = his actor origin (feet), as KH3's camera base
         // (D3) with the level: the collision pass of the event cameras and shield_01's own step.
         let out = self.cams.update_in(dt, &targets, Some(world));
         self.team_fov = None;
@@ -1595,6 +1721,11 @@ impl PartyRuntime {
             self.team_fov = Some(view.fov);
         }
         self.team_shake = out.shake;
+        // (GOOFY) a parry's camera nudge on top (GOOFY_OVERHAUL.md 13)
+        if let Some((deg, cm)) = self.leader.and_then(|id| self.party.goofy_nudge(id)) {
+            self.team_shake.rotation.x += deg;
+            self.team_shake.location.z -= cm;
+        }
         self.zetta_camera(dt, field, field_fov, world, stick); // (ZETTA) Zettaflare's cinematic camera on top
         out.reset_field_camera || self.zetta_behind /* (ZETTA round 5) behind Donald as the hand-back begins */
     }
@@ -1851,7 +1982,7 @@ impl ZettaSolve {
             }
         }
         let (at, rot, fov) = Self::pose_of(v, self.way, world);
-        let mut lifted = v.clone();
+        let mut lifted = *v;
         (lifted.position, lifted.rotation) = (at, rot);
         let (at, rot) = zetta_cinematic_view(&lifted, world);
         let out = match self.blend.as_mut() {
@@ -1914,6 +2045,13 @@ mod xsi_tests {
         fn end_revenge(&mut self, _id: TargetId) {
             self.ended = true;
         }
+        // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+        fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+            None
+        }
+        fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+            None
+        }
     }
 
     #[test]
@@ -1924,5 +2062,53 @@ mod xsi_tests {
         assert_eq!((t.foe_level(TargetId(1)), t.damage_to_hp(), t.in_revenge(TargetId(1))), (Some(42), 0.5, true));
         t.end_revenge(TargetId(1));
         assert!(!t.in_revenge(TargetId(1)));
+    }
+}
+
+// (PARTY-AI, THE USER 2026-11-03: "the party leader can hit friendly NPCs, but not AI allies") SoraTargets stamps AI Sora's hits.
+#[cfg(test)]
+mod friendly_rule_tests {
+    use super::*;
+    use kh_core::host::{HitResult, HurtShape, TargetInfo};
+    use kh_core::{HitRecord, Targets};
+
+    #[derive(Default)]
+    struct Seen(Vec<u32>);
+
+    impl Targets for Seen {
+        fn enumerate(&self, _out: &mut Vec<TargetInfo>) {}
+        fn info(&self, _id: TargetId) -> Option<TargetInfo> {
+            None
+        }
+        fn hurt_shapes(&self, _id: TargetId, _out: &mut Vec<HurtShape>) {}
+        fn apply_hit(&mut self, hit: &HitRecord) -> HitResult {
+            self.0.push(hit.flags);
+            HitResult::default()
+        }
+        // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+        fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+            None
+        }
+        fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+            None
+        }
+    }
+
+    #[test]
+    fn ai_soras_hits_carry_the_ai_bit_and_the_players_soras_do_not() {
+        let mut rt = PartyRuntime::new(RuntimeConfig { wanted: false, test: PartyTest::from_rows(&[]), weapons: Vec::new(), ai_pack: None, ai_pack_source: None });
+        let mut seen = Seen::default();
+        let mut hit = HitRecord::empty(TargetId(5));
+        hit.damage = 10.0;
+        // Sora leads: the player's hit, a friendly NPC may be struck
+        SoraTargets { targets: &mut seen, runtime: &mut rt }.apply_hit(&hit);
+        // a friend leads: AI Sora's hit passes through friendly NPCs
+        rt.leader = Some(MemberId(1));
+        SoraTargets { targets: &mut seen, runtime: &mut rt }.apply_hit(&hit);
+        // the leader switches back: the player's again
+        rt.leader = None;
+        SoraTargets { targets: &mut seen, runtime: &mut rt }.apply_hit(&hit);
+        let may: Vec<bool> = seen.0.iter().map(|f| kh_core::host::may_hit_friendly(*f)).collect();
+        assert_eq!(may, [true, false, true]);
     }
 }

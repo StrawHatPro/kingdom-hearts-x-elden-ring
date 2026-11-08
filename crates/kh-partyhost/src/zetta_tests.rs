@@ -27,6 +27,13 @@ impl kh_core::Targets for OneEnemy {
     fn apply_hit(&mut self, _hit: &kh_core::HitRecord) -> kh_core::host::HitResult {
         kh_core::host::HitResult { accepted: true, ..Default::default() }
     }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
+    }
 }
 
 impl crate::PartyTargets for OneEnemy {
@@ -165,6 +172,13 @@ impl kh_core::Targets for Foes {
     fn apply_hit(&mut self, hit: &kh_core::HitRecord) -> kh_core::host::HitResult {
         self.hits.push((hit.target.0, hit.flags));
         kh_core::host::HitResult { accepted: true, ..Default::default() }
+    }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
     }
 }
 

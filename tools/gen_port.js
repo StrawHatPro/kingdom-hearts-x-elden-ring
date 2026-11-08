@@ -98,7 +98,7 @@ function camel(name) {
   if (c === 'Self' || RESERVED.has(c)) c += '_';
   return c;
 }
-const f32 = (n) => { const s = String(Math.fround(n) === n ? n : Number(n.toPrecision(9))); return /[.eE]/.test(s) ? s : s + '.0'; };
+const { f32 } = require('./lib/f32lit'); // (2026-11-01) Clippy-clean literals, the same f32 values
 function typed(row) {
   const v = row.value;
   if (typeof v === 'number' && Number.isFinite(v)) return INT_UNITS.has(row.unit) && Number.isInteger(v) ? ['i32', String(v)] : ['f32', f32(v)];
@@ -269,7 +269,7 @@ function valuesFile(all, informational, informationalIds, names) {
   let out = banner(names.from);
   out += `\n/// ${names.doc}\n///\n/// (sheet id, value), ascending by id in byte order.\npub const ${names.prefix}_PARAM_VALUES: &[(&str, PV)] = &[\n`;
   for (const r of sorted) out += `    (${lit(r.id)}, ${r.lit}),\n`;
-  out += `];\n\n/// Where the values come from.\npub const ${names.prefix}_PARAMS_ORIGIN: &str = "sheet";\n\n`;
+  out += '];\n\n';
   out += `/// Rows of the sheet that are questions, not code inputs: (sheet id, what the code uses instead).\npub const ${names.prefix}_PARAM_INFORMATIONAL: &[(&str, &str)] = &[\n`;
   for (const r of informational) out += `    (${lit(r.id)}, ${lit(informationalIds[r.id])}),\n`;
   out += '];\n';
@@ -394,6 +394,91 @@ for (const overlay of [path.join(ROOT, 'build', 'sora_pack', 'xsi_manifest.json'
   Object.assign((man.attack_sockets = man.attack_sockets || {}).clips = man.attack_sockets.clips || {}, ov.attack_sockets.clips);
   break;
 }
+// (weapons F-SHIELD, 2026-11-03) THE FORM ANIM SETS' clips (KH3's m_ReplaceAnimSets: p_ex001_AnimSet2 .. 23, packed by the
+// asset agent into build/sora_pack/keyblades/sora_forms_manifest.json, the xsi_manifest format). Their LOGICAL names repeat
+// the base set's ("IdleB", "GuardHit" ... in every set), so a form's clip becomes one row named by its SEQUENCE ("B419"):
+// the form package maps the logical name to it (kh-core combat/forms `replace_clip`, sheets/port/sora-form-<name>.json).
+// Only the sets a form package plays are taken (each package adds its own here); blend spaces of a set are not rows (their
+// samples are, as plain sequences). Rows come after every other row: no AnimId value moves.
+const FORM_ANIM_SETS = ['p_ex001_AnimSet11', 'p_ex001_AnimSet19', /* (weapons F-ARROWGUN) Double Arrowguns / Magic Launcher / Hunny */ 'p_ex001_AnimSet2', 'p_ex001_AnimSet5', 'p_ex001_AnimSet16', 'p_ex001_AnimSet17', /* (weapons F-HAMMER) Hyper Hammer / Drill Punch / Boom Hammer / Clock Drill */ 'p_ex001_AnimSet3', 'p_ex001_AnimSet6', 'p_ex001_AnimSet20', 'p_ex001_AnimSet21', /* (F-RAGE) Rage Form */ 'p_ex001_AnimSet13', /* (F-STAFF) Mirage Staff */ 'p_ex001_AnimSet10', /* (F-CLAWS) Agile / Blizzard Claws, Twin Yo-Yos, Blizzard Blades */ 'p_ex001_AnimSet12', 'p_ex001_AnimSet4', 'p_ex001_AnimSet7', /* (F-SHIP) Highwind / Storm Flag */ 'p_ex001_AnimSet14', 'p_ex001_AnimSet15', /* (F-LIGHTDARK) Light / Dark Form, Double Form */ 'p_ex001_AnimSet22', 'p_ex001_AnimSet23'];
+// (F-NANO) sets whose rows go after every other form set's rows and blend spaces (appended: no AnimId moves): Nano Arms
+const FORM_ANIM_SETS_LATE = ['p_ex001_AnimSet8', /* (F-ULTIMATE) Ultimate Form (after Nano Arms' rows in the manifest's order: no AnimId moves) */ 'p_ex001_AnimSet9'];
+const FORM_SEQUENCES = new Set(); // their sequences: the notify assets only they name go after the others (no NOTIFY_ASSETS id moves)
+let formAnimSets = {}; // (F-LOCO) the manifest's anim_sets: set path -> [{ name (logical), clip, class }]
+{
+  const overlay = path.join(ROOT, 'build', 'sora_pack', 'keyblades', 'sora_forms_manifest.json');
+  if (fs.existsSync(overlay)) {
+    const ov = JSON.parse(fs.readFileSync(overlay, 'utf8'));
+    const known = new Set(man.items.filter((i) => i.kind === 'animation').map((i) => i.animation_name));
+    const names = new Set(man.logical_animations.map((a) => a.name));
+    const wanted = ov.logical_animations.filter((a) => FORM_ANIM_SETS.some((s) => String(a.anim_set).endsWith('/' + s)) && a.file && a.clip);
+    for (const a of wanted) {
+      const item = ov.items.find((i) => i.kind === 'animation' && i.animation_name === a.clip);
+      if (!item) continue;
+      if (!known.has(a.clip)) { man.items.push(item); known.add(a.clip); FORM_SEQUENCES.add(a.clip); }
+      if (names.has(a.clip)) continue;
+      names.add(a.clip);
+      man.logical_animations.push({ name: a.clip, class: 'AnimSequence', file: item.file, play: { mode: null, asset_m_InterpolationTime: 0, played_by: 'a form anim set\'s clip (' + String(a.anim_set).split('/').pop() + ' ' + a.name + '): played by its form package' } });
+    }
+    // (weapons F-ARROWGUN) a set's blend space (MagicFire5 ...: no file of its own): its samples as plain sequences.
+    for (const a of ov.logical_animations.filter((x) => FORM_ANIM_SETS.some((s) => String(x.anim_set).endsWith('/' + s)) && !x.file && ov.blend_spaces && ov.blend_spaces[x.clip])) {
+      for (const s of ov.blend_spaces[a.clip].samples || []) {
+        const clip = String(s.asset).split('/').pop().split('.')[0];
+        const item = ov.items.find((i) => i.kind === 'animation' && i.animation_name === clip);
+        if (!item || names.has(clip)) continue;
+        if (!known.has(clip)) { man.items.push(item); known.add(clip); FORM_SEQUENCES.add(clip); }
+        names.add(clip);
+        wanted.push({ clip });
+        man.logical_animations.push({ name: clip, class: 'AnimSequence', file: item.file, play: { mode: null, asset_m_InterpolationTime: 0, played_by: 'a sample of a form anim set\'s blend space (' + String(a.anim_set).split('/').pop() + ' ' + a.name + '): played by its form package' } });
+      }
+    }
+    // (F-SHIELD) ... and the blend space itself as a row named by its clip (GuardWalk, M_B425 ...: a 1D / 2D blend space
+    // over those samples, the main manifest's format), unless the name is taken: the states set its axes.
+    for (const a of ov.logical_animations.filter((x) => FORM_ANIM_SETS.some((s) => String(x.anim_set).endsWith('/' + s)) && !x.file && ov.blend_spaces && ov.blend_spaces[x.clip])) {
+      const bs = ov.blend_spaces[a.clip];
+      if (names.has(a.clip) || !/^BlendSpace/.test(bs.class || '')) continue;
+      const samples = (bs.samples || []).map((s) => ({ value: s.value, value_y: s.value_y, animation_name: String(s.asset).split('/').pop().split('.')[0] }));
+      if (!samples.length || samples.some((s) => !man.items.some((i) => i.kind === 'animation' && i.animation_name === s.animation_name))) continue;
+      names.add(a.clip);
+      man.logical_animations.push({ name: a.clip, class: bs.class === 'BlendSpace' ? 'BlendSpace' : 'BlendSpace1D', file: null, samples, axis: bs.axis, axis_y: bs.axis_y, grid_samples: bs.grid_samples, input_filter: bs.input_filter, notify_trigger_mode: bs.notify_trigger_mode, play: { mode: null, asset_m_InterpolationTime: bs.m_InterpolationTime || 0, played_by: 'a form anim set\'s blend space (' + String(a.anim_set).split('/').pop() + ' ' + a.name + ')' } });
+    }
+    // (F-NANO) FORM_ANIM_SETS_LATE: their clips as rows named by the sequence, after every row above.
+    for (const a of ov.logical_animations.filter((x) => FORM_ANIM_SETS_LATE.some((s) => String(x.anim_set).endsWith('/' + s)) && x.file && x.clip)) {
+      const item = ov.items.find((i) => i.kind === 'animation' && i.animation_name === a.clip);
+      if (!item) continue;
+      if (!known.has(a.clip)) { man.items.push(item); known.add(a.clip); FORM_SEQUENCES.add(a.clip); }
+      if (names.has(a.clip)) continue;
+      names.add(a.clip);
+      wanted.push(a);
+      man.logical_animations.push({ name: a.clip, class: 'AnimSequence', file: item.file, play: { mode: null, asset_m_InterpolationTime: 0, played_by: 'a form anim set\'s clip (' + String(a.anim_set).split('/').pop() + ' ' + a.name + '): played by its form package (F-NANO)' } });
+    }
+    // (F-LOCO) ... and FORM_ANIM_SETS_LATE's blend spaces (AnimSet9's RunLoopB9, MagicFire9 ...), as for the sets above: their
+    // samples as plain sequences, then the blend space as a row named by its clip. After every row above: no AnimId moves.
+    const lateSpaces = ov.logical_animations.filter((x) => FORM_ANIM_SETS_LATE.some((s) => String(x.anim_set).endsWith('/' + s)) && !x.file && ov.blend_spaces && ov.blend_spaces[x.clip]);
+    for (const a of lateSpaces) {
+      for (const s of ov.blend_spaces[a.clip].samples || []) {
+        const clip = String(s.asset).split('/').pop().split('.')[0];
+        const item = ov.items.find((i) => i.kind === 'animation' && i.animation_name === clip);
+        if (!item || names.has(clip)) continue;
+        if (!known.has(clip)) { man.items.push(item); known.add(clip); FORM_SEQUENCES.add(clip); }
+        names.add(clip);
+        wanted.push({ clip });
+        man.logical_animations.push({ name: clip, class: 'AnimSequence', file: item.file, play: { mode: null, asset_m_InterpolationTime: 0, played_by: 'a sample of a form anim set\'s blend space (' + String(a.anim_set).split('/').pop() + ' ' + a.name + '): played through the form\'s anim set (F-LOCO)' } });
+      }
+    }
+    for (const a of lateSpaces) {
+      const bs = ov.blend_spaces[a.clip];
+      if (names.has(a.clip) || !/^BlendSpace/.test(bs.class || '')) continue;
+      const samples = (bs.samples || []).map((s) => ({ value: s.value, value_y: s.value_y, animation_name: String(s.asset).split('/').pop().split('.')[0] }));
+      if (!samples.length || samples.some((s) => !man.items.some((i) => i.kind === 'animation' && i.animation_name === s.animation_name))) continue;
+      names.add(a.clip);
+      man.logical_animations.push({ name: a.clip, class: bs.class === 'BlendSpace' ? 'BlendSpace' : 'BlendSpace1D', file: null, samples, axis: bs.axis, axis_y: bs.axis_y, grid_samples: bs.grid_samples, input_filter: bs.input_filter, notify_trigger_mode: bs.notify_trigger_mode, play: { mode: null, asset_m_InterpolationTime: bs.m_InterpolationTime || 0, played_by: 'a form anim set\'s blend space (' + String(a.anim_set).split('/').pop() + ' ' + a.name + ') (F-LOCO)' } });
+    }
+    // (F-LOCO) the sets themselves (logical name -> clip, the asset's order) for the FORM_ANIM_SETS table below.
+    formAnimSets = ov.anim_sets || {};
+    Object.assign((man.root_motion = man.root_motion || {}).tracks = man.root_motion.tracks || {}, Object.fromEntries(Object.entries((ov.root_motion && ov.root_motion.tracks) || {}).filter(([k]) => wanted.some((a) => a.clip === k))));
+  }
+}
 const LEGACY_ORDER = ['IdleN', 'IdleBreakN', 'WalkLoopN', 'WalkEndR', 'WalkEndL', 'RunStartN', 'RunLoopN', 'RunEndR', 'RunEndL', 'JumpNormalStart', 'JumpNormalRiseLoop', 'JumpNormalDownLoop', 'Land', 'LightLand'];
 const items = new Map(man.items.filter((i) => i.kind === 'animation').map((i) => [i.animation_name, i]));
 const tracks = (man.root_motion && man.root_motion.tracks) || {};
@@ -414,8 +499,9 @@ for (const a of ordered) {
   const differ = Math.max(...lengths) - Math.min(...lengths) > 1e-4;
   if (differ && stage1 && LEGACY_ORDER.includes(a.name)) fail(`${a.name}: its blend-space samples differ in length (${lengths.join(', ')}); the stage-1 core plays them on one clock`);
   const enabled = samples.some((s) => items.get(seqNames[s[1]]).root_motion_enabled === true);
-  // A Rust identifier for the row: the name itself; a leading digit gets the prefix A ("1301" -> A1301).
-  let variant = String(a.name).replace(/[^A-Za-z0-9_]/g, '_');
+  // A Rust identifier for the row: the name itself, without an underscore that touches a letter
+  // ("M_1301" -> M1301: Rust wants UpperCamelCase); a leading digit gets the prefix A ("1301" -> A1301).
+  let variant = String(a.name).replace(/[^A-Za-z0-9_]/g, '_').replace(/(?<=[A-Za-z])_+|_+(?=[A-Za-z])/g, '');
   if (/^[0-9]/.test(variant)) variant = 'A' + variant;
   if (RESERVED.has(variant) || variant === 'Self') variant += '_';
   if (variantNames.has(variant)) fail(`animation rows ${a.name} and ${variantNames.get(variant)} both become the identifier ${variant}`);
@@ -449,7 +535,9 @@ const classVariant = (c) => camel(String(c).replace(/_/g, ' ')).replace(/^Sqexse
 // reads is "consumed"; the rest stays in the raw bag (`props`). The effect-attach lists are decoded
 // AND kept raw (the decoder takes only what the seam needs).
 const assetNames = new Set();
-const asset = (v) => { assetNames.add(String(v)); return rstr(v); };
+const formAssetNames = new Set(); // (weapons F-SHIELD) named only by the form anim sets' sequences
+let inFormSequence = false;
+const asset = (v) => { (inFormSequence ? formAssetNames : assetNames).add(String(v)); return rstr(v); };
 const DECODE = {
   TresAnimNotifyState_Attack: (p, used) => { ['CollisionGrpName', 'm_AttackDataIDName', 'm_WeaponHitSEAliasID', 'AttackInterval', 'm_HitSEAsset', 'm_bOverrideHitEffect', 'm_HitEffectGrpName'].forEach((k) => used.add(k));
     return `NotifyData::Attack { group: ${rstr(p.CollisionGrpName ?? 'None')}, row: ${rstr(p.m_AttackDataIDName ?? 'None')}, hit_se: ${opt(p.m_WeaponHitSEAliasID, (v) => rstr(label(v)))}, interval: ${opt(p.AttackInterval, f32)}, hit_se_asset: ${opt(p.m_HitSEAsset, asset)}, override_hit_effect: ${bool(p.m_bOverrideHitEffect, false)}, hit_effect_group: ${opt(p.m_HitEffectGrpName, rstr)} }`; },
@@ -516,6 +604,7 @@ const trig = (n) => (n.trigger_time !== undefined ? n.trigger_time : n.time);
 const endTrig = (n) => (n.end_trigger_time !== undefined ? n.end_trigger_time : n.time + (n.duration || 0));
 const notify = (item, name) => (item.notifies || []).find((n) => n.name === name);
 for (const name of seqNames) {
+  inFormSequence = FORM_SEQUENCES.has(name);
   const out = [];
   for (const n of items.get(name).notifies || []) {
     if (!n.class) continue; // an event without a notify object does nothing
@@ -625,13 +714,42 @@ for (const a of anims) {
   anim += `    AnimData { name: ${lit(a.name)}, stage1_mode: ${a.stage1 ? `Some(${a.mode})` : 'None'}, looping: ${a.looping}, root_motion_bit: ${a.rootBit}, root_motion: ${a.rootExtracted}, root_motion_enabled: ${a.rootEnabled}, blend_in: ${f32(a.blendIn)}, length: ${f32(a.length)}, sample_lengths_differ: ${a.differ}, blend_space: ${a.blendSpace}, axis_min: ${f32(a.axisMin)}, axis_max: ${f32(a.axisMax)}, axis_smoothing: ${f32(a.axisSmoothing)}, all_animation: ${a.allAnimation}, samples: &[${a.samples.map((s) => `(${f32(s[0])}, ${s[1]})`).join(', ')}], space2d: ${a.two ? `Some(&SPACE2D_${a.space})` : 'None'} },\n`;
 }
 anim += '];\n\n';
-anim += `/// The animations of Sora's main anim set (\`p_ex001_AnimSet\`), by the game's own row names (a name that starts\n/// with a digit has the prefix \`A\`: row "1301" is \`AnimId::A1301\`). The first ${LEGACY_ORDER.length} values are the stage-1\n/// animations in their historical order (pinned by tests/golden.rs); the rest follow in the anim set's order.\n#[allow(non_camel_case_types)]\n#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]\n#[repr(u16)]\npub enum AnimId {\n`;
+anim += `/// The animations of Sora's main anim set (\`p_ex001_AnimSet\`), by the game's own row names (a name that starts\n/// with a digit has the prefix \`A\`: row "1301" is \`AnimId::A1301\`; an underscore beside a letter is dropped: row\n/// "M_1301" is \`AnimId::M1301\`). The first ${LEGACY_ORDER.length} values are the stage-1\n/// animations in their historical order (pinned by tests/golden.rs); the rest follow in the anim set's order.\n#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]\n#[repr(u16)]\npub enum AnimId {\n`;
 anims.forEach((a, i) => { anim += `    ${a.variant} = ${i},\n`; });
 anim += `}\n\nimpl AnimId {\n    /// Every animation, in id order.\n    pub const ALL: [AnimId; ${anims.length}] = [${anims.map((a) => `AnimId::${a.variant}`).join(', ')}];\n\n    /// The stage-1 animations (the first ${LEGACY_ORDER.length} ids).\n    pub const STAGE1: [AnimId; ${LEGACY_ORDER.length}] = [${anims.slice(0, LEGACY_ORDER.length).map((a) => `AnimId::${a.variant}`).join(', ')}];\n\n    /// By the game's row name ("IdleN", "1301", "M_1359").\n    pub fn from_name(name: &str) -> Option<AnimId> {\n        ANIMS.iter().position(|a| a.name == name).map(|i| AnimId::ALL[i])\n    }\n}\n\n`;
+// (F-LOCO) THE FORM ANIM SETS (m_ReplaceAnimSets' assets p_ex001_AnimSet2 .. 23, `TresAnimSet.Anims`): per set, each logical
+// name with the animation-table row its asset is (a sequence or a blend space of the forms pack: the row named by its clip;
+// a clip of the main pack / XS overlay: the row that plays that one sequence, the row of the same logical name first). The
+// form's chain (`sheets/port/sora-keyblade-forms.json` anim_sets) is searched last set first (FindAnim 0x14056DE80):
+// kh-core combat/forms `replaced`. A logical name whose asset has no row is left out (none today; the generator fails).
+{
+  const rowOf = (e) => {
+    const named = anims.find((a) => a.name === e.clip);
+    if (named) return named;
+    const plays = anims.filter((a) => !a.blendSpace && a.samples.length === 1 && seqNames[a.samples[0][1]] === e.clip);
+    return plays.find((a) => a.name === e.name) || plays[0] || null;
+  };
+  const setNo = (k) => Number((/AnimSet(\d+)/.exec(k) || [0, 0])[1]);
+  const keys = Object.keys(formAnimSets).filter((k) => [...FORM_ANIM_SETS, ...FORM_ANIM_SETS_LATE].some((s) => k.endsWith('/' + s))).sort((x, y) => setNo(x) - setNo(y));
+  const missing = [];
+  anim += '/// (F-LOCO) One replacement anim set of a formchange (`p_ex001_AnimSetNN`): its logical names and the rows they play.\n#[derive(Clone, Copy, Debug, PartialEq)]\npub struct FormAnimSet {\n    /// The asset\'s name ("p_ex001_AnimSet7").\n    pub name: &\'static str,\n    /// (logical name, row), in the asset\'s order.\n    pub rows: &\'static [(&\'static str, AnimId)],\n}\n\n/// (F-LOCO) Every form anim set the forms name (m_ReplaceAnimSets), by set number.\npub static FORM_ANIM_SETS: &[FormAnimSet] = &[\n';
+  for (const k of keys) {
+    const rows = [];
+    for (const e of formAnimSets[k]) {
+      const r = rowOf(e);
+      if (!r) { missing.push(k.split('/').pop() + ' ' + e.name + ' = ' + e.clip); continue; }
+      rows.push(`(${lit(e.name)}, AnimId::${r.variant})`);
+    }
+    anim += `    FormAnimSet { name: ${lit(k.split('/').pop())}, rows: &[${rows.join(', ')}] },\n`;
+  }
+  anim += '];\n\n';
+  if (missing.length) fail(`the form anim sets name assets with no animation-table row: ${missing.join('; ')}`);
+}
 { const v = (man.attack_sockets || {}).vfx_cure || { position_actor_cm: [0, 0, 105], plus_200_x_actor_cm: [200, 0, 105] };
   anim += `/// The socket vfx_cure of the wielder (root bone, reference pose) in actor space, cm, and the same moved by the\n/// relative location (200, 0, 0) of the shape groups FrontImpactS and KB_FixPillar, in the socket frame.\npub const SOCKET_VFX_CURE: [f32; 3] = [${v.position_actor_cm.map(f32).join(', ')}];\npub const SOCKET_VFX_CURE_PLUS_200: [f32; 3] = [${v.plus_200_x_actor_cm.map(f32).join(', ')}];\n\n`; }
-const assetList = [...assetNames].sort();
-anim += `/// Every sound, voice and effect asset a notify names (sorted): the id the generic notify handlers give a seam\n/// event is \`NOTIFY_ID_BASE\` + the index of its name here, until the audio and effect tables are generated.\npub static NOTIFY_ASSETS: &[&str] = &[\n${assetList.map((n) => `    ${rstr(n)},\n`).join('')}];\n`;
+inFormSequence = false;
+const assetList = [...[...assetNames].sort(), ...[...formAssetNames].filter((n) => !assetNames.has(n)).sort()];
+anim += `/// Every sound, voice and effect asset a notify names (sorted; those only a form anim set names after them, sorted): the id the generic notify handlers give a seam\n/// event is \`NOTIFY_ID_BASE\` + the index of its name here, until the audio and effect tables are generated.\npub static NOTIFY_ASSETS: &[&str] = &[\n${assetList.map((n) => `    ${rstr(n)},\n`).join('')}];\n`;
 claim('file', 'sora_anim.rs', 'the pack manifest');
 outputs.push(['sora_anim.rs', anim, `${anims.length} animations (${anims.filter((a) => a.blendSpace && !a.two).length} BlendSpace1D, ${spaces.length} 2D), ${seqNames.length} sequences, ${seqNames.filter((n) => tracks[n] && tracks[n].bEnableRootMotion).length} root tracks, ${notifyCount} notifies of ${classList.length} classes, ${assetList.length} notify assets`]);
 

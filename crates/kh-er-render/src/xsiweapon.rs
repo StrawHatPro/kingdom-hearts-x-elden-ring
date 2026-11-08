@@ -8,11 +8,11 @@
 //! - Chandelier: the Blizzard Blades `w_so084` / `w_so085` on the forearms (R/L_ude2_wep2_skt) and `w_so086` / `w_so087`
 //!   on the legs (R/L_ashi2_wep_skt): TRES_WEAPON_FORM_07 of AnimSet7 (ER90 / XSI drew w_so082 / w_so083, the other form);
 //! - Myriad: Ultima `w_so192` on R_wep_skt (bone R_buki).
-//! Each weapon is posed by its OWN skeleton and clip (kh_anim::formweapon: the Hyper Hammer's clip 3416 grows the hammer and
-//! its parts; a weapon whose anim set has no row of the move holds its ResetPose), sampled at the time of Sora's clip, on
-//! its socket (the socket's own turn); its slots are the weapons' OWN translated materials (`PACK/xsi/weapons/materials`,
-//! tools/sora_material_pack.js outfit mode, owner ids 400+, meshes `xsi:<model>`), merged into the outfit's library, their
-//! shaders `PACK/xsi/weapons/materials/er/c3xx*.ps.dxil` (gfx.rs `read_shaders` reads them for the `xsi:` slots).
+//!   Each weapon is posed by its OWN skeleton and clip (kh_anim::formweapon: the Hyper Hammer's clip 3416 grows the hammer and
+//!   its parts; a weapon whose anim set has no row of the move holds its ResetPose), sampled at the time of Sora's clip, on
+//!   its socket (the socket's own turn); its slots are the weapons' OWN translated materials (`PACK/xsi/weapons/materials`,
+//!   tools/sora_material_pack.js outfit mode, owner ids 400+, meshes `xsi:<model>`), merged into the outfit's library, their
+//!   shaders `PACK/xsi/weapons/materials/er/c3xx*.ps.dxil` (gfx.rs `read_shaders` reads them for the `xsi:` slots).
 //!
 //! (XW-b) CHANDELIER'S CHANDELIER: `PACK/xsi/weapons/pawns_xwb.json` (build/sora_tmp/er/xwb/tools/xwb_chandelier.js): KH3's
 //! StylePawn w_so088 with its own skeleton, its clip 7423 (the fall and the crash) and its own material
@@ -384,8 +384,12 @@ pub fn add_slots_with<'a>(t: &'a Table, library: &mut Library) -> Vec<&'a FormMo
 
 /// (XW) The folder of a slot's compiled shaders and the suffix its files take: a form weapon's own material (owner ids
 /// 400+, `xsi:` slots of weapons_xw.json) is built once, without an outfit's own-set suffix, in
-/// `PACK/xsi/weapons/materials/er`; every other slot as before (`dir`, `suffix`).
+/// `PACK/xsi/weapons/materials/er`; (P5) a keyblade's (`kb:` slots, owner ids 500+) in `PACK/keyblades/materials/er`
+/// (keyblade.rs); every other slot as before (`dir`, `suffix`).
 pub fn shader_dir<'a>(slot: &Slot, dir: &'a Path, suffix: &'a str) -> (PathBuf, &'a str) {
+    if let Some(kb) = crate::keyblade::shader_dir(slot) {
+        return (kb, "");
+    }
     // (XW-b) the folder of the library that gives the slot's mesh
     match table().and_then(|t| t.libs.iter().find(|(_, meshes)| meshes.contains(&slot.mesh))) {
         Some((lib, _)) if slot.mesh.starts_with(PREFIX) => (lib.join("er"), ""),
@@ -394,7 +398,8 @@ pub fn shader_dir<'a>(slot: &Slot, dir: &'a Path, suffix: &'a str) -> (PathBuf, 
 }
 
 /// (XW-b) An accompany pawn of the move `name` (pawns_xwb.json) as one more form to draw: its actor at `ground` (GAME
-/// space, cm) turned `yaw` (the core's convention; its mesh component -90 as a character's), its bones from its clip at
+/// space, cm) turned `yaw` (the core's convention; its mesh component as its blueprint sets it: (AUDIT-B W-FIN) the
+/// Chandelier's 0, a character's -90), its bones from its clip at
 /// `time`. None without the table or such a pawn.
 pub fn pawn_form(name: &str, ground: glam::Vec3, yaw: f32, time: f32) -> Option<FormWeapon> {
     pawn_form_with(table()?, name, ground, yaw, time)
@@ -404,7 +409,11 @@ pub fn pawn_form(name: &str, ground: glam::Vec3, yaw: f32, time: f32) -> Option<
 pub fn pawn_form_with(t: &Table, name: &str, ground: glam::Vec3, yaw: f32, time: f32) -> Option<FormWeapon> {
     let (_, model) = t.pawns.iter().find(|(m, _)| m == name)?;
     let rig = t.models.iter().find(|m| &m.model == model)?.rig.as_ref()?;
-    let to_world = Trs { translation: ground, rotation: glam::Quat::from_rotation_z((yaw - 90.0).to_radians()), scale: Vec3::ONE };
+    // (AUDIT-B W-FIN) the pawn's mesh component as ITS blueprint sets it: StylePawn/w_so088's TresCharMesh0 has no relative
+    // rotation (and the native ctor FUN_14059F950 writes none): yaw 0 on its root, not a character's 270 (Sora, the Kraken).
+    // Its own clip rows (kh-core claws `wfx` pawn rows) are in that same frame.
+    let mesh_yaw = if model == "w_so088" { 0.0 } else { -90.0 };
+    let to_world = Trs { translation: ground, rotation: glam::Quat::from_rotation_z((yaw + mesh_yaw).to_radians()), scale: Vec3::ONE };
     Some(FormWeapon { model: model.clone(), to_world, component: rig.component(time) })
 }
 
@@ -420,6 +429,7 @@ mod tests {
             owner: "w_so010_mat0_Inst".into(),
             owner_id: 11,
             instance_name: "w_so010_mat0_Inst".into(),
+            root: "w_allBaseMat".into(),
             masked: true,
             translucent: false,
             two_sided: false,

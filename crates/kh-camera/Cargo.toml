@@ -11,3 +11,7 @@ kh-gendata = { path = "../kh-gendata" }
 glam = { workspace = true }
 # For the `World` trait (sphere sweeps are capsule sweeps whose half height is the radius).
 kh-core = { path = "../kh-core" }
+
+[dev-dependencies]
+# (F-HUD) tests/ghost_horde_camera.rs reuses kh-core's shotlock bench (tests/shotlocks_common), which reads the loadout sheet.
+serde_json = "1"

@@ -19,8 +19,8 @@
 //! - The second line (sora.rs `watch_ui`): a telescope prompt the manager still shows is no prompt for us (no KH3 command,
 //!   Y never reaches the game for it), as the ladder's "Descend".
 //! - `telescope.er = 1`: the game's telescopes as before (the rows get their region back). Default: switched off.
-//! (ActionButtonText 9240 "Stargaze" is NOT a Birdseye Telescope and is left alone; `telescope.text_ids = 9270,9240`
-//! would take it too.)
+//!   (ActionButtonText 9240 "Stargaze" is NOT a Birdseye Telescope and is left alone; `telescope.text_ids = 9270,9240`
+//!   would take it too.)
 
 use std::sync::Mutex;
 use std::time::Instant;
@@ -114,7 +114,7 @@ fn message(msgs: &MsgRepository, id: i32) -> Option<String> {
 /// The telescope rows, and how many rows' texts could be read (0: the messages are not loaded yet).
 fn find_rows(ids: &[i32], words: &[&str]) -> Option<(Vec<Row>, usize)> {
     // SAFETY: game thread; the singletons live as long as the game; the SDK checks the tables it walks.
-    let repo = unsafe { SoloParamRepository::instance() }.ok()?;
+    let repo = unsafe { SoloParamRepository::instance() }.ok().filter(|r| crate::game::param_loaded::<ActionButtonParam>(r))?; // (FINAL-FIX) not before the params are loaded
     let msgs = unsafe { MsgRepository::instance() }.ok();
     let mut rows = Vec::new();
     let mut read = 0;
@@ -132,7 +132,9 @@ fn find_rows(ids: &[i32], words: &[&str]) -> Option<(Vec<Row>, usize)> {
 /// Writes the rows: no region (`lock`) or their own; how many differed from what was wanted.
 fn write_rows(rows: &[Row], lock: bool) -> u32 {
     // SAFETY: game thread; the singleton lives as long as the game; rows by id, each written as the SDK's setters do.
-    let Ok(repo) = (unsafe { SoloParamRepository::instance_mut() }) else { return 0 };
+    // (FINAL-FIX, the shutdown panic) the game tears its params down at its exit while this frame task still runs: no row
+    // is written into a holder without its res cap (the SDK would panic, solo_param_repository.rs:487)
+    let Some(repo) = (unsafe { SoloParamRepository::instance_mut() }).ok().filter(|r| crate::game::param_loaded::<ActionButtonParam>(r)) else { return 0 };
     let mut changed = 0;
     for r in rows {
         let Some(row) = repo.get_mut::<ActionButtonParam>(r.id) else { continue };

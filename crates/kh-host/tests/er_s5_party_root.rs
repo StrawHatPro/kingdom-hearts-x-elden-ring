@@ -6,7 +6,7 @@
 //! - Sora's "a new core counts from 1" rule and his animation change never end the party's effects (before S5 the next
 //!   spawn of Sora's after one of the party's ended every effect alive);
 //! - a member's endless one-shot ends with his anim-set row; `party_loops` counts what still runs; `stop_party`.
-//! Skipped, saying so, without the packs.
+//!   Skipped, saying so, without the packs.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

@@ -108,6 +108,7 @@ pub fn wanted_on(mode_sora: bool, body_hidden: bool, key: Option<bool>) -> bool 
 /// `tarnished.fx_hide_friend = 0`: the Lantern as the game draws it.
 static FRIEND_LEADS: AtomicBool = AtomicBool::new(false);
 
+#[cfg(feature = "party")]
 pub fn set_friend_leads(on: bool) {
     FRIEND_LEADS.store(on, Relaxed);
 }
@@ -221,7 +222,7 @@ pub fn denied(class: &str) -> bool {
 }
 
 fn plausible(w: usize) -> bool {
-    (0x1_0000..0x7FFF_FFFF_0000).contains(&w) && w % 8 == 0
+    (0x1_0000..0x7FFF_FFFF_0000).contains(&w) && w.is_multiple_of(8)
 }
 
 /// FROM THE BODY'S EFFECT MODULES TO ITS EFFECT RECORDS (breadth first, `max_depth` levels, `budget` objects): a word
@@ -292,7 +293,7 @@ struct Live {
 impl Mem for Live {
     fn words(&self, addr: usize, n: usize) -> Option<Vec<usize>> {
         let mut b = vec![0u8; n * 8];
-        read(addr, &mut b).then(|| b.chunks_exact(8).map(|c| usize::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])).collect())
+        read(addr, &mut b).then(|| b.as_chunks::<8>().0.iter().map(|c| usize::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])).collect())
     }
     fn class(&self, addr: usize) -> Option<String> {
         let vt = crate::probe::word(addr)?;
@@ -328,7 +329,7 @@ fn pool_scan(system: usize, ids: &[u32], only: &[(usize, usize)]) -> ScanOut {
         while p < next {
             let len = (next - p).min(buf.len());
             if read(p, &mut buf[..len]) {
-                for (k, c) in buf[..len].chunks_exact(8).enumerate() {
+                for (k, c) in buf[..len].as_chunks::<8>().0.iter().enumerate() {
                     if usize::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) == system && p + k * 8 >= 0x38 {
                         let rec = p + k * 8 - 0x38;
                         if let Some(id) = fx_record(rec, system) {
@@ -460,8 +461,11 @@ fn restore_all(st: &mut State, system: usize) {
     }
 }
 
+/// Per vfx row, the row and its (midst, init, finish) FXR ids.
+type VfxRow = (i32, [i32; 3]);
+
 /// The Lantern's chain in the params: its special effect and, per vfx row, the (midst, init, finish) FXR ids.
-fn lantern_chain() -> Option<(i32, Vec<(i32, [i32; 3])>)> {
+fn lantern_chain() -> Option<(i32, Vec<VfxRow>)> {
     use eldenring::cs::{EquipParamGoods, SoloParamRepository};
     use fromsoftware_shared::FromStatic;
     // SAFETY: game thread; the repository lives as long as the game; rows are read only.
@@ -471,7 +475,7 @@ fn lantern_chain() -> Option<(i32, Vec<(i32, [i32; 3])>)> {
 }
 
 /// An effect's vfx rows with their FXR ids (none: the row does not exist).
-fn vfx_rows(sp: i32) -> Option<Vec<(i32, [i32; 3])>> {
+fn vfx_rows(sp: i32) -> Option<Vec<VfxRow>> {
     use eldenring::cs::{SoloParamRepository, SpEffectParam, SpEffectVfxParam};
     use fromsoftware_shared::FromStatic;
     if sp <= 0 {

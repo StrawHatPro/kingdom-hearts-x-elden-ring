@@ -13,10 +13,10 @@
 //!   finisher with the gummi Ultima hit.
 //! - GRAVITY: its ball (vd_don_grv1-3, `make_gravity.js`) scaled up to fit a tall target, and its own layered sounds: a deep
 //!   hole hum as it forms, crackles on the band, a press as it squeezes, an implosion thud at the bottom.
-//! Every effect is a KH3 effect or authored from KH3 emitters (YFX tools/make_yfx.js); every sound is a KH3 sound played by
-//! its asset path (the party audio root, YFX pack MERGE_NOTE).
+//!   Every effect is a KH3 effect or authored from KH3 emitters (YFX tools/make_yfx.js); every sound is a KH3 sound played by
+//!   its asset path (the party audio root, YFX pack MERGE_NOTE).
 
-use super::magic_fx::{Ctx, MagicFx};
+use super::magic_fx::{Ctx, MagicFx, Who};
 use super::spells::SpellRef;
 use crate::ids::MemberId;
 use glam::Vec3;
@@ -106,18 +106,18 @@ pub struct Landing {
     pub after: Option<(&'static str, f32, f32)>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Cue {
     /// An effect at a point (`yaw` deg about the vertical).
     Fx { name: &'static str, at: Vec3, scale: f32, yaw: f32, tint: Option<Tint> },
     /// A body flying from `from` down to `lift` cm over the ground point `to` in `time` s (moved every step), then its
     /// landing at `to`.
-    Fall { names: [Option<&'static str>; 2], from: Vec3, to: Vec3, lift: f32, time: f32, scale: f32, land: Landing },
+    Fall { names: [Option<&'static str>; 2], from: Vec3, to: Vec3, lift: f32, time: f32, scale: f32, land: Box<Landing> },
     /// A KH3 sound by its asset path at `at`; stopped (faded) after `stop` s when that is finite.
     Se { asset: &'static str, at: Vec3, volume: f32, pitch: f32, stop: f32 },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Timed {
     pub left: f32,
     pub caster: MemberId,
@@ -149,12 +149,37 @@ pub struct YState {
     pub fired: Vec<&'static str>,
 }
 
-fn fx(st: &mut YState, caster: MemberId, spell: SpellRef, delay: f32, name: &'static str, at: Vec3, scale: f32) {
-    st.timed.push(Timed { left: delay, caster, spell, cue: Cue::Fx { name, at, scale, yaw: 0.0, tint: None } });
+/// One spell's cues going into the queue.
+struct Queue<'a> {
+    st: &'a mut YState,
+    who: Who,
 }
 
-fn se(st: &mut YState, caster: MemberId, spell: SpellRef, delay: f32, asset: &'static str, at: Vec3, volume: f32, pitch: f32, stop: f32) {
-    st.timed.push(Timed { left: delay, caster, spell, cue: Cue::Se { asset, at, volume, pitch, stop } });
+impl Queue<'_> {
+    fn cue(&mut self, delay: f32, cue: Cue) {
+        self.st.timed.push(Timed { left: delay, caster: self.who.caster, spell: self.who.spell, cue });
+    }
+
+    fn fx(&mut self, delay: f32, name: &'static str, at: Vec3, scale: f32) {
+        self.cue(delay, Cue::Fx { name, at, scale, yaw: 0.0, tint: None });
+    }
+
+    fn se(&mut self, delay: f32, asset: &'static str, at: Vec3, volume: f32, pitch: f32, stop: f32) {
+        self.cue(delay, Cue::Se { asset, at, volume, pitch, stop });
+    }
+}
+
+/// A volley falling on `ground` (the same clock as `cast.rs`'s delayed hits): the spell's level, Donald at `me` facing `yaw`
+/// (deg), a body every `gap` s, each falling `fall` s from `height` cm.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Volley {
+    pub lv: u8,
+    pub ground: Vec3,
+    pub me: Vec3,
+    pub yaw: f32,
+    pub gap: f32,
+    pub fall: f32,
+    pub height: f32,
 }
 
 /// A deterministic jitter in -1..1 for `k`.
@@ -173,15 +198,15 @@ fn flat(v: Vec3) -> Vec3 {
 // ------------------------------------------------------------------------------------------------------ COMET
 /// COMET (Lv 1 one star, Comet II two): `count` stars, `gap` s apart, each falling `fall` s from `height` cm onto `ground`
 /// (the same clock as `cast.rs`'s delayed hits); Donald at `me` facing `yaw` (deg).
-#[allow(clippy::too_many_arguments)]
-pub fn comet(fxw: &mut MagicFx, caster: MemberId, spell: SpellRef, lv: u8, ground: Vec3, me: Vec3, yaw: f32, count: u32, gap: f32, fall: f32, height: f32) {
-    let st = &mut fxw.yfx;
+pub fn comet(fxw: &mut MagicFx, who: Who, volley: Volley, count: u32) {
+    let Volley { lv, ground, me, yaw, gap, fall, height } = volley;
+    let mut q = Queue { st: &mut fxw.yfx, who };
     let fwd = Vec3::new(yaw.to_radians().cos(), yaw.to_radians().sin(), 0.0);
     let side = Vec3::new(-fwd.y, fwd.x, 0.0);
     let n = count.max(1) as usize;
     // the marker under the target for the whole volley; the summon
-    fx(st, caster, spell, 0.0, COMET_MARK, ground, 1.0 + 0.15 * (lv as f32 - 1.0));
-    se(st, caster, spell, 0.0, SE_COMET_SUMMON, me, 1.0, 1.0, f32::INFINITY);
+    q.fx(0.0, COMET_MARK, ground, 1.0 + 0.15 * (lv as f32 - 1.0));
+    q.se(0.0, SE_COMET_SUMMON, me, 1.0, 1.0, f32::INFINITY);
     for k in 0..n {
         let last = k + 1 == n;
         let d = k as f32 * gap;
@@ -190,15 +215,15 @@ pub fn comet(fxw: &mut MagicFx, caster: MemberId, spell: SpellRef, lv: u8, groun
         let off = flat(-fwd * 0.55 + side * 0.85 * s) * (height * 0.62);
         let from = ground + Vec3::Z * height + off;
         let scale = if n > 1 && last { 1.3 } else { 1.0 } * (1.0 + 0.1 * (lv as f32 - 1.0));
-        fx(st, caster, spell, d, COMET_SKY, from, scale);
-        se(st, caster, spell, d, SE_COMET_TWINKLE, ground, 0.9, 1.15, f32::INFINITY);
-        se(st, caster, spell, d, SE_COMET_DIVE, ground, 0.9, 1.3, fall + 0.12);
+        q.fx(d, COMET_SKY, from, scale);
+        q.se(d, SE_COMET_TWINKLE, ground, 0.9, 1.15, f32::INFINITY);
+        q.se(d, SE_COMET_DIVE, ground, 0.9, 1.3, fall + 0.12);
         let land = Landing {
             fx: [Some((COMET_HIT, scale, None)), Some((COMET_BURST, 1.1 * scale, Some(STAR_TINT))), Some((COMET_PILLAR, 1.2 * scale, Some(STAR_TINT))), None],
             se: [Some((SE_COMET_IMPACT, 1.0, 1.0)), Some((SE_COMET_BOOM, 0.75, if last { 0.8 } else { 0.9 })), Some((SE_COMET_TWINKLE, 0.7, 1.45))],
             after: Some((COMET_AFTER, 0.25, scale)),
         };
-        st.timed.push(Timed { left: d, caster, spell, cue: Cue::Fall { names: [Some(COMET_STAR), None], from, to: ground, lift: 40.0, time: fall, scale, land } });
+        q.cue(d, Cue::Fall { names: [Some(COMET_STAR), None], from, to: ground, lift: 40.0, time: fall, scale, land: Box::new(land) });
     }
 }
 
@@ -217,9 +242,9 @@ pub fn meteor_spots(ground: Vec3, n: u32, radius: f32) -> Vec<Vec3> {
 
 /// METEOR (Lv 1 3 rocks over 6 m, Lv 2 6 over 9 m, Lv 3 10 over 12 m): `spots` (from [`meteor_spots`]), the k-th falling at
 /// `k * gap` for `fall` s from `height` cm (the same clock as `cast.rs`'s delayed hits).
-#[allow(clippy::too_many_arguments)]
-pub fn meteor(fxw: &mut MagicFx, caster: MemberId, spell: SpellRef, lv: u8, ground: Vec3, me: Vec3, yaw: f32, spots: &[Vec3], gap: f32, fall: f32, height: f32) {
-    let st = &mut fxw.yfx;
+pub fn meteor(fxw: &mut MagicFx, who: Who, volley: Volley, spots: &[Vec3]) {
+    let Volley { lv, ground, me, yaw, gap, fall, height } = volley;
+    let mut q = Queue { st: &mut fxw.yfx, who };
     let fwd = Vec3::new(yaw.to_radians().cos(), yaw.to_radians().sin(), 0.0);
     let side = Vec3::new(-fwd.y, fwd.x, 0.0);
     let lvf = lv.clamp(1, 3) as f32;
@@ -228,9 +253,9 @@ pub fn meteor(fxw: &mut MagicFx, caster: MemberId, spell: SpellRef, lv: u8, grou
     let n = spots.len().max(1);
     let total = (n - 1) as f32 * gap + fall;
     // the rift in the sky over the field, open for the whole volley; its call and rumble
-    fx(st, caster, spell, 0.0, METEOR_SKY, ground + Vec3::Z * height + dir * height * 0.55, 0.8 + 0.25 * lvf);
-    se(st, caster, spell, 0.0, SE_METEOR_CALL, me.lerp(ground, 0.5), 1.0, 0.95, f32::INFINITY);
-    se(st, caster, spell, 0.1, SE_METEOR_RUMBLE, ground, 0.8, 0.8, total + 0.6);
+    q.fx(0.0, METEOR_SKY, ground + Vec3::Z * height + dir * height * 0.55, 0.8 + 0.25 * lvf);
+    q.se(0.0, SE_METEOR_CALL, me.lerp(ground, 0.5), 1.0, 0.95, f32::INFINITY);
+    q.se(0.1, SE_METEOR_RUMBLE, ground, 0.8, 0.8, total + 0.6);
     for (k, at) in spots.iter().copied().enumerate() {
         let d = k as f32 * gap;
         let last = k + 1 == n;
@@ -239,33 +264,33 @@ pub fn meteor(fxw: &mut MagicFx, caster: MemberId, spell: SpellRef, lv: u8, grou
         let wobble = side * (90.0 * jit(k, 3)) + fwd * (90.0 * jit(k, 5));
         let from = at + Vec3::Z * height + dir * (height * 0.55) + wobble;
         // the warning glow where it will land, appearing as it starts to fall
-        fx(st, caster, spell, d, METEOR_MARK, at, scale.min(1.6));
-        se(st, caster, spell, d, SE_METEOR_STREAK[k % 2], at, 0.55 + 0.1 * scale, 0.85 + 0.1 * jit(k, 9), f32::INFINITY);
+        q.fx(d, METEOR_MARK, at, scale.min(1.6));
+        q.se(d, SE_METEOR_STREAK[k % 2], at, 0.55 + 0.1 * scale, 0.85 + 0.1 * jit(k, 9), f32::INFINITY);
         let land = Landing {
             fx: [Some((METEOR_BLAST, 0.65 + 0.3 * scale, None)), Some((METEOR_HIT, scale, None)), None, None],
             se: [Some((SE_METEOR_HIT, 0.85 + 0.1 * scale, 0.92 + 0.08 * jit(k, 11))), if k % 2 == 0 || big { Some((SE_METEOR_ROCK, 0.6, 1.0)) } else { None }, if big { Some((SE_METEOR_BIG, 1.0, 1.0)) } else { None }],
             after: None,
         };
-        st.timed.push(Timed { left: d, caster, spell, cue: Cue::Fall { names: [Some(METEOR_BODY), Some(METEOR_ROCK)], from, to: at, lift: 30.0, time: fall, scale, land } });
+        q.cue(d, Cue::Fall { names: [Some(METEOR_BODY), Some(METEOR_ROCK)], from, to: at, lift: 30.0, time: fall, scale, land: Box::new(land) });
     }
-    se(st, caster, spell, total + 0.3, SE_METEOR_RUBBLE, ground, 0.6, 1.0, f32::INFINITY);
+    q.se(total + 0.3, SE_METEOR_RUBBLE, ground, 0.6, 1.0, f32::INFINITY);
 }
 
 // ------------------------------------------------------------------------------------------------------ ULTIMA
 /// ULTIMA: the gathering at the release, the sphere bursting `delay` s later (the same clock as `cast.rs`'s hit).
 pub fn ultima(fxw: &mut MagicFx, caster: MemberId, spell: SpellRef, ground: Vec3, delay: f32) {
-    let st = &mut fxw.yfx;
-    fx(st, caster, spell, 0.0, ULTIMA_GATHER, ground, 1.0);
-    se(st, caster, spell, 0.0, SE_ULTIMA_CHARGE, ground, 1.0, 1.0, delay + 0.25);
-    se(st, caster, spell, 0.0, SE_ULTIMA_SWELL, ground, 0.6, 1.0, delay + 0.1);
-    fx(st, caster, spell, delay, ULTIMA_BURST, ground, 1.0);
-    st.timed.push(Timed { left: delay, caster, spell, cue: Cue::Fx { name: ULTIMA_DOME, at: ground, scale: 1.3, yaw: 0.0, tint: None } });
-    st.timed.push(Timed { left: delay, caster, spell, cue: Cue::Fx { name: ULTIMA_RING, at: ground, scale: 2.6, yaw: 0.0, tint: Some(ULTIMA_TINT) } });
-    st.timed.push(Timed { left: delay + 0.05, caster, spell, cue: Cue::Fx { name: COMET_BURST, at: ground, scale: 2.2, yaw: 0.0, tint: Some(ULTIMA_TINT) } });
-    se(st, caster, spell, delay, SE_ULTIMA_BLAST, ground, 1.0, 0.85, f32::INFINITY);
-    se(st, caster, spell, delay, SE_ULTIMA_HIT, ground, 0.9, 0.9, f32::INFINITY);
-    se(st, caster, spell, delay + 0.05, SE_ULTIMA_TAIL, ground, 0.8, 1.0, f32::INFINITY);
-    fx(st, caster, spell, delay + 1.3, ULTIMA_AFTER, ground, 1.0);
+    let mut q = Queue { st: &mut fxw.yfx, who: Who { caster, spell } };
+    q.fx(0.0, ULTIMA_GATHER, ground, 1.0);
+    q.se(0.0, SE_ULTIMA_CHARGE, ground, 1.0, 1.0, delay + 0.25);
+    q.se(0.0, SE_ULTIMA_SWELL, ground, 0.6, 1.0, delay + 0.1);
+    q.fx(delay, ULTIMA_BURST, ground, 1.0);
+    q.cue(delay, Cue::Fx { name: ULTIMA_DOME, at: ground, scale: 1.3, yaw: 0.0, tint: None });
+    q.cue(delay, Cue::Fx { name: ULTIMA_RING, at: ground, scale: 2.6, yaw: 0.0, tint: Some(ULTIMA_TINT) });
+    q.cue(delay + 0.05, Cue::Fx { name: COMET_BURST, at: ground, scale: 2.2, yaw: 0.0, tint: Some(ULTIMA_TINT) });
+    q.se(delay, SE_ULTIMA_BLAST, ground, 1.0, 0.85, f32::INFINITY);
+    q.se(delay, SE_ULTIMA_HIT, ground, 0.9, 0.9, f32::INFINITY);
+    q.se(delay + 0.05, SE_ULTIMA_TAIL, ground, 0.8, 1.0, f32::INFINITY);
+    q.fx(delay + 1.3, ULTIMA_AFTER, ground, 1.0);
 }
 
 // ------------------------------------------------------------------------------------------------------ GRAVITY
@@ -286,18 +311,18 @@ pub fn gravity_scale(lv: u8, height: f32) -> f32 {
 /// press as it squeezes, the implosion as it bottoms out.
 pub fn gravity(fxw: &mut MagicFx, caster: MemberId, spell: SpellRef, lv: u8, ground: Vec3, scale: f32) {
     let m = super::magic_fx::magic();
-    let st = &mut fxw.yfx;
+    let mut q = Queue { st: &mut fxw.yfx, who: Who { caster, spell } };
     let deep = 1.0 - 0.06 * (lv.clamp(1, 3) as f32 - 1.0);
     let at = ground + Vec3::Z * 120.0;
-    se(st, caster, spell, 0.0, SE_GRAVITY_HUM, at, 0.9, 0.78 * deep, m.gravity_fx_total + 0.1);
-    se(st, caster, spell, m.gravity_fx_form, SE_GRAVITY_CRACKLE, at, 0.55, 0.9, f32::INFINITY);
-    se(st, caster, spell, m.gravity_fx_form + 0.35, SE_GRAVITY_CRACKLE2, at, 0.5, 0.8, f32::INFINITY);
-    se(st, caster, spell, m.gravity_press_at, SE_GRAVITY_PRESS, at, 1.0, 0.8 * deep, f32::INFINITY);
-    se(st, caster, spell, m.gravity_press_at + 0.05, SE_GRAVITY_BOMB, at, 0.6, 0.68 * deep, f32::INFINITY);
-    se(st, caster, spell, m.gravity_press_at + m.gravity_press_time * 0.9, SE_GRAVITY_IMPLODE, ground, 1.0, 0.85 * deep, f32::INFINITY);
+    q.se(0.0, SE_GRAVITY_HUM, at, 0.9, 0.78 * deep, m.gravity_fx_total + 0.1);
+    q.se(m.gravity_fx_form, SE_GRAVITY_CRACKLE, at, 0.55, 0.9, f32::INFINITY);
+    q.se(m.gravity_fx_form + 0.35, SE_GRAVITY_CRACKLE2, at, 0.5, 0.8, f32::INFINITY);
+    q.se(m.gravity_press_at, SE_GRAVITY_PRESS, at, 1.0, 0.8 * deep, f32::INFINITY);
+    q.se(m.gravity_press_at + 0.05, SE_GRAVITY_BOMB, at, 0.6, 0.68 * deep, f32::INFINITY);
+    q.se(m.gravity_press_at + m.gravity_press_time * 0.9, SE_GRAVITY_IMPLODE, ground, 1.0, 0.85 * deep, f32::INFINITY);
     // the crater, the cracks and the shake as it bottoms out
     let tint = Some(GRAVITY_TINT);
-    st.timed.push(Timed { left: m.gravity_press_at + m.gravity_press_time * 0.85, caster, spell, cue: Cue::Fx { name: GRAVITY_CRUSH, at: ground, scale: scale * (0.42 + 0.06 * lv.clamp(1, 3) as f32), yaw: 0.0, tint } });
+    q.cue(m.gravity_press_at + m.gravity_press_time * 0.85, Cue::Fx { name: GRAVITY_CRUSH, at: ground, scale: scale * (0.42 + 0.06 * lv.clamp(1, 3) as f32), yaw: 0.0, tint });
 }
 
 /// The effects whose sound is this module's layered cues rather than one SE of their own (the pack harness).
@@ -307,16 +332,19 @@ pub fn own_sounds(effect: &str) -> Option<&'static [&'static str]> {
 }
 
 // ------------------------------------------------------------------------------------------------------ the step
-fn spawn(cx: &mut Ctx, caster: MemberId, spell: SpellRef, name: &'static str, at: Vec3, yaw: f32, scale: f32, persistent: bool, tint: Option<Tint>) -> Option<EffectHandle> {
+fn effect(name: &'static str, at: Vec3, yaw: f32, scale: f32, persistent: bool) -> EffectSpawn {
+    EffectSpawn { id: EffectId(kh_core::notify::notify_asset_id(name)), name, at: Attach::World(at), rotation: Vec3::new(0.0, yaw, 0.0), scale, persistent }
+}
+
+fn spawn(cx: &mut Ctx, caster: MemberId, what: &EffectSpawn, tint: Option<Tint>) -> Option<EffectHandle> {
     let m = cx.party.member_mut(caster)?;
-    let h = m.seam.spawn(cx.host.effects, &EffectSpawn { id: EffectId(kh_core::notify::notify_asset_id(name)), name, at: Attach::World(at), rotation: Vec3::new(0.0, yaw, 0.0), scale, persistent });
+    let h = m.seam.spawn(cx.host.effects, what);
     if let Some(t) = tint {
         cx.host.effects.tint(h, t);
     }
-    if let Some(s) = super::magic_fx::fx::extra_se(name) {
-        m.seam.play(cx.host.audio, &SoundPlay { id: SoundId(kh_core::notify::notify_asset_id(s)), name: s, at: Attach::World(at), volume: 1.0, pitch: 1.0, looping: false, spatial: true });
+    if let Some(s) = super::magic_fx::fx::extra_se(what.name) {
+        m.seam.play(cx.host.audio, &SoundPlay { id: SoundId(kh_core::notify::notify_asset_id(s)), name: s, at: what.at, volume: 1.0, pitch: 1.0, looping: false, spatial: true });
     }
-    let _ = spell;
     Some(h)
 }
 
@@ -335,7 +363,7 @@ pub fn step(fxw: &mut MagicFx, cx: &mut Ctx, dt: f32) {
     for t in st.timed.iter_mut() {
         t.left -= dt;
         if t.left <= 0.0 {
-            due.push(*t);
+            due.push(t.clone());
         }
     }
     st.timed.retain(|t| t.left > 0.0);
@@ -343,7 +371,7 @@ pub fn step(fxw: &mut MagicFx, cx: &mut Ctx, dt: f32) {
         match t.cue {
             Cue::Fx { name, at, scale, yaw, tint } => {
                 st.fired.push(name);
-                let _ = spawn(cx, t.caster, t.spell, name, at, yaw, scale, false, tint);
+                let _ = spawn(cx, t.caster, &effect(name, at, yaw, scale, false), tint);
             }
             Cue::Se { asset, at, volume, pitch, stop } => {
                 st.fired.push(asset);
@@ -361,10 +389,10 @@ pub fn step(fxw: &mut MagicFx, cx: &mut Ctx, dt: f32) {
                 for (k, name) in names.iter().enumerate() {
                     if let Some(name) = *name {
                         st.fired.push(name);
-                        handles[k] = spawn(cx, t.caster, t.spell, name, from, yaw, scale, true, None);
+                        handles[k] = spawn(cx, t.caster, &effect(name, from, yaw, scale, true), None);
                     }
                 }
-                st.flying.push(Flying { caster: t.caster, spell: t.spell, handles, from, to, lift, t: -t.left.min(0.0), time: time.max(0.05), scale, land });
+                st.flying.push(Flying { caster: t.caster, spell: t.spell, handles, from, to, lift, t: -t.left.min(0.0), time: time.max(0.05), scale, land: *land });
             }
         }
     }
@@ -392,7 +420,7 @@ pub fn step(fxw: &mut MagicFx, cx: &mut Ctx, dt: f32) {
         let ground = f.to;
         for (name, scale, tint) in f.land.fx.iter().flatten().copied() {
             st.fired.push(name);
-            let _ = spawn(cx, f.caster, f.spell, name, ground, 0.0, scale, false, tint);
+            let _ = spawn(cx, f.caster, &effect(name, ground, 0.0, scale, false), tint);
         }
         for (asset, volume, pitch) in f.land.se.iter().flatten().copied() {
             st.fired.push(asset);
@@ -434,7 +462,7 @@ mod tests {
     fn sounds(t: &[Timed]) -> Vec<&'static str> {
         let mut v: Vec<&'static str> = t.iter().filter_map(|c| if let Cue::Se { asset, .. } = c.cue { Some(asset) } else { None }).collect();
         for c in t {
-            if let Cue::Fall { land, .. } = c.cue {
+            if let Cue::Fall { land, .. } = &c.cue {
                 v.extend(land.se.iter().flatten().map(|s| s.0));
             }
         }
@@ -447,7 +475,7 @@ mod tests {
     #[test]
     fn falling_bodies_land_on_the_hits_clock() {
         let m = crate::donald::magic_fx::magic();
-        let comet = cues(|f| comet(f, MemberId(0), SpellRef::Arcane(ArcaneLine::Comet, 2), 2, Vec3::ZERO, Vec3::new(-600.0, 0.0, 0.0), 0.0, 2, m.comet_gap, m.comet_fall, m.comet_height));
+        let comet = cues(|f| comet(f, Who { caster: MemberId(0), spell: SpellRef::Arcane(ArcaneLine::Comet, 2) }, Volley { lv: 2, ground: Vec3::ZERO, me: Vec3::new(-600.0, 0.0, 0.0), yaw: 0.0, gap: m.comet_gap, fall: m.comet_fall, height: m.comet_height }, 2));
         let lands: Vec<f32> = comet.iter().filter_map(|c| if let Cue::Fall { time, .. } = c.cue { Some(c.left + time) } else { None }).collect();
         assert_eq!(lands.len(), 2);
         for (k, t) in lands.iter().enumerate() {
@@ -455,7 +483,7 @@ mod tests {
         }
         for (lv, n) in [(1u8, 3u32), (2, 6), (3, 10)] {
             let spots = meteor_spots(Vec3::ZERO, n, 600.0);
-            let rain = cues(|f| meteor(f, MemberId(0), SpellRef::Arcane(ArcaneLine::Meteor, lv), lv, Vec3::ZERO, Vec3::new(-600.0, 0.0, 0.0), 0.0, &spots, m.meteor_gap, m.meteor_fall, m.meteor_height));
+            let rain = cues(|f| meteor(f, Who { caster: MemberId(0), spell: SpellRef::Arcane(ArcaneLine::Meteor, lv) }, Volley { lv, ground: Vec3::ZERO, me: Vec3::new(-600.0, 0.0, 0.0), yaw: 0.0, gap: m.meteor_gap, fall: m.meteor_fall, height: m.meteor_height }, &spots));
             let falls: Vec<(f32, Vec3)> = rain.iter().filter_map(|c| if let Cue::Fall { time, to, .. } = c.cue { Some((c.left + time, to)) } else { None }).collect();
             assert_eq!(falls.len(), n as usize, "Meteor Lv {lv}");
             for (k, (t, to)) in falls.iter().enumerate() {
@@ -472,9 +500,9 @@ mod tests {
         let m = crate::donald::magic_fx::magic();
         let spots = meteor_spots(Vec3::ZERO, 10, 1200.0);
         let sets = [
-            sounds(&cues(|f| comet(f, MemberId(0), SpellRef::Arcane(ArcaneLine::Comet, 2), 2, Vec3::ZERO, Vec3::ZERO, 0.0, 2, m.comet_gap, m.comet_fall, m.comet_height))),
+            sounds(&cues(|f| comet(f, Who { caster: MemberId(0), spell: SpellRef::Arcane(ArcaneLine::Comet, 2) }, Volley { lv: 2, ground: Vec3::ZERO, me: Vec3::ZERO, yaw: 0.0, gap: m.comet_gap, fall: m.comet_fall, height: m.comet_height }, 2))),
             sounds(&cues(|f| gravity(f, MemberId(0), SpellRef::Arcane(ArcaneLine::Gravity, 3), 3, Vec3::ZERO, 1.0))),
-            sounds(&cues(|f| meteor(f, MemberId(0), SpellRef::Arcane(ArcaneLine::Meteor, 3), 3, Vec3::ZERO, Vec3::ZERO, 0.0, &spots, m.meteor_gap, m.meteor_fall, m.meteor_height))),
+            sounds(&cues(|f| meteor(f, Who { caster: MemberId(0), spell: SpellRef::Arcane(ArcaneLine::Meteor, 3) }, Volley { lv: 3, ground: Vec3::ZERO, me: Vec3::ZERO, yaw: 0.0, gap: m.meteor_gap, fall: m.meteor_fall, height: m.meteor_height }, &spots))),
             sounds(&cues(|f| ultima(f, MemberId(0), SpellRef::Arcane(ArcaneLine::Ultima, 1), Vec3::ZERO, m.ultima_delay))),
         ];
         for (i, a) in sets.iter().enumerate() {

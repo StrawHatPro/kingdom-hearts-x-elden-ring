@@ -23,8 +23,16 @@ fn track(material: u32, commands: &str) -> String {
     format!(r#"{{"type":"MaterialTrack","material":{material},"commands":[{commands}{}{{"name":"end"}}]}}"#, if commands.is_empty() { "" } else { "," })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn sound(index: u32, kind: &str, category: (u32, &str), priority: i32, volume: f32, macro_start: u32, selection: &str, sequences: &[String], tracks: &[(u32, String)]) -> String {
+/// A sound's category and mix values.
+struct Mix<'a> {
+    category: (u32, &'a str),
+    priority: i32,
+    volume: f32,
+    macro_start: u32,
+}
+
+fn sound(index: u32, kind: &str, mix: Mix<'_>, selection: &str, sequences: &[String], tracks: &[(u32, String)]) -> String {
+    let Mix { category, priority, volume, macro_start } = mix;
     let tracks: Vec<String> = tracks.iter().map(|(k, t)| format!(r#""{k}":{t}"#)).collect();
     format!(
         r#""{index}":{{"index":{index},"number":{index},"type":"{kind}","category":{{"number":{},"name":"{}"}},"priority":{priority},"volume":{volume},"main_bus":{{"name":"3DSE"}},"aux_sends":[{{"volume":0.25}}],"flags":0,"macro_start":{macro_start},"macro_stop":0,"flags2":4,"release_seconds":0,"selection":{selection},"sequences":[{}],"tracks":{{{}}}}}"#,
@@ -66,17 +74,17 @@ fn pack() -> Arc<Pack> {
     let (fade_seqs, fade_tracks) = one(r#"{"name":"volume","target":0,"ms":0,"curve":0},{"name":"volume","target":1,"ms":100,"curve":3},{"name":"randomPitch","min":-0.1,"max":0.1,"mode":1},{"name":"randomVolume","min":0.2,"max":1,"mode":2}"#);
     let timed = vec![seq(0, 0, 0, r#"{"name":"wait","ms":100},{"name":"keyOn","track":0,"loopFlag":0},{"name":"wait","ms":50},{"name":"keyOn","track":1,"loopFlag":0},{"name":"end"}"#)];
     let foot = [
-        sound(1, "OrderSound", FOOT, 0, 0.6, 0, &format!(r#"{{"rule":"order","always":[],"rotate":{}}}"#, groups(&[(0, 0), (0, 1), (0, 2)])), &order_seqs, &order_tracks),
-        sound(2, "RandomSound", FOOT, 0, 1.0, 0, &format!(r#"{{"rule":"random","always":[],"choose":{},"noRepeat":true}}"#, groups(&[(50, 0), (30, 1), (20, 2)])), &random_seqs, &random_tracks),
-        sound(3, "Sound", ACTION, 128, 1.0, 1, r#"{"rule":"all"}"#, &plain_seqs, &plain_tracks),
-        sound(4, "Sound", ACTION, 128, 1.0, 0, r#"{"rule":"all"}"#, &[seq(0, 0, 0, &key_on(0, 1))], &[(0, track(9, ""))]),
-        sound(5, "Sound", ACTION, 128, 1.0, 0, r#"{"rule":"all"}"#, &fade_seqs, &fade_tracks),
-        sound(6, "Sound", ACTION, 128, 1.0, 0, r#"{"rule":"all"}"#, &timed, &[(0, track(0, "")), (1, track(1, ""))]),
-        sound(7, "Sound", ACTION, 64, 1.0, 0, r#"{"rule":"all"}"#, &plain_seqs, &plain_tracks),
-        sound(8, "Sound", ACTION, 128, 1.0, 7, r#"{"rule":"all"}"#, &plain_seqs, &plain_tracks),
-        sound(9, "Sound", ACTION, 128, 1.0, 2, r#"{"rule":"all"}"#, &[seq(0, 0, 0, &key_on(0, 1))], &[(0, track(9, ""))]),
+        sound(1, "OrderSound", Mix { category: FOOT, priority: 0, volume: 0.6, macro_start: 0 }, &format!(r#"{{"rule":"order","always":[],"rotate":{}}}"#, groups(&[(0, 0), (0, 1), (0, 2)])), &order_seqs, &order_tracks),
+        sound(2, "RandomSound", Mix { category: FOOT, priority: 0, volume: 1.0, macro_start: 0 }, &format!(r#"{{"rule":"random","always":[],"choose":{},"noRepeat":true}}"#, groups(&[(50, 0), (30, 1), (20, 2)])), &random_seqs, &random_tracks),
+        sound(3, "Sound", Mix { category: ACTION, priority: 128, volume: 1.0, macro_start: 1 }, r#"{"rule":"all"}"#, &plain_seqs, &plain_tracks),
+        sound(4, "Sound", Mix { category: ACTION, priority: 128, volume: 1.0, macro_start: 0 }, r#"{"rule":"all"}"#, &[seq(0, 0, 0, &key_on(0, 1))], &[(0, track(9, ""))]),
+        sound(5, "Sound", Mix { category: ACTION, priority: 128, volume: 1.0, macro_start: 0 }, r#"{"rule":"all"}"#, &fade_seqs, &fade_tracks),
+        sound(6, "Sound", Mix { category: ACTION, priority: 128, volume: 1.0, macro_start: 0 }, r#"{"rule":"all"}"#, &timed, &[(0, track(0, "")), (1, track(1, ""))]),
+        sound(7, "Sound", Mix { category: ACTION, priority: 64, volume: 1.0, macro_start: 0 }, r#"{"rule":"all"}"#, &plain_seqs, &plain_tracks),
+        sound(8, "Sound", Mix { category: ACTION, priority: 128, volume: 1.0, macro_start: 7 }, r#"{"rule":"all"}"#, &plain_seqs, &plain_tracks),
+        sound(9, "Sound", Mix { category: ACTION, priority: 128, volume: 1.0, macro_start: 2 }, r#"{"rule":"all"}"#, &[seq(0, 0, 0, &key_on(0, 1))], &[(0, track(9, ""))]),
     ];
-    let voice = |index: u32, priority: i32, macro_start: u32| sound(index, "Sound", VOICE, priority, 1.0, macro_start, r#"{"rule":"all"}"#, &[seq(0, 0, 0, &key_on(0, 0))], &[(0, track(8, ""))]);
+    let voice = |index: u32, priority: i32, macro_start: u32| sound(index, "Sound", Mix { category: VOICE, priority, volume: 1.0, macro_start }, r#"{"rule":"all"}"#, &[seq(0, 0, 0, &key_on(0, 0))], &[(0, track(8, ""))]);
     let materials = |n: u32| -> String {
         let mut m: Vec<String> = (0..n).map(|i| format!(r#""{i}":{{"file":"wav/m{i:03}.wav","channels":1,"sample_rate":48000,"samples":4800,"loop":null}}"#)).collect();
         // A long line (1 s) and a loop (0.5 s, loop 0.25..0.5).
@@ -184,10 +192,10 @@ fn random_follows_the_weights_and_never_repeats() {
     let mut p = [1.0f64 / 3.0; 3];
     for _ in 0..200 {
         let mut q = [0.0f64; 3];
-        for from in 0..3 {
-            for to in 0..3 {
+        for (from, &weight) in p.iter().enumerate() {
+            for (to, &chance) in roll.iter().enumerate() {
                 let to_real = if to == from { if from == 0 { 1 } else { 0 } } else { to };
-                q[to_real] += p[from] * roll[to];
+                q[to_real] += weight * chance;
             }
         }
         p = q;
@@ -620,4 +628,54 @@ fn a_sound_to_the_listeners_right_pans_right_whatever_way_the_listener_faces() {
     let commands = d.update(DT, &l);
     let Some(VoiceCommand::Start { params, .. }) = commands.iter().find(|c| matches!(c, VoiceCommand::Start { .. })) else { panic!("{commands:?}") };
     assert!((params.pan - 0.5).abs() < 1.0e-6, "{params:?}");
+}
+
+/// (GOS) Each voice's latest volume after a run of updates (Start / Update), by voice; stopped voices dropped.
+fn volumes(d: &mut Driver, steps: usize, into: &mut std::collections::HashMap<u32, f32>) {
+    for _ in 0..steps {
+        for c in d.update(DT, &listener()) {
+            match c {
+                VoiceCommand::Start { voice, params, .. } | VoiceCommand::Update { voice, params } => {
+                    into.insert(voice, params.volume);
+                }
+                VoiceCommand::Stop { voice } => {
+                    into.remove(&voice);
+                }
+                VoiceCommand::Pause { .. } => {}
+            }
+        }
+    }
+}
+
+#[test]
+fn the_hosts_silence_fades_every_sound_but_the_exempt_ones_and_gives_them_back() {
+    // (GOS, the user 2026-11-03: "silence all music and other SFX when on death screen" / "(except for menu SFX, dont
+    // silence that)") two looped sounds of the SAME category: the one marked exempt (a menu's sound) keeps its volume
+    let mut d = driver();
+    let PlayOutcome::Started(world) = d.play(FOOT_BANK, 4, &flat()) else { panic!("world") };
+    let PlayOutcome::Started(menu) = d.play(FOOT_BANK, 4, &flat()) else { panic!("menu") };
+    let mut v = std::collections::HashMap::new();
+    volumes(&mut d, 2, &mut v);
+    assert_eq!(v.len(), 2, "{v:?}");
+    let before: Vec<f32> = v.values().copied().collect();
+    assert!(before.iter().all(|x| *x > 0.5), "{before:?}");
+    assert!(d.set_exempt(menu) && !d.set_exempt(999));
+    d.set_silence(0.0, 0.5);
+    // half-way: the world sound is fading, the menu's sound is untouched
+    volumes(&mut d, 15, &mut v);
+    let (world_voice, menu_voice) = (1u32, 2u32);
+    assert!(v[&world_voice] > 0.05 && v[&world_voice] < 0.95, "{v:?}");
+    assert!((v[&menu_voice] - before[0].max(before[1])).abs() < 1.0e-4, "{v:?}");
+    volumes(&mut d, 20, &mut v);
+    assert!(v[&world_voice] < 1.0e-4 && d.silence() == 0.0, "{v:?}");
+    // a sound started under the silence is silent from its first voice
+    let PlayOutcome::Started(late) = d.play(FOOT_BANK, 9, &flat()) else { panic!("late") };
+    let mut fresh = std::collections::HashMap::new();
+    volumes(&mut d, 1, &mut fresh);
+    assert!(fresh.values().all(|x| *x < 1.0e-4), "{fresh:?}");
+    // ... and everything comes back as it was
+    d.set_silence(1.0, 0.5);
+    volumes(&mut d, 40, &mut v);
+    assert!((v[&world_voice] - v[&menu_voice]).abs() < 1.0e-4 && v[&world_voice] > 0.5, "{v:?}");
+    assert!(d.is_playing(world) && d.is_playing(late) && d.silence() == 1.0);
 }

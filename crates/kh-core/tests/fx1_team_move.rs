@@ -72,7 +72,7 @@ impl Bench {
     }
 
     fn roll(&mut self, uid: u8) -> bool {
-        let abilities = self.sora.status().abilities.clone();
+        let abilities = self.sora.status().abilities;
         let at = self.sora.output().position;
         self.sora.combat_mut().friend.sora_is_ai = true;
         self.sora.combat_mut().friend.roll_leader_unison(&abilities, uid, at + Vec3::new(0.0, 150.0, 0.0), at)

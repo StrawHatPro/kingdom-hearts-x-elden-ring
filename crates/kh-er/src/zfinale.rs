@@ -79,9 +79,9 @@ impl Book {
             self.asked.push((id, f, now));
         }
     }
-
     /// One frame: the renderer's targets and the switch decisions. `alive(id)`: the character lives (None = the game has it
     /// no more).
+    #[cfg(test)]
     pub fn step(&mut self, rows: &[Row], now: f64, alive: &dyn Fn(u32) -> Option<bool>) -> (Vec<FinaleTarget>, Vec<Act>) {
         self.step_with(rows, now, alive, &|_| false)
     }
@@ -178,7 +178,7 @@ pub fn asked(id: u32, handle: Option<FieldInsHandle>, finale: Option<ScriptFinal
 
 /// (ZDRAW) The handle the finale knows of target `id` (zdraw.rs reads its body's model and bones by it).
 pub fn handle_of(id: u32) -> Option<FieldInsHandle> {
-    with(|l| l.handles.iter().find(|h| h.0 == id).map(|h| h.1.clone())).flatten()
+    with(|l| l.handles.iter().find(|h| h.0 == id).map(|h| h.1)).flatten()
 }
 
 /// The game's render switch of a character by handle. SAFETY of the callers: game thread.

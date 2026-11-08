@@ -154,6 +154,62 @@ pub fn dialog_layout(count: usize, text_width: f32, default_window: (f32, f32), 
     }
 }
 
+/// (ASH-ROWS) `Dialog.setText(text, colour)` WITH a text (method 192, the `a1 != ""` branch; the FINAL round's Collector's
+/// Goal dialog drew its third line over the OK row: the window stayed at its authored size): [`DialogLayout`] plus the text
+/// field's size. The window is as wide as the text's widest unwrapped line (`textPos.x * 2 + textWidth`, held to
+/// [`WINDOW_SIZE_MIN`] .. [`WINDOW_SIZE_MAX`]); the field wraps at that width + 5 (so only a text wider than the largest
+/// window wraps); the field is `textHeight + 5` tall and the button canvas moves down by what it grew past the authored
+/// `poDialogText` (`m_defaultTextSize`); the window's height is `textPos.y + field + 35 per further button + m_buttonPos.y`
+/// (`m_buttonPos.y` = the window's height under the authored text holder); a button wider than the field widens the
+/// window; the buttons are centred unless they are wider than the text or crowd the field's end (`l15`: then at the
+/// holder's left). `text_width` = the widest line unwrapped; `text_height(field width)` = Flash's `textHeight` of the text
+/// wrapped at that width; `buttons_width` = the widest button text (`textWidth`); `default_text` = `poDialogText`'s size.
+pub struct DialogText {
+    pub layout: DialogLayout,
+    /// The text field's width and height (`m_textTextField.width / height`).
+    pub field: (f32, f32),
+}
+
+pub fn dialog_text_layout(text_width: f32, text_height: impl Fn(f32) -> f32, buttons: (usize, f32), default_window: (f32, f32), holders: [(f32, f32); 2], default_text: (f32, f32)) -> DialogText {
+    let ((count, buttons_width), [text_pos, button_pos]) = (buttons, holders);
+    let margin_x = button_pos.0 - text_pos.0;
+    let button_pos_y = default_window.1 - (text_pos.1 + default_text.1);
+    let text_w5 = text_width + 5.0;
+    let width = (text_pos.0 * 2.0 + text_width).clamp(WINDOW_SIZE_MIN.0, WINDOW_SIZE_MAX.0);
+    let field_w = width - text_pos.0 * 2.0 + 5.0;
+    let field_h = text_height(field_w) + 5.0;
+    let canvas_y = field_h - default_text.1;
+    let mut height = text_pos.1 + field_h;
+    let mut window_w = width;
+    let mut at_left = false;
+    let mut widest = 0.0f32;
+    if count > 0 {
+        widest = buttons_width + 5.0 + margin_x;
+        height += BUTTON_HEIGHT * (count - 1) as f32 + button_pos_y;
+        if widest > field_w {
+            window_w = (text_pos.0 * 2.0 + widest - 5.0).min(WINDOW_SIZE_MAX.0);
+        }
+        at_left = text_w5 > 0.0 && (widest > text_w5 || field_w - widest < margin_x);
+    } else {
+        height += text_pos.1;
+    }
+    let height = height.clamp(WINDOW_SIZE_MIN.1, WINDOW_SIZE_MAX.1);
+    let canvas_x = if at_left { 0.0 } else { ((window_w - widest) - margin_x) * 0.5 - text_pos.0 };
+    DialogText {
+        layout: DialogLayout { window: (window_w + 2.0, height + 2.0), holder: ((default_window.0 - window_w) * 0.5, (default_window.1 - height) * 0.5), canvas: (canvas_x, canvas_y) },
+        field: (field_w, field_h),
+    }
+}
+
+/// (ASH-ROWS) Flash's `textHeight` of `lines` lines as the port's renderer lays them out (`render::Renderer::draw_text`:
+/// each line `(ascent + descent + font leading) * scale + the field's leading` below the last; the last line its ascent +
+/// descent).
+pub fn text_height(font: &crate::def::Font, size: f32, leading: f32, lines: usize) -> f32 {
+    let sc = size / font.units_per_em.max(1.0);
+    let line = (font.ascent + font.descent + font.leading) * sc + leading;
+    (font.ascent + font.descent) * sc + line * lines.saturating_sub(1) as f32
+}
+
 /// How the words on screen are shown.
 #[derive(Clone, Debug, PartialEq)]
 struct Words {

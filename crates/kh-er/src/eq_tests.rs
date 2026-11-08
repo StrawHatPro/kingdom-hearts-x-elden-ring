@@ -4,11 +4,11 @@
 //! - sora.rs `pre_physics` -> party/mod.rs `PartySlot::frame`: (EQ) `partyui::menu_sync` every frame, paused or not;
 //! - hud.rs `HudHost::frame`: `partyui::hud_frame`, kh-host `Hud::frame` + `apply_actions`, `partyui::hud_after`;
 //! - the party's step only while the world runs (a menu of ours holds it), then `partyui::sync`.
-//! THE CAUSE (before the fix): the runtime took the camp menu's edits only at the first party step after the menu
-//! closed, while `hud_frame` handed the HUD the feed of before the edit EVERY FRAME: the screen put the old values back
-//! (an ability lit off again, the old weapon / shortcut shown, the stock moved twice on a retry). Checked here: the
-//! screen keeps the edit on every paused frame, the runtime has it at once, the save's record too, and after the close
-//! the leader's command menu (the HUD's shortcut panel) shows the new shortcut.
+//!   THE CAUSE (before the fix): the runtime took the camp menu's edits only at the first party step after the menu
+//!   closed, while `hud_frame` handed the HUD the feed of before the edit EVERY FRAME: the screen put the old values back
+//!   (an ability lit off again, the old weapon / shortcut shown, the stock moved twice on a retry). Checked here: the
+//!   screen keeps the edit on every paused frame, the runtime has it at once, the save's record too, and after the close
+//!   the leader's command menu (the HUD's shortcut panel) shows the new shortcut.
 
 use glam::Vec3;
 use kh_core::enums::ETresAbilityKind as A;
@@ -38,6 +38,13 @@ impl kh_core::Targets for NoEnemies {
     fn hurt_shapes(&self, _id: TargetId, _out: &mut Vec<kh_core::host::HurtShape>) {}
     fn apply_hit(&mut self, _hit: &kh_core::HitRecord) -> kh_core::host::HitResult {
         kh_core::host::HitResult::default()
+    }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
     }
 }
 impl kh_partyhost::PartyTargets for NoEnemies {

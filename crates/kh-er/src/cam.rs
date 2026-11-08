@@ -61,7 +61,6 @@ pub trait PartyCamera {
     /// THE TEAM ATTACKS' CAMERAS (`StateEventCameras`: CameraAnims, the orbit cameras, the steerable shield_01, the
     /// collision pass against `world` = the camera's own filter of Elden Ring's world) laid over `view` (the field / lock-on
     /// camera of this step). True = put the field camera behind the leader again (the blueprints' ResetTresCameraNormal).
-    #[allow(clippy::too_many_arguments)]
     fn team_layer(&mut self, dt: f32, events: &[kh_core::Event], sora: &Output, view: &mut CameraView, world: &dyn kh_core::World, stick: CameraInput) -> bool;
     /// What the drawn lens adds after `team_layer`: the CameraAnim's horizontal FOV (degrees; `None` = the field's) and the
     /// blueprints' camera shakes.
@@ -427,6 +426,40 @@ pub struct StepInput {
     /// Left stick, raw (the aim camera turns by it while the right one rests).
     pub left: Vec2,
     pub recentre: bool,
+    /// (CAMP-OPTIONS follow-ups) the mouse as KH3 PC reads it: a second right stick (raw units, x right, y up; eroptions.rs
+    /// `mouse_stick`: Elden Ring's Mouse Sensitivity / X / Y-Axis applied); zero while the right stick is held from the
+    /// camera (a menu, a finish, the game's window behind). Added after the stick's own flips (Camera X / Y-Axis, the stick-y
+    /// option), so the mouse is inverted by its own rows only; Camera Speed scales both, as KH3's camera speed does.
+    pub mouse: Vec2,
+}
+
+/// (CAMP-OPTIONS follow-ups) THE STICK EVERY KH CAMERA AND AIM MODE OF cam.rs READS (the field / lock-on camera, the shotlock
+/// aim overlay, the formchanges' cameras): the pad's right stick through Elden Ring's Camera X / Y-Axis and Camera Speed
+/// (`config`: sign = flip, size = speed) and the stick-y option, plus the mouse as KH3 PC's second right stick (its own rows'
+/// flips already applied: only the speed and the default "up = look up" sign here).
+pub fn camera_stick(right: Vec2, mouse: Vec2, (config_x, config_y): (f32, f32), stick_y: f32) -> Vec2 {
+    Vec2::new(right.x * config_x + mouse.x * config_x.abs(), right.y * stick_y * config_y - mouse.y * config_y.abs())
+}
+
+/// What the camera reads of Sora: his output of the step, the one before it, himself.
+#[derive(Clone, Copy)]
+pub struct CamSora<'a> {
+    pub out: &'a Output,
+    pub before: &'a Output,
+    pub sora: &'a Sora,
+}
+
+/// (IMPL_ER22) The boss finish as the cameras take it before every step: `shot` = its cut (`None` = none), `enemy` = its
+/// enemy's camera point, `rate` = the world's rate (1.0 outside a sequence), `locked` = the script holds the sticks,
+/// `shake` = (stop the shakes, play the script's shake at this scale).
+pub struct FinishCam {
+    pub shot: Option<kh_core::combat::finish::FinishShot>,
+    pub enemy: kh_camera::finish::FinishSubject,
+    pub player_height: f32,
+    pub collision: bool,
+    pub locked: bool,
+    pub rate: f32,
+    pub shake: (bool, Option<f32>),
 }
 
 pub struct KhCam {
@@ -484,6 +517,19 @@ pub struct KhCam {
     /// runs, the blend back at the end; its lens while it has a part in the view.
     conv: kh_camera::conv::ConvCamera,
     conv_fov: Option<f32>,
+    /// (F-HUD) THE FORMCHANGE CAMERAS (kh_camera::forms): ShooterMode's, the multi-lock's, Counter Shield's finish; their
+    /// lens (KH3 horizontal degrees) while one has the view; the right stick is the form's (ShooterMode: the core's aim).
+    forms: kh_camera::forms::FormCameras,
+    forms_fov: Option<f32>,
+    /// (F-HUD) the log's name of what the form cameras showed this step (kh_camera::forms::mode_label).
+    forms_label: Option<&'static str>,
+    forms_stick: bool,
+    /// (AUDIT-C) Sora's formchange / finisher cameras of KH3's state-event blueprints (form_change, AltemaWep,
+    /// Oath_keeper: kh_camera::form_bp), laid over the field / team cameras with the team cameras' lens.
+    form_bp: kh_camera::form_bp::FormBpCameras,
+    /// (AUDIT-B F-HAMMER) the hammer forms' camera blueprints (Favorite Deputy's camera_toy_key, Classic Tone's Timlesskey:
+    /// kh_camera::forms_hammer), laid over the form_bp layer the same way.
+    hammer: kh_camera::forms_hammer::HammerCameras,
 }
 
 impl KhCam {
@@ -504,7 +550,7 @@ impl KhCam {
         }
         erlog!("cam: {} camera shake class(es) read from the effect pack", defs.len());
         let nothing = CameraView { position: Vec3::ZERO, rotation: Rot::default(), rotation_target: Rot::default(), look_point: Vec3::ZERO, distance: 0.0, auto_power: 0.0, stick_wait: 0.0, still_wait: 0.0, reset_wait: 0.0, slope_pitch: 0.0, stick_active: false, followed: false, collided: false };
-        KhCam { rig: None, aim: AimOverlay::default(), shot: ShotCamera::default(), shot_on: true, finish_shot: None, finish_enemy: kh_camera::finish::FinishSubject { point: Vec3::ZERO, yaw: 0.0 }, finish_player_height: 102.0, finish_collision: true, finish_locked: false, finish: kh_camera::finish::FinishCamera::default(), world_rate: 1.0, previous: nothing, view: nothing, world, weight: 0.0, owning: false, away: u32::MAX, relock_pending: false, stick_y: -1.0, fov_h: FOV_KH3, shakes: ShakeSet::new(), defs, shakes_played: 0, diag: false, trace: None, trace_path: logs.join("cam-trace.csv"), told: None, frozen: false, posted: None, frozen_told: false, collided: 0, steps: 0, mode: "field", party_target: None, snap_due: false /* (WALLS) */, team_fov: None, team_shake: ShakeOffset::default(), team_on: false /* (ER party S7) */, conv: kh_camera::conv::ConvCamera::default(), conv_fov: None /* (CV1) */ }
+        KhCam { rig: None, aim: AimOverlay::default(), shot: ShotCamera::default(), shot_on: true, finish_shot: None, finish_enemy: kh_camera::finish::FinishSubject { point: Vec3::ZERO, yaw: 0.0 }, finish_player_height: 102.0, finish_collision: true, finish_locked: false, finish: kh_camera::finish::FinishCamera::default(), world_rate: 1.0, previous: nothing, view: nothing, world, weight: 0.0, owning: false, away: u32::MAX, relock_pending: false, stick_y: -1.0, fov_h: FOV_KH3, shakes: ShakeSet::new(), defs, shakes_played: 0, diag: false, trace: None, trace_path: logs.join("cam-trace.csv"), told: None, frozen: false, posted: None, frozen_told: false, collided: 0, steps: 0, mode: "field", party_target: None, snap_due: false /* (WALLS) */, team_fov: None, team_shake: ShakeOffset::default(), team_on: false /* (ER party S7) */, conv: kh_camera::conv::ConvCamera::default(), conv_fov: None /* (CV1) */, forms: kh_camera::forms::FormCameras::default(), forms_fov: None, forms_label: None, forms_stick: false /* (F-HUD) */, form_bp: kh_camera::form_bp::FormBpCameras::new() /* (AUDIT-C) */, hammer: kh_camera::forms_hammer::HammerCameras::new() /* (AUDIT-B F-HAMMER) */ }
     }
 
     /// Sora has the camera (the blend counts: more than half ours).
@@ -514,16 +560,12 @@ impl KhCam {
 
     /// The yaw the controller steers by: the camera of the last step (camera spec 1.4).
     pub fn input_yaw(&self) -> Option<f32> {
-        self.has_view().then(|| self.view.rotation.yaw)
+        self.has_view().then_some(self.view.rotation.yaw)
     }
 
     /// The view the shotlock reticle test projects with (as kh-app's `MagicHost::view`).
     pub fn core_view(&self) -> Option<kh_core::magic::View> {
-        self.has_view().then(|| kh_core::magic::View::from_camera(self.view.position, self.view.rotation.yaw, self.view.rotation.pitch, self.fov_h, 1280, 720))
-    }
-
-    pub fn aiming(&self) -> bool {
-        self.aim.active()
+        self.has_view().then(|| kh_core::magic::View::from_camera(self.view.position, self.view.rotation.yaw, self.view.rotation.pitch, self.forms_fov.map_or(self.fov_h, |f| f * self.fov_h / FOV_KH3) /* (F-HUD) */, 1280, 720))
     }
 
     /// Once a frame BEFORE the steps: who has the camera, the options. `wanted` = Sora is alive
@@ -532,7 +574,7 @@ impl KhCam {
     /// which looks weird"): A MENU OF OURS HOLDS THE PAUSE (camp menu, battle Pause, save-point menu, the game-over hold,
     /// the choice menu): nothing about the view changes: no hand-back to Elden Ring's camera, no blend, no follow, no
     /// shake; the view posted last is posted again as it is, and play goes on from it when the menu closes.
-    pub fn frame(&mut self, control: &Control, wanted: bool, frozen: bool, out: &Output, before: &Output, sora: &Sora, frame: Frame) {
+    pub fn frame(&mut self, control: &Control, wanted: bool, frozen: bool, CamSora { out, before, sora }: CamSora<'_>, frame: Frame) {
         self.world.frame = frame;
         let frozen = frozen && self.rig.is_some() && self.posted.is_some() && control.flag("cam.freeze") != Some(false);
         if frozen != self.frozen {
@@ -592,10 +634,14 @@ impl KhCam {
         }
     }
 
-    /// (IMPL_ER22) Before every step: the boss finish's cut (`None` = none), its enemy's camera point, the world's
-    /// rate (1.0 outside a sequence), whether the script holds the sticks; `shake` = (stop the shakes, play the
-    /// script's shake at this scale).
-    pub fn set_finish(&mut self, shot: Option<kh_core::combat::finish::FinishShot>, enemy: kh_camera::finish::FinishSubject, player_height: f32, collision: bool, locked: bool, rate: f32, shake: (bool, Option<f32>)) {
+    /// (AUDIT-A WORLDTIME) After every step: the form blueprints' `SetGlobalGameSpeed` of the step (Counter Shield's
+    /// tate_finish hit-stops, kh-camera forms_shield.rs), taken once (worldtime.rs applies it from the next step on).
+    pub fn take_form_game_speed(&mut self) -> Option<(f32, f32)> {
+        self.form_bp.shield.game_speed.take()
+    }
+
+    /// (IMPL_ER22) Before every step: the boss finish (`FinishCam`).
+    pub fn set_finish(&mut self, FinishCam { shot, enemy, player_height, collision, locked, rate, shake }: FinishCam) {
         (self.finish_shot, self.finish_enemy, self.finish_player_height, self.finish_collision, self.finish_locked, self.world_rate) = (shot, enemy, player_height, collision, locked, rate.clamp(0.0, 1.0));
         if shake.0 {
             self.shakes.clear();
@@ -609,14 +655,13 @@ impl KhCam {
     /// One fixed step, AFTER Sora's (as kh-app/src/player.rs `simulate`).
     /// `party` (ER party S7): the party's side of the camera (a friend leader's field / lock-on target, the team
     /// attacks' cameras); `None` = Sora alone, exactly as before the party.
-    #[allow(clippy::too_many_arguments)]
     /// (NF) The look point of KH3's camera while it has the view (KH world = the renderer's game space, cm): where KH3's
     /// collision pass sweeps from (FUN_1405D87F0), for the camera fade (kh-er-render camfade.rs). `None`: Elden Ring's camera.
     pub fn look_point(&self) -> Option<Vec3> {
         (self.owning && self.view.look_point.is_finite()).then_some(self.view.look_point)
     }
 
-    pub fn step(&mut self, dt: f32, input: StepInput, out: &Output, before: &Output, sora: &Sora, targets: &ErTargets, shakes: Vec<kh_host::vfx::Shake>, mut party: Option<&mut dyn PartyCamera>) {
+    pub fn step(&mut self, dt: f32, input: StepInput, CamSora { out, before, sora }: CamSora<'_>, targets: &ErTargets, shakes: Vec<kh_host::vfx::Shake>, mut party: Option<&mut dyn PartyCamera>) {
         // The effects' camera shakes (`SQEX_CameraShake`): played on whatever camera is in use.
         for request in shakes {
             match self.defs.get(&request.class) {
@@ -706,29 +751,74 @@ impl KhCam {
         if let Some(change) = party.as_mut().and_then(|p| p.lock_change()) {
             rig.set_lockon(&target, change);
         }
+        // (GRABS) THE LOCK-ON CAMERA NEVER OUTLIVES ITS LOCK (grabs.rs `lock_stale`): the lock-on camera is let go the moment
+        // the leader's lock no longer names its target (Sora: his hard lock or an attack camera's mode 3 / 6 target; a friend
+        // leading: his lock) or the target is dead or gone. CAUSE (the user, 2026-11-06: "the camera gets stuck locked on to
+        // it when you get grabbed by it, even when it dies"): a grab seats Sora with `Sora::teleport`, which makes his core
+        // afresh and drops his lock WITHOUT the unlock event that alone ends this camera's lock; any such reset did the same.
+        if let Some(id) = rig.locked() {
+            let wanted = match friend {
+                Some(_) => party.as_ref().and_then(|p| p.leader_lock()).map(|t| t.0),
+                None => {
+                    let c = sora.combat();
+                    crate::grabs::core_lock(c.lockon.locked, c.lockon.current.0, c.attack_cam.mode, c.attack_cam.target.0)
+                }
+            };
+            let alive = targets.get(TargetId(id)).map(|e| e.alive);
+            if crate::grabs::lock_stale(Some(id), wanted, alive) {
+                rig.set_lockon(&target, None);
+                erlog!("cam: (GRABS) the lock-on camera let go of target {id}: {}", match (wanted, alive) { (_, None) => "it is gone".to_string(), (_, Some(false)) => "it died".to_string(), (None, _) => "the leader holds no lock any more (a grab's seat, a reset of his lock)".to_string(), (Some(w), _) => format!("the leader's lock is on target {w} now") });
+            }
+        }
         self.previous = self.view;
         let aiming = self.aim.active();
         // (IMPL_ER21) KH3's Config rows: Vertical / Horizontal Camera Control (flip) and Sensitivity, Camera Work
         let (config_x, config_y, config_auto) = crate::erconfig::camera();
-        let stick = Vec2::new(input.right.x * config_x, input.right.y * self.stick_y * config_y);
+        let stick = camera_stick(input.right, input.mouse, (config_x, config_y), self.stick_y); // (CAMP-OPTIONS) the mouse too
         let camera_input = CameraInput { right_stick: stick, recentre: input.recentre, extra_rotation: Vec2::ZERO };
         let shot_owns = self.shot.owns_view();
-        let field_input = if aiming || shot_owns || !self.owning || self.finish_locked { CameraInput::default() } else { camera_input };
+        let field_input = if aiming || shot_owns || !self.owning || self.finish_locked || self.forms_stick /* (F-HUD) the form's stick */ { CameraInput::default() } else { camera_input };
         let lock_at = rig.locked().and_then(|id| targets.get(TargetId(id))).map(|e| e.pos + Vec3::Z * e.half_height);
         rig.field.set_auto_camera(config_auto);
         crate::boc::camera_socket(&mut rig.field.params_mut().target_socket_height); // (IMPL_ER59) the outfit's height (KH1 Sora is shorter)
+        // (F-HUD) the distance scale of this step: the attack camera's modes, else the form's (Mirage Staff 1.35)
+        let form_scale = if friend.is_some() { 1.0 } else { kh_core::combat::forms::staff::camera_distance_scale(sora.combat()) };
+        rig.field.params_mut().distance_scale = kh_camera::forms::field_distance_scale(rig.attack_camera().mode, form_scale);
         let under = rig.step(dt, &field_input, &target, lock_at, &self.world);
         let mut view = self.aim.step(dt, if self.owning { stick } else { Vec2::ZERO }, if self.owning { input.left } else { Vec2::ZERO }, &sora_target, &self.world, &under);
         // (ER party S7) AI Sora's shotlock aim is not the player's camera while a friend leads (kh-app player.rs)
         if friend.is_some() {
             view = under;
         }
+        // (F-HUD) THE FORMCHANGE CAMERAS over the field / lock-on camera: ShooterMode's (a cut in and out), the multi-lock's
+        // (0.5 s), Counter Shield's finish (the fixed camera, the ride behind Pegasus; 0.5 s back); Sora's only
+        let point_of = |id: TargetId| targets.get(id).map(|e| e.pos + Vec3::Z * e.half_height);
+        // (F-HUD, SHOT-FIX follow-up) KH3's attack camera's own cameras (modes 1 / 2 / 8: Ghost Horde, Phantom Rush, Drill Dive,
+        // Noise Flux) first, then the form cameras (kh_camera::forms::select). (ROUND-2) While the port's shot camera had the
+        // view, KH3's camera blends in from what was ON SCREEN (the last step's view), not from the field camera under it.
+        let selection = kh_camera::forms::select(sora, friend.is_some(), &point_of);
+        let attack_own = selection.attack_own;
+        let form_under = if attack_own && self.shot.active() { self.previous } else { view };
+        let form_stick = if self.owning && !self.finish_locked { stick } else { Vec2::ZERO };
+        let form_shown = self.forms.step(dt, selection.shot, &sora_target, &form_under, form_stick, &self.world);
+        self.forms_label = kh_camera::forms::mode_label(&selection, form_shown.is_some());
+        match form_shown {
+            Some(shown) => {
+                view = shown.view;
+                (self.forms_fov, self.forms_stick) = (Some(shown.fov), shown.stick_taken);
+                if shown.cut {
+                    self.previous = shown.view;
+                }
+            }
+            None => (self.forms_fov, self.forms_stick) = (None, false),
+        }
         let in_state = out.state == StateId::Shootflow;
         if self.shot.owns_view() && !in_state && before.state != StateId::Shootflow && sora.aim().mode != 2 {
             self.shot.end();
             rig.field.reset(&target, true);
         }
-        if self.shot.active() {
+        // (F-HUD, SHOT-FIX follow-up) KH3's own attack camera (modes 1 / 2 / 8) frames the shotlock: the port's shot camera stays off
+        if self.shot.active() && !attack_own {
             let locks: Vec<Vec3> = sora.aim().locks.iter().filter_map(|(id, _)| targets.get(*id)).map(|e| e.pos + Vec3::Z * e.half_height).collect();
             let focus = (!locks.is_empty()).then(|| locks.iter().sum::<Vec3>() / locks.len() as f32);
             let wide = in_state && matches!(out.sub_step, 5 | 2 | 6);
@@ -748,6 +838,80 @@ impl KhCam {
                 (self.team_fov, self.team_shake) = p.team_lens();
             }
             None => (self.team_fov, self.team_shake) = (None, ShakeOffset::default()),
+        }
+        // (AUDIT-C) SORA'S FORMCHANGE / FINISHER CAMERAS (KH3's state-event blueprints, kh_camera::form_bp) over the field /
+        // team cameras, with the collision pass against the camera's filter of the world; Sora's only (not while a friend
+        // leads). The lens is the team cameras' (a CameraAnim's horizontal FOV); their ends reset or hand the view to the
+        // field camera as the blueprints do.
+        if friend.is_none() {
+            let field_fov = kh_camera::projection(&CAMERA_PARAMS).0;
+            let frame = kh_camera::form_bp::FormBpFrame {
+                sora: (out.position, out.yaw),
+                field: kh_camera::camera_anim::AnimView { location: view.position, rotation: view.rotation, fov: self.team_fov.unwrap_or(field_fov) },
+                state: out.state,
+                ultima: kh_core::combat::form::equipped_keyblade(sora.status()) == "WEP_KEYBLADE_SO_14",
+                perf: crate::erconfig::perf_camera(),
+            };
+            self.form_bp.command = sora.combat().form.command_in_action; // (AUDIT-A CAMS) ReceivePlayerBeginCommandAction
+            self.form_bp.guns.weapon = kh_core::combat::form::weapon_type(sora.status()); // (AUDIT-A CAMS) BP_GetEquipWeaponID
+            let o = self.form_bp.step(dt, &out.events, &frame, Some(&self.world));
+            if let Some(v) = o.view {
+                view.position = v.location;
+                view.rotation = v.rotation;
+                self.team_fov = Some(v.fov);
+            }
+            self.team_shake.rotation += o.shake.rotation;
+            self.team_shake.location += o.shake.location;
+            self.team_shake.fov += o.shake.fov;
+            if o.reset_field_camera {
+                rig.field.reset(&target, true);
+            }
+            if let Some(t) = o.takeover {
+                rig.field.take_over(t.location, t.rotation);
+            }
+            if let Some(on) = o.blue_hour {
+                erlog!("cam: (AUDIT-C) the Ultimate Finish's Blue Hour {}", if on { "begins (N425)" } else { "ends" });
+                kh_er_render::bluehour::set(on); // (AUDIT-C TF) the renderer's map hide (bluehour.rs)
+            }
+            // (AUDIT-B W-FIN) FINISH_SK's ceiling look (fz_key ATARI): the same map hide, the lights off, the tower's sky light
+            if let Some(on) = o.tower {
+                erlog!("cam: (AUDIT-B W-FIN) FINISH_SK's ceiling look {}", if on { "begins (7423)" } else { "ends" });
+                kh_er_render::bluehour::set_tower(on);
+            }
+        }
+        // (AUDIT-A STAFF) Mirage Staff's blueprint (kh_camera::forms_staff, stepped inside `self.form_bp` above with the core's
+        // BpEvents: its view, beam shake and bEndTakeover are in that output); the cramped finish's void and its log here (the
+        // layer's log drained every step, so it does not grow)
+        if let Some(on) = self.form_bp.staff.void.take() {
+            erlog!("cam: (AUDIT-A STAFF) FINISH_WA's void (no room above Sora) {}", if on { "begins" } else { "ends" });
+        }
+        for l in self.form_bp.log.drain(..).filter(|l| l.starts_with("Rapunzel_key")) {
+            erlog!("cam: (AUDIT-A STAFF) {l}");
+        }
+        // (AUDIT-B F-HAMMER) THE HAMMER FORMS' CAMERAS (Favorite Deputy's camera_toy_key, Classic Tone's Timlesskey:
+        // kh_camera::forms_hammer) over that layer, the same way: the transformations, Giant Stamp, the drill's combo finish /
+        // FOV kick / Drill Dive end, FINISH_DR's drill and Clock cameras; Sora's only.
+        if friend.is_none() {
+            let field_fov = kh_camera::projection(&CAMERA_PARAMS).0;
+            let frame = kh_camera::forms_hammer::HammerFrame {
+                sora: (out.position, out.yaw),
+                field: kh_camera::camera_anim::AnimView { location: view.position, rotation: view.rotation, fov: self.team_fov.unwrap_or(field_fov) },
+                state: out.state,
+                classic_tone: kh_core::combat::form::equipped_keyblade(sora.status()) == kh_camera::forms_hammer::CLASSIC_TONE,
+                perf: crate::erconfig::perf_camera(),
+            };
+            let o = self.hammer.step(dt, &out.events, &frame, Some(&self.world));
+            if let Some(v) = o.view {
+                view.position = v.location;
+                view.rotation = v.rotation;
+                self.team_fov = Some(v.fov);
+            }
+            if o.reset_field_camera {
+                rig.field.reset(&target, true);
+            }
+            if let Some(t) = o.takeover {
+                rig.field.take_over(t.location, t.rotation);
+            }
         }
         self.team_on = self.team_fov.is_some();
         // (CV1) THE CONVERSATION CAMERA over the field camera (its shots, the collision pass against the camera's filter of
@@ -797,7 +961,7 @@ impl KhCam {
             None if finish_was => self.previous = view,
             None => {}
         }
-        self.mode = if self.finish.active() { "finish" } else if self.team_on { "team" /* (ER party S7) */ } else if self.conv_fov.is_some() { "conversation" /* (CV1) */ } else if self.shot.active() { "shot" } else if aiming { "aim" } else if rig.locked().is_some() { "lock-on" } else if rig.attack_camera().mode != 0 { "attack" } else { "field" };
+        self.mode = if self.finish.active() { "finish" } else if self.team_on { "team" /* (ER party S7) */ } else if self.conv_fov.is_some() { "conversation" /* (CV1) */ } else if let Some(label) = self.forms_label { label /* (F-HUD) "attack": KH3's attack camera 1 / 2 / 8, "form": the form cameras */ } else if self.shot.active() { "shot" } else if aiming { "aim" } else if rig.locked().is_some() { "lock-on" } else if rig.attack_camera().mode != 0 { "attack" } else { "field" };
         self.view = view;
         self.steps += 1;
         self.collided += u32::from(view.collided);
@@ -844,7 +1008,7 @@ impl KhCam {
         rotation.yaw += shake.rotation.y * scale;
         rotation.roll += shake.rotation.z * scale;
         // (ER party S7) a team camera's CameraAnim FOV (+ its shakes' FOV) replaces the field camera's while it has the view
-        let mut raw = raw_of(&self.world.frame, position, rotation, fov_vertical(team_fov_h(self.conv_fov.unwrap_or(self.fov_h) /* (CV1) */, self.team_fov, self.team_shake.fov)));
+        let mut raw = raw_of(&self.world.frame, position, rotation, fov_vertical(team_fov_h(self.conv_fov.or(self.forms_fov.map(|f| f * self.fov_h / FOV_KH3) /* (F-HUD) */).unwrap_or(self.fov_h) /* (CV1) */, self.team_fov, self.team_shake.fov)));
         // (camera-local centimetres: X forward, Y right, Z up)
         raw.position += (raw.forward * shake.location.x + raw.right * shake.location.y + raw.up * shake.location.z) * scale / coords::CM_PER_M;
         // The ease of KH3's own camera blends (ease-out, exponent 2) in the direction of the change.
@@ -965,5 +1129,23 @@ mod tests {
         assert_eq!(leader_cut_height(102.0, 89.0, 89.0), 102.0);
         assert!((leader_cut_height(102.0, 49.0, 89.0) - 56.16).abs() < 0.01);
         assert_eq!(leader_cut_height(102.0, 0.0, 89.0), 102.0);
+    }
+
+    /// (CAMP-OPTIONS follow-ups) the mouse reaches every camera and aim mode as the right stick does (the same stick value),
+    /// turning the same way as the pad; the pad's Camera X / Y-Axis and the stick-y option do not invert it (its own rows do,
+    /// before: eroptions.rs `mouse_stick`); Camera Speed scales both
+    #[test]
+    fn co_the_mouse_is_the_cameras_stick_with_its_own_flips() {
+        let normal = (1.0, 1.0);
+        let pad_right_up = camera_stick(Vec2::new(0.5, 0.5), Vec2::ZERO, normal, -1.0);
+        let mouse_right_up = camera_stick(Vec2::ZERO, Vec2::new(0.5, 0.5), normal, -1.0);
+        assert_eq!(pad_right_up, mouse_right_up, "the mouse turns as the stick does");
+        // the pad's rows reversed (and the stick-y option): the pad flips, the mouse does not
+        let reversed = (-1.0, -1.0);
+        assert_eq!(camera_stick(Vec2::new(0.5, 0.5), Vec2::ZERO, reversed, -1.0), Vec2::new(-0.5, 0.5), "the pad flips");
+        assert_eq!(camera_stick(Vec2::ZERO, Vec2::new(0.5, 0.5), reversed, 1.0), mouse_right_up, "the mouse does not");
+        // Camera Speed (the size) scales the mouse too; the two add up
+        assert_eq!(camera_stick(Vec2::ZERO, Vec2::new(0.5, 0.0), (2.0, 2.0), -1.0), Vec2::new(1.0, 0.0));
+        assert_eq!(camera_stick(Vec2::new(0.25, 0.0), Vec2::new(0.5, 0.0), normal, -1.0), Vec2::new(0.75, 0.0));
     }
 }

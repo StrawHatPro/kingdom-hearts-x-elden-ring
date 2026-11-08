@@ -6,7 +6,7 @@
 //! - any other `\Users\<name>\` path part becomes `\Users\<user>\`;
 //! - a 64-bit Steam ID (17 digits starting 7656119, the save folder's name) and the account number after Steam's
 //!   `userdata\` become `<steam id>`.
-//! Also read by the loader (`kh-er-loader`, `#[path]`): one rule for both logs.
+//!   Also read by the loader (`kh-er-loader`, `#[path]`): one rule for both logs.
 
 use std::borrow::Cow;
 use std::sync::{Mutex, OnceLock};

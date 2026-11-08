@@ -62,8 +62,6 @@ pub enum MenuAction {
     SoraSpell(u8),
     /// (party X2) Y on a leading Donald's grand-magic offer (serial, S_* command).
     Grand(u32, u8),
-    /// (party X2) a leading Goofy's ability at a tier (1 ..= 3).
-    Tiered(ActionDef, u8),
     /// (DON-UI) Donald's spell from his menu / a shortcut (documentation/DONALD_OVERHAUL.md 6.1, 7): `target` is the
     /// party member the ally target list picked (Aero Barrier, Ball Lightning; `donald::cast::SORA_MEMBER` = Sora),
     /// None = the lock-on / soft target. DON-KIT routes it (`pad::donald::wants_cast`).
@@ -90,15 +88,16 @@ pub struct FriendMenu {
     pub don: DonMenu,
 }
 
-/// (party X2) The leader's own action of a list entry (a Sora spell for Donald, a tiered ability for Goofy, an item).
+/// (party X2) The leader's own action of a list entry (a Sora spell for Donald, an item). Goofy's Arts are no menu action: his
+/// buttons fire them (pad/goofy_arts.rs).
 fn leader_action(feed: &crate::leader_magic::MenuFeed, status: &FriendStatus, kind: u8) -> Option<MenuAction> {
-    use kh_core::command::leader::{goofy, LeaderKind};
+    use kh_core::command::leader::LeaderKind;
     if let Some(item) = kh_core::magic::items::item_of_command(kind) {
         return items(status).iter().any(|(i, n)| *i == item && *n > 0).then_some(MenuAction::Item(item));
     }
     match feed.kind? {
         LeaderKind::Donald => kh_core::magic::spells::is_magic(kind).then_some(MenuAction::SoraSpell(kind)),
-        LeaderKind::Goofy => goofy::split(kind).map(|(index, tier)| MenuAction::Tiered(crate::leader_magic::goofy_def(index), tier)),
+        LeaderKind::Goofy => None,
     }
 }
 
@@ -121,7 +120,7 @@ fn leader_row(feed: &crate::leader_magic::MenuFeed, status: &FriendStatus, kind:
     }
     match feed.kind {
         Some(LeaderKind::Donald) => crate::leader_magic::spell_row(status, feed, kind),
-        Some(LeaderKind::Goofy) if goofy::is_goofy(kind) => crate::leader_magic::goofy_row(status, kind),
+        Some(LeaderKind::Goofy) if goofy::is_goofy(kind) => super::goofy_arts::panel_row(status, kind),
         _ => CommandRow::default(),
     }
 }
@@ -129,8 +128,8 @@ fn leader_row(feed: &crate::leader_magic::MenuFeed, status: &FriendStatus, kind:
 fn spell_row(status: &FriendStatus, s: &Spell) -> CommandRow {
     let cost = status.mp_cost(s.ability);
     let enabled = cost.is_some() && status.mp_charge_left <= 0.0;
-    let short = cost.is_some_and(|c| c > 0 && status.mp < c);
-    CommandRow { kind: 28, name: s.name, enabled, mp_short: short, quantity: 0, needs_target: false }
+    let short = cost.is_some_and(|c| !crate::mp_rule::may_pay(status, c)); // (THE USER 2026-11-02) short only at 0 MP / in MP Charge
+    CommandRow { kind: 28, name: s.name, enabled, mp_short: short, quantity: 0, needs_target: false, ..CommandRow::default() }
 }
 
 /// The distinct items still held, with their counts (slot order).
@@ -149,7 +148,7 @@ pub fn items(status: &FriendStatus) -> Vec<(ItemKind, u32)> {
 
 fn item_row(item: ItemKind, count: u32) -> CommandRow {
     let kind = kh_core::magic::items::command_of_item(item).unwrap_or(0);
-    CommandRow { kind, name: kh_core::magic::spells::command_name(kind), enabled: count > 0, mp_short: false, quantity: count, needs_target: false }
+    CommandRow { kind, name: kh_core::magic::spells::command_name(kind), enabled: count > 0, mp_short: false, quantity: count, needs_target: false, ..CommandRow::default() }
 }
 
 impl FriendMenu {
@@ -230,7 +229,8 @@ impl FriendMenu {
                 }
                 let slot = [PadButton::FaceRight, PadButton::FaceTop, PadButton::FaceLeft, PadButton::FaceBottom].iter().position(|b| pressed(*b))?;
                 let kind = self.leader.custom.shortcuts[self.leader.page.min(2) as usize][slot];
-                if kind == 0 {
+                // (GF-ARTS) Goofy's Arts and Taunt: his buttons fire them in pre-move, pad or AI (pad/goofy_arts.rs); Y's item stays here
+                if kind == 0 || (chara == Chara::Goofy && slot != kh_core::command::leader::goofy::SLOT_ITEM) {
                     return None;
                 }
                 let row = leader_row(&self.leader, status, kind);
@@ -271,6 +271,10 @@ impl FriendMenu {
                     self.main_cursor = (self.main_cursor as i8 - 1).rem_euclid(count) as u8;
                 } else if pressed(PadButton::DPadDown) {
                     self.main_cursor = (self.main_cursor as i8 + 1).rem_euclid(count) as u8;
+                }
+                // (GF-UI, PLAN.md R19) Goofy's list is Attack / Items: the cursor skips the hidden row, the way it was going
+                if chara == Chara::Goofy && self.main_cursor == 1 {
+                    self.main_cursor = if pressed(PadButton::DPadUp) { 0 } else { 2 };
                 }
                 let decide = pressed(PadButton::ATTACK);
                 if self.main_cursor == 0 {
@@ -342,15 +346,24 @@ impl FriendMenu {
 
     /// The menu as the HUD draws it (kh-core's snapshot type; `situations` stay the host's: Sora's queue).
     pub fn snapshot(&self, chara: Chara, status: &FriendStatus) -> CommandSnapshot {
+        // (NOCOMBAT) every friend's menu, Donald's own included, greys but Items where attacks are forbidden
+        let mut s = self.snapshot_raw(chara, status);
+        kh_core::nocombat::grey(&mut s);
+        s
+    }
+
+    fn snapshot_raw(&self, chara: Chara, status: &FriendStatus) -> CommandSnapshot {
         // (DON-UI) Donald's own menu
         if let Some(s) = Self::is_donald(chara, status).then(|| self.don_snapshot(status)).flatten() {
             return s;
         }
         let magic = self.rows(chara, status, 1);
         let items = self.rows(chara, status, 2);
+        // (GF-UI, PLAN.md R19) Goofy's Attack / Items: a nameless middle row, which the HUD hides
+        let second = if chara == Chara::Goofy { CommandRow::default() } else { CommandRow { kind: 28, name: list_label(chara), enabled: magic.iter().any(|r| r.enabled), ..CommandRow::default() } };
         let main = [
             CommandRow { kind: kh_core::magic::spells::cmd::ATTACK, name: "Attack", enabled: true, ..CommandRow::default() },
-            CommandRow { kind: 28, name: list_label(chara), enabled: magic.iter().any(|r| r.enabled), ..CommandRow::default() },
+            second,
             CommandRow { kind: 57, name: "Items", enabled: items.iter().any(|r| r.enabled), ..CommandRow::default() },
             CommandRow { kind: 0, name: "Link", enabled: false, ..CommandRow::default() },
         ];
@@ -392,7 +405,8 @@ pub fn shortcut(chara: Chara, slot: usize) -> Option<Spell> {
     match chara {
         // Circle Fire, Triangle Blizzard, Square Thunder, Cross Cure
         Chara::Donald => [0usize, 1, 2, 4].get(slot).and_then(|&i| list.get(i).copied()), // (DON-PROG) the old list is empty: none
-        Chara::Goofy => list.get(slot).copied(),
+        // (GF-ARTS) his panel is his Arts and Taunt, on his buttons (pad/goofy_arts.rs)
+        Chara::Goofy => None,
     }
 }
 
@@ -682,7 +696,7 @@ impl<'a> DonCtx<'a> {
             Some(t) => intern(format!("{name}  {t}")),
             None => name,
         };
-        CommandRow { kind: DonCmd::Spell(s).id().unwrap_or(28), name: text, enabled, mp_short: short, quantity: 0, needs_target: s.ally_target() }
+        CommandRow { kind: DonCmd::Spell(s).id().unwrap_or(28), name: text, enabled, mp_short: short, quantity: 0, needs_target: s.ally_target(), ..CommandRow::default() }
     }
 
     /// The hybrid his two attunements make (6.4: with Dual Attunement and both attuned).
@@ -747,7 +761,7 @@ impl<'a> DonCtx<'a> {
         let core = &self.st.core;
         let enabled = !core.elements().is_empty() && core.attune.cast.is_none();
         let text = if !core.would_release_unattune(&self.d).is_empty() { "Unattune Release" } else { "Unattune" };
-        DonRow { row: CommandRow { kind: block::UNATTUNE, name: text, enabled, mp_short: false, quantity: 0, needs_target: false }, act: DonAct::Unattune }
+        DonRow { row: CommandRow { kind: block::UNATTUNE, name: text, enabled, mp_short: false, quantity: 0, needs_target: false, ..CommandRow::default() }, act: DonAct::Unattune }
     }
 
     /// The Attunement rows' text: the icon and name, the Resonance pips of an attuned one, the Release mark,
@@ -795,10 +809,10 @@ impl DonMenu {
                 let mut out: Vec<DonRow> = Vec::new();
                 for e in cx.elements(&self.feed.custom) {
                     let enabled = cx.group_spells(Group::Elem(e)).iter().any(|s| cx.check(*s).is_ok());
-                    out.push(DonRow { row: CommandRow { kind: 28, name: cx.element_label(e), enabled, mp_short: false, quantity: 0, needs_target: false }, act: DonAct::Open(Group::Elem(e)) });
+                    out.push(DonRow { row: CommandRow { kind: 28, name: cx.element_label(e), enabled, mp_short: false, quantity: 0, needs_target: false, ..CommandRow::default() }, act: DonAct::Open(Group::Elem(e)) });
                 }
                 if let Some(h) = cx.hybrid() {
-                    out.push(DonRow { row: CommandRow { kind: 28, name: "Hybrid", enabled: cx.check(h).is_ok(), mp_short: false, quantity: 0, needs_target: false }, act: DonAct::Open(Group::Hybrid) });
+                    out.push(DonRow { row: CommandRow { kind: 28, name: "Hybrid", enabled: cx.check(h).is_ok(), mp_short: false, quantity: 0, needs_target: false, ..CommandRow::default() }, act: DonAct::Open(Group::Hybrid) });
                 }
                 out
             }
@@ -811,7 +825,7 @@ impl DonMenu {
                     .filter(|e| cx.st.learned.attune_unlocked(*e))
                     .map(|e| {
                         let enabled = !cx.st.core.attuned(e) && cx.st.core.attune.cast.is_none();
-                        DonRow { row: CommandRow { kind: DonCmd::Attune(e).id().unwrap_or(0), name: cx.attune_label(e, best, &m), enabled, mp_short: false, quantity: 0, needs_target: false }, act: DonAct::Attune(e) }
+                        DonRow { row: CommandRow { kind: DonCmd::Attune(e).id().unwrap_or(0), name: cx.attune_label(e, best, &m), enabled, mp_short: false, quantity: 0, needs_target: false, ..CommandRow::default() }, act: DonAct::Attune(e) }
                     })
                     .chain(std::iter::once(cx.unattune_row()))
                     .collect()
@@ -855,7 +869,7 @@ impl DonMenu {
         match DonCmd::from_id(kind)? {
             DonCmd::Attune(e) => {
                 let enabled = cx.st.learned.attune_unlocked(e) && !cx.st.core.attuned(e) && cx.st.core.attune.cast.is_none();
-                Some(DonRow { row: CommandRow { kind, name: block::name(kind), enabled, mp_short: false, quantity: 0, needs_target: false }, act: DonAct::Attune(e) })
+                Some(DonRow { row: CommandRow { kind, name: block::name(kind), enabled, mp_short: false, quantity: 0, needs_target: false, ..CommandRow::default() }, act: DonAct::Attune(e) })
             }
             cmd => {
                 let s = cx.spell_of(cmd)?;
@@ -1314,11 +1328,14 @@ impl FriendMenu {
     }
 }
 
+/// One row of the ally target list: (member, name, HP, max HP).
+pub type TargetRow = (MemberId, &'static str, i32, i32);
+
 /// What the HUD shows of Donald's menu beyond kh-core's snapshot.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct DonMenuView {
-    /// The ally target list: (member, name, HP, max HP) rows and the cursor.
-    pub target: Option<(Vec<(MemberId, &'static str, i32, i32)>, usize)>,
+    /// The ally target list: its rows and the cursor.
+    pub target: Option<(Vec<TargetRow>, usize)>,
     /// Quick Cast: each panel slot's MP and the slot that would trigger a Reaction.
     pub quick: Option<([Option<i32>; 4], Option<usize>)>,
     /// Rows on the Y stack.
@@ -1447,10 +1464,10 @@ mod don_menu_tests {
         t.tap(DOWN);
         t.tap(DOWN);
         assert_eq!(t.m.main_cursor, 0, "wraps to Attack");
-        // Goofy's menu is unchanged
-        let g = FriendStatus::new(Chara::Goofy, 0);
+        // (GF-UI, R19) Goofy's menu is Attack / Items: a nameless middle row the HUD hides
+        let g = FriendStatus::test_level99(Chara::Goofy); // (GOOFY) level 1 knows no Art
         let gm = FriendMenu::default().snapshot(Chara::Goofy, &g);
-        assert_eq!(gm.main.map(|r| r.name), ["Attack", "Abilities", "Items", "Link"]);
+        assert_eq!(gm.main.map(|r| r.name), ["Attack", "", "Items", "Link"]);
         assert!(gm.link_none);
     }
 
@@ -1634,7 +1651,7 @@ mod don_menu_tests {
 
     #[test]
     fn goofys_b_goes_back_one_level() {
-        let g = FriendStatus::new(Chara::Goofy, 0);
+        let g = FriendStatus::test_level99(Chara::Goofy); // (GOOFY) level 1 knows no Art
         let mut m = FriendMenu::default();
         let mut held = PadButtons::NONE;
         let mut tap = |m: &mut FriendMenu, b: PadButton| {
@@ -1645,10 +1662,11 @@ mod don_menu_tests {
             held = PadButtons::NONE;
         };
         tap(&mut m, DOWN);
+        assert_eq!(m.main_cursor, 2, "(GF-UI) the cursor skips the hidden row");
         tap(&mut m, A);
         assert_eq!(m.state, MenuState::SubSel);
         tap(&mut m, B);
-        assert_eq!((m.state, m.main_cursor), (MenuState::MainSel, 1), "back to the main list, on Abilities");
+        assert_eq!((m.state, m.main_cursor), (MenuState::MainSel, 2), "back to the main list, on Items");
     }
 
     #[test]
@@ -1922,8 +1940,8 @@ mod don_menu_tests {
         t.tap(PadButton::LeftTrigger);
         assert_eq!(t.m.y_selected(), None, "on the team attack: Y is Sora's (as today)");
         // (the user: "they are either available or they are not") below their MP: not offered at all, no greyed row,
-        // no MP text; only the team attack stays
-        t.s.mp = 1;
+        // no MP text; only the team attack stays. (THE USER 2026-11-02) the party's MP rule: any MP above 0 pays, so "below" is 0
+        t.s.mp = 0;
         t.up();
         let s = t.snap();
         assert_eq!(s.situations.len(), 1, "only the team attack");

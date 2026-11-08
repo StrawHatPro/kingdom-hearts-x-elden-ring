@@ -28,6 +28,10 @@ pub mod reaction {
     pub const DEFAULT: u8 = 0;
     /// GUARD: a hit is guarded from every direction (the hit-entry Guard's `Body`).
     pub const GUARD: u8 = 3;
+    /// (AUDIT-C LD) TRES_BODY_RT_GHOST (8): his body neither pushes nor blocks; hits still land.
+    /// (AUDIT-B W-CORE) PlayAttack 0x1413378B0 case 0x25's 0x1405B8B30(pawn+0x460, 8) is NOT this: body coll +0x4A4 is the
+    /// push power level (`PawnActions::push_level`); the reaction type is pawn+0x619 (its setter 0x1405B8B00, which takes the pawn itself).
+    pub const GHOST: u8 = 8;
     /// GHOST_INVINCIBLE: the hit does not exist (Dodge Roll, Air Slide, Aerial Dodge, Recovery).
     pub const GHOST_INVINCIBLE: u8 = 11;
 }
@@ -112,6 +116,11 @@ pub struct PawnActions {
     /// pawn vt+0x1010(0): the pawn-to-pawn body collision is off (Risk Dodge): the soft body push
     /// of the combat side skips him.
     pub body_collision_off: bool,
+    /// (AUDIT-B W-CORE) MyBodyColl (pawn+0x590) +0x4A4: his push power level (`ETresBodyPushPowerLevel`) as set by
+    /// 0x1405B8B30(pawn+0x460, level) = body coll slot 228 0x1406469A0; None = the base parameter's (0x1405B6100:
+    /// m_pBaseParam (pawn+0x4D0) +0x98 = TresChrBaseParamDataTable.m_BodyPushPower, Sora's PPL_50 = 4). Read by the push
+    /// solver 0x140637430 through 0x1405AA1A0 (slot 229 0x140642B50): combat/push.rs.
+    pub push_level: Option<u8>,
     /// For hosts and tests: risk dodges begun.
     pub risk_dodges: u32,
     /// The traversal fields of tier 2 (II.4 - II.6): see `Traversal`.
@@ -196,6 +205,7 @@ impl Default for PawnActions {
             risk_chosen: None,
             risk_prompt: false,
             body_collision_off: false,
+            push_level: None, // (AUDIT-B W-CORE)
             risk_dodges: 0,
             traversal: Traversal::default(),
         }
@@ -208,10 +218,16 @@ pub(crate) fn has(s: &Pawn, kind: Ability) -> bool {
     s.status.has(kind)
 }
 
-/// `battleAnim` (pawn vt+0x1748 0x141435A10) for the plain Keyblade (weapon kind 1): the last
-/// pose is BATTLE.
+/// `battleAnim` (pawn vt+0x1748 0x141435A10). For the plain Keyblade (weapon kind 1): the last
+/// pose is BATTLE. (FORM-LOCO2) The whole body: the controller's form 0x8B (Rage Form) -> true;
+/// weapon kind (vt+0x28B0 0x141435DE0, equipment vt+0x12E0) not in {1, 0x16, 0x17} and weapon out
+/// (vt+0x1330) -> true; else the last pose (the restriction test vt+0x1ED8 is not ported). The
+/// kind of a held form is its row's `weapon_form_value` (Light / Dark Form 0x16 / 0x17, Second
+/// Form 1, Rage 0), 1 without a form.
 pub(crate) fn battle_anim(s: &Pawn) -> bool {
-    s.actions.last_pose == 1
+    let cmd = s.combat.form.cmd;
+    let kind = crate::combat::form::row_of(cmd).map_or(1, |r| r.weapon_form_value);
+    cmd == crate::combat::form::CHANGE_AN || (s.actions.weapon_out && !matches!(kind, 1 | 0x16 | 0x17)) || s.actions.last_pose == 1
 }
 
 /// The pawn's land pose (vt+0x1788): the value a `TresLandAnimPose` notify stored, unless
@@ -279,8 +295,14 @@ pub(crate) fn draw(cx: &mut Ctx, out: bool) {
     }
     cx.pawn.actions.weapon_out = out;
     cx.set_weapon_visible(out);
-    const APPEAR: &str = "VW_SO010_APP0";
-    cx.spawn_effect(EffectSpawn { at: Attach::Sora { bone: Some("R_wep_skt"), offset: Vec3::ZERO }, ..EffectSpawn::at_sora(EffectId(crate::notify::notify_asset_id(APPEAR)), APPEAR) });
+    let appear = appear_effect(cx);
+    cx.spawn_effect(EffectSpawn { at: Attach::Sora { bone: Some("R_wep_skt"), offset: Vec3::ZERO }, ..EffectSpawn::at_sora(EffectId(crate::notify::notify_asset_id(appear)), appear) });
+}
+
+/// (weapons P2) The held Keyblade's own `m_AppearEffect` (sheet sora-keyblades `kb.<KEY>.fx.appear.effect`); the
+/// Kingdom Key's `VW_SO010_APP0` when no Keyblade is held.
+fn appear_effect(cx: &Ctx) -> &'static str {
+    cx.pawn.status.current_keyblade().and_then(|k| k.effect_name("fx.appear.effect")).unwrap_or("VW_SO010_APP0")
 }
 
 /// The `Draw(1, 1, 1.0)` of Attack Begin (0x141333210; combat spec 5 "Begin"). With the PORT
@@ -300,8 +322,8 @@ pub(crate) fn draw_for_attack(cx: &mut Ctx, first_of_chain: bool) {
     }
     cx.pawn.actions.weapon_out = true;
     cx.pawn.event(crate::host::EventKind::WeaponVisible { visible: true, instant: true });
-    const APPEAR: &str = "VW_SO010_APP0";
-    cx.spawn_effect(EffectSpawn { at: Attach::Sora { bone: Some("R_wep_skt"), offset: Vec3::ZERO }, ..EffectSpawn::at_sora(EffectId(crate::notify::notify_asset_id(APPEAR)), APPEAR) });
+    let appear = appear_effect(cx);
+    cx.spawn_effect(EffectSpawn { at: Attach::Sora { bone: Some("R_wep_skt"), offset: Vec3::ZERO }, ..EffectSpawn::at_sora(EffectId(crate::notify::notify_asset_id(appear)), appear) });
 }
 
 /// Plays `name` with the play call of its stage-1 twin `like` (the `W` / `B` names take "the
@@ -363,10 +385,10 @@ pub(crate) fn air_slide_scale(s: &Pawn) -> f32 {
 pub(crate) fn pawn_tick(cx: &mut Ctx, dt: f32) {
     let engaged = cx.host.targets.engaged_count();
     let s = &mut *cx.pawn;
-    if !(s.combat.air_slide_cooldown > 0.0) {
+    if s.combat.air_slide_cooldown.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
         s.actions.air_slide_ok = true;
     }
-    if !(s.combat.air_guard_cooldown > 0.0) {
+    if s.combat.air_guard_cooldown.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
         s.actions.air_guard_ok = true;
     }
     let a = &mut s.actions;
@@ -385,7 +407,7 @@ pub(crate) fn pawn_tick(cx: &mut Ctx, dt: f32) {
     a.just_guard_timer = (a.just_guard_timer - dt).max(0.0);
     if a.counter_window > 0.0 {
         a.counter_window -= dt;
-        if !(a.counter_window > 0.0) {
+        if a.counter_window.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
             close_counter_window(s);
         }
     }
@@ -495,16 +517,52 @@ pub(crate) fn move_blocked(state: &mut StateData, cx: &mut Ctx) {
 /// needs GUARD_COUNTER (4), REVENGEIMPACT (5) or REVENGEDIVE (6).
 pub(crate) fn open_counter_window(s: &mut Pawn, time: f32, attacker: TargetId, critical: bool) {
     let (counter, impact, dive) = (has(s, Ability::GuardCounter), has(s, Ability::Revengeimpact), has(s, Ability::Revengedive));
-    if !(counter || impact || dive) {
+    // (F-LIGHTDARK) FUN_1414145C0's form switches (0x141414876 / 0x14141487F): in these forms the window opens without the
+    // abilities, with the form's reprisal command and, for the shields, 2 s (see `form_counter`).
+    let form_counter = form_counter(s.combat.form.cmd, s.combat.form.grow);
+    if !(counter || impact || dive) && form_counter.is_none() {
         close_counter_window(s);
         return;
     }
+    // (AUDIT-B F-CLAWS) the second form switch (re/decomp/14141/1414145C0.c, `case 0x80 0x82 0x83 0x85 0x88 0x8A 0x8B 0x90:
+    // return`): in Double Arrowguns, Twin Yo-Yos, Hunny Launcher, Blizzard Blades, Mirage Staff, Agile Claws, Rage Form and
+    // Blizzard Claws NO window opens, whatever the abilities (no write of +0x8A0 / +0x8A4, the HUD is not told).
+    if NO_WINDOW_FORMS.contains(&s.combat.form.cmd) {
+        return;
+    }
+    let time = form_counter.and_then(|(_, t)| t).unwrap_or(time);
     let a = &mut s.actions;
-    a.counter_command = if dive { 5 } else if impact { 4 } else { 3 };
+    a.counter_command = if let Some((c, _)) = form_counter { c } else if dive { 5 } else if impact { 4 } else { 3 };
     a.counter_window = time;
     a.counter_attacker = attacker;
     if critical && s.status.count(Ability::CriticalCounter) > 0 {
         s.actions.critical = true;
+    }
+}
+
+/// (AUDIT-B F-CLAWS) FUN_1414145C0's second switch: the forms in which no guard-counter window opens.
+pub(crate) const NO_WINDOW_FORMS: [i32; 8] = [0x80, 0x82, 0x83, 0x85, 0x88, 0x8A, 0x8B, 0x90];
+
+/// FUN_1414145C0's form table for Sora (pawn vt+0xD70 == 1), decompiled C: in forms 0x86 0x87 0x89 0x8E 0x8F 0x91 0x92
+/// 0x93 0xDD .. 0xE0 the window opens without GUARD_COUNTER / REVENGEIMPACT / REVENGEDIVE, and its command (controller+0x8A4)
+/// is the form's: (command, window time when the form sets its own). The grow level (equipment vt+0x448 via pawn vt+0x12E8,
+/// 0 = LV1) picks the shields' second command: `(bSuccess ^ 1) < grow` with a successful guard (the port's callers).
+/// None = the Keyblade's rule (3 / 4 / 5 by the abilities).
+pub(crate) fn form_counter(cmd: i32, grow: u8) -> Option<(i32, Option<f32>)> {
+    let grown = grow.saturating_sub(1) > 0;
+    match cmd {
+        // (F-LIGHTDARK for F-NANO) Nano Arms: 0xE.
+        0x86 => Some((0x0E, None)),
+        // (F-LIGHTDARK for F-ULTIMATE) Ultimate Form: 0xF.
+        0x87 => Some((0x0F, None)),
+        // (F-LIGHTDARK for F-SHIELD) Counter Shield: 0x10 (SHIELDCOUNTER), 0x11 with a grown shield; 2 s.
+        0x89 => Some((if grown { 0x11 } else { 0x10 }, Some(2.0))),
+        // (F-LIGHTDARK for F-SHIELD) Frying Pan: 0x12, 0x13 with a grown pan; 2 s.
+        0x91 => Some((if grown { 0x13 } else { 0x12 }, Some(2.0))),
+        // (F-LIGHTDARK for F-ARROWGUN, F-HAMMER) Hunny Blasters / Hunny Launcher / Boom Hammer / Clock Drill: 6 (switchD case 0x8E).
+        0x8E | 0x8F | 0x92 | 0x93 => Some((6, None)),
+        // (F-LIGHTDARK) Light Burst / Dark Burst / Dual Smasher.
+        _ => crate::combat::forms::lightdark::counter_command(cmd).map(|c| (c, None)),
     }
 }
 

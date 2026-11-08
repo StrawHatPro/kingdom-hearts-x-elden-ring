@@ -114,7 +114,7 @@ function vertexPoints(params) {
   return res;
 }
 const report = [];
-for (const root of ['vfx', 'party/vfx', 'xsi/vfx']) {
+for (const root of ['vfx', 'party/vfx', 'xsi/vfx', 'keyblades/vfx']) { // (VFX-RING) the keyblades root too: its 30 VertexSpawn emitters (VW_SO020_APP0 ...)
   const dir = path.join(pack, root, 'effects');
   if (!fs.existsSync(dir)) continue;
   for (const f of fs.readdirSync(dir).filter((f) => f.endsWith('.json'))) {

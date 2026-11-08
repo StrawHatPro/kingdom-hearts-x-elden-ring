@@ -1,0 +1,38 @@
+[
+  {
+    "asset": "/Game/Sound/SE/weapon/02002/se02002_036",
+    "trigger": "TresProjSS_BombShot2Ex (Magic Launcher) pawn hit SE, played by name by kh-core forms/arrowgun.rs",
+    "spatial": "3D",
+    "note": "(AUDIT-A) sheet sora-form-arrowgun proj rows, hit SE column"
+  },
+  {
+    "asset": "/Game/Sound/SE/weapon/02002/se02002_038",
+    "trigger": "an arrowgun / launcher shot's pawn hit SE, played by name",
+    "spatial": "3D",
+    "note": "(AUDIT-A) sheet sora-form-arrowgun proj rows"
+  },
+  {
+    "asset": "/Game/Sound/SE/weapon/02002/se02002_039",
+    "trigger": "TresProjSS_Normal / Curve / Spin / Barrage pawn hit SE, played by name",
+    "spatial": "3D",
+    "note": "(AUDIT-A) sheet sora-form-arrowgun proj rows"
+  },
+  {
+    "asset": "/Game/Sound/SE/weapon/02002/se02002_045",
+    "trigger": "an arrowgun / launcher shot's pawn hit SE, played by name",
+    "spatial": "3D",
+    "note": "(AUDIT-A) sheet sora-form-arrowgun proj rows"
+  },
+  {
+    "asset": "/Game/Sound/SE/weapon/02003/se02003_013",
+    "trigger": "Counter Shield FINISH_SH: the Chariot (StylePawn w_so035) clip B424 SQEXSEADAnimNotifyState_AttachSound 0.0138..3.4353 s",
+    "spatial": "3D",
+    "note": "(AUDIT-A) SOUND_INBOX (SHIELD); kh-core shield::pawn_notifies"
+  },
+  {
+    "asset": "/Game/Sound/SE/weapon/02003/se02003_019",
+    "trigger": "Counter Shield FINISH_SH: the Chariot (StylePawn w_so035) clip B424 SQEXSEADAnimNotify_PlaySound 3.0607 s",
+    "spatial": "3D",
+    "note": "(AUDIT-A) SOUND_INBOX (SHIELD); kh-core shield::pawn_notifies"
+  }
+]

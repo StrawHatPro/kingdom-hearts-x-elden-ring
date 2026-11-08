@@ -14,7 +14,7 @@
 
 use kh_core::{PadButtons, Sora, TargetId, Vec3};
 use kh_host::hud::{Frame, Hud, HudTargets, TargetView};
-use kh_host::hud_layers::{draw_movie_in, stage_root, Draw, Drawn, Perf};
+use kh_host::hud_layers::{draw_movie_in, stage_root, Draw, DrawArea, Drawn, Perf};
 use kh_host::party::{PartyChara, PartyHudSlot};
 
 struct NoTargets;
@@ -42,7 +42,7 @@ fn walk(s: &kh_ui::player::Sprite, path: &str) {
                         let t = &b.texture;
                         // mean colour of the texture's opaque texels
                         let (mut n, mut s) = (0f32, [0f32; 3]);
-                        for p in t.rgba.chunks_exact(4) {
+                        for p in t.rgba.as_chunks::<4>().0 {
                             if p[3] > 128 {
                                 n += 1.0;
                                 for c in 0..3 {
@@ -112,7 +112,7 @@ fn main() {
             }
             let mut draw = Draw::default();
             let mut renderer = kh_ui::render::Renderer::new(fonts.clone());
-            let Drawn::Picture(rect, _) = draw_movie_in(&mut draw, &mut renderer, &m, &stage, (2560.0, 1440.0), true, Perf::default(), Some(view)) else { panic!() };
+            let Drawn::Picture(rect, _) = draw_movie_in(&mut draw, &mut renderer, &m, &stage, DrawArea { size: (2560.0, 1440.0), clip: Some(view) }, true, Perf::default()) else { panic!() };
             let _ = rect;
             if hide.is_empty() {
                 full = draw.rgba.clone();
@@ -121,7 +121,7 @@ fn main() {
             // the pixels this node changes: their colour in the full picture and without it
             let (mut n, mut a, mut b) = (0f32, [0f32; 4], [0f32; 4]);
             let mut sample = String::new();
-            for (k, (p, q)) in full.chunks_exact(4).zip(draw.rgba.chunks_exact(4)).enumerate() {
+            for (k, (p, q)) in full.as_chunks::<4>().0.iter().zip(draw.rgba.as_chunks::<4>().0).enumerate() {
                 if p.iter().zip(q).any(|(x, y)| x.abs_diff(*y) > 24) {
                     n += 1.0;
                     for c in 0..4 {
@@ -161,7 +161,7 @@ fn main() {
         let (stage, view) = stage_root(w as f32, h as f32);
         let mut draw = Draw::default();
         let mut renderer = kh_ui::render::Renderer::new(fonts.clone());
-        match draw_movie_in(&mut draw, &mut renderer, m, &stage, (w as f32, h as f32), true, Perf::default(), Some(view)) {
+        match draw_movie_in(&mut draw, &mut renderer, m, &stage, DrawArea { size: (w as f32, h as f32), clip: Some(view) }, true, Perf::default()) {
             Drawn::Picture(rect, _) => (rect, draw.rgba),
             _ => panic!("nothing drawn"),
         }
@@ -179,7 +179,7 @@ fn main() {
                 let mut m = movie.clone();
                 assert!(m.set_visible(path, false), "{path}");
                 let (_, without) = picture(&m, w, h);
-                full.chunks_exact(4).zip(without.chunks_exact(4)).map(|(p, q)| p[3] > 200 && p.iter().zip(q).any(|(x, y)| x.abs_diff(*y) > 24)).collect()
+                full.as_chunks::<4>().0.iter().zip(without.as_chunks::<4>().0).map(|(p, q)| p[3] > 200 && p.iter().zip(q).any(|(x, y)| x.abs_diff(*y) > 24)).collect()
             })
             .collect();
         for (mode, legacy, solid) in &modes {
@@ -192,7 +192,7 @@ fn main() {
             for (scene, bg) in SCENES.iter() {
                 // the overlay's display-encoded blend (the user's 10-bit back buffer): c * a + bg * (1 - a)
                 let mut img = vec![0u8; rect.2 * rect.3 * 4];
-                for (i, p) in rgba.chunks_exact(4).enumerate() {
+                for (i, p) in rgba.as_chunks::<4>().0.iter().enumerate() {
                     let a = p[3] as f32 / 255.0;
                     for c in 0..3 {
                         img[i * 4 + c] = ((p[c] as f32 / 255.0 * a + bg[c] * (1.0 - a)) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;

@@ -464,7 +464,7 @@ fn rb_tap_locks_and_unlocks_and_rt_tap_steps_through_the_nearest_six() {
     tap(&mut bench, &rb);
     let lock = bench.sora.combat().lockon;
     assert!(lock.locked, "locked on {:?}", lock.current);
-    let first = lock.current;
+    let _first = lock.current;
     let events = bench.outs.iter().flat_map(|o| &o.events).filter(|e| matches!(e.kind, EventKind::CameraLock { .. } | EventKind::LockCursor { kind: Some(CursorKind::Lock), .. })).count();
     assert_eq!(events, 2, "the lock cursor and the camera lock");
     // A hold longer than the tap time is not a tap.

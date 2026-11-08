@@ -48,6 +48,8 @@ pub struct RecordingHost {
     /// (XSI) `Targets::foe_level` answers (powerful foes and their battle level) and the targets in their revenge.
     pub foe_levels: Vec<(TargetId, u8)>,
     pub revenge: Vec<TargetId>,
+    /// (AUDIT-B F-CLAWS) Every `Targets::script_hold` call, in order (a finish's catch and carry).
+    pub holds: Vec<(TargetId, Option<super::ScriptHold>)>,
 }
 
 impl RecordingHost {
@@ -60,7 +62,7 @@ impl RecordingHost {
     pub fn step<R>(&mut self, world: &dyn World, run: impl FnOnce(&mut Host<'_>) -> R) -> R {
         let calls = RefCell::new(std::mem::take(&mut self.calls));
         let ui = RefCell::new(None);
-        let mut targets = RecordedTargets { targets: &mut self.targets, calls: &calls, bodies: &self.bodies, armor: &mut self.armor, endurance: &mut self.endurance, push_levels: &self.push_levels, attack_shapes: &self.attack_shapes, touched: &mut self.touched, reactions: &mut self.reactions, rush_suppression: &self.rush_suppression, foe_levels: &self.foe_levels, revenge: &mut self.revenge };
+        let mut targets = RecordedTargets { targets: &mut self.targets, calls: &calls, bodies: &self.bodies, armor: &mut self.armor, endurance: &mut self.endurance, push_levels: &self.push_levels, attack_shapes: &self.attack_shapes, touched: &mut self.touched, reactions: &mut self.reactions, rush_suppression: &self.rush_suppression, foe_levels: &self.foe_levels, revenge: &mut self.revenge, holds: &mut self.holds /* (AUDIT-B F-CLAWS) */ };
         let (mut audio, mut effects, mut sink) = (RecordedCalls { calls: &calls, ui: &ui }, RecordedCalls { calls: &calls, ui: &ui }, RecordedCalls { calls: &calls, ui: &ui });
         let result = run(&mut Host { world, targets: &mut targets, audio: &mut audio, effects: &mut effects, ui: &mut sink });
         self.calls = calls.into_inner();
@@ -89,9 +91,19 @@ struct RecordedTargets<'a> {
     rush_suppression: &'a [TargetId],
     foe_levels: &'a [(TargetId, u8)],
     revenge: &'a mut Vec<TargetId>,
+    holds: &'a mut Vec<(TargetId, Option<super::ScriptHold>)>,
 }
 
 impl Targets for RecordedTargets<'_> {
+    // (AUDIT-B F-CLAWS) written down, and a carry moves the fixture target there (its origin)
+    fn script_hold(&mut self, id: TargetId, hold: Option<super::ScriptHold>) {
+        if let (Some(t), Some(at)) = (self.targets.iter_mut().find(|t| t.id == id), hold.and_then(|h| h.carry)) {
+            let lift = t.center - t.position;
+            (t.position, t.center) = (at, at + lift);
+        }
+        self.holds.push((id, hold));
+    }
+
     fn foe_level(&self, id: TargetId) -> Option<u8> {
         self.foe_levels.iter().find(|f| f.0 == id).map(|f| f.1)
     }
@@ -185,6 +197,13 @@ impl Targets for RecordedTargets<'_> {
 
     fn rush_suppression(&self, id: TargetId) -> bool {
         self.rush_suppression.contains(&id)
+    }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: crate::host::TargetId, _at: glam::Vec3) -> Option<crate::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: crate::host::TargetId, _bone: crate::host::TargetBone) -> Option<crate::host::BonePose> {
+        None
     }
 }
 

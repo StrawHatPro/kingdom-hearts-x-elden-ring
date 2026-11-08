@@ -69,6 +69,66 @@ if [ -z "$OK" ]; then
   exit 1
 fi
 
+# me3's launcher (me3-launcher.exe, under Proton) talks to Steam as ELDEN RING: while it runs, Steam shows the game as
+# running. When the game dies while me3 starts it, the launcher can wait for it forever (seen on Windows with me3 0.13.0),
+# so, as play.bat does through setup\me3_watch.ps1: launchers left over from earlier runs are ended first (only when no
+# Elden Ring is running; with one running nothing is started), and a watcher ends this run's launcher once the game has
+# been gone 15 s, or when it has run 90 s without the game. The game itself is never touched.
+# Only ever ends me3-launcher.exe processes whose program file is directly in THIS me3's folders: the folder of the me3
+# picked above, and the folder me3's Linux installer puts its Windows parts in (${XDG_DATA_HOME:-~/.local/share}/me3/
+# windows-bin); the program path is read from the process's own command line (Wine shows it as Z:\home\...\me3-launcher.exe)
+# and compared as a full folder path. Never anything by name alone, never the game. Every process it ends is printed.
+# NOT PERSISTENT: the watcher lives only until the game has gone (at most a day); no autostart, no cron / systemd job,
+# no files written, no network, no root.
+# (Wine names a process after its .exe, cut to 15 characters: "eldenring.exe", "me3-launcher.ex".)
+lower() { tr 'A-Z\\' 'a-z/'; }
+ME3_DIRS=$(for d in "$(dirname "$(readlink -f "$ME3" 2>/dev/null || echo "$ME3")")" "${XDG_DATA_HOME:-$HOME/.local/share}/me3/windows-bin"; do
+  printf '%s\n' "$d" | lower; done)
+game_running() { pgrep -x eldenring.exe >/dev/null 2>&1; }
+launcher_pids() {
+  for p in $({ pgrep -x me3-launcher.ex; pgrep -f '[m]e3-launcher\.exe'; } 2>/dev/null | sort -u); do
+    a0=$(tr '\0' '\n' < "/proc/$p/cmdline" 2>/dev/null | head -n 1 | lower)
+    a0=${a0#z:}; dir=${a0%/*}
+    [ -n "$a0" ] && [ "${a0##*/}" = me3-launcher.exe ] && printf '%s\n' "$ME3_DIRS" | grep -qxF "$dir" && echo "$p"
+  done
+}
+end_launchers() { # $1: only those at least this many seconds old, $2: what to call them
+  for p in $(launcher_pids); do
+    age=$(ps -o etimes= -p "$p" 2>/dev/null | tr -d ' ')
+    from=$(ps -o lstart= -p "$p" 2>/dev/null)
+    if [ -n "$age" ] && [ "$age" -ge "$1" ]; then kill -9 "$p" 2>/dev/null && echo "  ended $2 from $from (pid $p)"; fi
+  done
+}
+if game_running; then
+  echo "Elden Ring is already running. Close it first, then start play.sh again."
+  exit 2
+fi
+if [ -n "$(launcher_pids)" ]; then
+  echo "me3 launchers left over from earlier runs (they make Steam show Elden Ring as running):"
+  end_launchers 30 "a leftover me3 launcher"
+fi
+(
+  trap '' HUP
+  seen=; gone=0; t=0
+  while [ "$t" -lt 86400 ]; do
+    sleep 1; t=$((t + 1))
+    if game_running; then seen=1; gone=0; continue; fi
+    if [ -z "$(launcher_pids)" ]; then
+      if [ -n "$seen" ] || [ "$t" -ge 120 ]; then break; fi
+      continue
+    fi
+    if [ -n "$seen" ]; then
+      gone=$((gone + 1))
+      if [ "$gone" -ge 15 ]; then
+        echo; echo "Elden Ring closed 15 s ago but me3's launcher is still running; ending it so Steam no longer shows the game as running:"
+        end_launchers 0 "me3's stuck launcher"; break
+      fi
+    elif [ "$t" -ge 90 ]; then
+      echo; echo "me3's launcher has run 90 s without Elden Ring (the game closed or crashed while starting); ending it:"
+      end_launchers 0 "me3's stuck launcher"; break
+    fi
+  done
+) &
 echo "Starting Elden Ring with me3 $VER: \"$ME3\""
 if "$ME3" launch -g eldenring -p "$HERE/profiles/kh-sora.me3"; then exit 0; fi
 echo

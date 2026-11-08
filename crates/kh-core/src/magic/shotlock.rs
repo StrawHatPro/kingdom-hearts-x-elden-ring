@@ -134,11 +134,18 @@ pub struct AimMode {
     /// (CHESTFIX, port) How often an aim mode left open by a dropped state was closed (`close_dropped` at a teleport,
     /// the net in `update`): the hosts log it.
     pub stale_cleared: u32,
+    /// (THE USER 2026-11-02: "make it stop if shotlock gets cancelled") PORT ADDITION: an aim that was still aiming when
+    /// `close_dropped` closed it owes the sound state STATE_SLOW_END (`exit` sends it; a dropped state never ran
+    /// `exit`): the next `update` sends it, or the slow layer (footsteps at pitch 0.3, battle voices silent) stayed on.
+    pub slow_end_owed: bool,
+    /// (SHOT-C) ctrl+0xA34: SelectKind 0x141411B80 takes this kind as the base kind when it is not 0 (KH3 has no writer:
+    /// a debug override; the shotlock trace tests set it to run a kind whose Keyblade's base family is still pending).
+    pub debug_kind: u8,
 }
 
 impl Default for AimMode {
     fn default() -> AimMode {
-        AimMode { flags: 0, hold_timer: 0.0, mode: 0, total: 0, locked_targets: 0, lock_timer: 0.0, max_locks: 0, start_delay: 0.0, aim_time: 0.0, slow_rate: 0.4, kind: 0, rr: 0, candidates: Vec::new(), locked: Vec::new(), airstep_candidates: Vec::new(), airstep_targets: Vec::new(), consumed: 0, focus0: 0, saved_lock: TargetId::NONE, saved_soft: TargetId::NONE, can_airstep: false, is_max: false, aimed: 0.0, stale_cleared: 0 }
+        AimMode { flags: 0, hold_timer: 0.0, mode: 0, total: 0, locked_targets: 0, lock_timer: 0.0, max_locks: 0, start_delay: 0.0, aim_time: 0.0, slow_rate: 0.4, kind: 0, rr: 0, candidates: Vec::new(), locked: Vec::new(), airstep_candidates: Vec::new(), airstep_targets: Vec::new(), consumed: 0, focus0: 0, saved_lock: TargetId::NONE, saved_soft: TargetId::NONE, can_airstep: false, is_max: false, aimed: 0.0, stale_cleared: 0, slow_end_owed: false, debug_kind: 0 /* (SHOT-C) */ }
     }
 }
 
@@ -173,7 +180,9 @@ impl AimMode {
         if self.mode == 0 && self.flags & (flag::ACTIVE | flag::RELEASE_PENDING) == 0 {
             return false;
         }
-        *self = AimMode { flags: flag::WAIT_RELEASE, slow_rate: self.slow_rate, stale_cleared: self.stale_cleared + 1, ..AimMode::default() };
+        // (THE USER 2026-11-02) still aiming (modes 1 / 4): the slow's sound state is owed
+        let owed = self.slow_end_owed || self.mode == 1 || self.mode == 4;
+        *self = AimMode { flags: flag::WAIT_RELEASE, slow_rate: self.slow_rate, stale_cleared: self.stale_cleared + 1, slow_end_owed: owed, ..AimMode::default() };
         true
     }
 
@@ -207,6 +216,12 @@ fn select_kind(cx: &mut Ctx, mut reset: bool) {
     let aspir = cx.pawn.status.has(ETresAbilityKind::FocusAspir);
     // (XSI) SPECTRAL RAYS (XS 2.8): the Customize screen's choice, while the ability is equipped (abilities/xs).
     let spectral = crate::abilities::xs::spectral::chosen(cx.pawn);
+    // (SHOT-A) the held Keyblade's weapon type (pawn vt+0x12C8) picks the base kind and, at MAX, the MAX kind (sheet
+    // sora-shotlocks select.*); a kind whose family is not ported yet keeps the Kingdom Key's (magic/shotlocks `ready`).
+    let weapon = super::shotlocks::weapon_type(cx.pawn);
+    let base = Some(super::shotlocks::base_kind(weapon)).filter(|&k| super::shotlocks::ready(k)).unwrap_or(KIND_KC_SHOT);
+    // (SHOT-C) ctrl+0xA34 when not 0 (the debug override of SelectKind; 0 in the game).
+    let base = if cx.pawn.magic.aim.debug_kind != 0 { cx.pawn.magic.aim.debug_kind } else { base };
     let aim = &mut cx.pawn.magic.aim;
     if empty && aspir {
         aim.kind = KIND_FOCUS_ASPIR;
@@ -214,7 +229,7 @@ fn select_kind(cx: &mut Ctx, mut reset: bool) {
     } else if spectral {
         aim.kind = crate::abilities::xs::spectral::KIND;
     } else {
-        aim.kind = KIND_KC_SHOT;
+        aim.kind = base;
     }
     aim.max_locks = param0(aim.kind);
     if !reset {
@@ -224,8 +239,10 @@ fn select_kind(cx: &mut Ctx, mut reset: bool) {
         }
         let aim = &mut cx.pawn.magic.aim;
         // (XSI) Spectral Rays has no MAX upgrade.
-        if aim.flags & flag::MAX != 0 && aim.kind == KIND_KC_SHOT {
-            aim.kind = KIND_KC_RAGNAROK;
+        if aim.flags & flag::MAX != 0 && aim.kind == base {
+            // (SHOT-A) the MAX kind of the weapon type (types 3 / 8: 0x1413ECC80 picks the alternative), when ready.
+            let max = if base == KIND_KC_SHOT && !super::shotlocks::ready(super::shotlocks::base_kind(weapon)) { KIND_KC_RAGNAROK } else { super::shotlocks::max_kind(weapon, super::shotlocks::alt_max(cx)) };
+            cx.pawn.magic.aim.kind = if super::shotlocks::ready(max) { max } else { KIND_KC_RAGNAROK };
         }
     }
     let aim = &mut cx.pawn.magic.aim;
@@ -488,6 +505,10 @@ fn airstep_target_update(cx: &mut Ctx, input: &Input) -> bool {
 /// step's. Returns true while the aim mode is open (the caller then skips the normal dispatch).
 pub(crate) fn update(state: &mut StateData, cx: &mut Ctx, input: &Input, dt: f32, real_dt: f32) -> bool {
     let s = Sheet::Shot;
+    // (THE USER 2026-11-02) the sound state a dropped aim owes (`close_dropped`)
+    if std::mem::take(&mut cx.pawn.magic.aim.slow_end_owed) {
+        cx.pawn.event(EventKind::SoundState { name: "STATE_SLOW_END" });
+    }
     if !cx.pawn.magic.shotlock_unlocked || cx.pawn.status.placeholder {
         return false;
     }
@@ -511,8 +532,9 @@ pub(crate) fn update(state: &mut StateData, cx: &mut Ctx, input: &Input, dt: f32
     if mode == 0 {
         let cooldown = cx.pawn.combat.command_cooldown > 0.0;
         let latch = cx.pawn.magic.command_latch;
+        let allowed = crate::nocombat::allows(crate::nocombat::Fighter::Sora, crate::nocombat::Act::Shotlock); // (NOCOMBAT)
         let aim = &mut cx.pawn.magic.aim;
-        if !cooldown && hold && !latch {
+        if !cooldown && hold && !latch && allowed {
             if aim.flags & flag::WAIT_RELEASE != 0 {
                 return false;
             }

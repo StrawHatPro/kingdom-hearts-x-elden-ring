@@ -42,6 +42,27 @@ const LABELS_STATE: [&str; 3] = ["usually", "damage", "link"];
 const LABELS_LOOK: [&str; 4] = ["normal", "battle", "dying", "death"];
 const LABELS_LOOK_TRANSITION: [&str; 2] = ["b2n", "n2b"];
 
+/// KH3's own spelling of the normal look on the portraits' base plates (`HudStatus_fla.McPcFaceDodai1_62`,
+/// `McNpcDodai_3`, `McSnpcDodai_16`: labels `nomal` / `battle` / `dying` / `link` (/ `death`)); the native item-number
+/// call sends the same `nomal` (sic) out of battle (docs/sora-ui-spec.md, the battle-mode row).
+const DODAI_NORMAL: &str = "nomal";
+
+/// (HUD-REVIVE, THE USER 2026-11-07: "the background element of the HUD party leader picture starts flashing red when low
+/// health, this is correct, but it keeps flashing red low health even when healed past low health") THE LOOK LABEL A CLIP
+/// ANSWERS TO. `Face.setLook` sends `LABELS_LOOK[a1]` ("normal") to the base plate (`m_linkNode` = `pcFaceDodai1` /
+/// `npcDodai`), whose timeline spells it `nomal`: the call missed (a Flash `gotoAndPlay` of an unknown label is ignored) and
+/// the plate stayed on `dying`, whose frame 69 loops back to `dying` (the red flash) for ever, or on a friend's `death`.
+/// Leaving the pinch out of battle never reached the plate; in battle `battle` exists, so only that exit worked. The
+/// normal look goes to the plate's own `nomal` frame (frame 1, `stop()` at 3), every other label is the clip's as sent.
+fn look_label_of<'a>(movie: &Movie, path: &str, label: &'a str) -> &'a str {
+    let lacks = |l: &str| movie.sprite(path).is_some_and(|s| s.def.label_frame(l).is_none());
+    if label == LABELS_LOOK[FACE_LOOK_NORMAL as usize] && lacks(label) && !lacks(DODAI_NORMAL) {
+        DODAI_NORMAL
+    } else {
+        label
+    }
+}
+
 /// `tres.controls.Face`: one portrait holder.
 #[derive(Clone, Debug, Default)]
 struct Face {
@@ -126,10 +147,10 @@ impl Face {
                 movie.goto_and_play(&look, l3);
                 let effect = format!("{face}.faceEff");
                 if movie.exists(&effect) {
-                    movie.goto_and_play(&effect, l2);
+                    movie.goto_and_play(&effect, look_label_of(movie, &effect, l2));
                 }
                 if let Some(node) = &self.link_node {
-                    movie.goto_and_play(node, l2);
+                    movie.goto_and_play(node, look_label_of(movie, node, l2));
                 }
             }
         }

@@ -21,30 +21,30 @@ pub enum PV {
     L(&'static [&'static str]),
 }
 
-#[allow(dead_code)]
 mod spells {
     use super::PV;
     include!(concat!(env!("KH_GEN_DIR"), "/sora_magic_spells.rs"));
 }
-#[allow(dead_code)]
 mod proj {
     use super::PV;
     include!(concat!(env!("KH_GEN_DIR"), "/sora_magic_projectiles.rs"));
 }
-#[allow(dead_code)]
 mod mp {
     use super::PV;
     include!(concat!(env!("KH_GEN_DIR"), "/sora_magic_mp.rs"));
 }
-#[allow(dead_code)]
 mod shot {
     use super::PV;
     include!(concat!(env!("KH_GEN_DIR"), "/sora_magic_shotlocks.rs"));
 }
-#[allow(dead_code)]
 mod items {
     use super::PV;
     include!(concat!(env!("KH_GEN_DIR"), "/sora_magic_items.rs"));
+}
+// (SHOT-A) the Keyblades' shotlocks (tools/sora_shotlocks.js)
+mod shotlocks {
+    use super::PV;
+    include!(concat!(env!("KH_GEN_DIR"), "/sora_shotlocks.rs"));
 }
 
 /// Which sheet.
@@ -60,10 +60,12 @@ pub enum Sheet {
     Shot,
     /// `sora-magic-items`: items, pouch, menu (parts E, J).
     Items,
+    /// (SHOT-A) `sora-shotlocks`: the Keyblades' shotlocks (magic/shotlocks).
+    Shotlocks,
 }
 
 impl Sheet {
-    pub const ALL: [Sheet; 5] = [Sheet::Spells, Sheet::Proj, Sheet::Mp, Sheet::Shot, Sheet::Items];
+    pub const ALL: [Sheet; 6] = [Sheet::Spells, Sheet::Proj, Sheet::Mp, Sheet::Shot, Sheet::Items, Sheet::Shotlocks /* (SHOT-A) */];
 
     /// The rows, ascending by id.
     pub fn rows(self) -> &'static [(&'static str, PV)] {
@@ -73,6 +75,7 @@ impl Sheet {
             Sheet::Mp => mp::MAGIC_MP_PARAM_VALUES,
             Sheet::Shot => shot::MAGIC_SHOT_PARAM_VALUES,
             Sheet::Items => items::MAGIC_ITEMS_PARAM_VALUES,
+            Sheet::Shotlocks => shotlocks::SHOTLOCKS_PARAM_VALUES, // (SHOT-A)
         }
     }
 
@@ -84,6 +87,7 @@ impl Sheet {
             Sheet::Mp => mp::MAGIC_MP_PARAM_INFORMATIONAL,
             Sheet::Shot => shot::MAGIC_SHOT_PARAM_INFORMATIONAL,
             Sheet::Items => items::MAGIC_ITEMS_PARAM_INFORMATIONAL,
+            Sheet::Shotlocks => shotlocks::SHOTLOCKS_PARAM_INFORMATIONAL, // (SHOT-A)
         }
     }
 
@@ -94,6 +98,7 @@ impl Sheet {
             Sheet::Mp => "sora-magic-mp",
             Sheet::Shot => "sora-magic-shotlocks",
             Sheet::Items => "sora-magic-items",
+            Sheet::Shotlocks => "sora-shotlocks", // (SHOT-A)
         }
     }
 

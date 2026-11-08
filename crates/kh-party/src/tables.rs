@@ -2,8 +2,7 @@
 //! `build/gen/rust/party_data.rs` (each row cites its asset / address in the sheet), and the
 //! lookups the rest of the crate uses.
 
-#[allow(unused_imports)]
-use crate::anim::{AnimSetTable, ClipDef, ClipNotify, ClipNotifyData, RootKey, SocketKey};
+use crate::anim::{AnimSetTable, ClipDef, ClipNotify, ClipNotifyData};
 use crate::ids::Chara;
 
 /// One row of `n_ex00x_AttackDataTable` (`TresAttackDataTable`).
@@ -37,11 +36,13 @@ include!(concat!(env!("KH_PARTY_GEN_DIR"), "/party_data.rs"));
 #[cfg(kh_party_anim_a)]
 mod a_ex001 {
     use super::*;
+    use crate::anim::{RootKey, SocketKey};
     include!(concat!(env!("KH_PARTY_GEN_DIR"), "/party_clips_n_ex001.rs"));
 }
 #[cfg(kh_party_anim_b)]
 mod a_ex002 {
     use super::*;
+    use crate::anim::{RootKey, SocketKey};
     include!(concat!(env!("KH_PARTY_GEN_DIR"), "/party_clips_n_ex002.rs"));
 }
 
@@ -85,7 +86,7 @@ pub fn attack_row(chara: Chara, name: &str) -> Option<&'static AttackRow> {
 
 /// A weapon row by item row ("I03021") or key ("WEP_DONALD_00"):
 /// (row, key, uid, strength, magic, defense, abilities, model).
-pub fn weapon(id: &str) -> Option<&'static (&'static str, &'static str, u8, i32, i32, i32, &'static [&'static str], &'static str)> {
+pub fn weapon(id: &str) -> Option<&'static PartyWeaponRow> {
     PARTY_WEAPONS.iter().find(|w| w.0 == id || w.1 == id)
 }
 
@@ -116,9 +117,6 @@ pub static EMPTY_CLIP: ClipDef = ClipDef::bare("", 0.5, false);
 pub fn clip(chara: Chara, name: &str) -> &'static ClipDef {
     anim_set(chara).get(name).unwrap_or(&EMPTY_CLIP)
 }
-
-#[allow(dead_code)]
-fn _types_used(_: ClipNotify, _: ClipNotifyData) {}
 
 #[cfg(test)]
 mod tests {

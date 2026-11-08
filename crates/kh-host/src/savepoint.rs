@@ -71,6 +71,45 @@ pub struct SavePointData {
     /// Points per second of each gauge.
     pub recover_rate: f32,
     pub first_access_time: f32,
+    /// (INTERACT-MARK) A host's extra area around the save point (None: KH3's capsules alone): see [`Ring`].
+    pub ring: Option<Ring>,
+}
+
+/// (INTERACT-MARK, the user 2026-11-05: "you should be able to access round table hold save point from the floor next to the
+/// table") A BAND AROUND AN OBSTACLE the save point stands in (the Elden Ring host's Roundtable Hold table): the leader is
+/// in it while his own position (his capsule's axis) is within `reach` of the obstacle's edge (`edge`: its distance from
+/// `centre` by yaw, every `360 / edge.len()` degrees from KH3's +X toward +Y, linearly between) and his capsule overlaps
+/// the slab from `floor` up `height`. All in KH3 cm, `centre` / `floor` relative to the root.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ring {
+    pub centre: Vec3,
+    pub edge: Vec<f32>,
+    pub floor: f32,
+    pub height: f32,
+    /// Reach from the edge for (the Save command, the recover rule).
+    pub reach: (f32, f32),
+}
+
+impl Ring {
+    /// The edge's distance at yaw `yaw` (radians).
+    pub fn edge_at(&self, yaw: f32) -> f32 {
+        let n = self.edge.len();
+        if n == 0 {
+            return 0.0;
+        }
+        let at = yaw.rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU * n as f32;
+        let (k, f) = (at.floor() as usize % n, at.fract());
+        self.edge[k] * (1.0 - f) + self.edge[(k + 1) % n] * f
+    }
+
+    /// (in for the Save command, in for the recover rule) of a leader's capsule (centre, radius, half height), the root at `root`.
+    pub fn contains(&self, root: Vec3, capsule: (Vec3, f32, f32)) -> (bool, bool) {
+        let v = capsule.0 - (root + self.centre);
+        let d = v.truncate().length();
+        let edge = self.edge_at(v.y.atan2(v.x));
+        let slab = (capsule.0.z - (root.z + self.floor + self.height * 0.5)).abs() <= self.height * 0.5 + capsule.2;
+        (slab && d <= edge + self.reach.0, slab && d <= edge + self.reach.1)
+    }
 }
 
 impl Default for SavePointData {
@@ -85,6 +124,7 @@ impl Default for SavePointData {
             recover: (50.0, 140.0, Vec3::new(0.0, 0.0, -40.0)),
             recover_rate: 180.0,
             first_access_time: 3.0,
+            ring: None, // (INTERACT-MARK)
         }
     }
 }
@@ -321,8 +361,10 @@ impl SavePoint {
         }
         let was_healing = self.healing;
         let shape = |c: &(f32, f32, Vec3)| (self.root + c.2, c.0, c.1 * 0.5);
-        let in_reactor = overlap(capsule, shape(&self.data.reactor));
-        let in_recover = overlap(capsule, shape(&self.data.recover));
+        // (INTERACT-MARK) a host's band around the save point counts as its area too
+        let ring = self.data.ring.as_ref().map_or((false, false), |r| r.contains(self.root, capsule));
+        let in_reactor = overlap(capsule, shape(&self.data.reactor)) || ring.0;
+        let in_recover = overlap(capsule, shape(&self.data.recover)) || ring.1;
         let mut recovered = 0;
         let entered = in_recover && !self.was_inside;
         if in_recover != self.was_inside {
@@ -376,8 +418,10 @@ impl SavePoint {
     /// untouched (that is its own feedback, not an appearance). Returns: he stands in its area.
     pub fn arrive(&mut self, capsule: (Vec3, f32, f32)) -> bool {
         let shape = |c: &(f32, f32, Vec3)| (self.root + c.2, c.0, c.1 * 0.5);
-        let in_reactor = overlap(capsule, shape(&self.data.reactor));
-        let in_recover = overlap(capsule, shape(&self.data.recover));
+        // (INTERACT-MARK) a host's band around the save point counts as its area too
+        let ring = self.data.ring.as_ref().map_or((false, false), |r| r.contains(self.root, capsule));
+        let in_reactor = overlap(capsule, shape(&self.data.reactor)) || ring.0;
+        let in_recover = overlap(capsule, shape(&self.data.recover)) || ring.1;
         let area = if self.first_in_reactor { in_reactor } else { in_recover };
         // (a host may call it every step of its load-in window: an unchanged overlap keeps the recovery's accumulator)
         if self.was_inside != in_recover {
@@ -798,6 +842,29 @@ pub(crate) mod tests {
             assert_eq!(SavePointData::load(&pack), SavePointData::default());
         }
     }
+    /// (INTERACT-MARK, the user 2026-11-05: "you need to be INSIDE a save point to access it") THE SAVE COMMAND'S AREA IS
+    /// KH3'S REACTOR CAPSULE (g_ex_SavePoint TresReactor0: radius 110, height 180, 40 cm under the root): his capsule
+    /// overlapping it; the edge, the height and leaving with the command up.
+    #[test]
+    fn interact_mark_the_save_command_is_offered_only_inside_the_reactor() {
+        let mut sora = sora99();
+        let (r, hh) = (SORA_PARAMS.capsule_radius, SORA_PARAMS.capsule_half_height);
+        let root = Vec3::new(0.0, 0.0, 92.0);
+        let z = root.z - 40.0; // his capsule's middle at the reactor's
+        let mut point = SavePoint::new(SavePointData::default(), root);
+        let at = |x: f32, z: f32| (Vec3::new(x, 0.0, z), r, hh);
+        // the edge: radii touching is inside, a centimetre beyond is outside
+        assert!(point.step(DT, &mut sora, at(110.0 + r - 0.5, z)).in_reactor);
+        assert!(!point.step(DT, &mut sora, at(110.0 + r + 1.0, z)).in_reactor);
+        // the height: within the half heights inside, above them (a ledge over it) or below outside
+        assert!(point.step(DT, &mut sora, at(0.0, z + 90.0 + hh - 1.0)).in_reactor);
+        assert!(!point.step(DT, &mut sora, at(0.0, z + 90.0 + hh + 1.0)).in_reactor);
+        assert!(!point.step(DT, &mut sora, at(0.0, z - 90.0 - hh - 1.0)).in_reactor);
+        // leaving mid-prompt: inside, inside, one step out (gone on that step), back in (offered again)
+        let inside: Vec<bool> = [60.0, 100.0, 110.0 + r + 5.0, 90.0].iter().map(|x| point.step(DT, &mut sora, at(*x, z)).in_reactor).collect();
+        assert_eq!(inside, vec![true, true, false, true]);
+    }
+
     /// (IMPL_ER26) A host that unlocks its save point in the reactor: the first-visit burst plays from the reactor on
     /// (once: 3 s in all), and nothing changes for a host that does not ask for it.
     #[test]

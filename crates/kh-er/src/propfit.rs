@@ -144,10 +144,13 @@ pub struct Profile {
 impl Profile {
     pub const SORA: Profile = Profile { style_keep: 0.0, depth: 16.0, plant_feet: true, hip_cap: 0.97, head_keep: 0.0, max_arm_lift: 35.0 };
     /// Donald: short, big belly, a forward stoop (n_ex001).
+    #[cfg(any(test, feature = "party"))]
     pub const DONALD: Profile = Profile { style_keep: 0.45, depth: 20.0, plant_feet: true, hip_cap: 0.88, head_keep: 1.0, max_arm_lift: 30.0 };
     /// Goofy: tall, thin, a slouch (n_ex002).
+    #[cfg(any(test, feature = "party"))]
     pub const GOOFY: Profile = Profile { style_keep: 0.3, depth: 15.0, plant_feet: true, hip_cap: 0.92, head_keep: 1.0, max_arm_lift: 35.0 };
 
+    #[cfg(feature = "party")]
     pub fn of(chara: kh_host::party::PartyChara) -> Profile {
         match chara {
             kh_host::party::PartyChara::Sora => Profile::SORA,
@@ -194,6 +197,15 @@ struct Foot {
     out: Option<Vec3>,
 }
 
+/// Whom a frame fits: `s` / `t`: the Tarnished's / his measures; `ratio`: his legs / the Tarnished's (the retarget's); `prof`: his rules.
+#[derive(Clone, Copy, Debug)]
+pub struct Measures<'a> {
+    pub s: &'a Dims,
+    pub t: &'a Dims,
+    pub ratio: f32,
+    pub prof: &'a Profile,
+}
+
 /// The state of one character's fit (the smoothing, the planted feet).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Fit {
@@ -213,8 +225,7 @@ impl Fit {
     /// A foot's swing to its new place (s).
     pub const SWING_S: f32 = 0.18;
     pub const SWING_MIN_S: f32 = 0.1;
-    /// A source foot slower than this (cm/s) and this near the floor (cm) is planted.
-    pub const PLANT_SPEED: f32 = 30.0;
+    /// A source foot this near the floor (cm) is planted.
     pub const PLANT_LIFT: f32 = 6.0;
     /// A planted foot steps anew when its place is this share of the leg from where his stride would put it.
     pub const STEP_SHARE: f32 = 0.45;
@@ -229,11 +240,9 @@ impl Fit {
         *self = Fit::default();
     }
 
-    /// ONE FRAME. `src`: every `ROWS` row of the Tarnished's pose (world); `s` / `t`: the Tarnished's / his measures;
-    /// `ratio`: his legs / the Tarnished's (the retarget's); `root`: his feet's place (x, y; z unused); `floor`: his floor's
-    /// height; `dt`: seconds.
-    #[allow(clippy::too_many_arguments)]
-    pub fn plan(&mut self, src: &[(Vec3, Quat)], s: &Dims, t: &Dims, ratio: f32, prof: &Profile, root: Vec3, floor: f32, kind: Kind, dt: f32) -> Plan {
+    /// ONE FRAME. `src`: every `ROWS` row of the Tarnished's pose (world); `root`: his feet's place (x, y; z unused);
+    /// `floor`: his floor's height; `dt`: seconds.
+    pub fn plan(&mut self, src: &[(Vec3, Quat)], Measures { s, t, ratio, prof }: Measures<'_>, root: Vec3, floor: f32, kind: Kind, dt: f32) -> Plan {
         let p = |k: usize| src.get(k).map_or(Vec3::ZERO, |r| r.0);
         if self.kind.as_ref().map(std::mem::discriminant) != Some(std::mem::discriminant(&kind)) {
             // (a new action: nothing of the last one is carried)
@@ -266,8 +275,8 @@ impl Fit {
         };
         // the hands' goals: where the Tarnished's are
         let mut targets: [Option<Vec3>; 4] = [None; 4];
-        for k in 0..2 {
-            targets[k] = Some(p(rows::LIMBS[k][2]));
+        for (k, target) in targets.iter_mut().enumerate().take(2) {
+            *target = Some(p(rows::LIMBS[k][2]));
         }
         // (ANIMS) UPRIGHT: what the Tarnished bends DOWN to (a chest lid at its waist) is at HIS shoulder or head: he does not
         // copy the bow, he stands as he stands (his own spine) and reaches from his upright shoulders
@@ -285,12 +294,12 @@ impl Fit {
         // touched by Donald where his arms come, on the same spot of it (its place across and in front, his height)
         if matches!(kind, Kind::Surface) {
             let lift = prof.max_arm_lift.to_radians().sin();
-            for k in 0..2 {
-                let Some(c) = targets[k] else { continue };
+            for (k, target) in targets.iter_mut().enumerate().take(2) {
+                let Some(c) = *target else { continue };
                 let a = hand_root(k, base);
                 let top = (a.z + lift * t.limb[k]).min(base.z + (t.head_h - t.pelvis_h));
                 if c.z > top && flat(c - sp).dot(Vec3::Z.cross(across_src)) > 0.25 * s.limb[k] {
-                    targets[k] = Some(Vec3::new(c.x, c.y, top));
+                    *target = Some(Vec3::new(c.x, c.y, top));
                 }
             }
         }
@@ -369,8 +378,8 @@ impl Fit {
         // (ANIMS) HIS HANDS AT HIS HEIGHT: what the Tarnished touches within his reach stays the goal; else the
         // Tarnished's arm as a direction and share of its length from HIS shoulder, never lifted more than `max_arm_lift` over
         // his shoulder (the fog gate's parting arms were Donald's hands up by his head)
-        for k in 0..2 {
-            let Some(c) = targets[k] else { continue };
+        for (k, target) in targets.iter_mut().enumerate().take(2) {
+            let Some(c) = *target else { continue };
             let a = hand_root(k, pelvis);
             let to_c = c - a;
             // (never over the top of his head: the fog's parting arms are at the Tarnished's head height, above Sora's)
@@ -391,7 +400,7 @@ impl Fit {
                 let h = flat(v).try_normalize().unwrap_or_else(|| Vec3::Z.cross(flat(p(rows::LEG_L[0]) - p(rows::LEG_R[0]))).normalize_or_zero());
                 v = h * len * lift.cos() + Vec3::Z * len * lift.sin();
             }
-            targets[k] = Some(a + v);
+            *target = Some(a + v);
         }
         // THE FEET: planted, stepping anew past his stride
         if prof.plant_feet {
@@ -404,7 +413,7 @@ impl Fit {
             let speed = self.root_vel.length();
             let ahead = self.root_vel.try_normalize().unwrap_or(Vec3::ZERO);
             let other_swinging = [self.feet[1].swing.is_some(), self.feet[0].swing.is_some()];
-            for j in 0..2 {
+            for (j, &other_swings) in other_swinging.iter().enumerate() {
                 let k = 2 + j;
                 let sf = p(rows::LIMBS[k][2]);
                 let lift = (sf.z - floor - s.ankle_h).max(0.0);
@@ -446,7 +455,7 @@ impl Fit {
                     desired + Vec3::Z * lift * ratio
                 } else {
                     match f.locked {
-                        Some(l) if flat(l - desired).length() > limit && (!other_swinging[j] || flat(l - desired).length() > 1.5 * limit) => {
+                        Some(l) if flat(l - desired).length() > limit && (!other_swings || flat(l - desired).length() > 1.5 * limit) => {
                             f.swing = Some((l, 0.0));
                             f.locked = None;
                             l
@@ -476,6 +485,7 @@ impl Fit {
     }
 
     /// A foot (0 left, 1 right) is swinging to a new place now (the proof's measures).
+    #[cfg(test)]
     pub fn swinging(&self, j: usize) -> bool {
         self.feet.get(j).is_some_and(|f| f.swing.is_some())
     }
@@ -522,6 +532,7 @@ pub fn sanity(limbs: &[Option<Vec3>; 4], pelvis: Vec3, t: &Dims, floor: f32, acr
 /// THE WALK THROUGH (pure): the leader is moved by the game in a borrowed action (the fog's walk, a door's steps): above
 /// `ON_SPEED` (cm/s, smoothed) for `ON_S` he walks with his own walk; below `OFF_SPEED` for `OFF_S` the borrowed pose
 /// again. `distance` drives the walk's phase; `weight` eases in and out over `BLEND_S`.
+#[cfg(any(test, feature = "party"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct WalkThrough {
     pub on: bool,
@@ -532,6 +543,7 @@ pub struct WalkThrough {
     last: Option<Vec3>,
 }
 
+#[cfg(any(test, feature = "party"))]
 impl WalkThrough {
     pub const ON_SPEED: f32 = 25.0;
     pub const OFF_SPEED: f32 = 10.0;
@@ -579,12 +591,13 @@ impl WalkThrough {
 }
 
 /// The spine, neck and head bones whose own pose is partly kept (`Profile::style_keep`).
+#[cfg(any(test, feature = "party"))]
 pub const STYLE_BONES: [&str; 7] = ["hara1", "hara2", "mune", "kubi", "kubi1", "kubi2", "atama"];
 
 /// THE PLAN LAID ON A POSE (stateless; his skeleton, component place): the retarget at the plan's pelvis, his own spine
 /// / head kept by its share, each planned limb solved to its place (limbs.rs).
-#[allow(clippy::too_many_arguments)]
-pub fn apply(retarget: &kh_anim::retarget::Retarget, skeleton: &kh_anim::Skeleton, rows: &[(Vec3, Quat)], plan: &Plan, to_world: &kh_anim::Trs, weight: f32, reach: f32, local: &mut [kh_anim::Trs]) {
+#[cfg(any(test, feature = "party"))]
+pub fn apply(retarget: &kh_anim::retarget::Retarget, skeleton: &kh_anim::Skeleton, rows: &[(Vec3, Quat)], plan: &Plan, to_world: &kh_anim::Trs, (weight, reach): (f32, f32), local: &mut [kh_anim::Trs]) {
     if weight <= 0.0 || local.len() != skeleton.len() {
         return;
     }
@@ -602,7 +615,7 @@ pub fn apply(retarget: &kh_anim::retarget::Retarget, skeleton: &kh_anim::Skeleto
                     let names = crate::limbs::LIMBS[k];
                     if let (Some(u), Some(l), Some(e)) = (skeleton.index_of(names[0]), skeleton.index_of(names[1]), skeleton.index_of(names[2])) {
                         // (his forward is +Y in his component; a little up: a knee comes up and forward)
-                        reach_pole(skeleton, u, l, e, to, Vec3::new(0.0, 1.0, 0.25), weight * reach, local);
+                        reach_pole(skeleton, [u, l, e], to, Vec3::new(0.0, 1.0, 0.25), weight * reach, local);
                     }
                 } else {
                     crate::limbs::reach_sora(skeleton, local, k, to, weight * reach);
@@ -612,11 +625,11 @@ pub fn apply(retarget: &kh_anim::retarget::Retarget, skeleton: &kh_anim::Skeleto
     }
 }
 
-/// (ANIMS) A TWO-BONE SOLVE WITH A POLE (kh-anim's `reach_arm`, the bend's side given): `upper` / `lower` / `end` bones,
+/// (ANIMS) A TWO-BONE SOLVE WITH A POLE (kh-anim's `reach_arm`, the bend's side given): `[upper, lower, end]` bones,
 /// the end to `to` (component space) or as near as the limb reaches, the middle joint bent toward `pole` (component
 /// direction; a knee: his forward). The end keeps its turn in space. `weight` blends from the pose as it is.
-#[allow(clippy::too_many_arguments)]
-pub fn reach_pole(skeleton: &kh_anim::Skeleton, upper: usize, lower: usize, end: usize, to: Vec3, pole: Vec3, weight: f32, local: &mut [kh_anim::Trs]) {
+#[cfg(any(test, feature = "party"))]
+pub fn reach_pole(skeleton: &kh_anim::Skeleton, [upper, lower, end]: [usize; 3], to: Vec3, pole: Vec3, weight: f32, local: &mut [kh_anim::Trs]) {
     use kh_anim::pose::component_space;
     if weight <= 0.0 || local.len() != skeleton.len() || upper.max(lower).max(end) >= local.len() || !to.is_finite() {
         return;
@@ -664,7 +677,7 @@ pub fn reach_pole(skeleton: &kh_anim::Skeleton, upper: usize, lower: usize, end:
 /// - his chest over his pelvis: the pelvis-to-chest line within `SPINE_DEG` of his own;
 /// - his knees bending forward (no knee bent backwards) and not folded shut (`KNEE_MAX_DEG`);
 /// - his hands below the top of his head (+ a hand's breadth).
-/// `Err` names the first limit broken (the log). Component space (his forward +Y, up +Z).
+///   `Err` names the first limit broken (the log). Component space (his forward +Y, up +Z).
 pub const HEAD_DEG: f32 = 35.0;
 pub const SPINE_DEG: f32 = 55.0;
 pub const KNEE_MAX_DEG: f32 = 155.0;
@@ -713,6 +726,7 @@ pub fn limits(skeleton: &kh_anim::Skeleton, own: &[kh_anim::Trs], now: &[kh_anim
 }
 
 /// (ANIMS) His neck and head kept from his own pose by `share` (after `keep_style`: whichever keeps more wins).
+#[cfg(any(test, feature = "party"))]
 pub fn keep_head(skeleton: &kh_anim::Skeleton, own: &[kh_anim::Trs], share: f32, local: &mut [kh_anim::Trs]) {
     if share <= 0.0 || own.len() != local.len() {
         return;
@@ -724,6 +738,7 @@ pub fn keep_head(skeleton: &kh_anim::Skeleton, own: &[kh_anim::Trs], share: f32,
     }
 }
 
+#[cfg(any(test, feature = "party"))]
 pub fn keep_style(skeleton: &kh_anim::Skeleton, own: &[kh_anim::Trs], share: f32, head_only: bool, local: &mut [kh_anim::Trs]) {
     if share <= 0.0 || own.len() != local.len() {
         return;
@@ -778,7 +793,7 @@ mod tests {
         // (ANIMS 2026-10-23, the fog gate) at 120 cm the hands are far over Donald: he touches the door AT HIS HEIGHT (no hands
         // up to the Tarnished's), stepping no more than his size allows, never through it
         let mut d = Fit::default();
-        let high = d.plan(&src, &s_dims(), &donald(), 0.34, &Profile::DONALD, Vec3::ZERO, 0.0, Kind::Surface, DT);
+        let high = d.plan(&src, Measures { s: &s_dims(), t: &donald(), ratio: 0.34, prof: &Profile::DONALD }, Vec3::ZERO, 0.0, Kind::Surface, DT);
         assert!(high.shift.y <= 0.5 * (26.0 + 28.0) + 0.01 && 45.0 - high.pelvis.y >= Profile::DONALD.depth - 0.01, "{:?}", high);
         for k in 0..2 {
             let hand = high.limbs[k].unwrap();
@@ -787,15 +802,15 @@ mod tests {
         // a door handled at 60 cm: he steps toward it, by no more than his size allows, never through it
         let low = tarnished([Vec3::new(20.0, 45.0, 60.0), Vec3::new(-20.0, 45.0, 60.0)], [Vec3::new(10.0, 0.0, 11.0), Vec3::new(-10.0, 0.0, 11.0)], Vec3::new(0.0, 0.0, 97.0));
         let mut d = Fit::default();
-        let pd = d.plan(&low, &s_dims(), &donald(), 0.34, &Profile::DONALD, Vec3::ZERO, 0.0, Kind::Surface, DT);
+        let pd = d.plan(&low, Measures { s: &s_dims(), t: &donald(), ratio: 0.34, prof: &Profile::DONALD }, Vec3::ZERO, 0.0, Kind::Surface, DT);
         assert!(pd.shift.y > 5.0 && pd.shift.y <= 0.5 * (26.0 + 28.0) + 0.01, "Donald steps toward the door: {:?}", pd.shift);
         assert!(45.0 - pd.pelvis.y >= Profile::DONALD.depth - 0.01, "never through it: {:?}", pd.pelvis);
         let mut g = Fit::default();
-        let pg = g.plan(&src, &s_dims(), &goofy(), 1.15, &Profile::GOOFY, Vec3::ZERO, 0.0, Kind::Surface, DT);
+        let pg = g.plan(&src, Measures { s: &s_dims(), t: &goofy(), ratio: 1.15, prof: &Profile::GOOFY }, Vec3::ZERO, 0.0, Kind::Surface, DT);
         assert!(pg.shift.y < 0.0, "Goofy stands back: {:?}", pg.shift);
         // the free kind: no standoff
         let mut f = Fit::default();
-        assert_eq!(f.plan(&src, &s_dims(), &donald(), 0.34, &Profile::DONALD, Vec3::ZERO, 0.0, Kind::Free, DT).shift, Vec3::ZERO);
+        assert_eq!(f.plan(&src, Measures { s: &s_dims(), t: &donald(), ratio: 0.34, prof: &Profile::DONALD }, Vec3::ZERO, 0.0, Kind::Free, DT).shift, Vec3::ZERO);
     }
 
     /// THE WALK THROUGH: the fog's 1.8 m in 3 s (60 cm/s) turns his own walk on within 0.3 s, counts the distance, eases
@@ -856,7 +871,7 @@ mod tests {
     fn the_pelvis_is_placed_at_his_size() {
         let src = tarnished([Vec3::new(20.0, 30.0, 100.0), Vec3::new(-20.0, 30.0, 100.0)], [Vec3::new(10.0, 0.0, 11.0), Vec3::new(-10.0, 0.0, 11.0)], Vec3::new(0.0, 20.0, 90.0));
         let mut d = Fit::default();
-        let p = d.plan(&src, &s_dims(), &donald(), 0.34, &Profile::DONALD, Vec3::new(0.0, 0.0, 0.0), 0.0, Kind::Free, DT);
+        let p = d.plan(&src, Measures { s: &s_dims(), t: &donald(), ratio: 0.34, prof: &Profile::DONALD }, Vec3::new(0.0, 0.0, 0.0), 0.0, Kind::Free, DT);
         // his legs are 28 / 86.6 of the Tarnished's: the lean scaled by that, his hips over his ankles as the Tarnished's are, his pelvis
         // bone at his own 5 cm over his hips
         let r = 28.0 / 86.6;
@@ -885,11 +900,11 @@ mod tests {
                 Vec3::new(x, y - 45.0 + phase * 60.0, 11.0 + lift)
             };
             let src = tarnished([Vec3::new(20.0, root.y + 40.0, 130.0), Vec3::new(-20.0, root.y + 40.0, 130.0)], [foot(0.0, 10.0), foot(0.75, -10.0)], root + Vec3::new(0.0, 0.0, 97.0));
-            let plan = d.plan(&src, &s_dims(), &donald(), 0.34, &Profile::DONALD, root, 0.0, Kind::Free, DT);
-            for j in 0..2 {
+            let plan = d.plan(&src, Measures { s: &s_dims(), t: &donald(), ratio: 0.34, prof: &Profile::DONALD }, root, 0.0, Kind::Free, DT);
+            for (j, seen) in last.iter_mut().enumerate() {
                 let at = plan.limbs[2 + j].unwrap();
                 let swinging = d.feet[j].swing.is_some();
-                if let Some((was, was_swinging)) = last[j] {
+                if let Some((was, was_swinging)) = *seen {
                     if !swinging && !was_swinging && d.feet[j].locked.is_some() {
                         slide = slide.max((at - was).length());
                     }
@@ -897,7 +912,7 @@ mod tests {
                         steps += 1;
                     }
                 }
-                last[j] = Some((at, swinging));
+                *seen = Some((at, swinging));
             }
         }
         assert!(slide < 0.01, "a planted foot moved {slide} cm in a frame");
@@ -911,9 +926,9 @@ mod tests {
         let far = tarnished([Vec3::new(20.0, 80.0, 120.0), Vec3::new(-20.0, 80.0, 120.0)], [Vec3::new(10.0, 0.0, 11.0), Vec3::new(-10.0, 0.0, 11.0)], Vec3::new(0.0, 0.0, 97.0));
         let run = |hz: f32| {
             let mut d = Fit::default();
-            d.plan(&src, &s_dims(), &donald(), 0.34, &Profile::DONALD, Vec3::ZERO, 0.0, Kind::Surface, 1.0 / hz);
+            d.plan(&src, Measures { s: &s_dims(), t: &donald(), ratio: 0.34, prof: &Profile::DONALD }, Vec3::ZERO, 0.0, Kind::Surface, 1.0 / hz);
             let n = (0.1 * hz) as usize;
-            (0..n).map(|_| d.plan(&far, &s_dims(), &donald(), 0.34, &Profile::DONALD, Vec3::ZERO, 0.0, Kind::Surface, 1.0 / hz).shift).last().unwrap()
+            (0..n).map(|_| d.plan(&far, Measures { s: &s_dims(), t: &donald(), ratio: 0.34, prof: &Profile::DONALD }, Vec3::ZERO, 0.0, Kind::Surface, 1.0 / hz).shift).last().unwrap()
         };
         let (a, b) = (run(30.0), run(120.0));
         assert!((a - b).length() < 0.5, "{a} {b}");

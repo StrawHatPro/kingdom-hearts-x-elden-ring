@@ -24,6 +24,10 @@ pub trait PartyTargets: kh_core::Targets {
     fn fighting_party(&self, _id: u32) -> bool {
         false
     }
+    /// (MIMIC-STANCE) The attacks of the enemy side that a party copy's Goofy sees coming (`Party::set_telegraphs`, read by
+    /// `mimicboss::FriendBoss::step`): only a Mimic Tear boss's hostile side has any (`mimicboss::BossTargets`: the party
+    /// members' own swings). The default: none (the real party's telegraphs are the host's sensors, set by the host).
+    fn telegraphs(&self, _out: &mut Vec<kh_party::Telegraph>) {}
 }
 
 /// (FX5, OUR DESIGN: KH3's enemies exist only inside a battle area, Elden Ring's whole map is full of them) THE FRIENDS
@@ -170,6 +174,9 @@ pub fn member_actor(v: &MemberView) -> ActorView {
 /// The straight-line navigation stand-in (open note N1) when the host gives none.
 pub static STRAIGHT_NAV: kh_ai::StraightNav = kh_ai::StraightNav { floor_z: None };
 
+/// (party I2) One row of `PartyRuntime::member_mps`: (member, (MP, max MP, charging, charge timer)).
+pub type MemberMp = (u8, (i32, i32, bool, f32));
+
 /// THE AI'S WORLD WHILE SORA LEADS (contract C.3): Sora as the player, the host's enemies, the friends as allies,
 /// the drawn camera, the host's navigation.
 pub struct SoraAiWorld<'a> {
@@ -184,7 +191,7 @@ pub struct SoraAiWorld<'a> {
     pub nav: &'a dyn kh_ai::Nav,
     pub game_level: u8,
     /// (party I2) `PartyRuntime::member_mps`: the members' MP for `member_mp`.
-    pub mps: &'a [(u8, (i32, i32, bool, f32))],
+    pub mps: &'a [MemberMp],
 }
 
 impl SoraAiWorld<'_> {
@@ -262,7 +269,7 @@ pub struct LeaderAiWorld<'a> {
     pub nav: &'a dyn kh_ai::Nav,
     pub game_level: u8,
     /// (party I2) `PartyRuntime::member_mps` (the friends' MP; Sora's from `sora`) for `member_mp`.
-    pub mps: &'a [(u8, (i32, i32, bool, f32))],
+    pub mps: &'a [MemberMp],
 }
 
 impl LeaderAiWorld<'_> {

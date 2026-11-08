@@ -87,24 +87,6 @@ pub(crate) fn target_size(width: u32, height: u32) -> (u32, u32) {
     (grow(width), grow(height))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::target_size;
-
-    #[test]
-    fn a_new_target_has_room_for_the_panels_animation() {
-        // the user's session at 2560 x 1440: the first picture 366x868, the close animation up to 412x977
-        let (w, h) = target_size(366, 868);
-        assert!(w >= 412 && h >= 977, "{w}x{h}");
-        assert_eq!((w % 64, h % 64), (0, 0));
-        // never smaller than what is asked, never beyond a texture's limit
-        for (a, b) in [(2, 2), (528, 1095), (8000, 8192)] {
-            let (w, h) = target_size(a, b);
-            assert!(w >= a.min(8192) && h >= b.min(8192) && w <= 8192 && h <= 8192, "{a}x{b} -> {w}x{h}");
-        }
-    }
-}
-
 impl Core {
     /// AT PRESENT, before the 2D overlay: the portrait of this frame, when the host handed one over.
     pub(super) fn portrait_at_present(&mut self) {
@@ -316,7 +298,7 @@ impl Core {
                     if material.translucent != translucent {
                         continue;
                     }
-                    let mut params = assets.library.params(material, &object, rig, kit.khs.as_ref().map(|(_, s)| s), input.clock, frame.exposure, 0.0);
+                    let mut params = assets.library.params(material, &object, rig, kit.khs.as_ref().map(|(_, s)| s), kh_look::library::LookFrame { clock: input.clock, exposure: frame.exposure, debug: 0.0 });
                     params.sh = sh;
                     // (the reflection environment: the renderer's one cube at its own level; see lib.rs `PortraitFrame`)
                     params.env.y = frame.env_level;
@@ -350,5 +332,23 @@ impl Core {
         kit.drawn += 1;
         kit.micros += started.elapsed().as_micros() as u64;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::target_size;
+
+    #[test]
+    fn a_new_target_has_room_for_the_panels_animation() {
+        // the user's session at 2560 x 1440: the first picture 366x868, the close animation up to 412x977
+        let (w, h) = target_size(366, 868);
+        assert!(w >= 412 && h >= 977, "{w}x{h}");
+        assert_eq!((w % 64, h % 64), (0, 0));
+        // never smaller than what is asked, never beyond a texture's limit
+        for (a, b) in [(2, 2), (528, 1095), (8000, 8192)] {
+            let (w, h) = target_size(a, b);
+            assert!(w >= a.min(8192) && h >= b.min(8192) && w <= 8192 && h <= 8192, "{a}x{b} -> {w}x{h}");
+        }
     }
 }

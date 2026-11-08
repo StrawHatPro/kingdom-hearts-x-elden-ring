@@ -32,7 +32,7 @@ impl XorShift {
         XorShift(if seed == 0 { 0x9E37_79B9 } else { seed })
     }
 
-    pub fn next(&mut self) -> u32 {
+    pub fn draw(&mut self) -> u32 {
         let mut x = self.0;
         x ^= x << 13;
         x ^= x >> 17;

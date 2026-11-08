@@ -105,7 +105,6 @@ pub fn bone_local(t: Vec3, r: Vec3, s: Vec3) -> Mat4 {
 
 #[derive(Clone, Copy)]
 struct Member {
-    buffer: usize,
     offset: usize,
     kind: u32,
     semantic: u32,
@@ -172,7 +171,7 @@ pub fn read(b: &[u8]) -> Result<Flver, String> {
         let mut list = Vec::new();
         for m in 0..n.min(64) {
             let x = members_at + m * 0x14;
-            list.push(Member { buffer: 0, offset: r.i32(x + 4)?.max(0) as usize, kind: r.u32(x + 8)?, semantic: r.u32(x + 12)?, index: r.i32(x + 16)? });
+            list.push(Member { offset: r.i32(x + 4)?.max(0) as usize, kind: r.u32(x + 8)?, semantic: r.u32(x + 12)?, index: r.i32(x + 16)? });
         }
         layout_members.push(list);
     }
@@ -204,7 +203,7 @@ pub fn read(b: &[u8]) -> Result<Flver, String> {
             let (layout, stride, n, offset) = (r.i32(v + 4)?.max(0) as usize, r.i32(v + 8)?.max(0) as usize, r.i32(v + 12)?.max(0) as usize, r.u32(v + 0x1C)? as usize);
             count = count.min(n);
             for m in layout_members.get(layout).into_iter().flatten() {
-                members.push((Member { buffer: j, ..*m }, data_offset + offset, stride));
+                members.push((*m, data_offset + offset, stride));
             }
         }
         if count == usize::MAX {
@@ -248,7 +247,7 @@ pub fn read(b: &[u8]) -> Result<Flver, String> {
                     }
                 }
                 (3, 0) => {
-                    for i in 0..count {
+                    for (i, normal_w) in normal_w.iter_mut().enumerate() {
                         let p = at(i);
                         let (n, w) = match m.kind {
                             0x02 => (r.v3(p)?, 0),
@@ -263,7 +262,7 @@ pub fn read(b: &[u8]) -> Result<Flver, String> {
                             }
                         };
                         mesh.normals[i] = n.normalize_or(Vec3::Y);
-                        normal_w[i] = w;
+                        *normal_w = w;
                     }
                 }
                 _ => {}
@@ -271,8 +270,8 @@ pub fn read(b: &[u8]) -> Result<Flver, String> {
         }
         if !dynamic || !have_w || !have_j {
             // rigid: each vertex on the bone its normal's w names (or the mesh's default bone)
-            for i in 0..count {
-                let bone = if !dynamic && normal_w[i] < 0xFFFF { global(normal_w[i]) } else if default_bone >= 0 { default_bone as u16 } else { 0 };
+            for (i, &normal_w) in normal_w.iter().enumerate() {
+                let bone = if !dynamic && normal_w < 0xFFFF { global(normal_w) } else if default_bone >= 0 { default_bone as u16 } else { 0 };
                 mesh.joints[i] = [bone, 0, 0, 0];
                 mesh.weights[i] = [1.0, 0.0, 0.0, 0.0];
             }
@@ -337,7 +336,7 @@ pub fn read(b: &[u8]) -> Result<Flver, String> {
                 let before = mesh.indices.len();
                 let verts = count as u32;
                 // (a triangle naming a vertex the mesh has not is dropped)
-                let tris: Vec<u32> = mesh.indices.chunks_exact(3).filter(|t| t.iter().all(|v| *v < verts)).flatten().copied().collect();
+                let tris: Vec<u32> = mesh.indices.as_chunks::<3>().0.iter().filter(|t| t.iter().all(|v| *v < verts)).flatten().copied().collect();
                 if tris.len() != before {
                     out.notes.push(format!("mesh {k}: {} triangle(s) out of range dropped", (before - tris.len()) / 3));
                 }

@@ -211,7 +211,7 @@ fn a12_the_root_is_locked_to_the_reference_root_in_root_motion_sequences_only() 
     let Some(pack) = pack() else { return };
     let animator = Animator::new(pack, Settings::default()).unwrap();
     let reference = animator.skeleton().bones[0].reference;
-    assert!(angle_deg(reference.rotation, Quat::from_xyzw(-0.707_106_71, 0.0, 0.0, 0.707_106_83)) < 1.0e-4);
+    assert!(angle_deg(reference.rotation, Quat::from_xyzw(f32::from_bits(0xBF35_04F2), 0.0, 0.0, f32::from_bits(0x3F35_04F4))) < 1.0e-4); // (-0.707_106_71, 0.707_106_83)
     for sequence in ["0007", "0007L", "0007BR"] {
         for time in [0.0, 0.1, 0.2333] {
             assert_eq!(animator.sample(sequence, time)[0], reference, "{sequence} at {time}");
@@ -219,7 +219,7 @@ fn a12_the_root_is_locked_to_the_reference_root_in_root_motion_sequences_only() 
     }
     // The run loop has no root motion: its root track value is used as it is.
     let root = animator.sample("0003", 0.2)[0];
-    let key = Quat::from_xyzw(-0.707_083_34, 0.0, 0.0, 0.707_130_19);
+    let key = Quat::from_xyzw(-0.707_083_34, 0.0, 0.0, 0.707_130_2);
     println!("A12: run loop root rotation {:?} (the clip's key; the locked value is {:?})", root.rotation, reference.rotation);
     assert!((root.rotation - key).length() < 2.0e-6 || (root.rotation + key).length() < 2.0e-6, "{:?}", root.rotation);
     assert_ne!(root.rotation, reference.rotation);

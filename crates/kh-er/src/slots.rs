@@ -313,6 +313,7 @@ pub fn delete_slot(n: usize) -> Result<String, String> {
     let stone = Tombstone::of(n, &record);
     std::fs::write(tombstone_path(&dir, n), stone.to_text()).map_err(|e| format!("Sora's files were moved aside, but the tombstone could not be written: {e}"))?;
     let cleared = clear_in_use(n);
+    forget_continue(n); // (SAVE-DELETE) the game's own delete does it too (0x9a4c8d)
     Ok(format!(
         "SLOT {n} DELETED (\"{}\", the game's play time {} s, map {}): {} file(s) of Sora's moved to {} [{}]; the game's profile summary in memory: {}; NOTHING WAS SAVED",
         record.name,
@@ -379,7 +380,7 @@ mod sv_tests {
         // another record in that slot (a new character, a save into it): not deleted
         let mut again = raw.clone();
         again[1] = rec("Sora", 701);
-        apply_tombstones(&mut again, &[stone.clone()]);
+        apply_tombstones(&mut again, std::slice::from_ref(&stone));
         assert!(again[1].used);
         // a tombstone of another slot number never touches this one
         let mut other = raw.clone();
@@ -437,6 +438,199 @@ pub fn slot_summaries() -> Vec<SlotSummary> {
             SlotSummary { slot, used: true, name: r.name.clone(), play_seconds: r.seconds, location: place_name(r.place).unwrap_or_else(|| map_name(r.map)), map: r.map, place: r.place, sora, points_only: crate::save::armed_slot(&r.name, slot as i32), current: current == Some(slot as i32) }
         })
         .collect()
+}
+
+// ------------------------------------------------------------------------------------------ (CONT) the latest save
+//
+// THE USER (2026-11-03): "make 'continue' simply load the latest save game as if it was selected from load game".
+// THE LATEST SAVE = of the slots the Load screen lists as used (the game's profile summary, deleted slots taken out),
+// the one whose save was WRITTEN LAST: the modification time of its Sora save file (`slot<N>_<name>_<hash>.khsave`),
+// which is written with every save of that slot (a save point's Save, the Save screen, and without `save.points_only`
+// Elden Ring's own saves of the slot). Ties: the running session's slot, then the lower slot number. The game's play
+// time per slot is NOT a save time (two characters' play times say nothing of which was saved last) and the game's one
+// save file has one time for all ten slots, so a listed slot without a Sora file cannot be dated and is not "latest".
+
+// (SAVE-DELETE, THE USER 2026-11-07: "continue should load the most recently loaded save game (or most recently saved,
+// whichever is most recent) if the most recent is deleted, then continue goes to the next most recent. If there are no
+// save games, continue doesn't appear") A SLOT'S TIME = the later of its last save (above) and its LAST LOAD: the
+// record `slot<N>_<name>_<hash>.loaded` written each time that character starts (save.rs `on_start` -> [`record_loaded`]).
+// It begins with `slot<N>_`, so a delete (ours, the game's own, a new game made over the slot) moves it with the slot's
+// other files and a deleted character can never be "latest". A deleted slot is not listed (`used` false) in any case.
+
+/// One listed slot, as the latest-save rule reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Dated {
+    pub slot: usize,
+    pub used: bool,
+    /// When its save was last written (`None`: it has no Sora save file to tell).
+    pub saved_at: Option<std::time::SystemTime>,
+    /// (SAVE-DELETE) When its character was last loaded (`None`: no record of a load).
+    pub loaded_at: Option<std::time::SystemTime>,
+    pub current: bool,
+}
+
+impl Dated {
+    /// (SAVE-DELETE) The slot's time: the later of its last save and its last load (`None`: neither is known).
+    pub fn time(&self) -> Option<std::time::SystemTime> {
+        self.saved_at.max(self.loaded_at)
+    }
+}
+
+/// THE LATEST SAVE among `rows` (the rule above). `None`: no listed slot has a dated save or load. Pure.
+pub fn latest_of(rows: &[Dated]) -> Option<usize> {
+    rows.iter().filter(|r| r.used && r.time().is_some()).max_by(|a, b| a.time().cmp(&b.time()).then(a.current.cmp(&b.current)).then(b.slot.cmp(&a.slot))).map(|r| r.slot)
+}
+
+/// (SAVE-DELETE) THE TITLE'S CONTINUE: the slot it is to load, or -1 = no Continue (the game then shows none). The latest
+/// save / load of the listed slots; with none dated, a listed slot the game itself had as its Continue (`er_last`), else
+/// the lowest listed slot; with no listed slot at all, -1. Pure.
+pub fn title_continue_of(rows: &[Dated], er_last: i32) -> i32 {
+    let listed = |s: i32| rows.iter().any(|r| r.used && r.slot as i32 == s);
+    if let Some(latest) = latest_of(rows) {
+        return latest as i32;
+    }
+    if listed(er_last) {
+        return er_last;
+    }
+    rows.iter().filter(|r| r.used).map(|r| r.slot as i32).min().unwrap_or(-1)
+}
+
+/// (SAVE-DELETE) The last-load record of a character key in `dir`.
+fn loaded_path(dir: &std::path::Path, key: &str) -> std::path::PathBuf {
+    dir.join(format!("{key}.loaded"))
+}
+
+/// (SAVE-DELETE) The record's text: the Unix seconds of the load (pure).
+pub fn loaded_text(at: std::time::SystemTime) -> String {
+    format!("kh-er last load of this character (SAVE-DELETE: the title's Continue takes the most recent load or save)\nloaded={}\n", at.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()))
+}
+
+/// (SAVE-DELETE) The time a record names (pure; `None`: not a record).
+pub fn loaded_from_text(text: &str) -> Option<std::time::SystemTime> {
+    let secs: u64 = text.lines().find_map(|l| l.strip_prefix("loaded="))?.trim().parse().ok()?;
+    Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+}
+
+/// (SAVE-DELETE; save.rs `on_start`) Character `key` (`slot<N>_...`) was just loaded: its last-load record says now.
+pub fn record_loaded(dir: &std::path::Path, key: &str) {
+    let path = loaded_path(dir, key);
+    let _ = std::fs::create_dir_all(dir);
+    match std::fs::write(&path, loaded_text(std::time::SystemTime::now())) {
+        Ok(()) => erlog!("slots: the last load of {key} is recorded ({}): the title's Continue ranks it by it", path.display()),
+        Err(e) => erlog!("slots: the last load of {key} could NOT be recorded ({e})"),
+    }
+}
+
+/// When slot `s`'s character was last loaded (its record).
+fn loaded_at(s: &SlotSummary) -> Option<std::time::SystemTime> {
+    let dir = crate::save::dir()?;
+    std::fs::read_to_string(loaded_path(&dir, &kh_host::save::character_key(&s.name, s.slot as i32))).ok().and_then(|t| loaded_from_text(&t))
+}
+
+/// CONTINUE'S SLOT: the latest save; without one, the running session's slot (what Continue loaded before 2026-11-03);
+/// `None` (no save of any kind is known): the caller does what Continue did then without a slot (Elden Ring's own death
+/// and respawn). Pure.
+pub fn continue_slot(latest: Option<usize>, session: Option<i32>) -> Option<usize> {
+    latest.filter(|n| *n < SLOTS).or_else(|| session.filter(|s| (0..SLOTS as i32).contains(s)).map(|s| s as usize))
+}
+
+/// When slot `s`'s save was last written: its Sora save file's modification time.
+fn saved_at(s: &SlotSummary) -> Option<std::time::SystemTime> {
+    let dir = crate::save::dir()?;
+    let path = kh_host::save::save_path(&dir, &kh_host::save::character_key(&s.name, s.slot as i32));
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+/// THE LATEST SAVE of the running game's lists, and a line for the log (every listed slot's date).
+pub fn latest_slot() -> (Option<usize>, String) {
+    let rows = dated_rows();
+    (latest_of(&rows), describe_dates(&rows))
+}
+
+/// (SAVE-DELETE) The listed slots with their save and load times.
+fn dated_rows() -> Vec<Dated> {
+    slot_summaries().iter().map(|s| Dated { slot: s.slot, used: s.used, saved_at: if s.used { saved_at(s) } else { None }, loaded_at: if s.used { loaded_at(s) } else { None }, current: s.current }).collect()
+}
+
+fn describe_dates(rows: &[Dated]) -> String {
+    let now = std::time::SystemTime::now();
+    let ago = |t: Option<std::time::SystemTime>| t.and_then(|t| now.duration_since(t).ok()).map_or("never".to_string(), |d| format!("{:.0} s ago", d.as_secs_f64()));
+    let listed: Vec<String> = rows.iter().filter(|r| r.used).map(|r| format!("slot {}{} saved {}, loaded {}", r.slot, if r.current { " (the session's)" } else { "" }, ago(r.saved_at), ago(r.loaded_at))).collect();
+    if listed.is_empty() {
+        "no slot is listed".to_string()
+    } else {
+        listed.join(", ")
+    }
+}
+
+// ------------------------------------------------------------------------------------------ (SAVE-DELETE) the title's Continue
+//
+// WHAT THE GAME HAS (eldenring.exe 2.7.1.0 and 2.7.2.0, read from the files; the offline test
+// gamever.rs `continue_offline` proves every piece in both): CONTINUE'S SLOT IS ONE i32, `[GameDataMan + 0x60] + 0x1200`
+// (fn 0x256330 = `mov rax,[GameDataMan]; mov rax,[rax+60h]; ret`, both versions):
+// - the title menu's two Continue lambdas (0x9a9d70, 0x9aa1e0; 2.7.2.0 0x9aa21c.., 0x9aa690..) read it and ask
+//   0x876740(slot) = `slot >= 0 && profile summary "in use" byte [summary + 8 + slot]` (0x261ce0): Continue is offered
+//   only for a listed slot;
+// - the Continue job (0x9ad9b0) loads THAT slot (0x261b90(summary, slot), then 0x827500(.., slot, ..) builds the load);
+// - the game writes it when a game starts from the title (TitleStep 0xb0ecc0: `= GameMan::save_slot`) and on a load
+//   (0x9aa3f0); ITS OWN DELETE (both delete dialogs, 0x9a4c30 / 0x9a5ff0) clears the slot's "in use" byte (0x262240) and
+//   `if lastSlot == slot { lastSlot = -1 }` (no Continue).
+// WHAT WE DO: our delete does the game's delete in memory exactly (the byte, already; now the -1 too: [`delete_slot`]),
+// and AT THE TITLE the i32 is set to OUR pick (the user's rule, [`title_continue_of`]) whenever the title menu is made
+// (title.rs `top_hook`, before the game's code) and while the title's menus run (titleload.rs frame, TitleStep
+// MenuJobWait, no load under way). The game's own Continue then offers and loads that slot, or none at -1.
+
+/// The title's Continue follows the user's rule (`title.continue`, default on; 0 = the game's own Continue untouched).
+static TITLE_CONTINUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// (titleload.rs frame) The switch of the latest frame.
+pub fn set_title_continue(on: bool) {
+    TITLE_CONTINUE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// `GameDataMan + 0x60`: the menu system's saved data; `+ 0x1200`: Continue's slot (i32, -1 = none).
+pub const MENU_DATA: usize = 0x60;
+pub const CONTINUE_SLOT: usize = 0x1200;
+
+/// The address of Continue's slot in the running game (checked readable).
+fn continue_slot_addr() -> Option<usize> {
+    use eldenring::cs::GameDataMan;
+    use fromsoftware_shared::FromStatic;
+    // SAFETY: game thread; the singleton lives as long as the game; the pointer is checked before it is followed.
+    let man = unsafe { GameDataMan::instance() }.ok()? as *const GameDataMan as usize;
+    // SAFETY: a pointer-sized field of the live manager.
+    let data = unsafe { std::ptr::read_unaligned((man + MENU_DATA) as *const usize) };
+    (crate::game::plausible(data) && crate::pause::heap_readable(data + CONTINUE_SLOT, 4)).then_some(data + CONTINUE_SLOT)
+}
+
+/// (SAVE-DELETE) The game's own delete in memory: Continue's slot was the deleted one -> -1 (0x9a4c8d..0x9a4c95).
+fn forget_continue(n: usize) {
+    let Some(at) = continue_slot_addr() else { return };
+    // SAFETY: four readable and writable bytes of the live menu data (checked); the game writes the same field the same way.
+    unsafe {
+        if std::ptr::read_unaligned(at as *const i32) == n as i32 {
+            std::ptr::write_unaligned(at as *mut i32, -1);
+            erlog!("slots: slot {n} was the game's Continue: it is -1 now, as the game's own delete leaves it");
+        }
+    }
+}
+
+/// (SAVE-DELETE; at the title only) THE TITLE'S CONTINUE IS SET TO THE USER'S RULE: the most recent load or save of the
+/// listed slots, -1 (no Continue) without any. `why` for the log (said only when the value changes).
+pub fn apply_title_continue(why: &str) {
+    if !TITLE_CONTINUE.load(std::sync::atomic::Ordering::Relaxed) || crate::game::player_age() > 0 || crate::titleload::masked() {
+        return;
+    }
+    let Some(at) = continue_slot_addr() else { return };
+    // SAFETY: four readable bytes of the live menu data (checked).
+    let was = unsafe { std::ptr::read_unaligned(at as *const i32) };
+    let rows = dated_rows();
+    let pick = title_continue_of(&rows, was);
+    if pick != was {
+        // SAFETY: four writable bytes of the live menu data (checked); the game itself stores slot numbers and -1 there.
+        unsafe { std::ptr::write_unaligned(at as *mut i32, pick) };
+        erlog!("slots: THE TITLE'S CONTINUE ({why}): slot {was} -> {} [{}]", if pick < 0 { "NONE (-1: the game offers no Continue)".to_string() } else { format!("slot {pick}") }, describe_dates(&rows));
+    }
 }
 
 /// The first slot the game lists nothing in (a new game's slot), `None` when all ten are used.
@@ -594,11 +788,6 @@ pub fn load_slot(n: usize) -> Result<(), &'static str> {
     }
 }
 
-/// An in-session load was asked for and the loaded slot's Sora has not started yet (at most 30 s).
-pub fn loading() -> bool {
-    crate::savegate::load_asked_ago().is_some_and(|ms| ms < 30_000) && crate::save::current_key().is_none()
-}
-
 static DBG_SAVE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 
 /// (testing aid) The slot `dbg.saveto` asked for, once (taken where a Sora is at hand: save.rs `tick`).
@@ -660,6 +849,80 @@ mod tests {
         assert!(parse_summary_entry(&d[..d.len() - 1]).is_none());
         assert_eq!(map_name(0x3C2A_2400), "m60_42_36");
         assert_eq!(map_name(u32::MAX), "");
+    }
+
+    #[test]
+    fn continue_takes_the_latest_save_of_every_listed_slot() {
+        use std::time::{Duration, SystemTime};
+        let t = |s: u64| Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000 + s));
+        let row = |slot, used, saved_at, current| Dated { slot, used, saved_at, loaded_at: None, current };
+        // the newest file wins, whichever slot the session is in and whatever their play times
+        let rows = [row(0, true, t(50), true), row(3, true, t(90), false), row(5, false, t(500), false), row(7, true, None, false), row(9, true, t(10), false)];
+        assert_eq!(latest_of(&rows), Some(3));
+        // an empty (or deleted) slot never counts, even with a file left behind; an undated one neither
+        assert_eq!(latest_of(&[row(5, false, t(500), false), row(7, true, None, false)]), None);
+        // ties: the session's slot, then the lower number
+        assert_eq!(latest_of(&[row(2, true, t(5), false), row(6, true, t(5), true), row(8, true, t(5), false)]), Some(6));
+        assert_eq!(latest_of(&[row(8, true, t(5), false), row(2, true, t(5), false)]), Some(2));
+        // CONTINUE -> the load request: the latest save; without one the session's slot (as before); else none
+        assert_eq!(continue_slot(latest_of(&rows), Some(0)), Some(3));
+        assert_eq!(continue_slot(None, Some(4)), Some(4));
+        assert_eq!(continue_slot(None, Some(-1)), None);
+        assert_eq!(continue_slot(None, None), None);
+        assert_eq!(continue_slot(Some(12), Some(1)), Some(1));
+    }
+
+    /// (SAVE-DELETE, the user 2026-11-07) The title's Continue: the most recent load or save; the top one deleted -> the
+    /// next; none left -> no Continue (-1).
+    #[test]
+    fn the_titles_continue_takes_the_most_recent_load_or_save_and_skips_deleted_slots() {
+        use std::time::{Duration, SystemTime};
+        let t = |s: u64| Some(SystemTime::UNIX_EPOCH + Duration::from_secs(2_000_000 + s));
+        let row = |slot, saved_at, loaded_at| Dated { slot, used: true, saved_at, loaded_at, current: false };
+        // slot 0 saved at 100 (loaded at 50), slot 1 saved at 80 but LOADED at 120, slot 4 loaded at 110 only
+        let mut rows = vec![row(0, t(100), t(50)), row(1, t(80), t(120)), row(4, None, t(110))];
+        assert_eq!(title_continue_of(&rows, 0), 1, "the load of slot 1 is the most recent");
+        // then slot 0 is saved at 130: it is the most recent
+        rows[0].saved_at = t(130);
+        assert_eq!(title_continue_of(&rows, 1), 0);
+        // slot 0 deleted (not listed any more, whatever its times): the next most recent, slot 1 (120), then slot 4 (110)
+        rows[0].used = false;
+        assert_eq!(title_continue_of(&rows, 0), 1);
+        rows[1].used = false;
+        assert_eq!(title_continue_of(&rows, 1), 4);
+        // every slot deleted: no Continue
+        rows[2].used = false;
+        assert_eq!(title_continue_of(&rows, 4), -1);
+        assert_eq!(title_continue_of(&[], 3), -1);
+        // listed slots without any time (never run with the mod): the game's own Continue when it is listed, else the lowest
+        let undated = [row(2, None, None), row(7, None, None)];
+        assert_eq!(title_continue_of(&undated, 7), 7);
+        assert_eq!(title_continue_of(&undated, 5), 2);
+        assert_eq!(title_continue_of(&undated, -1), 2);
+        // a dated slot beats the game's own pick
+        assert_eq!(title_continue_of(&[row(2, None, None), row(7, None, t(1))], 2), 7);
+    }
+
+    /// (SAVE-DELETE) The last-load record: its text round-trips; it is named after the character's key, so a delete of the
+    /// slot (Sora's files moved aside) takes it along and leaves every other slot's record where it was.
+    #[test]
+    fn the_last_load_record_moves_with_its_slot() {
+        use std::time::{Duration, SystemTime};
+        let at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        assert_eq!(loaded_from_text(&loaded_text(at)), Some(at));
+        assert_eq!(loaded_from_text("nothing here"), None);
+        let dir = std::env::temp_dir().join(format!("kh-er-save-delete-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (k3, k1) = (kh_host::save::character_key("Sora", 3), kh_host::save::character_key("Sora", 1));
+        record_loaded(&dir, &k3);
+        record_loaded(&dir, &k1);
+        assert!(loaded_path(&dir, &k3).is_file() && loaded_path(&dir, &k3).file_name().unwrap().to_string_lossy().starts_with("slot3_"));
+        let moved = kh_host::save::delete_slot_files(&dir, 3, "test").unwrap();
+        assert_eq!(moved.len(), 1);
+        assert!(!loaded_path(&dir, &k3).exists() && loaded_path(&dir, &k1).is_file());
+        assert!(kh_host::save::trash_dir(&dir, 3, "test").join(format!("{k3}.loaded")).is_file());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

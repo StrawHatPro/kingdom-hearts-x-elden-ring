@@ -102,6 +102,13 @@ impl kh_core::Targets for Foes {
     fn apply_hit(&mut self, hit: &kh_core::host::HitRecord) -> kh_core::host::HitResult {
         kh_core::host::HitResult { accepted: true, damage_dealt: hit.damage, hp_after: 1.0e6, killed: false, guarded: false }
     }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
+    }
 }
 impl PartyTargets for Foes {
     fn ai_actors(&self, out: &mut Vec<kh_ai::ActorView>) {
@@ -380,7 +387,7 @@ fn run_row(m: &mut PosedMember, row: &'static str, t0: f32, secs: f32, dt: f32, 
             face: test_face(),
             ..Default::default()
         };
-        m.set_pose_view(poser::DONALD, Vec3::ZERO, 0.0, dt, &view, true, true, &kh_anim::NoIkWorld);
+        m.set_pose_view(poser::PoseState { member: poser::DONALD, position: Vec3::ZERO, yaw: 0.0, weapon_visible: true, grounded: true }, dt, &view, &kh_anim::NoIkWorld);
         let (eyes, beak) = face_numbers(m);
         out.push((t + dt, eyes, beak, m.animator.face_playing().map(|p| p.map(|(c, _)| c.to_string()))));
     }
@@ -394,7 +401,7 @@ fn donald() -> Option<PosedMember> {
 
 /// A voice line of `parts` (seconds, loudness 0..1) at 60 Hz.
 fn line(parts: &[(f32, f32)]) -> (std::sync::Arc<[u8]>, f32) {
-    let v: Vec<u8> = parts.iter().flat_map(|&(s, l)| std::iter::repeat((l * 255.0) as u8).take((s * 60.0).round() as usize)).collect();
+    let v: Vec<u8> = parts.iter().flat_map(|&(s, l)| std::iter::repeat_n((l * 255.0) as u8, (s * 60.0).round() as usize)).collect();
     (v.into(), 60.0)
 }
 
@@ -411,7 +418,7 @@ fn face_a_voice_line_without_its_clips_lips_opens_the_beak_at_any_frame_rate() {
         let mut elapsed = -0.3f32;
         let mut step = |m: &mut PosedMember, _t: f32| {
             elapsed += dt;
-            let v = (elapsed >= 0.0 && elapsed < 1.5).then(|| VoiceInput {
+            let v = (0.0..1.5).contains(&elapsed).then(|| VoiceInput {
                 id: 7,
                 elapsed,
                 length: 1.5,
@@ -454,7 +461,7 @@ fn face_a_voice_line_its_clip_authored_is_left_to_the_clip() {
     // M_1301 from 0.40: its PlayVoice at 0.436, its own lips after it
     let mut step = |m: &mut PosedMember, t: f32| {
         let e = t - 0.04;
-        m.set_voice((e >= 0.0 && e < 0.8).then(|| VoiceInput {
+        m.set_voice((0.0..0.8).contains(&e).then(|| VoiceInput {
             id: 3,
             elapsed: e,
             length: 0.8,
@@ -476,7 +483,7 @@ fn face_a_line_without_loudness_talks_with_kh3s_chatter_lip_row() {
     let Some(mut m) = donald() else { return };
     let dt = 1.0 / 60.0;
     let mut step = |m: &mut PosedMember, t: f32| {
-        m.set_voice((t < 1.0).then(|| VoiceInput {
+        m.set_voice((t < 1.0).then_some(VoiceInput {
             id: 9,
             elapsed: t,
             length: 1.0,
@@ -572,7 +579,7 @@ fn face_a_clip_played_backwards_fires_no_face_plays() {
             weight: 1.0,
             ..Default::default()
         };
-        m.set_pose_view(poser::DONALD, Vec3::ZERO, 0.0, dt, &view, true, true, &kh_anim::NoIkWorld);
+        m.set_pose_view(poser::PoseState { member: poser::DONALD, position: Vec3::ZERO, yaw: 0.0, weapon_visible: true, grounded: true }, dt, &view, &kh_anim::NoIkWorld);
         let now = m.animator.face_playing().map(|p| p.map(|(c, _)| c.to_string()));
         if last.as_ref().is_some_and(|l| *l != now) {
             changes += 1;
@@ -669,7 +676,7 @@ fn face_a_voiced_clips_named_face_is_its_lines_face() {
         let (loud, rate) = line(&[(0.6, 1.0)]);
         let mut step = |m: &mut PosedMember, t: f32| {
             let e = t - voice_at;
-            m.set_voice((e >= 0.0 && e < 0.6).then(|| VoiceInput { id: 11, elapsed: e, length: 0.6, loudness: Some((loud.clone(), rate)) }));
+            m.set_voice((0.0..0.6).contains(&e).then(|| VoiceInput { id: 11, elapsed: e, length: 0.6, loudness: Some((loud.clone(), rate)) }));
         };
         let log = run_row(&mut m, row, t0, 0.5, dt, &mut step);
         assert!(m.face_layer.lip_state().1, "{row}: the clip's own face ({})", m.face_layer.said);

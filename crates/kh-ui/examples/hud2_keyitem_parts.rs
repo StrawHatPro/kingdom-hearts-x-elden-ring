@@ -36,7 +36,6 @@ fn main() {
     if std::env::var("FRAMES").is_ok() { frames(); }
 }
 
-#[allow(dead_code)]
 pub fn frames() {
     let mut pack = Pack::open_default().expect("pack");
     let def = pack.movie_linked("KeyItem", &LIBRARIES).expect("movie");

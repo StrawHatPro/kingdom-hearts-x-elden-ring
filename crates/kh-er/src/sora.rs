@@ -16,7 +16,7 @@ use eldenring::cs::PlayerIns;
 use glam::{Quat, Vec2, Vec3};
 use kh_anim::{Animator, BodySlot, Frame as PoseFrame, Settings, Trs};
 use kh_core::states::HitOnPlayer;
-use kh_core::{EventKind, Host, Input, NullHost, Output, PadButton, PadButtons, PadState, Pose, Sora, Status, TargetId, SORA_PARAMS};
+use kh_core::{EventKind, Host, Input, Output, PadButton, PadButtons, PadState, Pose, Sora, Status, TargetId, SORA_PARAMS};
 
 use crate::control::{Control, OneShot};
 use crate::ermap;
@@ -28,11 +28,10 @@ use crate::game::{self, Draw};
 use crate::pad;
 use crate::world::ErWorld;
 
-/// `kh-app`'s loadout reader (sheet rows -> `kh_core::Loadout`), shared as source: it depends on
-/// `kh_core` and `serde_json` only.
-#[allow(dead_code)]
-#[path = "../../kh-host/src/loadout_shared.rs"]
-mod loadout;
+/// The body's skeleton retargeted for the overlay: (source pose, pelvis, weight).
+type OwnPose = (Vec<(Vec3, Quat)>, Vec3, f32);
+/// (IMPL_ER16) The component place of a pose step and the overlay on it.
+type PoseOver<'a> = (Trs, &'a mut dyn FnMut(&kh_anim::Skeleton, &mut [Trs]));
 
 const STEP: f32 = 1.0 / 60.0;
 /// The body capsule kh-core sweeps (kh-core/src/world.rs), cm: drawn only.
@@ -69,6 +68,7 @@ fn weapon_socket() -> Trs {
 }
 
 mod lab;
+pub(crate) mod kbdraw; // (P5 WEAPON DRAW) the equipped keyblade: renderer, keychain, sounds, trail, switch timing
 
 /// (IMPL_ER23A) We hold the game's no-death switch for its player (`SoraHost::fall_switches`).
 static NO_DEAD_HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -144,12 +144,18 @@ pub struct SoraHost {
     out_before: Output,
     pose_before: kh_anim::Pose,
     weapon: WeaponShow,
-    /// (IMPL_ER44) The Keyblade light: Sora holds the Keyblade out while the hero light's darkness gate is closed, and it
-    /// sparkles (kh_er_render::pointlight::Sparkle, KH3's effect at the blade's tip); `keyblade_held`: for the log.
-    sparkle: kh_er_render::pointlight::KeybladeGlow,
+    /// (F-SHIP 3, INT-F) Highwind's spears in flight: (shot key, its life last seen, the free effect of its body particle).
+    spears: Vec<(u16, f32, u64)>,
+    /// (IMPL_ER44) The Keyblade light: Sora holds the Keyblade out while the hero light's darkness gate is closed and he leads;
+    /// `keyblade_held`: for the log. (HEROLIGHT-KB) its glow and sparkles on the leader's weapon, whatever it is (herolight.rs).
     keyblade_held: bool,
-    /// (IMPL_ER53) the steady glow's effect (its handle, once the core has started it)
-    glow_handle: Option<kh_core::EffectHandle>,
+    herolight: crate::herolight::HeroLight,
+    /// (HEROLIGHT-KB final pass) the left-hand weapon of a dual-wield form: its own glow and sparkles
+    herolight_left: crate::herolight::HeroLight,
+    /// (FORMWEP-FIX) the hand Keyblade between a form's start and its transformation (kh-host formstart.rs)
+    form_gate: kh_host::formstart::FormStartGate,
+    /// (FREEZE-FX) KH3's frozen look on every frozen Elden Ring enemy (freezefx.rs)
+    freeze_fx: crate::freezefx::FreezeFx,
     /// The Keyblade's keychain (its own Bonamik instance) and its poses of the two latest steps.
     keychain: Option<kh_anim::Keychain>,
     chain: Vec<Trs>,
@@ -160,7 +166,6 @@ pub struct SoraHost {
     int_drawn: std::cell::RefCell<Option<(Output, kh_host::audio::PoseTap)>>,
     weapon_shown: bool,
     clock: f32,
-    null: NullHost,
     /// (fx) Sora's sound and effects in this host (fx.rs): the core's audio and effect seams.
     fx: crate::fx::Fx,
     /// (prize) KH3's prize orbs from killed enemies (`prize.kh`) and the munny mirror (`munny.mirror`): prize.rs. Both OFF by default.
@@ -171,6 +176,7 @@ pub struct SoraHost {
     attackers: crate::attackers::ErAttackers,
     /// (IMPL_ER31) Bosses give magic, abilities, slots, max HP / MP, small bosses an item (`boss.rewards`): bossreward.rs.
     boss_rewards: crate::bossreward::ErBossRewards,
+    weapon_src: crate::weaponsrc::ErWeaponSources, // (P9b) the rare weapon drops of real deaths
     /// (savepoint) KH3 save points at the sites of grace in reach (`savepoint.kh`): savepoint.rs.
     savepoint: crate::savepoint::ErSavePoints,
     /// (hud) Sora's HUD and menus in this host (hud.rs): the core's UI sink, the menus' pad input.
@@ -180,6 +186,7 @@ pub struct SoraHost {
     cam: crate::cam::KhCam,
     /// (IMPL_ER22) KH3's boss finish (finish.rs; `finish.kh`).
     finish: crate::finish::ErFinish,
+    worldtime: crate::worldtime::ErWorldTime, // (AUDIT-A WORLDTIME) KH3's world slow / hit-stops
     script: crate::script::InScript,
     script_clock: f32,
     script_at: std::time::Instant,
@@ -227,6 +234,8 @@ pub struct SoraHost {
     /// (TELESCOPE) a Birdseye Telescope's prompt was up last frame (the log's edge)
     telescope_told: bool,
     leap_wait: Option<(Vec3, f32, f32)>,
+    /// (SPIRITSPRING) the leader's jump at a spiritspring (spiritspring.rs)
+    spring: crate::spiritspring::rules::Watch,
     leap: Option<crate::ladder::SoraLeap>,
     leap_show: crate::ladder::Show,
     chest: crate::chest::Chest,
@@ -248,9 +257,9 @@ pub struct SoraHost {
     own_dims: Option<(usize, crate::propfit::Dims, crate::propfit::Dims)>,
     own_surface: bool,
     /// (ANIMS) the log's edges: the friend leader's walk through an action, a borrowed pose refused by the sanity check
-    #[cfg_attr(not(feature = "party"), allow(dead_code))]
+    #[cfg(feature = "party")]
     lead_walk_told: bool,
-    #[cfg_attr(not(feature = "party"), allow(dead_code))]
+    #[cfg(feature = "party")]
     lead_insane_told: bool,
     worn: crate::limbs::Worn,
     /// (IMPL_ER38) the map's requests and outcomes, the game's window focus, the View guard (mapwatch.rs)
@@ -293,13 +302,15 @@ pub struct SoraHost {
     /// a lever: its event animations): the body's skeleton, retargeted, is laid over his pose (weight eased over 0.2 s).
     own_weight: f32,
     own_rig: Option<crate::figure::Rig>,
-    own_over: Option<(Vec<(Vec3, Quat)>, Vec3, f32)>,
+    own_over: Option<OwnPose>,
     own_anim: i32,
     own_reach: f32,
     /// (IMPL_ER17) The fall net's last put-back: where to and when.
     net_last: Option<(Vec3, std::time::Instant)>,
     own_hold: bool,
     cut_lying: Option<bool>,
+    /// (CUTSCENE-ANIM) what the figure and Sora rest on (cutfit.rs parts), as last logged
+    cut_rests: Option<(usize, usize)>,
     own_seen: i32,
     /// (testing aid) `dbg.kh = x,y,z` (KH3 cm; one-shot): he is put at that KH3 position (a recorded run's place).
     kh_shot: OneShot,
@@ -357,6 +368,9 @@ pub struct SoraHost {
     /// The hidden body never dies of a fall: the window in which the game's HP losses are its fall damage; the game's
     /// own value of its no-death switch (put back when Sora stops), whether we hold it now.
     fall: crate::guards::FallGuard,
+    /// (THE IN-GAME TESTER 2026-11-03) the hidden body's own fall (a warp that put it lower counts): HP the game takes with
+    /// no attacker named in its window is that fall's, discarded (guards.rs `BodyFall`, `blame`)
+    body_fall: crate::guards::BodyFall,
     no_dead_own: Option<bool>,
     no_dead_held: bool,
     death_anim_for: f32,
@@ -382,12 +396,29 @@ pub struct SoraHost {
     /// (IMPL_ER57) the deep-water death (guards.rs `Drown`), the clock of its casts, the depth last said in the log (cm, in
     /// steps of a metre); an enemy's grab of the body (guards.rs `Grab`), the throw node's state last logged.
     drown: crate::guards::Drown,
+    /// (DEATHPLANE) every KH character's doom by Elden Ring's death barriers (deathplane.rs; rebuilt with the host)
+    barrier: crate::deathplane::Deathplane,
     water_check: f32,
     water_told: i32,
     grab: crate::guards::Grab,
     throw_seen: Option<u32>,
+    /// (GRABS) KH3's caught sequence of the leader while an enemy's grab holds the body and while he gets up (grabs.rs)
+    catch: Option<crate::grabs::Catch>,
+    /// (GRABS) the grab's thrower: its handle bits, its MSB event entity and its map; the abduction it is, if any
+    grabber: Option<(u64, u32, String)>,
+    abduct: Option<crate::grabs::Abduction>,
     /// (IMPL_ER67) the body plays a pickup animation Sora runs through (for the log's edge).
     pickup_seen: bool,
+    /// (ER-TWEAKS) the body opens a door / pulls a lever and the leader stays free (doorfree.rs; the log's edge).
+    door_seen: bool,
+    /// (ER-TWEAKS) the followed action of this frame walks the leader through (the fog: fogwalk.rs), his own walk shown;
+    /// the walk, the carry's trail (KH3 cm, moved by the seat's shift while followed), the log's edge, a friend's walk drawn by it.
+    walk_action: bool,
+    fog_walk: crate::fogwalk::ActionWalk,
+    fog_trail: Vec3,
+    fog_walk_told: bool,
+    #[cfg(feature = "party")]
+    fog_drew: bool,
     /// (ER party S2) THE LEADER BODY (party/leader.rs): whoever leads (Sora, Donald, Goofy). S1's party glue feeds it every
     /// party step (`update` / `apply`); the body rules read `friend_lead` (None = Sora: every rule as before).
     #[cfg(feature = "party")]
@@ -527,7 +558,7 @@ pub fn data_paths(root: &Path) -> (PathBuf, PathBuf) {
         cfg.str(key).map(PathBuf::from).or_else(|| std::env::var_os(env).map(PathBuf::from)).unwrap_or(default)
     };
     (
-        pick("pack", "KH_SORA_PACK", project.join("build").join("sora_pack")),
+        pick("pack", "KH_SORA_PACK", option_env!("KH_ER_TEST_PACK").map_or_else(|| project.join("build").join("sora_pack"), PathBuf::from)), // (P5) a TEST build's own pack (set at build time only)
         pick("loadout", "KH_SORA_LOADOUT", project.join("sheets").join("port").join("sora-loadout-99.json")),
     )
 }
@@ -552,8 +583,12 @@ impl SoraHost {
         crate::limbs::set_pack(&pack_dir); // (ER70) the worn outfit's skeleton for the hands of a borrowed action
         #[cfg(feature = "party")]
         crate::partydraw::set_pack(&pack_dir); // (ER party S4) the friends' weapons and props for the drawing
+        #[cfg(feature = "party")]
+        crate::moogle::set_paths(&pack_dir, &loadout_path); // (P8) the Moogle's pack (PACK/party/n_ex028, P8 fix) and sheet (kh-moogle.json beside the loadout)
+        #[cfg(feature = "party")]
+        crate::spirit_mimic::set_pack(&pack_dir); // (MIMIC SORA) his own Animator and keychain are read from Sora's pack
         crate::status::set_pack(&pack_dir); // (IMPL_ER48) the KH3 item texts
-        match std::fs::read_to_string(&loadout_path).map_err(|e| e.to_string()).and_then(|text| loadout::parse(&loadout_path.to_string_lossy(), &text)) {
+        match std::fs::read_to_string(&loadout_path).map_err(|e| e.to_string()).and_then(|text| kh_host::rig::loadout::parse(&loadout_path.to_string_lossy(), &text)) {
             Ok((mut loadout, problems)) => {
                 // `sora.level = N` (1..99; read when Sora starts): the same loadout at another level.
                 if let Some(level) = control.i64("sora.level").filter(|l| (1..=99).contains(l)) {
@@ -609,6 +644,7 @@ impl SoraHost {
         };
         crate::graceflame::set_ids(params.grace_flame_sfx); // (IMPL_ER17)
         crate::blood::load(&host_sheet); // (IMPL_ER60) the rows `blood.*`
+        crate::guardblow::load(&host_sheet); // (THE USER 2026-11-02) the rows `guard_sound.*`
         let out = sora.output();
         erlog!(
             "sora: started at Elden Ring ({:.3}, {:.3}, {:.3}), KH yaw {yaw:.1}; level {} HP {}",
@@ -619,9 +655,12 @@ impl SoraHost {
             out_before: out.clone(),
             pose_before: kh_anim::Pose::default(),
             weapon: WeaponShow { visible: false, since: 10.0 },
-            sparkle: kh_er_render::pointlight::KeybladeGlow::default(),
+            spears: Vec::new(), // (F-SHIP 3, INT-F)
             keyblade_held: false,
-            glow_handle: None,
+            herolight: crate::herolight::HeroLight::default(), // (HEROLIGHT-KB)
+            herolight_left: crate::herolight::HeroLight::secondary(), // (HEROLIGHT-KB final pass)
+            form_gate: kh_host::formstart::FormStartGate::default(), // (FORMWEP-FIX)
+            freeze_fx: Default::default(), // (FREEZE-FX)
             keychain,
             chain: Vec::new(),
             chain_before: Vec::new(),
@@ -630,17 +669,18 @@ impl SoraHost {
             weapon_shown: false,
             clock: 0.0,
             out,
-            null: NullHost::default(),
             prize: crate::prize::ErPrizes::start(control, params.prize), // (prize)
             loot: crate::loot::ErLoot::new(), // (loot)
             attackers: crate::attackers::ErAttackers::new(), // (ENG)
             boss_rewards: crate::bossreward::ErBossRewards::new(control), // (IMPL_ER31)
+            weapon_src: crate::weaponsrc::ErWeaponSources::new(), // (P9b) this Sora's drops (the load epoch is read per kill)
             savepoint: crate::savepoint::ErSavePoints::new(&pack_dir, control, params.savepoint_sfx).with_story(&loadout_path.with_file_name("sora-er-story.json")).with_ground(params.ground, params.collision_floor_layer).with_layer(params.collision_layer) /* (WALLS) */, // (savepoint) (IMPL_ER33: the story table) (IMPL_ER52: on the ground)
             fx: crate::fx::Fx::start(&pack_dir, &loadout_path.with_file_name("sora-er-fx.json"), control), // (fx)
             hud: crate::hud::HudHost::new(&pack_dir), // (hud)
             world: ErWorld::new(frame),
             cam: crate::cam::KhCam::new(&pack_dir, &crate::log::dir(), frame),
             finish: crate::finish::ErFinish::new(crate::finish::FinishRules::DEFAULT),
+            worldtime: crate::worldtime::ErWorldTime::default(), // (AUDIT-A WORLDTIME)
             script: crate::script::InScript::new(control),
             script_clock: 0.0,
             script_at: std::time::Instant::now(),
@@ -678,6 +718,7 @@ impl SoraHost {
             net_last: None,
             own_hold: false,
             cut_lying: None,
+            cut_rests: None, // (CUTSCENE-ANIM)
             own_seen: -1,
             kh_shot: OneShot::new("dbg.kh", control),
             lab: lab::Lab::new(control),
@@ -711,6 +752,7 @@ impl SoraHost {
             popup: None,
             dialog_up: false,
             fall: Default::default(),
+            body_fall: Default::default(),
             no_dead_own: None,
             no_dead_held: false,
             death_anim_for: 0.0,
@@ -748,6 +790,7 @@ impl SoraHost {
             descend_told: false,
             telescope_told: false,
             leap_wait: None,
+            spring: Default::default(),
             leap: None,
             leap_show: crate::ladder::Show::Own,
             chest: Default::default(),
@@ -763,17 +806,30 @@ impl SoraHost {
             own_plan: None,
             own_dims: None,
             own_surface: false,
+            #[cfg(feature = "party")]
             lead_walk_told: false,
+            #[cfg(feature = "party")]
             lead_insane_told: false,
             worn: Default::default(),
             map_watch: Default::default(),
             work: std::time::Duration::ZERO,
             drown: Default::default(),
+            barrier: Default::default(), // (DEATHPLANE)
             water_check: 0.0,
             water_told: 0,
             grab: Default::default(),
             throw_seen: None,
+            catch: None, // (GRABS)
+            grabber: None,
+            abduct: None,
             pickup_seen: false,
+            door_seen: false,                       // (ER-TWEAKS)
+            walk_action: false,                     // (ER-TWEAKS)
+            fog_walk: Default::default(),           // (ER-TWEAKS)
+            fog_trail: Vec3::ZERO,                  // (ER-TWEAKS)
+            fog_walk_told: false,                   // (ER-TWEAKS)
+            #[cfg(feature = "party")]
+            fog_drew: false,                        // (ER-TWEAKS)
             #[cfg(feature = "party")]
             lead: { let mut lead = crate::party::leader::LeaderBody::default(); lead.set_pack(&pack_dir); lead }, // (ER party S2)
             #[cfg(feature = "party")]
@@ -816,6 +872,14 @@ impl SoraHost {
     /// (ER party S2) An order of the body code for the friend leader (carried out at the party's next step).
     #[cfg(feature = "party")]
     fn lead_order(&mut self, order: crate::guards::LeadOrder) {
+        // (LOADFALL, the in-game tester 2026-11-03: a load after Goofy died mid-hop wrote the body to his place of before the
+        // load and the leader fell for ever) A SEAT IS TAKEN AT ONCE, not at the party's next step (none runs while a new host
+        // waits for the ground): the friend leader is on the body's place before anything reads or writes his place
+        if let crate::guards::LeadOrder::Follow(at, yaw) = order {
+            if let Some(rt) = self.party.runtime_on() {
+                self.lead.seat_now(rt, &mut self.sora, &self.out, at, yaw);
+            }
+        }
         self.lead.order(order);
     }
     #[cfg(not(feature = "party"))]
@@ -833,6 +897,31 @@ impl SoraHost {
     }
     fn lead_alive(&self) -> bool {
         self.friend_lead().map_or(self.sora.status().hp > 0, |f| f.alive)
+    }
+
+    /// (HUD-REVIVE-COMBAT, THE USER 2026-11-07: "if an enemy is actively fighting the party leader or any party member, the whole
+    /// party should still be in combat. Combat only ends when no enemy is targetting the party") THE PARTY'S MARKS ON THE TARGETS,
+    /// once a frame after the enemies were read (telegraph.rs): every party place besides the leader's (the members who are up,
+    /// a friend leader, AI Sora) and the hostiles whose own Elden Ring AI targets a party member's body (party/aggro.rs
+    /// `aims_now`: the game's AI target matched to the member there; Mimic Sora is no party member and does not count). Read by
+    /// `ErTargets::engaged_count`, the one count behind every battle flag. `combat.aims = 0`: the aim sign is not used.
+    fn party_marks(&mut self, control: &Control) {
+        self.targets.aims_rule = control.flag("combat.aims") != Some(false);
+        #[cfg(feature = "party")]
+        if let Some(core) = self.party.core() {
+            let rt = &core.rt;
+            let mut at: Vec<Vec3> = rt.current.iter().filter(|v| !v.ko).map(|v| v.position).collect();
+            if rt.leader.is_some() && rt.lead.sora_active && self.sora.status().hp > 0 {
+                at.push(self.out.position); // AI Sora
+            }
+            let aims = crate::party::aggro::aims_now(rt, &self.targets, self.out.position).into_iter().filter(|(_, who)| who.is_some_and(|w| w.chara().is_some())).map(|(id, _)| id).collect();
+            self.targets.set_party_marks(at, aims);
+            return;
+        }
+        // Sora alone: the enemies whose AI targets his body (the place within 3 m of his feet: aggro.aim_near's default)
+        let lead = self.lead_pos();
+        let aims = crate::telegraph::aims().into_iter().filter(|(id, aim)| self.targets.get(*id).is_some_and(|e| (e.pos + coords::dir_er_to_kh(*aim - e.er_pos) - lead).length() <= 300.0)).map(|(id, _)| id).collect();
+        self.targets.set_party_marks(Vec::new(), aims);
     }
     /// (DTH) WHO LEADS the body this frame (Sora when he does, the party is off or not compiled).
     #[cfg(feature = "party")]
@@ -896,8 +985,8 @@ impl SoraHost {
     /// - after the game put its player somewhere else (a warp: the tutorial's death, a cutscene's end, a start)
     ///   UNTIL THERE IS GROUND UNDER HIM (`Follow::NoGround`: a cast down from his feet hits within 3 m): the
     ///   collision of the new place may not be loaded yet, and he must never fall through it.
-    /// THE NET: in the air with no ground at all within 300 m below for 1.5 s -> he is put back where he last
-    /// stood (or was seated by the game) and waits there for the ground.
+    ///   THE NET: in the air with no ground at all within 300 m below for 1.5 s -> he is put back where he last
+    ///   stood (or was seated by the game) and waits there for the ground.
     fn follow_phase(&mut self, player: &mut PlayerIns, control: &Control, now: Vec3, relocated: bool, dt: f32) {
         let height = Sora::origin_height_on_floor(&SORA_PARAMS);
         let remo = game::remo_state();
@@ -937,6 +1026,7 @@ impl SoraHost {
             // pose: he keeps the pad and runs on, the body is written to where he is as always. The item is not affected: MEASURED
             // in the user's log (111.609 s Y to the game, 111.694 the loot gate's swap + "item: obtained", 111.718 the body's
             // 60071 starts) the game gives the item at the action's start, before the animation. `pickup.run = 0`: as before.
+            crate::chest::learn_from_game(); // (ER-TWEAKS follow-up) the chests of the game's own object-action table (once)
             let pickup = control.flag("pickup.run") != Some(false) && crate::guards::pickup_anim(anim, control.str("pickup.anims"));
             if pickup != self.pickup_seen {
                 self.pickup_seen = pickup;
@@ -944,6 +1034,18 @@ impl SoraHost {
                     erlog!("pickup: the body plays the game's pickup {anim}: SORA RUNS ON (no hold, no pose of the body's; the item was given at the press; Sora {:?}) (pickup.run = 0: held as before)", self.out.state);
                 }
             }
+            // (ER-TWEAKS, the user 2026-11-06: "when Y is pressed the door opens but the party leader isn't locked into any
+            // animation regardless of door type") A DOOR / LEVER IS NOT THE LEADER'S EITHER (doorfree.rs: every ObjActParam door
+            // and lever animation): no hold, no seat on the body, no pose of the body's; the game's ObjAct opens the door and
+            // kicks its event / flag from the press as before (the body plays its animation, hidden). `door.free = 0`: as before.
+            let door = control.flag("door.free") != Some(false) && crate::doorfree::free_anim(anim, control.str("door.anims"));
+            if door != self.door_seen {
+                self.door_seen = door;
+                if door {
+                    erlog!("door: (ER-TWEAKS) the body plays the game's door / lever {anim}: THE LEADER ({}) STAYS FREE (no hold, no follow, no pose of the body's; the game opens the door with its own ObjAct and event) (door.free = 0: as before)", self.lead_chara_name());
+                }
+            }
+            let pickup = pickup || door;
             self.own_hold = allowed && !pickup && within("own.anims", &self.targets.sheet.own_anims);
             // (IMPL_ER18) a row of the held kind wins over the follow rows (the row `own.move.unlisted` is a whole range)
             // (LADDER2) THE GAME'S LADDER (ladder.rs): Y at a ladder's "Climb" prompt reached the game, which starts its own
@@ -1022,12 +1124,18 @@ impl SoraHost {
             // own is followed like an `own.move.*` row (single doors, levers, chests are expected there; a held row always wins).
             let unlisted = !pickup && control.str("own.unlisted").map(ermap::own_ranges).is_some_and(|r| r.iter().any(|(a, b)| (*a..=*b).contains(&anim)));
             // (ANIMS) the actions' cap (exitnet.rs `OwnCap`, `own.max_s` default 20 s): no door / fog follow holds the pad for ever
-            let moves = allowed && !self.own_hold && !ladder_anim && (within("own.moves", &self.targets.sheet.own_moves) || unlisted);
+            // (ER-TWEAKS) a door / lever (`pickup` includes it) is never followed, whatever row or key names it
+            let moved_by_row = within("own.moves", &self.targets.sheet.own_moves);
+            let moves = allowed && !pickup && !self.own_hold && !ladder_anim && (moved_by_row || unlisted);
             let (moves, spent) = self.own_cap.frame(anim, moves, control.f32("own.max_s").unwrap_or(crate::exitnet::OwnCap::DEFAULT_MAX_S), dt);
             if spent {
                 erlog!("!!! own: the body has played the action {anim} for more than {:.0} s (own.max_s): no longer followed (Sora has the body) until it changes", control.f32("own.max_s").unwrap_or(crate::exitnet::OwnCap::DEFAULT_MAX_S));
             }
-            self.own_surface = on_chest || moves; // (ANIMS) the hands on something in front (propfit.rs `Kind::Surface`)
+            // (ER-TWEAKS, the user 2026-11-06: "when entering fog gate, just make the party leader play their walking animation
+            // thru the fog gate instead of using the elden ring animation") an `own.move.*` row (the fog) is still followed (the
+            // game carries the body through: its fog flag, the boss's start), but the leader shows his own walk (fogwalk.rs)
+            self.walk_action = moves && moved_by_row && control.flag("fog.walk") != Some(false);
+            self.own_surface = (on_chest || moves) && !self.walk_action; // (ANIMS) the hands on something in front (propfit.rs `Kind::Surface`)
             on_chest || moves
         };
         // (ANIMS) the game's ladder module after a stale ladder (exitnet.rs): repaired once, a stuck let-go nudged once
@@ -1102,7 +1210,10 @@ impl SoraHost {
                     // (IMPL_ER57) WATER UNDER HIM IS GROUND for the net: his casts go through the sea (layer 0x56 does not see it),
                     // and the net put him back from a jump into the sea before he reached it (the user's log, 111.2 s); in the
                     // water the deep-water rule decides (`water_phase`), as the game's own does
-                    let ground = ground || control.flag("water.death") != Some(false) && self.water_below();
+                    // (DEATHPLANE) water under him is ground for the net while either water rule is on: the barrier rule (the sea's kill plane
+                    // lies about 2 m under its surface, measured in game 2026-11-03) needs him to reach the water, not a put-back from the cliff
+                    let water_rule = control.flag("water.death") != Some(false) || control.flag("barrier.death") != Some(false);
+                    let ground = ground || water_rule && self.water_below();
                     self.void_for = if ground { 0.0 } else { self.void_for + 0.5 };
                     let dropped = if safe { self.stood.dropped(p.z) } else { f32::MAX };
                     if let (true, Some(anchor)) = (self.lead_alive() /* (ER party S2) */ && !self.drown.under(), self.anchor) {
@@ -1110,7 +1221,8 @@ impl SoraHost {
                         // again: IMPL_ER14 saw that loop every 9.5 s for ever): there is no place of his to go back to, so the fall
                         // is a death, as the game's own kill plane makes it: the game-over menu (Continue = the last save).
                         let again = self.net_last.is_some_and(|(at, when)| (at - anchor).length() < 100.0 && when.elapsed().as_secs_f32() < 30.0);
-                        match crate::guards::net_verdict(self.void_for, dropped, again) {
+                        // (DEATHPLANE) a leader doomed by one of the game's death barriers falls into the void to his death, no put-back
+                        match crate::deathplane::net(crate::guards::net_verdict(self.void_for, dropped, again), self.barrier.void_is_death(crate::deathplane::Who::Leader)) {
                             crate::guards::NetVerdict::Nothing => {
                                 if self.void_for >= 1.5 && self.void_for < 2.0 {
                                     erlog!("net: no ground at all under him for {:.1} s at kh ({:.0}, {:.0}, {:.1}) but he is only {:.0} cm below where he last had a floor: NOT A FALL (wedged, hovering or gliding): nothing is done (the stuck rule frees a wedged body)", self.void_for, p.x, p.y, p.z, dropped);
@@ -1122,13 +1234,30 @@ impl SoraHost {
                                 self.anchor = None;
                                 self.stood = Default::default();
                                 self.void_for = 0.0;
+                                // (KILLPLANE) doomed by one of the game's barriers: the barrier's own death, instant and past every ability
+                                let doomed = self.barrier.void_is_death(crate::deathplane::Who::Leader);
+                                self.barrier.leader_killed |= doomed;
                                 if friend.is_some() {
                                     // (ER party S2) the friend leader's fall is his KO (the game over is the leader's)
+                                    #[cfg(feature = "party")]
+                                    if doomed {
+                                        if let Some(rt) = self.party.runtime_on() {
+                                            if let Some(id) = rt.leader {
+                                                crate::deathplane::knock_out(&mut rt.party, id);
+                                            }
+                                        }
+                                        return;
+                                    }
                                     self.lead_order(crate::guards::LeadOrder::Die);
                                     return;
                                 }
-                                let from = self.out.position + Vec3::Z * 100.0;
                                 self.invulnerable = false;
+                                if doomed {
+                                    let feet = self.out.position;
+                                    crate::deathplane::kill_core(&mut self.sora, feet);
+                                    return;
+                                }
+                                let from = self.out.position + Vec3::Z * 100.0;
                                 self.sora.take_hit(HitOnPlayer { direction: Vec3::NEG_Z, ..HitOnPlayer::new(kh_core::enums::ETresDamageKind::Small, 1.0e6, TargetId::NONE, from) });
                                 return;
                             }
@@ -1185,6 +1314,11 @@ impl SoraHost {
         }
         // seated on the body
         let shift = now - self.feet_er();
+        // (ER-TWEAKS) the carry's trail for the fog walk (fogwalk.rs): what the game moved the body since the last frame of the
+        // same action (the first frame's seat is a placement, not a step)
+        if follow == Follow::Action && before == Some(Follow::Action) {
+            self.fog_trail += coords::dir_er_to_kh(shift);
+        }
         // (ER party S2) A FRIEND LEADING IS SEATED ON THE BODY: he is put there (held every party step), the KH3 frame stays
         // (Sora and the other friend stay where they are); Sora leading: the frame moves under him as before, and the members
         // who do not lead are moved back by as much (party/leader.rs `seated`)
@@ -1424,6 +1558,54 @@ impl SoraHost {
         erlog!("ladder: (LADDER2) THE LEAP: the leader from kh ({:.0}, {:.0}, {:.0}) up {:.0} cm onto ({:.0}, {:.0}, {:.0}) facing {facing:.0} ({waited:.2} s after the start; {})", from.x, from.y, from.z, to.z - from.z, to.x, to.y, to.z, if self.ladder_go.body_free() { "the game let its body go" } else { "THE GAME HAS NOT LET ITS BODY GO YET: it follows when it does" });
     }
 
+    /// (SPIRITSPRING) ONE STEP OF THE SPIRITSPRING WATCH (spiritspring.rs), before the leader's step: the lift asked of his core
+    /// for this step (Sora: `Sora::spring_lift`; a friend: `LeadOrder::SpringLift`), the spring's launch sound when his core
+    /// takes it, and the allies' jump after him when he lands higher (party/glue.rs `spring_catch_up`).
+    fn spring_step(&mut self, here: Option<usize>, on_foot: bool, control: &Control, dt: f32) {
+        use crate::spiritspring::{self as spring, rules};
+        let friend = self.friend_lead();
+        let (feet, vz) = match friend {
+            Some(f) => (f.position, f.velocity.z),
+            None => (self.out.position - Vec3::Z * Sora::origin_height_on_floor(&SORA_PARAMS), self.out.velocity.z),
+        };
+        let who = self.lead_chara();
+        let leader = rules::LeaderIn { on_foot, on_floor: self.lead_on_floor(), feet, vz, who: who as u8 };
+        let step = self.spring.step(leader, here, spring::launch_cm, dt);
+        let log = control.flag("spring.log") != Some(false);
+        if let Some(height) = step.lift {
+            if friend.is_some() {
+                self.lead_order(crate::guards::LeadOrder::SpringLift(height));
+            } else {
+                self.sora.spring_lift(height);
+            }
+        }
+        if let Some(r) = step.confirmed {
+            let played = crate::ersound::spring_launch(self.world.frame.pos_kh_to_er(r.takeoff));
+            if log {
+                erlog!("spring: {} JUMPS AT THE SPIRITSPRING {}: his jump rises {:.0} cm above the take-off (Torrent's: JumpHeight + 7 m), launch sound c{} {}", who.name(), spring::describe(r.spring), r.height, crate::ersound::TORRENT_SPRING_LAUNCH, if played { "played by the game" } else { "NOT PLAYED (the game's sound play is not available)" });
+            }
+        }
+        if let Some((r, end)) = step.ended {
+            if log && (r.confirmed || end != rules::End::Refused) {
+                erlog!("spring: {}'s spiritspring lift ended ({end:?}) {:.2} s after the take-off, {:.0} cm above it (aim {:.0})", who.name(), r.t, feet.z - r.takeoff.z, r.height);
+            }
+        }
+        if let Some((r, landing)) = step.landed {
+            let follow = rules::allies_follow(&r, landing);
+            #[cfg(feature = "party")]
+            if follow {
+                let facing = self.lead_yaw();
+                if let Some(core) = self.party.core_mut() {
+                    core.spring_catch_up(landing, facing, r.takeoff, rules::ALLY_RADIUS_CM);
+                }
+            }
+            if log {
+                let reach = if follow { format!(": the party members within {:.0} m of the take-off jump after him (the ladder jump's leap), the others by their catch-up / warp", rules::ALLY_RADIUS_CM / 100.0) } else { String::new() };
+                erlog!("spring: {} landed {:.0} cm above the spiritspring take-off{reach}", who.name(), landing.z - r.takeoff.z);
+            }
+        }
+    }
+
     /// (LADDER2) AFTER A STEP OF SORA'S LEAP (the leader's or AI Sora's): his take-off plays Torrent's wind (ersound.rs, the
     /// game's own sound at his feet); his landing puts his kh-core state there, facing the landing's heading.
     fn leap_after_step(&mut self, out: &Output) {
@@ -1548,6 +1730,7 @@ impl SoraHost {
     pub fn pre_physics(&mut self, player: &mut PlayerIns, dt: f32, control: &Control) {
         let started = std::time::Instant::now();
         self.frame_dt = dt.clamp(0.0, 0.25); // (DTH) the death flow's clock
+        crate::mimic_music::sora_frame(self.died); // (MIMIC-MUSIC) Sora's frames run; the leader down (death.rs latch) ends the fight's music
         // (experiments) `w.filter = 0x...`: the filter word the casts are made with; `w.reject =
         // 0x..,0x..`: filter words of bodies that do not block him.
         let hex = |s: &str| u32::from_str_radix(s.trim().trim_start_matches("0x"), 16).ok();
@@ -1584,6 +1767,7 @@ impl SoraHost {
         // large one is the physics origin shifting (or a warp by the game), which Sora follows.
         let now = game::v3(&player.chr_ins.modules.physics.position);
         let mut relocated = false;
+        let mut origin_moved = false; // (THE IN-GAME TESTER 2026-11-03) the body's own fall watch moves with the origin
         if let Some(written) = self.written {
             let moved = now - written;
             if moved.length() > 4.0 {
@@ -1591,6 +1775,7 @@ impl SoraHost {
                 self.rebased_now = true;
                 self.targets.rebased();
                 relocated = !game::origin_shift(moved);
+                origin_moved = !relocated;
                 erlog!("sora: the player was moved by ({:.3}, {:.3}, {:.3}): {}; the KH3 frame is rebased", moved.x, moved.y, moved.z, if relocated { "THE GAME PUT ITS PLAYER SOMEWHERE ELSE (a warp): Sora waits there for the ground" } else { "the physics origin shifted" });
             } else {
                 self.pushed = self.pushed.max(moved.length());
@@ -1618,7 +1803,11 @@ impl SoraHost {
         }
         #[cfg(feature = "party")]
         if self.follow.is_none() {
-            self.lead.release(); // (ER party S2) the body leads the friend leader no more: his seat is let go
+            // (GRABS) a friend leader getting up after a grab (KH3's CatchEnd, partydraw.rs) stays where the throw let him go
+            match self.friend_lead().filter(|_| crate::grabs::friend_caught(self.lead.chara())) {
+                Some(f) => self.lead_order(crate::guards::LeadOrder::Follow(f.position, f.yaw)),
+                None => self.lead.release(), // (ER party S2) the body leads the friend leader no more: his seat is let go
+            }
         }
         self.ride_phase(player, control); // (IMPL_ER18) a floor that moves (a lift) carries him
 
@@ -1669,7 +1858,7 @@ impl SoraHost {
                 _ => None,
             };
             let action = self.follow == Some(Follow::Action);
-            self.party.frame(player, control, &self.world.frame, relocated, hidden, action, dt, self.clock as f64);
+            self.party.frame(player, control, &self.world.frame, crate::party::BodyFrame { relocated, hidden, body_action: action }, dt, self.clock as f64);
         }
 
         // ---- Elden Ring's interface: a menu has the input; the world stands still (a tutorial popup)
@@ -1692,7 +1881,7 @@ impl SoraHost {
         let ui = {
             static STILL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             let standing = crate::pause::world_runs() == Some(false) && !crate::pause::holding() && !crate::hud::menu_open() && !crate::hud::gameover_holds();
-            let frames = if standing { STILL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1 } else { STILL.swap(0, std::sync::atomic::Ordering::Relaxed) * 0 };
+            let frames = if standing { STILL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1 } else { STILL.store(0, std::sync::atomic::Ordering::Relaxed); 0 };
             if frames == 6 {
                 erlog!("ui: ELDEN RING'S WORLD STANDS STILL AND NO MENU OF OURS HOLDS IT (a window of the game's is up: a tutorial, a message): the whole pad is Elden Ring's until it runs again (interface state said menu {})", ui.menu);
             }
@@ -1741,6 +1930,9 @@ impl SoraHost {
         let paused = self.world_paused(player);
         let paused = paused || crate::hud::menu_open(); // (hud) a menu of ours holds the pause: no steps
         self.fx.frame(player, control, dt, paused, &self.world.frame); // (fx) surface, listener, switches, pause
+        // (AUDIT-A CAMS) KH3's dark screen of every finish (0x14140DF80: the master light x 0.5 over 1 s, back over 1 s): the
+        // late pass multiplies the lit scene by it (kh-er-render darkscreen.rs); `r.dark_screen = 0`: off
+        kh_er_render::darkscreen::frame(self.sora.combat().form.dark_screen && control.flag("r.dark_screen") != Some(false), if paused { 0.0 } else { dt });
         if self.cutscene && control.flag("cut.savepoint") != Some(false) {
             self.fx.cutscene_step(&self.out, &self.sora, dt); // (IMPL_ER33) the save points' effects live through a cutscene
         }
@@ -1752,7 +1944,7 @@ impl SoraHost {
         // until the next frame's simulation starts (`hit_events`).
         self.targets.events.clear();
         self.targets.refresh(player, self.world.frame, feet_now, dt);
-        self.targets.sora = self.out.position;
+        self.targets.sora = self.lead_pos(); // (GF-INGAME) the leader's: Sora out of the party stood where he was left, and "nearest" was read from there
         // (IMPL_ER32) breakable map objects near him and near his spells; the next bullet at one (`break.kh`)
         if !paused {
             let actors: Vec<(Vec3, Vec3)> = self.sora.magic().projectiles.iter().map(|p| (p.position, p.velocity)).collect();
@@ -1772,6 +1964,9 @@ impl SoraHost {
         self.targets.puppets.rules = self.targets.params.anim;
         // (IMPL_ER21) `react.guard = 0`: bosses as before this pass (bossguard.rs)
         self.targets.puppets.guard = Some(if control.flag("react.guard") == Some(false) { crate::bossguard::GuardRules::OFF } else { self.targets.params.guard });
+        // (REVENGE) KH3's revenge and hit-stun of the bodies on Elden Ring's boss bar (bossrevenge.rs; off with `react.guard = 0`)
+        self.targets.puppets.boss = Some(if control.flag("react.guard") == Some(false) { crate::bossrevenge::BossRules::OFF } else { self.targets.params.boss });
+        self.targets.puppets.bosses = crate::erhud::boss_bar_handles();
         self.targets.puppets.no_anim = control.flag("pup.anim") == Some(false);
         // (IMPL_ER45) `poise.kh = 0`: every hit on an ordinary enemy reacts, as before (poise.rs)
         self.targets.puppets.poise = Some(if control.flag("poise.kh") == Some(false) { crate::poise::PoiseRules::OFF } else { self.targets.params.poise });
@@ -1781,15 +1976,60 @@ impl SoraHost {
         self.debug_keys(control);
         self.lab_step(control, dt);
         self.fall.frame(self.lead_on_floor(), self.lead_pos().z, dt); // (IMPL_ER23A) the fall guard's window (ER party S2: the leader's)
+        {
+            // (THE IN-GAME TESTER 2026-11-03) the hidden body's own drops, a warp that put it lower among them (guards.rs)
+            let ph = &player.chr_ins.modules.physics;
+            if self.body_fall.frame(ph.standing_on_solid_ground || ph.touching_solid_ground, now, origin_moved, dt) {
+                erlog!("fall: THE HIDDEN BODY came down {:.1} m (a fall of its own or a warp that put it lower; the leader {}): for {:.2} s what the game takes off it with nobody named is that fall's, never an enemy's", self.body_fall.depth, if self.lead_on_floor() { "stands" } else { "is off the floor" }, crate::guards::FALL_WINDOW);
+            }
+        }
         self.body_watch(player, control, dt);
         crate::status::frame(player, control, dt); // (IMPL_ER48) Elden Ring's ailments on the body: ticks, clearing
+        // (GF-SENSOR) what the enemies are doing, before the hits are read
+        crate::telegraph::frame(control, player, &self.targets, self.lead_pos(), dt);
+        self.party_marks(control); // (HUD-REVIVE-COMBAT) the party's places and the enemies whose AI targets one of them
+        crate::stance::frame(&mut self.targets, dt);
+        crate::aipause::frame(&self.targets, dt); // (GF-POLISH)
+        crate::rebound::frame(&mut self.targets, dt); // (THE USER 2026-11-02) swings bounced off Goofy's shield
+        if crate::sensorlab::frame(control, player, &mut self.targets, dt) {
+            self.sora.status_request(kh_core::StatusRequest::FullRecover);
+        }
         self.damage_in(player, control);
+        crate::nocombat::frame(control); // (NOCOMBAT) Elden Ring's own "no attacking here" state -> every KH character's rule, before any steps
+        // (THE USER 2026-11-02: "Give Sora the ability to 'Summon' from the command menu, but he uses Elden Ring's spirit
+        // ashes") the Summon command's Elden Ring side (spirit.rs): his ashes, the bell, the spirit, its timer and leaving;
+        // the view the core reads in this frame's steps. Battle = the KH HUD's rule (the leader's battle flag, or the forced one).
+        {
+            #[cfg(feature = "party")]
+            let in_battle = crate::conv::party_scene(self.party.core(), &self.out, &self.sora).2;
+            #[cfg(not(feature = "party"))]
+            let in_battle = self.sora.actions().battle;
+            let in_battle = in_battle || self.sora.actions().battle_forced;
+            let (leader_kh, leader_yaw, leads) = (self.lead_pos(), self.lead_yaw(), self.friend_lead().is_none());
+            let (feet_kh, yaw, resting) = (self.out.position, self.out.yaw, self.savepoint.resting());
+            crate::spirit::frame(crate::spirit::SpiritFrame { control, sora: &mut self.sora, player, frame: self.world.frame, feet_kh, yaw, leader_kh, leader_yaw, leads, in_battle, resting, paused, dt });
+        }
+        // (MIMIC-BOSS) THE MIMIC TEAR BOSSES (mimic_boss.rs): the fight's state, the solo fight at the fog gate (the friends out,
+        // a spirit from before the gate dismissed; back on a win or outside the arena), the copy of the leader made when the
+        // game enables the boss's body
+        #[cfg(feature = "party")]
+        {
+            let (leader_kh, leader_alive, now) = (self.lead_pos(), self.lead_alive() && !self.died, self.clock as f64);
+            let rt = self.party.core_mut().map(|c| &mut c.rt);
+            let reseat = crate::mimic_boss::frame(crate::mimic_boss::BossFrame { control, sora: &mut self.sora, rt, targets: &self.targets, frame: self.world.frame, leader_kh, leader_alive, now });
+            crate::arena_walls::frame(&self.world, leader_kh); // (NOKRON-WALLS) the fight's invisible walls into Sora's world
+            if reseat {
+                if let Some(core) = self.party.core_mut() {
+                    core.reseat_soon();
+                }
+            }
+        }
 
         // ---- the camera: KH3's while Sora is in control (alive, gameplay, the world runs)
         // (IMPL_ER13) a menu of OURS (or the game-over hold) freezes the view; Elden Ring's own menus / map / grace /
         // cutscenes get its camera back as before
         let own_menu = (crate::hud::menu_open() || crate::hud::gameover_holds()) && !ui.cutscene;
-        self.cam.frame(control, (!ui.menu || self.follow == Some(Follow::Action)) && !paused, own_menu, &self.out, &self.out_before, &self.sora, self.world.frame);
+        self.cam.frame(control, (!ui.menu || self.follow == Some(Follow::Action)) && !paused, own_menu, crate::cam::CamSora { out: &self.out, before: &self.out_before, sora: &self.sora }, self.world.frame);
 
         // Input: the pad through XInput, the keyboard path beside it; `in.*` of the control file
         // replaces the stick (unattended tests).
@@ -1808,6 +2048,10 @@ impl SoraHost {
             self.script.cancel("real pad input");
         }
         let mut right_stick = device.map(|p| p.right).unwrap_or(Vec2::ZERO);
+        // (CAMP-OPTIONS follow-ups) THE MOUSE AS KH3 PC READS IT: as the right stick (eroptions.rs `mouse_stick`), for every
+        // camera and aim mode the right stick drives (cam.rs: field, lock-on, shotlock aim, the forms' cameras; ShooterMode's
+        // aim below); taken every frame (none kept for later), given only where the right stick reaches them (below)
+        let mut mouse_look = crate::eroptions::mouse_stick(crate::dinput_mask::take_mouse_motion(), dt);
         if let (Some(x), Some(y)) = (control.f32("in.rx"), control.f32("in.ry")) {
             right_stick = Vec2::new(x, y);
         }
@@ -1818,6 +2062,7 @@ impl SoraHost {
         let view_raw = device.is_some_and(|p| p.buttons.has(PadButton::SpecialLeft));
         if !self.map_watch.pad_gate(control, dt) {
             (stick, right_stick, held) = (Vec2::ZERO, Vec2::ZERO, PadButtons::NONE);
+            mouse_look = Vec2::ZERO; // (CAMP-OPTIONS)
         }
         if control.flag("in.keys") != Some(false) {
             let (key_stick, key_buttons) = inputs::keyboard();
@@ -1850,6 +2095,11 @@ impl SoraHost {
             self.script.cancel("an Elden Ring menu has the input");
         }
         if let (Some(seg), true) = (self.script_now, self.script.active()) {
+            (stick, right_stick, held) = (seg.left, seg.right, seg.buttons);
+            inputs::set_virtual(seg.left, seg.right, seg.buttons);
+        }
+        // (GF-INGAME) the test pilot (`test.auto`, a test key)
+        if let Some(seg) = crate::autopad::step(control, self.lead_pos(), self.cam.input_yaw().unwrap_or(self.out.yaw), &self.targets, dt) {
             (stick, right_stick, held) = (seg.left, seg.right, seg.buttons);
             inputs::set_virtual(seg.left, seg.right, seg.buttons);
         }
@@ -1887,7 +2137,7 @@ impl SoraHost {
         #[cfg(not(feature = "party"))]
         let sp_floor = self.out.on_floor;
         self.savepoint.load_in(control, loadin.window, self.feet_er()); // (LDI) what appears in the load-in window appears settled
-        let sp_y = self.savepoint.frame(control, player, &self.targets, self.world.frame, &mut self.sora, sp_floor, self.prompt, ui, y_raw, held.iter().any(|b| b == PadButton::LeftShoulder) /* (IMPL_ER26) LB + Y */, real);
+        let sp_y = self.savepoint.frame(control, player, &self.targets, self.world.frame, &mut self.sora, crate::savepoint::SpFrame { on_floor: sp_floor, prompt: self.prompt, ui, y_held: y_raw, lb_held: held.iter().any(|b| b == PadButton::LeftShoulder) /* (IMPL_ER26) LB + Y */, dt: real });
         // (savepoint, IMPL_ER26) Respawn Enemies asked the game for its world reset: no orb stays on the field (their munny is given, as when a cutscene starts)
         if self.savepoint.take_world_reset() && !self.cutscene {
             self.prize.cutscene(true, &mut self.sora);
@@ -1909,6 +2159,10 @@ impl SoraHost {
         // (CV3) TALK PRIORITY: a party member's talk prompt (Donald at the crone) or a party conversation running wins Y
         // over Elden Ring's own action prompt (the crone's talk); Y then goes the party talk's way (unlock::note_pad)
         let er_prompt = crate::conv::er_prompt_may_take_y(self.prompt);
+        // (CAMP-OPTIONS) the game's own action input is the game's while its prompt is open to it (no KH prompt, no menu of
+        // ours): its keyboard action key (dinput_mask.rs) and, with a remapped pad, its own Y button (the mask below)
+        let er_action_open = er_prompt && !sp_y && !menu_before;
+        crate::dinput_mask::set_er_action_open(er_action_open);
         if self.prompt && !er_prompt && y_raw && !self.y.held {
             erlog!("y: Elden Ring's action prompt is up, but a party member's talk is offered (or his conversation runs): Y is the party talk's (CV3)");
         }
@@ -1987,6 +2241,10 @@ impl SoraHost {
             held = PadButtons::NONE;
         }
         let ours = before_hud != held || crate::hud::menu_open() || crate::hud::gameover_holds(); // (IMPL_ER23A) a menu of ours has the pad
+        // (CAMP-OPTIONS) no mouse look under a menu (ours or the game's), a story bubble, the boss finish, a held body, a script
+        if ui.menu || story_bubble || ours || crate::conv::holds_sticks() || self.finish.locked() || self.follow.is_some() || self.own_hold || self.leap_wait.is_some() || self.script.active() {
+            mouse_look = Vec2::ZERO;
+        }
         if self.finish.locked() {
             // (IMPL_ER22) KH3's boss finish holds the input (bDisableMove, bDisableCameraMove)
             stick = Vec2::ZERO;
@@ -1994,7 +2252,7 @@ impl SoraHost {
             held = PadButtons::NONE;
         }
         // (LADDER2) also while the game lets its body go at a ladder: the leader stands for his leap (no step away from it)
-        if self.follow.is_some() || self.own_hold || self.leap_wait.is_some() {
+        if self.follow.is_some() || self.own_hold || self.leap_wait.is_some() || (self.catch.is_some_and(|c| c.holds()) && self.friend_lead().is_none()) /* (GRABS) Sora leading, caught or getting up */ {
             // (IMPL_ER10) he follows the body: no input (IMPL_ER17: nor while the body performs an action in place)
             stick = Vec2::ZERO;
             right_stick = Vec2::ZERO;
@@ -2018,7 +2276,7 @@ impl SoraHost {
         }
         // What Elden Ring does not see of the pad (inputs.rs; renewed every frame, lapses by itself).
         let own = control.flag("in.own") != Some(false) && control.flag("hud.hide") != Some(true);
-        let mask = if own && cutscene_menu { crate::hud::cutscene_mask() } else if !own || ui.menu { 0 } else { u32::from((inputs::XI_GAMEPLAY | if start_to_er { 0 } else { inputs::XI_START }) & !(if y_to_er { inputs::XI_Y } else { 0 })) | inputs::MASK_LEFT_STICK | inputs::MASK_TRIGGERS | if self.cam.has_view() { inputs::MASK_RIGHT_STICK } else { 0 } };
+        let mask = if own && cutscene_menu { crate::hud::cutscene_mask() } else if !own || ui.menu { 0 } else { u32::from((inputs::XI_GAMEPLAY | if start_to_er { 0 } else { inputs::XI_START }) & !(if y_to_er || (er_action_open && crate::remap_er::pad_moves(PadButton::FaceTop)) { inputs::XI_Y } else { 0 })) | inputs::MASK_LEFT_STICK | inputs::MASK_TRIGGERS | if self.cam.has_view() { inputs::MASK_RIGHT_STICK } else { 0 } };
         let mask = if borrowed_pad.on && own { mask | borrowed_pad.er_mask } else { mask }; // (ERUI) no Start / View of the game's in a borrowed interaction (nothing under our Pause)
         inputs::set_mask(if mask != 0 { mask | crate::hud::extra_mask() } else { mask }); // (hud) + Start, View, right stick while a menu of ours is up
         if self.savepoint.masks_pad() {
@@ -2063,6 +2321,10 @@ impl SoraHost {
         // (INT) paused: the accumulator is HELD (no steps, the frame stays where it was between the steps; 0 drew the step
         // before: everything popped back a step when a menu opened, with `r.interp` on)
         self.accumulator = if paused { self.accumulator.min(STEP * 0.999) } else { (self.accumulator + dt_steps).min(0.25) };
+        // (SPIRITSPRING) the spring the body stands in (never while it rides Torrent: the game's own spring jump), once a frame
+        let spring_on = control.flag("spring.on") != Some(false) && !ui.menu && !ui.cutscene && !self.cutscene && !paused;
+        let spring_riding = crate::spiritspring::game::riding(player);
+        let spring_here = if spring_on && !spring_riding { crate::spiritspring::game::here(player) } else { None };
         let casts_before = self.world.casts.get();
         while self.accumulator >= STEP {
             self.accumulator -= STEP;
@@ -2094,13 +2356,21 @@ impl SoraHost {
             }
             // (IMPL_ER22) KH3's boss finish: the script's step on the real step; `wdt` = the world's step (1/60 outside a sequence)
             let rate = self.finish.step(STEP);
+            let world = self.worldtime.step(STEP, rate, &self.sora); // (AUDIT-A WORLDTIME) + the forms' hit-stops (global) and WorldSlow (enemies)
+            let rate = world.global; // (AUDIT-A WORLDTIME)
             let wdt = STEP * rate;
-            self.targets.puppets.time_slow = 1.0 - rate;
+            // (PARTY-AI, AUDIT-A WORLDTIME) KH3's [FRIEND] (the shotlock aim's x0.4, SetTypeRates 0x4D9E): every AI party member's
+            // step on wdt x [FRIEND], the player's character on wdt (kh-party Party::member_rate)
+            #[cfg(feature = "party")]
+            if let Some(c) = self.party.core_mut() {
+                c.rt.party.set_friend_rate(world.friend_type);
+            }
+            self.targets.puppets.time_slow = 1.0 - world.enemy(); // (AUDIT-A WORLDTIME) the enemies' reactions at global x [ENEMY]
             if self.finish.locked() {
                 held_now = PadButtons::NONE;
             }
             self.targets.step = self.out.step + 1;
-            self.targets.sora = self.out.position;
+            self.targets.sora = self.lead_pos(); // (GF-INGAME)
             self.targets.sora_on_floor = self.out.on_floor; // (IMPL_ER14)
             // The enemies in a KH3 reaction move one fixed step BEFORE Sora's step, so that his
             // targeting, combo continuation and air-combo height matching see them where they are.
@@ -2116,7 +2386,17 @@ impl SoraHost {
             // stepped while he is out of the active party
             // (LADDER2) SORA'S LEAP UP A LADDER (the leader, or AI Sora after a friend leader; ladder.rs `SoraLeap`): his kh-core
             // state is HELD (not stepped), his place is the leap's (kh-core leap.rs), his figure KH3's own jump clips
+            // (SPIRITSPRING) the leader on foot at a spiritspring: his jump's lift for this step (spiritspring.rs)
+            let on_foot = spring_on && !spring_riding && self.follow.is_none() && !self.own_hold && self.leap.is_none() && self.leap_wait.is_none() && self.lead_alive();
+            self.spring_step(spring_here, on_foot, control, wdt);
             let leaping = self.leap.is_some();
+            // (F-ARROWGUN line 3, F-HUD, INT-F) the right stick for the gun forms' ShooterMode aim (Input has none): the
+            // pad's while Sora leads (cam.rs keeps the orbit still while ShooterMode's camera is up)
+            #[cfg(feature = "party")]
+            let look = if self.friend_lead().is_some() { Vec2::ZERO } else { right_stick + mouse_look /* (CAMP-OPTIONS) the mouse aims too */ };
+            #[cfg(not(feature = "party"))]
+            let look = right_stick + mouse_look; // (CAMP-OPTIONS) the mouse aims too
+            self.sora.set_shooter_look(look);
             let leap_out = match self.leap.as_mut().map(|l| l.step(wdt)) {
                 Some((s, show)) => {
                     self.leap_show = show;
@@ -2128,7 +2408,7 @@ impl SoraHost {
             #[cfg(feature = "party")]
             let out = match leap_out {
                 Some(o) => o,
-                None => self.party.step_sora(&mut self.sora, wdt, &input, &self.world, &mut self.targets, &mut self.fx, &mut self.hud.keep, &self.out),
+                None => self.party.step_sora(&mut self.sora, wdt, &input, crate::party::soratargets::SoraSeams { world: &self.world, targets: &mut self.targets, fx: &mut self.fx, ui: &mut self.hud.keep }, &self.out),
             };
             #[cfg(not(feature = "party"))]
             let out = match leap_out {
@@ -2181,7 +2461,14 @@ impl SoraHost {
                     let i = s.index_of("t_camera").or_else(|| s.index_of("atama"))?;
                     self.pose.component.get(i).map(|t| component_to_world(&self.out).transform_point(t.translation))
                 });
-                self.party.after_sora_step(&mut self.sora, &out, wdt, &self.world, &mut self.targets, &mut self.fx, lock_on, look, self.leap.is_some(), self.clock as f64);
+                self.party.after_sora_step(&mut self.sora, crate::party::AfterSora { out: &out, dt: wdt, world: &self.world, targets: &mut self.targets, fx: &mut self.fx, lock_on, look, leaping: self.leap.is_some(), now: self.clock as f64 });
+                // (MIMIC SORA, THE USER 2026-11-03: "build mimic Sora") the Mimic Tear's Sora: his AI (AI Sora's), his step, his pose
+                // (spirit_mimic.rs), right after the party's step, against the same world and enemies
+                crate::spirit_mimic::step(crate::spirit_mimic::MimicStep { sora: &self.sora, world: &self.world, targets: &mut self.targets, fx: &mut self.fx, rt: self.party.core().map(|c| &c.rt), camera: self.party.core().map(|c| &c.camera), lock_on, dt: wdt * world.friend_type /* (PARTY-AI) Mimic Sora is an AI: KH3's [FRIEND] */, now: self.clock as f64 });
+                // (MIMIC-BOSS) a Mimic Tear boss's copy (and its summon): its hostile AI, its step against the party, its hits on
+                // the leader through the party's damage path; an enemy of the world: KH3's [ENEMY] time rate
+                let camera = self.party.core().map(|c| c.camera);
+                crate::mimic_boss::step(crate::mimic_boss::BossStep { sora: &mut self.sora, rt: self.party.core_mut().map(|c| &mut c.rt), camera, world: &self.world, fx: &mut self.fx, dt: wdt * world.enemy_type, now: self.clock as f64 });
                 self.world.flat.set(flat);
                 match self.party.runtime_on() {
                     Some(rt) => {
@@ -2241,6 +2528,15 @@ impl SoraHost {
                 let n = SP_SOUND.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xFFFF;
                 self.fx.audio.0.push(kh_host::seam::AudioCommand::Play(kh_core::SoundHandle(0x7E01_0000 | n), play));
             }
+            // (THE USER 2026-11-02: "...while they are guarding plays the 'guard' sound effect instead of hit and they don't get
+            // bloody from it") a blow Sora's guard took this step (leader or AI Sora), then every guarded blow's guard sound
+            // (guardblow.rs: his row; the friends' were noted by the party's step above), through the same audio queue
+            crate::guardblow::sora_step(&out.events, out.capsule_center);
+            for play in crate::guardblow::take_sounds() {
+                static GUARD_SOUND: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                let n = GUARD_SOUND.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xFFFF;
+                self.fx.audio.0.push(kh_host::seam::AudioCommand::Play(kh_core::SoundHandle(0x7E02_0000 | n), play));
+            }
             self.fx.effect_dt = wdt; // (IMPL_ER75) the effects (the trail's history and fade) on the world's clock, as his step
             #[cfg(feature = "party")]
             self.fx.set_party(self.party.core().map(|c| (&c.feed, c.visible()))); // (ER party S5) the party's bones, spell actors, shown or not
@@ -2256,7 +2552,7 @@ impl SoraHost {
                 // (IMPL_ER22) the finish's cut, its shake, the world's rate for our cameras
                 let shake = self.finish.take_shake();
                 let rules = self.finish.rules;
-                self.cam.set_finish(self.finish.shot(), self.finish.enemy(), rules.player_height, rules.collision, self.finish.locked(), rate, shake);
+                self.cam.set_finish(crate::cam::FinishCam { shot: self.finish.shot(), enemy: self.finish.enemy(), player_height: rules.player_height, collision: rules.collision, locked: self.finish.locked(), rate, shake });
             }
             // (ER party S7) the party's side of the camera: a friend leader's field / lock-on target, the team attacks' cameras
             #[cfg(feature = "party")]
@@ -2265,7 +2561,8 @@ impl SoraHost {
             let party_cam: Option<&mut dyn crate::cam::PartyCamera> = party_cam.as_mut().map(|c| c as &mut dyn crate::cam::PartyCamera);
             #[cfg(not(feature = "party"))]
             let party_cam: Option<&mut dyn crate::cam::PartyCamera> = None;
-            self.cam.step(STEP, crate::cam::StepInput { right: right_stick, left: stick, recentre }, &out, &self.out, &self.sora, &self.targets, self.fx.take_shakes(), party_cam);
+            self.cam.step(STEP, crate::cam::StepInput { right: right_stick, left: stick, recentre, mouse: mouse_look /* (CAMP-OPTIONS) a stick: every step of the frame */ }, crate::cam::CamSora { out: &out, before: &self.out, sora: &self.sora }, &self.targets, self.fx.take_shakes(), party_cam);
+            self.worldtime.request(self.cam.take_form_game_speed()); // (AUDIT-A WORLDTIME) tate_finish's SetGlobalGameSpeed, from the next step
             if self.pose_before.component.is_empty() {
                 self.pose_before = self.pose.clone();
             }
@@ -2292,19 +2589,9 @@ impl SoraHost {
             crate::status::on_events_of(&out.events, self.sora.status(), kh_host::party::PartyChara::Sora, self.lead.chara());
             #[cfg(not(feature = "party"))]
             crate::status::on_events(&out.events, self.sora.status());
+            out.events.iter().for_each(|e| crate::spirit::note_event(&e.kind)); // (THE USER 2026-11-02: "Summon") the core's Summon events
             // The Keyblade's show / hide sequence (the core's events) and its keychain.
             for event in &out.events {
-                // (IMPL_ER53) the steady Keyblade glow the core has just started: kept to stop it (at once when the light
-                // went off meanwhile)
-                if let EventKind::EffectSpawn { handle, spawn } = &event.kind {
-                    if spawn.name == kh_er_render::pointlight::GLOW_EFFECT {
-                        if self.sparkle.glowing {
-                            self.glow_handle = Some(*handle);
-                        } else {
-                            self.sora.debug_emit(kh_core::DebugEmit::StopEffect(*handle, false));
-                        }
-                    }
-                }
                 match event.kind {
                     EventKind::WeaponVisible { visible: true, instant: true } => self.weapon = WeaponShow { visible: true, since: self.weapon.since.max(WeaponShow::DELAY + WeaponShow::RAMP) + if self.weapon.visible { 0.0 } else { 10.0 } },
                     EventKind::WeaponVisible { visible, .. } if visible != self.weapon.visible => self.weapon = WeaponShow { visible, since: 0.0 },
@@ -2320,10 +2607,16 @@ impl SoraHost {
                         self.sora_fell = true; // (DTH) taken by the death flow (`death_observe`)
                     }
                     EventKind::CameraLock { target } => erlog!("lock: Sora's lock-on camera target is {}", if target == TargetId::NONE { "none".to_string() } else { format!("target {}", target.0) }),
+                    // (AUDIT-C) a face play the core asks for (Rage Form's end: ANTI_01 / ANTI_02, EndStyle 0x14141CA20)
+                    EventKind::FaceAnim { row } => {
+                        let played = self.animator.as_mut().is_some_and(|a| a.play_face_row(Some(row), "NORMAL_AUTO", [true, true], -1.0, false));
+                        erlog!("face: {row} on his face{}", if played { "" } else { ": NO SUCH FACE ROW IN THE PACK (face/face_extra.json)" });
+                    }
                     EventKind::BattleMode { on } => erlog!("battle: Sora's battle flag {}{}", if on { "ON" } else { "off" }, if on { format!(" ({})", self.targets.engaged_report()) } else { String::new() }), // (BM) who engaged
                     _ => {}
                 }
             }
+            kbdraw::frame(control, self.sora.status_mut()); // (P5) test.keyblade / test.kb_form (test profile only)
             if let Some(forced) = control.flag("sora.weapon") {
                 if forced != self.weapon.visible {
                     self.weapon = WeaponShow { visible: forced, since: 0.0 };
@@ -2336,41 +2629,75 @@ impl SoraHost {
             // effect is started at the blade's tip at an interval while it is drawn; the light itself is placed on the
             // blade by the renderer (pointlight.rs).
             {
-                let wanted = kh_er_render::pointlight::keyblade_wanted();
-                // (ER party S2, U5) WHO CARRIES THE HERO LIGHT: Sora while he is in the party (AI Sora too); otherwise the leader's
-                // weapon tip (kh-er-render, S4, reads `lead.light`)
+                // (the user, 2026-11-03: "keyblade-hero light should never activate in round table hold") the renderer's gate
+                // is held off at once in the Hold's map (pointlight.rs `set_hero_banned`): no light, no Keyblade drawn for it
                 #[cfg(feature = "party")]
-                let wanted = {
-                    let sora_in = !self.party.core().is_some_and(|c| c.sora_skipped());
-                    self.lead.light = Some(crate::party::leader::light_carrier(sora_in, self.lead.chara()));
-                    wanted && self.lead.light == Some(kh_host::party::PartyChara::Sora)
+                kh_er_render::pointlight::set_hero_banned(crate::moogle::in_roundtable_hold());
+                let wanted = kh_er_render::pointlight::keyblade_wanted();
+                // (HEROLIGHT-KB, the user 2026-11-05: "for the hero light, it should just be whoever is party leader, not dependent on
+                // Sora") WHO CARRIES THE HERO LIGHT: the party leader, whoever he is (leader.rs `light_carrier`); an AI Sora does not
+                // draw his Keyblade for it; a friend leader's weapon carries it (S4 places the light at it: partydraw.rs `lead.light`)
+                #[cfg(feature = "party")]
+                let leader = {
+                    let leader = crate::party::leader::light_carrier(self.lead.chara());
+                    self.lead.light = Some(leader);
+                    leader
                 };
-                if wanted != self.keyblade_held {
-                    self.keyblade_held = wanted;
-                    erlog!("hero light: the Keyblade light is {} (the darkness gate{})", if wanted { "ON: Sora draws the Keyblade, it sparkles and lights the dark" } else { "off: the Keyblade is put away out of battle" }, if wanted { " closed" } else { " open, or r.hero_light / hero.keyblade = 0" });
+                #[cfg(not(feature = "party"))]
+                let leader = kh_host::party::PartyChara::Sora;
+                let sora_holds = wanted && leader == kh_host::party::PartyChara::Sora;
+                if sora_holds != self.keyblade_held {
+                    self.keyblade_held = sora_holds;
+                    erlog!("hero light: the Keyblade light is {} (the darkness gate{})", if sora_holds { "ON: Sora draws the Keyblade, it sparkles and lights the dark" } else { "off for Sora: his Keyblade follows its combat rule" }, if sora_holds { " closed" } else if wanted { " closed, but a friend leads: the light is on his weapon" } else { " open, or r.hero_light / hero.keyblade = 0" });
                 }
-                self.sora.hold_weapon(wanted);
-                // (IMPL_ER53, the user: "the glow on the keyblade pulses instead of being constant while in the dark, it must
-                // be constant") a STEADY glow (KH3's appear effect's blade-glow emitters held) for as long as the light is on,
-                // and only its small sparkles restarted at the interval; no particle light of the effect (the hero light is
-                // the light). hero.glow 0: IMPL_ER44's whole appear effect at the interval.
-                let s = kh_er_render::pointlight::settings();
-                let lit = wanted && self.weapon.visible && self.weapon.opacity() >= 1.0;
-                let step = self.sparkle.step(STEP, lit, s.hero_glow, s.hero_sparkle);
-                let at_blade = |name: &'static str, socket: &'static str, persistent: bool| kh_core::EffectSpawn { at: kh_core::Attach::Sora { bone: Some(socket), offset: glam::Vec3::ZERO }, persistent, ..kh_core::EffectSpawn::at_sora(kh_core::EffectId(kh_core::notify::notify_asset_id(name)), name) };
-                if step.start_glow {
-                    self.sora.debug_emit(kh_core::DebugEmit::Effect(at_blade(kh_er_render::pointlight::GLOW_EFFECT, kh_er_render::pointlight::GLOW_SOCKET, true)));
-                }
-                if step.stop_glow {
-                    if let Some(handle) = self.glow_handle.take() {
-                        self.sora.debug_emit(kh_core::DebugEmit::StopEffect(handle, false));
+                // (PARTY-WEAPONS) the one hold rule of every character (kh_core::weapon_gate::hold: the carrier only, never in a
+                // no-combat place); a friend leader's staff / shield is held by the same rule (kh-party weapon_draw)
+                self.sora.hold_weapon(kh_core::weapon_gate::hold(leader == kh_host::party::PartyChara::Sora, wanted));
+                #[cfg(feature = "party")]
+                if let Some(core) = self.party.core_mut() {
+                    for (chara, id) in core.rt.members.clone() {
+                        core.rt.party.set_weapon_hold(id, kh_core::weapon_gate::hold(chara == leader, wanted));
                     }
                 }
-                if step.sparkle {
-                    let (sparkle_fx, sparkle_socket) = if s.hero_glow { (kh_er_render::pointlight::SPARK_EFFECT, kh_er_render::pointlight::GLOW_SOCKET) } else { kh_er_render::pointlight::sparkle_effect() };
-                    self.sora.debug_emit(kh_core::DebugEmit::Effect(at_blade(sparkle_fx, sparkle_socket, false)));
-                }
+                // (IMPL_ER53, the user: "the glow on the keyblade pulses instead of being constant while in the dark, it must
+                // be constant") a STEADY glow (the carrier weapon's own appear effect's glow emitters held) for as long as the
+                // light is on, and only its sparkles restarted at the interval; no particle light of the effect (the hero light
+                // is the light). (HEROLIGHT-KB) Of THE CARRIER'S WEAPON (sheets/port/sora-herolight.json): Sora's hand Keyblade or
+                // his form's hand unit (kh-core `attack_model`), fully drawn (not inside a D-pad switch); a friend leader's
+                // staff / shield while it is in his hand and he is drawn. A switch or a leader swap ends the old ones at once.
+                let carrier: (Option<String>, bool) = if leader == kh_host::party::PartyChara::Sora {
+                    (Some(kbdraw::sound_model()), self.weapon.visible && self.weapon.opacity() >= 1.0 && kbdraw::visibility() >= 1.0)
+                } else {
+                    #[cfg(feature = "party")]
+                    let friend = self.party.core().filter(|c| c.visible()).and_then(|c| {
+                        let t = c.feed.taps.iter().find(|t| crate::fx::party::chara_of_member(t.member) == Some(leader))?;
+                        let id = kh_party::MemberId(t.member);
+                        Some((Some(t.weapon.clone()), !c.rt.party.weapon_hidden(id) && c.rt.party.weapon_ground(id).is_none() && c.rt.party.weapon_view(id).is_some_and(|w| w.opacity >= 1.0) /* (PARTY-WEAPONS) fully drawn, as the Keyblade */))
+                    });
+                    // (PARTY-WEAPONS) Clippy without the party feature: no literal None unwrapped
+                    #[cfg(feature = "party")]
+                    let friend = friend.unwrap_or((None, false));
+                    #[cfg(not(feature = "party"))]
+                    let friend = (None, false);
+                    friend
+                };
+                let lit = wanted && carrier.1;
+                self.herolight.step(STEP, lit, carrier.0.as_deref().map(|model| crate::herolight::Carrier { who: leader, model, socket: None }), &mut self.fx.effects);
+                // (HEROLIGHT-KB final pass, the user: "all of them have graphical errors") A DUAL-WIELD FORM's LEFT-HAND weapon gets its
+                // own glow and sparkles too (Double Form's Oblivion, the Double Arrowguns' left gun, ...): the form's LEFT_HAND unit
+                // (`LWeapon@LEFT_HAND:L_wep1_skt=.../w_so023_Wep`) on its own socket; the light stays the right hand's
+                let left: Option<(&'static str, &'static str)> = if leader == kh_host::party::PartyChara::Sora {
+                    self.sora.combat().form.weapon_units().into_iter().find_map(|u| {
+                        let socket = u.split_once("@LEFT_HAND:")?.1.split('=').next().filter(|s| !s.is_empty() && *s != "None")?;
+                        Some((kh_core::status::keyblade::model_of(kh_core::status::keyblade::blueprint_of(u)), socket))
+                    })
+                } else {
+                    None
+                };
+                self.herolight_left.step(STEP, lit && left.is_some(), left.map(|(model, socket)| crate::herolight::Carrier { who: leader, model, socket: Some(socket) }), &mut self.fx.effects);
             }
+            // (FREEZE-FX) KH3's frozen look on every frozen enemy, for exactly its freeze; the break at its end (freezefx.rs)
+            self.freeze_fx.step(&self.targets, self.world.frame, STEP, &mut self.fx.effects);
             self.weapon.since += STEP;
             self.step_chain(&out);
             self.clock += STEP;
@@ -2431,6 +2758,7 @@ impl SoraHost {
             self.steps_in_tick += 1;
             held = held_now;
         }
+        self.spear_fx(); // (F-SHIP 3, INT-F)
         if std::mem::take(&mut self.stuck_now) && self.follow.is_none() && self.sora.status().hp > 0 && self.friend_lead().is_none() /* (ER party S2) the net and anchor are the leader's */ {
             self.unstick(player, control.flag("stuck.safe") != Some(false));
         }
@@ -2463,7 +2791,10 @@ impl SoraHost {
         for (id, max_hp, at) in kills {
             let npc_param = self.targets.get(id).map_or(0, |e| e.npc_param); // (prize)
             self.prize.on_kill(control, &mut self.sora, id.0, npc_param, max_hp, at); // (prize) `prize.kh = 1`: it bursts into KH3 prizes
-            self.loot.on_kill(control, &mut self.sora, self.prize.loot_host(), id.0, npc_param, max_hp, at); // (loot) `loot.kh = 1`: its item lot as KH3 prize boxes
+            self.loot.on_kill(control, &mut self.sora, self.prize.loot_host(), crate::loot::Kill { target: id.0, npc_param, max_hp, at }); // (loot) `loot.kh = 1`: its item lot as KH3 prize boxes
+            // (P9b) a REAL death of a drop kind (no load asked since this Sora started, the leader alive, not counted already): KH3's rare weapon drop as a prize box
+            let dead = self.death_sent || self.sora.status().hp <= 0;
+            self.weapon_src.on_kill(control, &mut self.sora, self.prize.loot_host(), crate::weaponsrc::Kill { target: id.0, npc_param, at, dead });
             let exp = self.targets.params.exp_of(max_hp);
             if exp > 0 {
                 // (ER party S6, P2) a friend leading: the award with him as player 0 (his Zero EXP), the shared total
@@ -2491,7 +2822,7 @@ impl SoraHost {
         self.cam.post(dt, crate::interp::alpha(control, self.accumulator), control);
         self.death_observe(); // (DTH) the leader down, whoever leads: before the HUD (its game over) and `after_steps` (the body)
         let down = self.flow.gameover(); // (DTH) KH3's game over is the down leader's (never AI Sora's, never a scripted death)
-        self.hud.frame(&mut self.sora, &self.out, &self.targets, self.world.frame.origin, control, ui, down); // (hud) one HUD frame from the latest step
+        self.hud.frame(&mut self.sora, crate::hud::HudStep { out: &self.out, targets: &self.targets, origin: self.world.frame.origin }, control, ui, down); // (hud) one HUD frame from the latest step
         {
             // (CV1) THE CONVERSATION SYSTEM (conv.rs): the participants, the bubble, the locks, the camera's shots
             #[cfg(feature = "party")]
@@ -2505,10 +2836,18 @@ impl SoraHost {
             crate::conv::frame(control, &scene);
             crate::talkkh::frame(control, crate::talkkh::TalkCtx { cutscene: ui.cutscene || self.cutscene, in_battle: scene.combat, er_menu: self.popup.is_some_and(|p| p.top_job != 0), story_talk: self.savepoint.holds_pad() /* (CV3) */, leader_name: scene.leader_name.clone() /* (CV3) */, dt }); // (CV2) Elden Ring's character conversations as KH bubbles (`talk.kh`)
             crate::shopkh::frame(control, &self.sora, ui.cutscene || self.cutscene, dt); // (SHOP) the KH shop for the merchants' windows
+            crate::boc::talk_frame(control, ui.cutscene || self.cutscene, dt); // (THE USER 2026-11-02) Boc's "Alter garments" -> the KH Outfits screen
+            crate::spirittune::talk_frame(control, &self.sora, ui.cutscene || self.cutscene, dt); // (THE USER 2026-11-02) Roderika's "Spirit Tuning" -> the KH Spirit Tuning screen
+            crate::forgekh::talk_frame(control, ui.cutscene || self.cutscene, dt); // (P7 SMITHS, the user 2026-11-03) any smith's reinforcement menu -> KH3's Keyblade Forge; his other options trimmed
+            crate::gestureprompt::frame(control, crate::gestureprompt::FrameIn { hidden: ui.menu || ui.cutscene || self.cutscene }); // (EMOTE-PROMPTS) a known gesture's quest event as a Y command
+            #[cfg(feature = "party")]
+            crate::moogle::frame(control, &crate::moogle::FrameIn { dt, frame: self.world.frame, hidden: ui.cutscene || self.cutscene, in_battle: scene.combat }); // (P8) the Synthesis Moogle at Roundtable Hold
         }
         crate::save::choice_tick(&mut self.sora); // (IMPL_ER11) the opening's choices were made
         crate::save::tick(&self.sora, control); // (save)
         // The view of this frame for the game's camera step (which runs after this phase).
+        self.worldtime.post(&self.targets, control); // (AUDIT-A WORLDTIME) the enemies' animation at WorldSlow's rate
+        self.finish.form_rate = self.worldtime.form_rate(); // (AUDIT-A WORLDTIME) the hit-stops on Elden Ring's game speed too
         self.finish.post(); // (IMPL_ER22) Elden Ring's game speed for this frame (put back exactly when no sequence runs), the white plate
         // (INT) the view of this frame was posted before the HUD (above)
         self.after_steps(player, control, r3, mask != 0);
@@ -2529,20 +2868,27 @@ impl SoraHost {
             // (ER party S8) the staged friends' bodies too (a not yet unlocked friend fighting a boss: its AI targets him)
             let wants = wants.map(|mut w| {
                 w.extend(crate::unlock::stage_wants());
+                w.extend(crate::spirit_mimic::want()); // (MIMIC SORA) his body: the pool's fourth key
                 w
             });
             let (leader_feet, leader_yaw) = (self.lead_pos(), self.lead_yaw());
             crate::allybody::pre_physics(&mut crate::allybody::Ctx { player, frame: self.world.frame, targets: &mut self.targets, control, leader_feet, leader_yaw, dt, paused, wants });
+            crate::mimic_boss::write_bodies(self.world.frame); // (MIMIC-BOSS) the Mimic Tear boss's body (and its Mimic's) at their copies
             let (sora_hp, sora_max) = (self.sora.status().hp, self.sora.status().max_hp());
             let params = self.targets.params;
             if let Some(core) = self.party.core_mut() {
                 crate::allybody::deliver(core, sora_hp, sora_max, &params);
             }
+            self.seat_caught_allies(); // (GRABS) the AI friends a throw holds: seated on their bodies
             // (ER party I, X3G) Goofy's Over Here!: the enemies in its reach are given a hit from his Elden Ring body
             crate::party::taunt::frame(self.party.core(), player.chr_ins.field_ins_handle, &mut self.targets, control, dt);
             // (DON-PROG) Donald's aggro (Low Profile / Hide Behind / Distraction / Taunt Pass / Out of Sight): the hate route, never a hit moved
             crate::party::donaggro::hate(self.party.core(), player.chr_ins.field_ins_handle, &mut self.targets, control, Some(self.sora.output().position), dt);
+            // (AGGRO, wired by GF-THREAT) THE DIRECTOR: whom each engaged enemy attacks. Without this call it never ran (its log held no line)
+            let sora_pos = self.sora.output().position;
+            crate::party::aggro::frame(self.party.core_mut(), player.chr_ins.field_ins_handle, &mut self.targets, control, sora_pos, dt);
         }
+        self.barrier_frame(control, dt, paused); // (DEATHPLANE) Elden Ring's death barriers, for every KH character
         self.work += started.elapsed();
     }
 
@@ -2590,7 +2936,7 @@ impl SoraHost {
         // (DF) the difficulty on Elden Ring's hits: KH3's enemy-damage factor x the base-HP ratio (Critical 4, Proud 1.5);
         // `difficulty.in = 0`: off (Standard's 1), a number: that factor
         t.params.diff_in = match control.f32("difficulty.in") {
-            Some(v) if v == 0.0 => 1.0,
+            Some(0.0) => 1.0,
             Some(v) if v > 0.0 => v,
             _ => crate::ermap::difficulty_in(level),
         };
@@ -2616,14 +2962,6 @@ impl SoraHost {
                 erlog!("damage: the game's own pipeline is NOT available: Sora's hits are written to the targets' HP directly (the stopgap)");
             }
         }
-    }
-
-    /// THE HIT EVENTS OF THIS FRAME: every hit of Sora's the steps of this frame delivered to an
-    /// Elden Ring character (contact point, normal, attack row, target, reaction kind, the damage
-    /// level asked of the game). For the effect renderer and the audio: read it after
-    /// `pre_physics` of the frame (e.g. in `post_physics`).
-    pub fn hit_events(&self) -> &[targets::HitEvent] {
-        &self.targets.events
     }
 
     /// The watched target (testing aid): every change of its animation, HP and poise is logged.
@@ -2656,12 +2994,15 @@ impl SoraHost {
 
     /// The Tarnished goes back to his own maximum HP (Sora stops; the payload is replaced).
     pub fn stop(&mut self, player: &mut PlayerIns) {
+        self.worldtime.stop(); // (AUDIT-A WORLDTIME) every slowed body given back
         self.finish.stop(); // (IMPL_ER22) a running boss finish ends: Elden Ring's game speed is put back
         self.loot.restore("Sora stops"); // (loot) the enemy types get their own item lots back
         self.attackers.restore("Sora stops"); // (ENG) the enemies' own TeamAttackEffectivity
+        crate::spirit::stop("Sora stops"); // (THE USER 2026-11-02: "Summon") the spirit goes with him (the game's remove-now)
         self.prize.stop(&mut self.sora); // (prize) the orbs and their effects go; munny still in orbs is his (IMPL_ER20), before the file is written
         crate::save::on_stop(&self.sora); // (save)
         self.savepoint.stop(); // (savepoint) the save points go, the graces get their own drawing back
+        crate::guardblow::release_body_sounds(&mut player.chr_ins, "Sora stops"); // (THE USER 2026-11-02) the body's sound switch back if we held it
         if let Some(b) = self.body.take() {
             let data = player.chr_ins.modules.data.as_mut();
             if data.base_hp == b.written_base && b.written_base != b.own_base {
@@ -3066,6 +3407,15 @@ impl SoraHost {
             return;
         }
         let lost = written - hp;
+        crate::sensorlab::on_hit(&player.chr_ins, lost, "the leader"); // (GF-SENSOR)
+        // (GRABS) THE RAYA LUCARIA ABDUCTOR'S BLOWS: in Elden Ring they are its way of carrying its player off (the death,
+        // then the respawn at Volcano Manor its event set); here nothing reaches the leader and the warp at the release
+        // carries the party (grabs.rs). No hit, no death, no game over; the body is topped up as always.
+        if self.grab.on && self.abduct.is_some() {
+            erlog!("hit: (GRABS) the Abductor's blow took {lost} HP off the body: not the leader's (its grab carries the party to Volcano Manor)");
+            self.hp_written = Some(hp);
+            return;
+        }
         // (IMPL_ER23A, the user: "I've had Sora die from fall damage because the invisible elden ring character died instead of
         // him") THE GAME'S FALL DAMAGE IS NOT SORA'S: KH3 has none. What the game takes off its body while he is on a drop of
         // 4 m or more, or within 0.75 s after he landed from one (the body lands by itself a few frames after him), is
@@ -3090,6 +3440,34 @@ impl SoraHost {
         // percent of the maximum is taken of HIS maximum, the rest by the share rule; a hit (it comes with the attack)
         use crate::status_rules::{self as sr, Loss};
         let (tick, taken) = match class { Loss::Tick { own_loss, .. } => (true, own_loss), Loss::Proc { pct, flat, .. } => (false, sr::proc_own_loss(pct, flat, max)), Loss::Hit => (false, lost) };
+        // WHO: the handle the game left in `last_hit_by`, or (GF-SENSOR R4) the attack sensor's reading where that names
+        // nobody (telegraph.rs).
+        // (THE IN-GAME TESTER 2026-11-03, run 2: the test aids put the hidden body 16.7 m lower, the game took 1325 of its HP
+        // as a fall with nobody named, and "the nearest hostile", an idle soldier, was blamed for a Blow on Sora; a 21 m
+        // put-down later knocked the friend leader out) A GUESS NEVER NAMES AN ENEMY (guards.rs `blame`): with nobody named,
+        // the body on (or just down from) a fall of its own is the game's fall damage, KH3 has none: discarded whether the
+        // leader fell or not; else a hostile within 8 m in (or just out of) an attack animation is the evidence of a bullet or
+        // a bite; else it is the environment's (a fire floor, a trap): his damage with no causer.
+        let read = if tick { None } else { crate::telegraph::hit_read(self.lead_pos(), crate::game::v3(&player.chr_ins.modules.physics.position)) };
+        let by_handle = if tick { None } else { self.targets.id_of(&player.chr_ins.last_hit_by).or(read.map(|r| r.attacker)).and_then(|id| self.targets.get(id)).cloned() };
+        // (GRABS) a blow inside an enemy's grab names nobody (the user's log 2026-11-06: "NOBODY NAMED ... THE ENVIRONMENT"):
+        // it is the thrower's (the throw node's other party, named by `grab_kh`)
+        let by_handle = by_handle.or_else(|| if self.grab.on && !tick { self.grabber.as_ref().and_then(|(bits, ..)| self.targets.list.iter().find(|e| game::handle_bits(&e.handle) == *bits)).cloned() } else { None });
+        let attacking = if tick || by_handle.is_some() { None } else { self.targets.attacking_near(self.lead_pos(), 800.0).cloned() };
+        let blame = crate::guards::blame(by_handle.is_some(), tick, control.flag("fall.guard") != Some(false) && self.body_fall.in_window(), attacking.is_some());
+        if blame == crate::guards::Blame::Fall {
+            self.fall.discarded += lost as i64;
+            erlog!(
+                "fall: the game took {lost} HP off its body ({hp} left of {}) with nobody named (last_hit_by {:#x}) while THE BODY ITSELF came down {:.1} m (a fall of its own or a warp that put it lower; the leader {}): THE GAME'S FALL DAMAGE, discarded: no enemy is blamed, the leader takes none{}",
+                player.chr_ins.modules.data.max_hp,
+                crate::game::handle_bits(&player.chr_ins.last_hit_by),
+                self.body_fall.depth,
+                if lead_floor { "stands" } else { "is off the floor" },
+                if hp <= 1 { " (A LETHAL FALL for the game: its no-death switch, held by us, kept the body alive)" } else { "" },
+            );
+            self.hp_written = Some(hp);
+            return;
+        }
         // (DON-MAGIC glacier) GLACIER'S WALLS: an Elden Ring bullet cannot be stopped in flight safely, so a hit (not a status tick)
         // whose attacker's line to the leader passes through Donald's ice wall (the attacker unknown, as a bullet often is: every
         // hostile's line within 60 m) is taken by the ice: no hit, the body topped up as always (the fall guard's route).
@@ -3106,15 +3484,12 @@ impl SoraHost {
         let is_proc = matches!(class, Loss::Proc { .. });
         // (ER party S2) a share of the LEADER'S maximum (Sora's own as before)
         let friend = self.friend_lead();
-        let lead_max = friend.map_or(self.sora.status().max_hp(), |f| f.share_max.round().max(1.0) as i32); // (GOOFY-BAL) a friend leader: Sora's max x his defence (balance.rs)
+        let lead_max = friend.map_or(self.sora.status().max_hp(), |f| f.share_max.round().max(1.0) as i32); // (GF-STATS) a friend leader: the sheet's reference x his Defense factor (balance.rs)
         // (DF) a status tick without the difficulty factor (max-HP-proportional), a hit with it
         let amount = match class { Loss::Proc { pct, flat, .. } => sr::proc_amount(&params, pct, flat, max, lead_max), Loss::Tick { .. } => params.damage_in_tick(taken, max, lead_max), _ => params.damage_in(taken, max, lead_max) };
-        // WHO: the handle the game left in `last_hit_by`; when that names nothing we know (a bullet,
-        // or the field is not what its name says: run 1 logged "unknown" for bat bites), the nearest
-        // living hostile within 8 m (A GUESS, said in the log).
-        let by_handle = self.targets.id_of(&player.chr_ins.last_hit_by).and_then(|id| self.targets.get(id)).cloned();
+        // (the attacker as decided above, by `blame`)
         let guessed = by_handle.is_none();
-        let attacker = if tick { None } else { by_handle }.or_else(|| if tick { None } else { self.targets.hostiles_by_distance().first().filter(|(d, _)| *d <= 800.0).map(|(_, e)| (*e).clone()) });
+        let attacker = by_handle.or(attacking);
         let (causer, from, yaw, radius) = match &attacker {
             Some(e) => (e.id, e.pos, e.yaw, e.radius),
             None => (TargetId::NONE, self.lead_pos() + coords::dir_er_to_kh(coords::facing_er(self.lead_yaw())) * 1.0, self.lead_yaw() + 180.0, 40.0), // (ER party S2)
@@ -3123,6 +3498,9 @@ impl SoraHost {
         // (IMPL_ER48, the user: "status effects like poison should not make Sora flinch, burn should though") a status tick
         // has no reaction; any other loss below the minimum share (burning) is a small hit (`status.burn_flinch = 0`: as before)
         let kind = if tick { None } else { params.kind_in(taken, max).or_else(|| (is_proc || control.flag("status.burn_flinch") != Some(false)).then_some(kh_core::enums::ETresDamageKind::Small)) };
+        // (GRABS) INSIDE AN ENEMY'S GRAB the blows land on HP WITHOUT A REACTION: KH3's caught state holds the pawn (the
+        // user's log: each blow of the throw threw Sora into a Blow reaction, Damage/4, while he was seated on the body)
+        let kind = if self.grab.on && control.flag("grab.kh") != Some(false) { None } else { kind };
         // (DON-MAGIC) Sanctuary's short invincibility and Aero Barrier's cut on Sora (a friend leader's and the allies' are
         // kh-party's Party::receive_hit). (A Blind enemy's hit that reached him lands: Blind moves its aim, donstatus.rs.)
         if friend.is_none() && crate::donstatus::sora_invincible() {
@@ -3131,6 +3509,17 @@ impl SoraHost {
             return;
         }
         let amount = if friend.is_none() { amount * crate::donstatus::sora_damage_mult() } else { amount };
+        // (GF-ARTS, R14) Goofy's Interpose absorbs a hit on Sora: the body is topped up, he takes nothing
+        #[cfg(feature = "party")]
+        if friend.is_none() {
+            let at = self.lead_pos();
+            let attacker = (causer != TargetId::NONE).then_some(causer);
+            if self.party.runtime_on().is_some_and(|rt| rt.party.cover_sora(at, amount, from, attacker)) {
+                erlog!("hit: Goofy's Interpose took it for Sora: no damage");
+                self.hp_written = Some(hp);
+                return;
+            }
+        }
         // (damage over time: reaction type 1 = the HP rule without a reaction)
         let hit = HitOnPlayer { direction, causer_yaw: yaw, causer_radius: radius, reaction_type: if kind.is_some() { 2 } else { 1 }, ..HitOnPlayer::new(kind.unwrap_or(kh_core::enums::ETresDamageKind::Small), amount, causer, from) };
         let mut guarded = false; // (ER party I) the friend leader's kit guarded / dodged it
@@ -3140,14 +3529,15 @@ impl SoraHost {
             // (Goofy's shield / Perfect Guard, Donald's Magic Block) or dodges costs him nothing and plays his guard, not a
             // hit reaction (kh-party); the body is topped up as always
             Some(f) => {
-                let record = crate::guards::friend_hit(&f, kind, amount, causer, from, yaw, radius);
+                let mut record = crate::guards::friend_hit(&f, kind, amount, causer, from, yaw, radius);
+                record.attack_info = read.map_or(kh_core::host::AttackInfo { attacker: (causer != TargetId::NONE).then_some(causer), ..kh_core::host::AttackInfo::NONE }, |r| r.info); // (GF-SENSOR)
                 #[cfg(feature = "party")]
                 let result = self.party.runtime_on().and_then(|rt| crate::party::leader::LeaderBody::hit_now(rt, record));
                 #[cfg(not(feature = "party"))]
                 let result: Option<kh_core::host::HitResult> = None;
                 match result {
                     Some(r) => guarded = r.guarded || !r.accepted,
-                    None => self.lead_order(crate::guards::LeadOrder::Hit(record)),
+                    None => self.lead_order(crate::guards::LeadOrder::Hit(Box::new(record))),
                 }
             }
             None => self.sora.take_hit(hit),
@@ -3159,9 +3549,10 @@ impl SoraHost {
         erlog!(
             "hit: Elden Ring took {lost} of {max} HP off its player ({}) -> {} is hit for {amount:.1} ({}){}",
             match &attacker {
-                Some(e) if guessed => format!("last_hit_by {:#x} is no character we know: taken as the nearest hostile, target {} c{:04}", crate::game::handle_bits(&player.chr_ins.last_hit_by), e.id.0, e.npc_id),
+                Some(e) if guessed => format!("last_hit_by {:#x} is no character we know: target {} c{:04} is in its attack animation {:.1} m away (the evidence of a bullet or a bite)", crate::game::handle_bits(&player.chr_ins.last_hit_by), e.id.0, e.npc_id, (e.pos - self.lead_pos()).length() / 100.0),
                 Some(e) => format!("last hit by target {} c{:04}", e.id.0, e.npc_id),
-                None => format!("attacker unknown, last_hit_by {:#x}", crate::game::handle_bits(&player.chr_ins.last_hit_by)),
+                None if tick => "a status tick, no attacker".to_string(),
+                None => format!("NOBODY NAMED (last_hit_by {:#x}) and no hostile attacking within 8 m: THE ENVIRONMENT or the body's own state ({blame:?}), no enemy blamed", crate::game::handle_bits(&player.chr_ins.last_hit_by)),
             },
             if friend.is_some() { "THE LEADER (a friend)" } else { "Sora" }, // (ER party S2)
             match kind { Some(k) => format!("{k:?}"), None if tick => "a STATUS TICK, no reaction".to_string(), None => "damage over time, no reaction".to_string() },
@@ -3178,7 +3569,8 @@ impl SoraHost {
         let who = self.lead_chara();
         let alive = crate::death::leader_alive(self.friend_lead().map(|f| f.alive), self.sora.status().hp, self.sora_fell);
         self.sora_fell = false;
-        if let Some((who, kind)) = self.flow.observe(who, alive, crate::hud::scripted_death()) {
+        // (KILLPLANE) a leader killed by a barrier dies the party's normal death, never the scripted 1-HP spare
+        if let Some((who, kind)) = self.flow.observe(who, alive, crate::hud::scripted_death() && !self.barrier.leader_killed) {
             self.died = true;
             match kind {
                 crate::death::Kind::Scripted => erlog!(
@@ -3336,6 +3728,10 @@ impl SoraHost {
         if which != "hit" && chr.chr_flags1c5.is_invincible() != self.invulnerable {
             chr.chr_flags1c5.set_is_invincible(self.invulnerable);
         }
+        // (THE USER 2026-11-02: the guard sound INSTEAD of the hit's) the game's own sounds of the body held off while the
+        // leader's guard takes a blow (guardblow.rs; `guard_sound.quiet = 0`: left alone)
+        let guard_up = self.friend_lead().is_none() && self.sora.actions().guard_parts;
+        crate::guardblow::hold_body_sounds(chr, self.lead_chara(), guard_up, control.flag("guard_sound.quiet") != Some(false));
     }
 
     /// (IMPL_ER23A) THE HIDDEN BODY NEVER DIES OF A FALL THAT SORA SURVIVES. MEASURED in the user's log: the body died twice
@@ -3355,6 +3751,10 @@ impl SoraHost {
         let want = control.flag("fall.guard") != Some(false) && !self.died && !self.death_sent && self.lead_alive() /* (ER party S2) */ && self.follow != Some(Follow::Cutscene);
         // (DTH) a scripted death holds it from the leader's KO until the game's scene: the body stays at the event's HP
         let want = want || self.flow.holds_no_dead();
+        // (DEATHPLANE, in game 2026-11-03: Sora died of the sea's kill plane, the switch was let go with his death and the game's
+        // own kill plane killed the body 0.4 s later, under KH3's game over: Elden Ring's death and a reload instead of the
+        // menu) THE LEADER IS DOWN AND HIS DEATH NOT HANDED OVER YET: the body is ours until the menu is answered (Body::Hold)
+        let want = want || (control.flag("fall.guard") != Some(false) && self.flow.down().is_some() && !self.death_sent);
         // SAFETY: game thread; the SDK resolves the static by its pinned RVA (the exe-version gate holds).
         if let Ok(flags) = unsafe { eldenring::cs::WorldChrManDbgFlags::instance_mut() } {
             if want {
@@ -3429,7 +3829,86 @@ impl SoraHost {
             crate::guards::GrabEdge::GaveUp => erlog!("!!! grab: the throw node has said \"grabbed\" (state {:?}) for more than {max:.0} s: TAKEN AS STALE, Sora has the body again (grab.max = s; grab.states = 4,6)", state),
             crate::guards::GrabEdge::None => {}
         }
+        self.grab_kh(control, by, dt); // (GRABS)
         self.grab.on
+    }
+
+    /// (GRABS) THE AI FRIENDS A THROW HOLDS (party/allybody_live.rs leaves their bodies to the throw): each is seated on his
+    /// body as the game moves it (Donald / Goofy: his pawn put there, his movement stopped; AI Sora while a friend leads:
+    /// put there when he is more than 30 cm off). The party's caught gate (kh-partyhost caught.rs) gets every AI-driven
+    /// character's word each frame: no action while caught or getting up (his tree stopped, a spell cancelled), KH3's caught
+    /// motion on a friend's pawn (CatchStart / CatchLoop / CatchEnd), AI Sora's on his core (`step_pose`), and the guards
+    /// against a stale hold. The same rule as the leader's: the throw node's, whoever is held.
+    #[cfg(feature = "party")]
+    fn seat_caught_allies(&mut self) {
+        use kh_host::party::PartyChara;
+        let leader = if self.friend_lead().is_some() { self.lead.chara() } else { PartyChara::Sora };
+        // the party's caught gate (kh-partyhost caught.rs): the word for every AI-driven character, every frame (no action while
+        // caught or getting up, KH3's caught motion on a friend's pawn, the stale-hold guards)
+        if let Some(core) = self.party.core_mut() {
+            for c in [PartyChara::Sora, PartyChara::Donald, PartyChara::Goofy] {
+                core.rt.set_caught(c, c != leader && crate::grabs::ally_held(c));
+            }
+        }
+        for a in crate::grabs::allies() {
+            if a.chara == leader {
+                continue;
+            }
+            if a.chara == PartyChara::Sora {
+                if self.sora.status().hp > 0 && (self.sora.output().position - a.feet).length() > 30.0 {
+                    self.sora.teleport(Pose { position: a.feet, yaw: a.yaw });
+                }
+                continue;
+            }
+            if let Some(core) = self.party.core_mut() {
+                if let Some(m) = core.rt.id(a.chara).and_then(|id| core.rt.party.member_mut(id)) {
+                    m.cmc.location = a.feet;
+                    m.cmc.stop_movement();
+                    m.yaw = a.yaw;
+                }
+            }
+        }
+    }
+
+    /// (GRABS) THE GRAB, KH3'S WAY (grabs.rs), once a frame after `grab_phase`'s rule: the thrower is named (its MSB event
+    /// entity and map, from the throw node's other party); the caught sequence is stepped (KH3's `CatchStart`, `CatchLoop`
+    /// while the throw holds the body, `CatchEnd` at the release: Sora's here, a friend leader's by partydraw.rs from
+    /// `grabs::leader_held`); and the ONE Raya Lucaria Abductor Virgin's grab ends in the game's own warp to Volcano Manor.
+    /// `grab.kh = 0`: the body's pose retargeted as before (IMPL_ER57); `grab.abduct = 0`: no warp.
+    fn grab_kh(&mut self, control: &Control, by: Option<u64>, dt: f32) {
+        let held = self.grab.on;
+        let kh = control.flag("grab.kh") != Some(false);
+        crate::grabs::set_leader_held(held && kh && self.friend_lead().is_some());
+        if held && self.grabber.is_none() {
+            let named = by.and_then(|bits| self.targets.list.iter().find(|e| game::handle_bits(&e.handle) == bits)).and_then(|e| crate::targets::find_chr(&e.handle).map(|chr| (game::handle_bits(&e.handle), chr.event_entity_id, crate::zphase::map_of(chr), e.npc_id)));
+            if let Some((bits, entity, map, npc)) = named {
+                self.abduct = if control.flag("grab.abduct") != Some(false) { crate::grabs::abduction(&map, entity) } else { None };
+                erlog!(
+                    "grab: (GRABS) the thrower is c{npc:04}, MSB entity {entity} in {map}{}",
+                    if self.abduct.is_some() { ": THE RAYA LUCARIA ABDUCTOR VIRGIN: its grab takes the party to Volcano Manor (its blows cost nothing, no death; at the release the game's own warp to m16_00_00_00 point 16002080, flags 16000540 and 14009300)" } else { ": an ordinary grab (KH3's caught sequence, its blows through the party's damage path without a reaction)" }
+                );
+                self.grabber = Some((bits, entity, map));
+            }
+        }
+        if crate::grabs::abduct_step(held) == crate::grabs::AbductStep::Warp {
+            self.grabber = None;
+            if let Some(a) = self.abduct.take() {
+                abduct_warp(&a);
+            }
+        }
+        // KH3's caught sequence on Sora: leading, or (a friend leading) AI Sora whose own body a throw holds
+        let sora_held = kh && if self.friend_lead().is_none() { held } else { crate::grabs::ally_held(kh_host::party::PartyChara::Sora) };
+        if sora_held && self.catch.is_none() {
+            self.catch = Some(crate::grabs::Catch::begin());
+            erlog!("grab: (GRABS) Sora is CAUGHT: KH3's TresPlayerState_Catch sequence (CatchStart, CatchLoop while held, CatchEnd at the release), seated on the body the throw moves");
+        }
+        if let Some(c) = self.catch.as_mut() {
+            c.step(sora_held, dt, sora_catch_lengths());
+            if c.done() {
+                erlog!("grab: (GRABS) Sora is up again after CatchEnd (held {:.1} s): his own pose and input", c.held_for);
+                self.catch = None;
+            }
+        }
     }
 
     /// (IMPL_ER57, the user: "Sora is not dying when falling into the ocean") THE GAME'S DEEP-WATER DEATH, FOR SORA. CAUSE
@@ -3443,6 +3922,8 @@ impl SoraHost {
     /// or deeper for `water.time` s (0.6, the measured delay) is his death, the way the net's death is made (a blow of
     /// 1e6: KH3's death and its game-over menu). A wade is not deep enough; a cave under a lake has the lake's bed between.
     /// `water.death = 0`: as before. Log lines `water:`.
+    /// (DEATHPLANE) RETIRED BY DEFAULT (control.rs DEFAULTS `water.death = 0`): the game's own barriers kill in the sea
+    /// (deathplane.rs); the key brings this back for debugging.
     fn water_phase(&mut self, control: &Control, dt: f32) -> bool {
         if control.flag("water.death") == Some(false) || !self.lead_alive() /* (ER party S2) */ || self.died || self.death_sent {
             self.drown = Default::default();
@@ -3506,6 +3987,196 @@ impl SoraHost {
         let water_b = flat_heights(feet, 1000.0, WATER_LAYER_B, true);
         let solid: Vec<f32> = [self.world.filter, self.world.floor_filter.get(), WATER_SOLID_OLD[0], WATER_SOLID_OLD[1]].iter() /* (WALLS) */.filter(|f| **f != 0).flat_map(|f| flat_heights(feet, 1000.0, *f, false)).collect();
         !crate::guards::water_surfaces(&water_a, &water_b, &solid).is_empty()
+    }
+
+    /// (DEATHPLANE, THE USER 2026-11-03: "KH characters should die from Elden Ring's death barriers (like the ocean)") ONCE A
+    /// FRAME, at the end of the live pre-physics: the game's own contact query (deathplane.rs) at every KH character's place,
+    /// the shared rule (`Deathplane::judge`), and each one's own death: the leader (Sora: the blow of his whole HP, KH3's
+    /// knockdown, the game over; a friend leader: his KO), the AI friends (their KO), AI Sora (a friend leads) and Mimic Sora
+    /// (the blow on his core). The no-death switch, the fall guard and the hit cap stand nowhere on this path: it never goes
+    /// through the body's HP. `barrier.death = 0`: off.
+    fn barrier_frame(&mut self, control: &Control, dt: f32, paused: bool) {
+        use crate::deathplane::{Facts, Who};
+        if paused {
+            return;
+        }
+        if control.flag("barrier.death") == Some(false) || !crate::deathplane::ready() {
+            self.barrier = Default::default();
+            return;
+        }
+        let log = control.flag("log.barrier") != Some(false);
+        // (test aids, test profile only; inert unless written, one-shots on a change) where the barriers are; a friend put
+        if let Some(text) = crate::deathplane::aid_fired(&mut self.barrier.aids[0], control.str("test.barrier_probe")) {
+            self.barrier_probe(&text);
+        }
+        if let Some(text) = crate::deathplane::aid_fired(&mut self.barrier.aids[1], control.str("test.barrier_push")) {
+            self.barrier_push(&text);
+        }
+        let world_ok = self.follow != Some(Follow::Cutscene) && !self.death_sent;
+        // ---- the leader (the body's leader: Sora, or the friend who leads)
+        let (radius, top) = self.friend_lead().map_or((SORA_PARAMS.capsule_radius, crate::guards::SORA_TOP_CM), |f| (f.capsule.0, f.capsule.1 + f.capsule.2));
+        let alive = self.lead_alive() && !self.died && !self.death_sent;
+        let facts = Facts { feet_kh: self.lead_pos(), radius, top, alive, on_floor: self.lead_on_floor(), test: world_ok && self.follow.is_none() };
+        if self.barrier_one(Who::Leader, facts, log, dt).is_some() {
+            self.net_last = None;
+            self.void_for = 0.0;
+            self.barrier.leader_killed = true; // (KILLPLANE)
+            if self.friend_lead().is_some() {
+                // a friend leader: his KO (the party's Die state, past his guard); the game over is the death flow's
+                #[cfg(feature = "party")]
+                if let Some(rt) = self.party.runtime_on() {
+                    if let Some(id) = rt.leader {
+                        crate::deathplane::knock_out(&mut rt.party, id);
+                    }
+                }
+            } else {
+                self.invulnerable = false;
+                let feet = self.out.position;
+                crate::deathplane::kill_core(&mut self.sora, feet); // (KILLPLANE) instant, past every ability
+            }
+        }
+        let judged = [vec![Who::Leader], self.barrier_allies(world_ok, log, dt)].concat();
+        self.barrier.keep_only(&judged);
+    }
+
+    /// (DEATHPLANE) ONE CHARACTER: the game's query along his move of this frame (when `facts.test`), the shared rule, the
+    /// log. Returns the death to give him now.
+    fn barrier_one(&mut self, who: crate::deathplane::Who, facts: crate::deathplane::Facts, log: bool, dt: f32) -> Option<crate::deathplane::Barrier> {
+        use crate::deathplane::Barrier;
+        let feet = self.world.frame.pos_kh_to_er(facts.feet_kh);
+        let found = if facts.test {
+            let (a, b) = self.barrier.doom(who).sweep(feet);
+            crate::deathplane::touches(a, b, facts.radius / coords::CM_PER_M, facts.top / coords::CM_PER_M)
+        } else {
+            self.barrier.doom(who).pause();
+            Vec::new()
+        };
+        let hit: Vec<Barrier> = found.iter().filter_map(|t| t.barrier).collect();
+        let (began, give) = self.barrier.judge(who, &hit, facts.alive, facts.on_floor, dt);
+        if log {
+            let name = who.name(self.lead_chara());
+            for b in &began {
+                let at = found.iter().find(|t| t.barrier == Some(*b)).map_or(feet, |t| t.at);
+                erlog!("barrier: {name} TOUCHED {} of the game's at Elden Ring ({:.2}, {:.2}, {:.2}), his feet at y {:.2}: {}", b.name(), at.x, at.y, at.z, feet.y, match b {
+                    Barrier::Kill => "HIS DEATH (given until he is down)",
+                    Barrier::LethalFall => "his death at his landing (no fall damage: the game's lethal-fall zone)",
+                    Barrier::FallCamera => "no death of its own; the void below is his death (no put-back)",
+                });
+            }
+            if give == Some(Barrier::LethalFall) {
+                erlog!("barrier: {name} LANDED after a lethal-fall zone: HIS DEATH");
+            }
+        }
+        give
+    }
+
+    /// (DEATHPLANE) The AI friends, AI Sora (a friend leads) and Mimic Sora: the same query at each one's KH place, each
+    /// one's own KO. Returns whom it judged.
+    #[cfg(feature = "party")]
+    fn barrier_allies(&mut self, world_ok: bool, log: bool, dt: f32) -> Vec<crate::deathplane::Who> {
+        use crate::deathplane::{Facts, Who};
+        use kh_host::party::PartyChara;
+        let mut judged = Vec::new();
+        if !world_ok {
+            return judged;
+        }
+        let (sr, st) = (SORA_PARAMS.capsule_radius, crate::guards::SORA_TOP_CM);
+        // AI Sora: the host's own Sora core while a friend leads
+        if self.friend_lead().is_some() {
+            judged.push(Who::Ally(PartyChara::Sora));
+            let out = self.sora.output();
+            let facts = Facts { feet_kh: out.position, radius: sr, top: st, alive: self.sora.status().hp > 0, on_floor: out.on_floor, test: true };
+            if self.barrier_one(Who::Ally(PartyChara::Sora), facts, log, dt).is_some() {
+                crate::deathplane::kill_core(&mut self.sora, out.position); // (KILLPLANE) instant, past every ability
+            }
+        }
+        // Donald / Goofy (the friends who do not lead)
+        let list: Vec<(PartyChara, kh_party::MemberId, Facts)> = match self.party.runtime_on() {
+            Some(rt) => {
+                let leader = rt.leader;
+                rt.members
+                    .iter()
+                    .filter(|(c, id)| Some(*id) != leader && *c != PartyChara::Sora)
+                    .filter_map(|(c, id)| rt.view(*c).map(|v| (*c, *id, Facts { feet_kh: v.position, radius: v.capsule.0, top: 2.0 * v.capsule.1, alive: !v.ko, on_floor: v.on_ground, test: true })))
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+        for (c, id, facts) in list {
+            judged.push(Who::Ally(c));
+            if self.barrier_one(Who::Ally(c), facts, log, dt).is_some() {
+                let downed = self.party.runtime_on().is_some_and(|rt| crate::deathplane::knock_out(&mut rt.party, id));
+                if downed && log {
+                    erlog!("barrier: {} IS KNOCKED OUT by the game's death barrier (the party's KO)", c.name());
+                }
+            }
+        }
+        // Mimic Sora
+        if let Some((feet_kh, on_floor, alive)) = crate::spirit_mimic::barrier_view() {
+            judged.push(Who::Mimic);
+            let facts = Facts { feet_kh, radius: sr, top: st, alive, on_floor, test: true };
+            if self.barrier_one(Who::Mimic, facts, log, dt).is_some() && crate::spirit_mimic::barrier_down() && log {
+                erlog!("barrier: Mimic Sora is given the barrier's blow (he leaves as Died when down)");
+            }
+        }
+        judged
+    }
+    #[cfg(not(feature = "party"))]
+    fn barrier_allies(&mut self, _world_ok: bool, _log: bool, _dt: f32) -> Vec<crate::deathplane::Who> {
+        Vec::new()
+    }
+
+    /// (DEATHPLANE test aid `test.barrier_probe = metres`) The game's special collision around the leader, nearest first per
+    /// kind, with the `sora.warp` that puts him 6 m above it (he falls in by himself).
+    fn barrier_probe(&self, text: &str) {
+        let feet = self.feet_er();
+        let reach = text.trim().parse::<f32>().unwrap_or(40.0);
+        let cols = crate::deathplane::probe(feet, reach);
+        erlog!("barrier: test.barrier_probe {reach:.0} m around Elden Ring ({:.2}, {:.2}, {:.2}): {} column(s) meet the game's special collision", feet.x, feet.y, feet.z, cols.len());
+        for kind in crate::deathplane::KIND_SPECIAL.0..=crate::deathplane::KIND_SPECIAL.1 {
+            let near = cols.iter().flat_map(|(top, ts)| ts.iter().filter(|t| t.kind == kind).map(move |t| (*top, t.at))).min_by(|a, b| (a.1 - feet).length().total_cmp(&(b.1 - feet).length()));
+            if let Some((top, at)) = near {
+                let to = Vec3::new(top.x, at.y + 6.0, top.z) - feet;
+                erlog!("barrier: probe: kind {kind}{} nearest at ({:.2}, {:.2}, {:.2}), {:.1} m away: `sora.warp = +{:.2},{:.2},{:.2}` puts him 6 m above it", crate::deathplane::Barrier::of_kind(kind).map_or(String::new(), |b| format!(" ({})", b.name())), at.x, at.y, at.z, (at - feet).length(), to.x, to.y, to.z);
+            }
+        }
+    }
+
+    /// (DEATHPLANE test aid `test.barrier_push = donald|goofy|sora,x,y,z` or `..,+dx,+dy,+dz`) An AI friend put at an Elden Ring
+    /// place (relative: to the leader's feet), KH3's own fall from there.
+    #[cfg(feature = "party")]
+    fn barrier_push(&mut self, text: &str) {
+        use kh_host::party::PartyChara;
+        let Some((who, at)) = crate::deathplane::push_of(text, self.feet_er()) else {
+            erlog!("barrier: test.barrier_push = {text}: give who,x,y,z or who,+dx,+dy,+dz (Elden Ring metres)");
+            return;
+        };
+        let chara = match who.as_str() {
+            "donald" => PartyChara::Donald,
+            "goofy" => PartyChara::Goofy,
+            "sora" => PartyChara::Sora,
+            _ => {
+                erlog!("barrier: test.barrier_push: {who} is not donald / goofy / sora");
+                return;
+            }
+        };
+        let kh = self.world.frame.pos_er_to_kh(at);
+        if chara == PartyChara::Sora && self.friend_lead().is_some() {
+            let yaw = self.sora.output().yaw;
+            self.sora.teleport(Pose { position: kh, yaw });
+            erlog!("barrier: test.barrier_push: AI Sora put at Elden Ring ({:.2}, {:.2}, {:.2})", at.x, at.y, at.z);
+            return;
+        }
+        let leader = self.party.runtime_on().and_then(|rt| rt.leader);
+        let done = self.party.runtime_on().and_then(|rt| rt.id(chara).filter(|id| Some(*id) != leader).and_then(|id| rt.party.member_mut(id))).map(|m| {
+            m.cmc.location = kh;
+            m.cmc.stop_movement();
+        });
+        erlog!("barrier: test.barrier_push: {} {}", chara.name(), if done.is_some() { format!("put at Elden Ring ({:.2}, {:.2}, {:.2}): he falls from there", at.x, at.y, at.z) } else { "is no AI friend in the party now: not put".to_string() });
+    }
+    #[cfg(not(feature = "party"))]
+    fn barrier_push(&mut self, text: &str) {
+        erlog!("barrier: test.barrier_push = {text}: no party in this build");
     }
 
     /// (IMPL_ER24) At most one report a second and 300 a session.
@@ -3631,7 +4302,7 @@ impl SoraHost {
         inputs::set_mask(0);
         self.written = None;
         self.hp_written = None;
-        self.cam.frame(control, false, false, &self.out, &self.out_before, &self.sora, self.world.frame);
+        self.cam.frame(control, false, false, crate::cam::CamSora { out: &self.out, before: &self.out_before, sora: &self.sora }, self.world.frame);
         self.cam.post(dt, 1.0, control);
         self.accumulator = (self.accumulator + dt).min(0.25);
         while self.accumulator >= STEP {
@@ -3640,13 +4311,14 @@ impl SoraHost {
             self.held_before = PadButtons::NONE;
             let input = Input { move_stick: Vec2::ZERO, camera_yaw: self.out.yaw, ..Input::default() }.with_pad(pad);
             self.targets.list.clear();
+            self.sora.set_shooter_look(Vec2::ZERO); // (F-ARROWGUN line 3, F-HUD, INT-F) no aim stick while down
             // (DTH) THE WHOLE PARTY GOES ON BEING STEPPED (no input, no targets): the leader's own KO plays, whoever he is
             // (before: only Sora's core was stepped here: a friend leader froze in the pose of his last live step)
             #[cfg(feature = "party")]
             let out = if self.party.core().is_some() {
                 let input = self.party.route(&mut self.sora, &input, STEP, &self.world, &mut self.targets, self.clock as f64);
-                let out = self.party.step_sora(&mut self.sora, STEP, &input, &self.world, &mut self.targets, &mut self.fx, &mut self.hud.keep, &self.out);
-                self.party.after_sora_step(&mut self.sora, &out, STEP, &self.world, &mut self.targets, &mut self.fx, TargetId::NONE, None, false, self.clock as f64);
+                let out = self.party.step_sora(&mut self.sora, STEP, &input, crate::party::soratargets::SoraSeams { world: &self.world, targets: &mut self.targets, fx: &mut self.fx, ui: &mut self.hud.keep }, &self.out);
+                self.party.after_sora_step(&mut self.sora, crate::party::AfterSora { out: &out, dt: STEP, world: &self.world, targets: &mut self.targets, fx: &mut self.fx, lock_on: TargetId::NONE, look: None, leaping: false, now: self.clock as f64 });
                 out
             } else {
                 self.sora.set_aura(0.0, 0.0); // (DON-KIT) no party: no Donald's aura
@@ -3661,6 +4333,8 @@ impl SoraHost {
             self.pose_before = std::mem::take(&mut self.pose);
             self.step_pose(&out);
             self.fx.effect_dt = STEP; // (IMPL_ER75) this path steps him at the fixed step
+            self.herolight.end(&mut self.fx.effects); // (HEROLIGHT-KB) down: the hero light's glow and sparkle end at once
+            self.herolight_left.end(&mut self.fx.effects); // (HEROLIGHT-KB final pass) and the left hand's
             self.fx.after_step(&out, self.animator.as_ref(), &self.pose, &self.targets, &self.sora); // (fx) the step's sounds and effects
             self.weapon.since += STEP;
             self.step_chain(&out);
@@ -3711,7 +4385,7 @@ impl SoraHost {
                     let (before, after) = (kh_anim::pose::component_space(skeleton, &own), kh_anim::pose::component_space(skeleton, local));
                     if let Err(why) = crate::propfit::limits(skeleton, &before, &after) {
                         static TOLD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-                        if TOLD.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 600 == 0 {
+                        if TOLD.fetch_add(1, std::sync::atomic::Ordering::Relaxed).is_multiple_of(600) {
                             erlog!("!!! own: the borrowed pose on Sora breaks a limit ({why}): his own pose is drawn");
                         }
                         local.copy_from_slice(&own);
@@ -3725,12 +4399,18 @@ impl SoraHost {
     }
 
     /// (IMPL_ER16) `step_pose` with another component place and an overlay on the body's pose (the cutscene's figure).
-    fn step_pose_over(&mut self, out: &Output, dt: f32, over: Option<(Trs, &mut dyn FnMut(&kh_anim::Skeleton, &mut [Trs]))>) {
+    fn step_pose_over(&mut self, out: &Output, dt: f32, over: Option<PoseOver<'_>>) {
         // (ER69) the outfit's body size: the collision capsule
         let scale = crate::boc::body_scale();
         if (self.sora.params().capsule_half_height - kh_core::params::SORA_PARAMS.capsule_half_height * scale).abs() > 0.01 {
             self.sora.set_body_scale(scale);
         }
+        // (ER-TWEAKS) Sora leading through the fog (fogwalk.rs): KH3's `WalkLoopN` (an outfit's own of that name when it has
+        // one), its time by the distance the game carried him, in place of his held idle (the leap's clip route below)
+        let fog_show = (self.fog_walk.on && self.friend_lead().is_none()).then(|| {
+            let walk = kh_core::AnimId::WalkLoopN;
+            crate::ladder::Show::Clip { anim: walk, time: crate::fogwalk::clip_time(self.fog_walk.distance, crate::fogwalk::sora_stride(), walk.data().length), looping: true, play: 0x0E00_0000 + (self.fog_walk.walks & 0xFFFF) }
+        });
         let Some(animator) = self.animator.as_mut() else { return };
         // (IMPL_ER59) the worn outfit's own clips (boc.rs): sampled instead of his of the same names
         if let Some(dir) = crate::boc::take_clip_dir() {
@@ -3743,12 +4423,18 @@ impl SoraHost {
         }
         // (IMPL_ER23A) the leg IK: his own poses and the body's actions in play; never the cutscene figure's pose (it lies, sits, is carried)
         // (LADDER2) in his ladder leap KH3's own jump clips replace his held state's (no leg IK: he is in the air)
-        animator.set_leg_ik(self.leg_ik && !self.cutscene && self.leap_show == crate::ladder::Show::Own);
-        let (shown, ticked) = match self.leap_show {
+        // (GRABS) an enemy's grab: KH3's caught sequence in his body slot (grabs.rs; the leap's route), before the leap's clips
+        let show = self.catch.and_then(|c| c.shown(sora_catch_lengths())).and_then(catch_show).unwrap_or(self.leap_show);
+        let show = match (show, fog_show) {
+            (crate::ladder::Show::Own, Some(walk)) => walk, // (ER-TWEAKS) the grab's and the leap's clips win
+            (show, _) => show,
+        };
+        animator.set_leg_ik(self.leg_ik && !self.cutscene && show == crate::ladder::Show::Own);
+        let (shown, ticked) = match show {
             crate::ladder::Show::Own => (out.anim, out.anim_ticked),
             crate::ladder::Show::Clip { anim, time, looping, play } => {
                 let data = anim.data();
-                let r = kh_core::AnimRequest { name: anim, play_id: 0x4C00_0000 + play, time, active: true, weight: 1.0, looping, blend_in: 0.1, axis: 0.0, root_motion: data.root_motion_enabled, notify_window: (0.0, 0.0), locomotion: None, length: data.length };
+                let r = kh_core::AnimRequest { name: anim, play_id: 0x4C00_0000 + play, time, active: true, weight: 1.0, looping, blend_in: 0.1, axis: 0.0, axis_y: 0.0 /* (F-LOCO) */, root_motion: data.root_motion_enabled, notify_window: (0.0, 0.0), locomotion: None, length: data.length };
                 (r, r)
             }
         };
@@ -3777,9 +4463,28 @@ impl SoraHost {
     /// The keychain of one step (as kh-app's `step_pose`): the weapon's component is the socket on
     /// bone R_buki; while the weapon is hidden the chain is frozen, and reset when it appears.
     fn step_chain(&mut self, out: &Output) {
+        kbdraw::equip(self.sora.status()); // (P5) the equipped keyblade to the renderer, its switch timing and effects
+        // (FORMWEP-FIX) once a step: a form just started and its transformation not begun yet keeps the hand Keyblade drawn
+        self.form_gate.step(&self.sora.combat().form, out.state);
         let visible = self.weapon.opacity() > 0.0;
         let (Some(chain), Some(animator)) = (self.keychain.as_mut(), self.animator.as_ref()) else { return };
         let Some(hand) = animator.skeleton().index_of("R_buki") else { return };
+        // (KEYCHAIN-DUAL) the Keyblades his form holds, each with its own keychain (Double Form's two, Light / Dark Form's), on
+        // the hands they are drawn in (an outfit's, as his hand's keychain below); `submit` draws them (`apply_form_chains`);
+        // the clip his weapons play (each weapon's own clip of it runs its Bonamik states: the hand's too, below)
+        let clip = {
+            let shown = self.weapon.opacity() * (1.0 - self.own_weight).clamp(0.0, 1.0) * kbdraw::visibility() > 0.0;
+            #[cfg(windows)]
+            let effect = crate::boc::effect_pose(animator.skeleton(), &self.pose);
+            #[cfg(windows)]
+            let component = effect.as_ref().map_or(&self.pose.component, |p| &p.component);
+            #[cfg(not(windows))]
+            let component = &self.pose.component;
+            let kb = kbdraw::StepParts { sora: &self.sora, out, skeleton: animator.skeleton(), component, to_world: component_to_world(out), shown, test_aid: true, start_pending: self.form_gate.on() };
+            kbdraw::step_form_chains(STEP, &kb, Some(animator));
+            kb.clip()
+        };
+        let input = kbdraw::ChainIn { animator: Some(animator), clip }; // (KEYCHAIN-DUAL) his routed clip states, the weapon's own
         if visible {
             let Some(his_hand) = self.pose.component.get(hand).copied() else { return };
             // (ER79) with an outfit on, the Keyblade is drawn in the OUTFIT'S hand (kh-er-render outfit.rs weapon_to_world): its
@@ -3794,9 +4499,10 @@ impl SoraHost {
                 chain.reset();
             }
             let weapon_to_world = weapon_socket().then(hand_pose).then(&component_to_world(out));
-            let now = chain.step(STEP, &weapon_to_world, animator.bonamik()).to_vec();
+            // (P5) another keyblade in his hand: ITS keychain (its own skeleton and Bonamik asset), else the Kingdom Key's
+            let now = kbdraw::step_chain(STEP, &weapon_to_world, &input, appeared).unwrap_or_else(|| kbdraw::step_keychain(chain, kh_er_render::keyblade::KINGDOM_KEY, STEP, None, &weapon_to_world, &input).to_vec());
             self.chain_before = std::mem::replace(&mut self.chain, now);
-            if appeared || self.chain_before.is_empty() {
+            if appeared || self.chain_before.len() != self.chain.len() {
                 self.chain_before = self.chain.clone();
             }
         }
@@ -3831,7 +4537,7 @@ impl SoraHost {
             #[cfg(feature = "party")]
             {
                 self.lead.cut_on = true;
-                self.lead_cut();
+                self.lead_cut(control.flag("cut.fit") != Some(false)); // (CUTSCENE-ANIM) `cut.fit`
             }
             CutDraw::Hidden
         } else {
@@ -3852,8 +4558,35 @@ impl SoraHost {
                     }
                     let out = self.out.clone();
                     let to_world = posed.component_to_world;
-                    let mut overlay = |skeleton: &kh_anim::Skeleton, local: &mut [Trs]| retarget.apply(skeleton, &posed.source, posed.pelvis, &to_world, 1.0, local);
+                    // (CUTSCENE-ANIM) AT HIS PROPORTIONS ON THE SCENE'S FLOOR (cutfit.rs; `cut.fit = 0`: the rule before): measured
+                    // on the skeleton that is DRAWN (the worn outfit's: KH1's shorter legs rest on the floor, not his), hands and
+                    // feet on what the figure's touch
+                    let worn = match (self.animator.as_ref(), control.flag("cut.fit") != Some(false)) {
+                        (Some(a), true) => self.worn.current(a.skeleton()),
+                        _ => None,
+                    };
+                    let fit_on = control.flag("cut.fit") != Some(false);
+                    let sora_body = self.animator.as_ref().and_then(|a| crate::cutfit::body_of_skeleton(a.skeleton(), crate::cutfit::SORA_DEPTH));
+                    let fitted = std::cell::Cell::new(None);
+                    let mut overlay = |skeleton: &kh_anim::Skeleton, local: &mut [Trs]| {
+                        let done = match (fit_on, posed.body.as_ref(), worn.as_deref(), sora_body.as_ref()) {
+                            (true, Some(s), Some(w), _) => crate::cutfit::apply_outfit(&retarget, skeleton, &posed.source, &posed.source, (s, w), &to_world, local),
+                            (true, Some(s), None, Some(t)) => crate::cutfit::apply_skeleton(&retarget, skeleton, &posed.source, &posed.source, (s, t), &to_world, local),
+                            _ => None,
+                        };
+                        if done.is_none() {
+                            retarget.apply(skeleton, &posed.source, posed.pelvis, &to_world, 1.0, local);
+                        }
+                        fitted.set(done);
+                    };
                     self.step_pose_over(&out, dt, Some((to_world, &mut overlay)));
+                    if fitted.get().map(|f| f.rests_on) != self.cut_rests {
+                        self.cut_rests = fitted.get().map(|f| f.rests_on);
+                        match fitted.get() {
+                            Some(f) => erlog!("cutfig: (CUTSCENE-ANIM) the figure rests on its {} (floor z {:.0}), Sora{} on his {} (lifted {:+.1} cm from the figure's pelvis height)", crate::cutfit::part_name(f.rests_on.0), f.floor, if worn.is_some() { " (the worn outfit)" } else { "" }, crate::cutfit::part_name(f.rests_on.1), f.lift),
+                            None => erlog!("cutfig: (CUTSCENE-ANIM) Sora placed as before (`cut.fit = 0` or the figure's measures not readable)"),
+                        }
+                    }
                     CutDraw::Posed(to_world)
                 }
                 None => CutDraw::Hidden,
@@ -3877,7 +4610,9 @@ impl SoraHost {
         let ta = &player.chr_ins.modules.time_act;
         let anim = ta.anim_queue[(ta.read_idx as usize) % 10].anim_id;
         // (IMPL_ER33) while the body attunes to / rests at a site of grace he is held (no input) but does NOT take its pose: he neither kneels nor sits (`savepoint.sit_pose = 1`)
-        let owned = matches!(self.follow, Some(Follow::Action | Follow::Grab)) || (self.own_hold && !(self.savepoint.hides_grace_pose() && crate::story::grace_animation(anim)));
+        // (GRABS) a grab is no longer the body's pose retargeted: KH3's caught sequence (grabs.rs; `grab.kh = 0`: as before)
+        let grab_owned = self.follow == Some(Follow::Grab) && control.flag("grab.kh") == Some(false);
+        let owned = matches!(self.follow, Some(Follow::Action)) || grab_owned || (self.own_hold && !(self.savepoint.hides_grace_pose() && crate::story::grace_animation(anim)));
         // (ER party S2) a friend leading takes the body's pose; Sora keeps his own
         // (CHESTFIX, the user 2026-10-27: "Goofy and Donald should have no chest animation") NOT the body's chest opening
         // (U13's retarget is gone): seated facing the chest, he shows his own pose (his idle) while the game opens it
@@ -3886,6 +4621,17 @@ impl SoraHost {
         let owned = owned && self.friend_lead().is_none();
         // (IMPL_ER58) a chest shown with KH3's own animation: no Elden Ring pose laid over him
         let owned = owned && !(self.follow == Some(Follow::Action) && self.chest.on());
+        // (ER-TWEAKS) THE FOG WALK (fogwalk.rs): carried through a walking action (the fog), WHOEVER LEADS shows his own walk
+        // and no pose of the Tarnished's (Sora: his `WalkLoopN` in `step_pose_over`; a friend: his walk below)
+        let walking = self.follow == Some(Follow::Action) && self.walk_action;
+        self.fog_walk.frame(walking, self.fog_trail, self.anims_dt);
+        if walking != self.fog_walk_told {
+            self.fog_walk_told = walking;
+            erlog!("own: (ER-TWEAKS) {}", if walking { format!("THE GAME CARRIES THE LEADER ({}) THROUGH ITS ACTION (animation {anim}: the fog): HIS OWN WALK is shown, not the Tarnished's (fog.walk = 0: the old pose)", self.lead_chara_name()) } else { format!("the walk through the action is over ({:.0} cm walked)", self.fog_walk.distance) });
+        }
+        let owned = owned && !walking;
+        #[cfg(feature = "party")]
+        let held_by_body = held_by_body && !walking;
         // (IMPL_ER17, `log.own = 1`) every change of the body's animation, for finding the ids of the game's own actions
         // (IMPL_ER18: ON unless `log.own = 0`: a session's log then names the ids of actions nobody measured yet)
         if control.flag("log.own") != Some(false) && anim != self.own_seen {
@@ -3902,6 +4648,18 @@ impl SoraHost {
         let step = 1.0 / (blend.max(0.02) * 60.0);
         #[cfg(feature = "party")]
         self.lead_frame(player, control, held_by_body, anim, step); // (ER party S2) the leader's pose of the body
+        // (ER-TWEAKS) a friend leading through the fog: HIS OWN WALK at full weight from the first frame (party/leader.rs
+        // `walk_pose`), its phase by the carry; given back (None) once eased out
+        #[cfg(feature = "party")]
+        {
+            let fog_lead = self.friend_lead().is_some() && self.lead.active() && !self.cutscene && self.fog_walk.weight > 0.0;
+            if fog_lead {
+                self.lead.walk_draw = Some((self.lead.chara(), self.fog_walk.distance, self.fog_walk.speed, self.fog_walk.weight));
+                self.fog_drew = true;
+            } else if std::mem::take(&mut self.fog_drew) {
+                self.lead.walk_draw = None;
+            }
+        }
         self.own_weight = if owned { (self.own_weight + step).min(1.0) } else { (self.own_weight - step).max(0.0) };
         self.own_over = None;
         self.own_plan = None;
@@ -3934,7 +4692,7 @@ impl SoraHost {
         // (ANIMS) AT HIS PROPORTIONS (propfit.rs; `own.fit = 0`: the rule before): the pelvis, the standoff, his contacts;
         // the plan is laid on in `step_pose`
         // (ANIMS) a plan the sanity check refuses is not used: the retarget as before
-        let (plan, pelvis) = match self.anims_plan(control, item, flver, &mut source, None, Vec3::new(self.out.position.x, self.out.position.y, floor), floor).filter(|p| p.sane) {
+        let (plan, pelvis) = match self.anims_plan(control, item, flver, &mut source, None, Vec3::new(self.out.position.x, self.out.position.y, floor)).filter(|p| p.sane) {
             Some(plan) => (Some(plan), plan.pelvis),
             None => (None, { let h = source[0].0.z - floor; source[0].0 + Vec3::Z * (h * ratio - h) }), // (`Retarget::pelvis_place`)
         };
@@ -3957,8 +4715,9 @@ impl SoraHost {
     /// (ANIMS) ONE FRAME OF THE FIT for whoever leads (`chara` None: Sora, his fit; a friend: the leader's): the body's pose
     /// (`source`, every `ROWS` row, KH3 world), the measures (the Tarnished's from the body's FLVER bind pose, his from his
     /// skeleton), the plan. None: `own.fit = 0` or the measures are not readable (the rule before stays).
-    #[allow(clippy::too_many_arguments)]
-    fn anims_plan(&mut self, control: &Control, item: usize, flver: usize, source: &mut [(Vec3, Quat)], chara: Option<kh_host::party::PartyChara>, root: Vec3, floor: f32) -> Option<crate::propfit::Plan> {
+    /// `root`: his feet's place on his floor (its z is the floor's height).
+    fn anims_plan(&mut self, control: &Control, item: usize, flver: usize, source: &mut [(Vec3, Quat)], chara: Option<kh_host::party::PartyChara>, root: Vec3) -> Option<crate::propfit::Plan> {
+        let floor = root.z;
         if control.flag("own.fit") == Some(false) || source.len() != crate::figure::ROWS.len() {
             return None;
         }
@@ -3983,13 +4742,13 @@ impl SoraHost {
         match chara {
             None => {
                 let ratio = self.own_rig.as_ref().map_or(1.0, |r| r.retarget.ratio);
-                Some(self.own_fit.plan(source, &s, &t, ratio, &crate::propfit::Profile::SORA, root, floor, kind, dt))
+                Some(self.own_fit.plan(source, crate::propfit::Measures { s: &s, t: &t, ratio, prof: &crate::propfit::Profile::SORA }, root, floor, kind, dt))
             }
             #[cfg(feature = "party")]
             Some(c) => {
                 let skeleton = self.lead.skeleton(c)?;
                 let t = crate::propfit::Dims::of_skeleton(&skeleton)?;
-                Some(self.lead.fit.plan(source, &s, &t, 1.0, &crate::propfit::Profile::of(c), root, floor, kind, dt))
+                Some(self.lead.fit.plan(source, crate::propfit::Measures { s: &s, t: &t, ratio: 1.0, prof: &crate::propfit::Profile::of(c) }, root, floor, kind, dt))
             }
             #[cfg(not(feature = "party"))]
             Some(_) => None,
@@ -4076,7 +4835,7 @@ impl SoraHost {
         // the door, his feet planted, his posture kept in part
         let mut source = source;
         let flver = crate::probe::word(item + 0x68).unwrap_or(0);
-        let plan = self.anims_plan(control, item, flver, &mut source, Some(self.lead.chara()), Vec3::new(f.position.x, f.position.y, floor), floor);
+        let plan = self.anims_plan(control, item, flver, &mut source, Some(self.lead.chara()), Vec3::new(f.position.x, f.position.y, floor));
         // (ANIMS) THE POSE SANITY (propfit.rs `sanity`): a plan that would fold or over-stretch him is not shown: his own pose
         if plan.is_some_and(|p| !p.sane) {
             if !self.lead_insane_told {
@@ -4088,24 +4847,26 @@ impl SoraHost {
         }
         self.lead_insane_told = false;
         let pelvis = plan.map_or_else(|| retarget.pelvis_place(source[0].0, Vec3::Z, floor), |p| p.pelvis);
-        self.lead.over = Some(PoseOver { chara: self.lead.chara(), retarget, keep, source, pelvis, weight: w * w * (3.0 - 2.0 * w), place: None, limbs: 2, reach: self.own_reach, hide_weapon: true, plan });
+        self.lead.over = Some(PoseOver { chara: self.lead.chara(), retarget, keep, source, pelvis, weight: w * w * (3.0 - 2.0 * w), place: None, limbs: 2, reach: self.own_reach, hide_weapon: true, plan, cut: None /* (CUTSCENE-ANIM) */ });
     }
 
     /// (ER party S2, U6) A REAL-TIME CUTSCENE WITH A FRIEND LEADING: the scene's figure of the player retargeted onto HIS
     /// skeleton, in its place (party/leader.rs `PoseOver` with the figure's place); AI Sora is not drawn (S1 hides the
     /// others). False: no figure of the player in this cut (the leader is not drawn either: `LeaderBody::hidden`).
     #[cfg(feature = "party")]
-    fn lead_cut(&mut self) -> bool {
+    fn lead_cut(&mut self, fit: bool) -> bool {
         use crate::party::leader::PoseOver;
         let chara = self.lead.chara();
         let Some(skeleton) = self.lead.skeleton(chara) else { return false };
+        // (CUTSCENE-ANIM) his measures for the fit on the scene's floor (cutfit.rs); `cut.fit = 0`: none (the rule before)
+        let cut_body = crate::cutfit::body_of_skeleton(&skeleton, crate::cutfit::depth_of(chara)).filter(|_| fit);
         let posed = match crate::figure::CUT.lock() {
             Ok(mut guard) => guard.as_mut().and_then(|cut| cut.posed_party(&skeleton, &self.world.frame)),
             Err(_) => None,
         };
         match posed {
             Some((posed, retarget, keep)) => {
-                self.lead.over = Some(PoseOver { chara, retarget, keep, source: posed.source, pelvis: posed.pelvis, weight: 1.0, place: Some(posed.component_to_world), limbs: 0, reach: 0.0, hide_weapon: true, plan: None });
+                self.lead.over = Some(PoseOver { chara, retarget, keep, source: posed.source, pelvis: posed.pelvis, weight: 1.0, place: Some(posed.component_to_world), limbs: 0, reach: 0.0, hide_weapon: true, plan: None, cut: posed.body.zip(cut_body) /* (CUTSCENE-ANIM) */ });
                 self.lead.hidden = false;
                 true
             }
@@ -4124,6 +4885,40 @@ impl SoraHost {
         crate::partydraw::frame(&mut self.party, &mut self.lead, control, alpha, STEP, self.cutscene);
     }
 
+    /// (F-SHIP INT 3, INT-F) HIGHWIND'S SPEARS IN FLIGHT: each `HL_SPEAR` shot of the core (combat/forms/ship.rs: the rain of
+    /// the finisher and the dive; the core moves them and spawns their stick / hit effects itself) carries TresProjHL_Spear's
+    /// body particle `vw_so092_fns_blt0` at its shape's centre, once a frame after the steps; gone with its shot. A shot whose
+    /// life went UP is a new spear of the same key (a later rain).
+    fn spear_fx(&mut self) {
+        const BODY: &str = "vw_so092_fns_blt0";
+        // (AUDIT-B W-FIN) + the shot's yaw: 0 in flight (the rain spawns them at yaw 0), the hit bone's turn once stuck (ShotStick)
+        let now: Vec<(u16, f32, Vec3, f32)> = self.sora.combat().shots.iter().filter(|s| s.name == "HL_SPEAR").map(|s| (s.window.key.1, s.life, s.centre(), s.yaw)).collect();
+        if now.is_empty() && self.spears.is_empty() {
+            return;
+        }
+        let mut kept: Vec<(u16, f32, u64)> = Vec::with_capacity(now.len());
+        let mut old = std::mem::take(&mut self.spears);
+        crate::fx::with_effects(|e| {
+            for (key, life, at, yaw) in &now {
+                let id = match old.iter().position(|o| o.0 == *key && o.1 >= *life && e.free_alive(o.2)) {
+                    Some(i) => {
+                        let id = old.swap_remove(i).2;
+                        e.free_move(id, *at, *yaw, 1.0);
+                        Some(id)
+                    }
+                    None => e.free_spawn(BODY, *at, *yaw, 1.0),
+                };
+                if let Some(id) = id {
+                    kept.push((*key, *life, id));
+                }
+            }
+            for (_, _, id) in &old {
+                e.free_stop(*id, false);
+            }
+        });
+        self.spears = kept;
+    }
+
     /// What the renderer draws this frame: the latest step, or with `r.interp` the blend of the
     /// two latest steps by how far the frame is between them (as the test app draws).
     fn submit(&self, control: &Control) {
@@ -4133,10 +4928,12 @@ impl SoraHost {
         kh_er_render::camfade::set_look(self.cam.look_point());
         kh_er_render::camfade::set_enabled(control.flag("r.camfade"));
         kh_er_render::camfade::set_friends_look_fade(control.flag("r.camfade_friends") == Some(true)); // (RSF round 18) default off: friends as Sora
-        // (IMPL_ER23B, costume) the wear form the pawn has applied: the renderer slides the form's costume in (`form.costume = 0`: his normal clothes always, as before)
-        kh_er_render::set_wear_form(if control.flag("form.costume") == Some(false) { 0 } else { self.sora.combat().form.wear_form });
-        // (IMPL_ER59) Boc's talk seen; the outfit drawn (a form without its costume in the outfit: KH3's default for the form)
-        crate::boc::frame(control, self.popup.map(|p| p.talk_id), self.sora.combat().form.wear_form);
+        // (IMPL_ER59, weapons P5b) Boc's talk seen; the outfit drawn; the wear form shown (boc::wear_form_shown -> kh_er_render::set_wear_form)
+        // (SHOT-B line 2, INT-F) while a shotlock holds a weapon form, that form's wear form (equipment vt+0x5F8: Frozen Crescents
+        // Grace, Flag Rampage Brave), back to the held state's own when it returns to 0
+        let shot_form = self.sora.magic().shot_weapon_form;
+        let wear = if shot_form != 0 { kh_core::magic::shotlocks::vacuum::wear_form(shot_form).unwrap_or(self.sora.combat().form.wear_form) } else { self.sora.combat().form.wear_form };
+        crate::boc::frame(control, self.popup.map(|p| p.talk_id), wear);
         let Some(animator) = self.animator.as_ref() else { return };
         if self.pose.component.is_empty() {
             return;
@@ -4164,24 +4961,31 @@ impl SoraHost {
         }
         // (INT) `r.interp` default ON: his pose, transform and keychain between the two latest steps (interp.rs `sora_drawn`)
         let alpha = crate::interp::alpha(control, self.accumulator);
-        let (pose, to_world, chain) = crate::interp::sora_drawn(&self.out_before, &self.out, &self.pose_before, &self.pose, &self.chain_before, &self.chain, alpha);
+        let (pose, mut to_world, chain) = crate::interp::sora_drawn(&self.out_before, &self.out, &self.pose_before, &self.pose, &self.chain_before, &self.chain, alpha);
+        let feet = to_world.translation;
+        // (F-LOCO, INT-F) the body tilted by the actor's pitch about the capsule centre (both as drawn between the two steps)
+        {
+            let jumped = crate::interp::discontinuous(&self.out_before, &self.out) || alpha >= 1.0;
+            let (pitch, centre) = if jumped { (self.out.pitch, self.out.capsule_center - self.out.position) } else { (self.out_before.pitch + (self.out.pitch - self.out_before.pitch) * alpha, (self.out_before.capsule_center - self.out_before.position).lerp(self.out.capsule_center - self.out.position, alpha)) };
+            let yaw = crate::interp::yaw_drawn(&self.out_before, &self.out, alpha);
+            pitch_about(&mut to_world, yaw, pitch, feet + centre);
+        }
         // (INT) his drawn bones for the effects on him: the effects' own bones (the worn outfit's: boc.rs), his drawn place
         if alpha < 1.0 {
             let mut out_d = self.out.clone();
-            (out_d.position, out_d.yaw) = (to_world.translation, crate::interp::yaw_drawn(&self.out_before, &self.out, alpha));
+            (out_d.position, out_d.yaw) = (feet, crate::interp::yaw_drawn(&self.out_before, &self.out, alpha));
             let mut tap = kh_host::audio::PoseTap::default();
             let effect_pose = crate::boc::effect_pose(animator.skeleton(), &pose);
             tap.record(self.out.step, &out_d, animator.skeleton(), effect_pose.as_ref().unwrap_or(&pose), &to_world);
             tap.samples.clear();
             *self.int_drawn.borrow_mut() = Some((out_d, tap));
         }
-        let mut to_world = to_world;
         to_world.translation += coords::dir_er_to_kh(render_offset(control));
         // (ER party S7) Sora pitched on Goofy Bombardier's link pawn's socket (`Team::sora_mesh_pitch`, D5 handoff)
         #[cfg(feature = "party")]
         crate::party::team::pitch_sora(&mut to_world, self.party.core().and_then(|c| c.rt.team.sora_mesh_pitch()));
         // (IMPL_ER17) no Keyblade in his hand while he performs the body's action (it goes and comes with the blend)
-        let opacity = self.weapon.opacity() * (1.0 - self.own_weight).clamp(0.0, 1.0);
+        let opacity = self.weapon.opacity() * (1.0 - self.own_weight).clamp(0.0, 1.0) * kbdraw::visibility(); // (P5) hidden for the switch's appear delay
         let weapon = animator.skeleton().index_of("R_buki").and_then(|hand| pose.component.get(hand)).filter(|_| opacity > 0.0).map(|hand| kh_er_render::Weapon { to_world: weapon_socket().then(hand).then(&to_world), component: chain, opacity });
         // (ER90, XSI request 1) THE XS MOVES' FORM WEAPONS (kh-app xsi_weapons.rs, the same rule): while Giant Stamp, Chandelier
         // or Myriad plays, its form weapons on their hand bones and the Kingdom Key hidden meanwhile; `r.xsi_weapons = 0`: the
@@ -4215,12 +5019,120 @@ impl SoraHost {
                 forms.extend(kh_er_render::xsiweapon::pawn_form("chandelier", p.ground + coords::dir_er_to_kh(render_offset(control)), p.yaw, self.int.chandelier_time(p.time, alpha) /* (INT) */));
             }
         }
-        let weapon = if forms.is_empty() { weapon } else { None };
+        let skeleton = animator.skeleton();
+        let index_of = |b: &str| skeleton.index_of(b);
+        let hand_socket = weapon_socket();
+        // (AUDIT-B W-DATA) a blend-space row of the held form's set: the weapons play their row of its LOGICAL name (KH3's weapon anim
+        // instance; Twin Yo-Yos' MagicFire -> 4321, RunLoopB -> 4017), not the sample's sequence they have no clip of
+        let weapon_anim = kh_core::combat::forms::weapon_logical(self.sora.combat().form.cmd, self.out.anim.name).or_else(|| self.out.anim.name.sequences().first().copied());
+        let form_pose = kh_er_render::keyblade::FormPose { index_of: &index_of, component: &pose.component, to_world: &to_world, anim: weapon_anim, time: self.out.anim.time, hand_socket: &hand_socket };
+        forms.extend(kbdraw::form_parts(&form_pose)); // (P5) test.kb_form
+        let mut hand_hidden = !forms.is_empty();
+        // (INT-F) THE FORM WEAPONS AND THE FINISHER PAWNS (P3 line 4, F-SHIELD 5, F-HAMMER 1-2, F-SHIP 1-2, F-STAFF 1, F-NANO 1-2,
+        // SHOT-A 1, SHOT-B 1, SHOT-C 1): of the keyblade in his hand, in place of it
+        let hand_kb = kbdraw::hand();
+        let combat = self.sora.combat();
+        let form = &combat.form;
+        let magic = self.sora.magic();
+        if magic.shot_weapon_form != 0 {
+            // a shotlock's weapon form (hex, as the pack names forms: Flag Rampage "0F", Stellar Inception "18"); Atomic
+            // Deluge's own equip set first
+            let id = format!("{:02X}", magic.shot_weapon_form);
+            if magic.shot_weapon_units.is_empty() {
+                forms.extend(kh_er_render::keyblade::draw_form_weapon_parts(&hand_kb, &id, "", false, &form_pose));
+            } else {
+                forms.extend(kbdraw::unit_parts(&hand_kb, &id, magic.shot_weapon_units, &form_pose));
+            }
+            hand_hidden = true;
+        } else if let Some(row) = form.row().filter(|r| r.weapon_form_value > 1 && !hand_hidden && form.equip != kh_core::combat::form::FormEquip::Keyblade /* (AUDIT-B W-CORE) */ && !self.form_gate.on() /* (FORMWEP-FIX) */) {
+            // a form's weapons by its grow level; the hand keyblade is hidden when the pack knows the form's weapons (a form the
+            // pack lacks keeps the keyblade)
+            // (AUDIT-B W-CORE) exactly the units KH3's equipment holds (kh-core `FormEquip`): the Keyblade until StyleChange's
+            // equip, then the transform units ALONE (w_so051 brings the hammer in itself), the form's own units from its End
+            let grow = form.grow.max(1).to_string();
+            let style_change = self.out.state == kh_core::StateId::Stylechange;
+            let transform = form.equip == kh_core::combat::form::FormEquip::Transform;
+            if !kh_er_render::keyblade::equipped_parts(&hand_kb, row.weapon_form, &grow, transform).is_empty() {
+                if opacity > 0.0 || style_change {
+                    forms.extend(kh_er_render::keyblade::draw_equipped_parts(&hand_kb, row.weapon_form, &grow, transform, &form_pose));
+                }
+                hand_hidden = true;
+            }
+        }
+        // (AUDIT-A) (AUDIT-A PLACEMENT) the parts off their sockets: a weapon clip's ChangeAttachParent window hangs the part on
+        // that bone of his (kh-core placement::part_parent: the launchers' FINISH_BZ, the staff's A416, Nano Arms' clips); a
+        // part KH3 threw (ThrowWeapon: the raid's shield / pan, the flag) is drawn where its flight is (between the steps)
+        let (seq_now, time_now) = (self.out.anim.name.sequences().first().copied().unwrap_or(""), self.out.anim.time);
+        for model in forms.iter().filter_map(|f| f.model.strip_prefix(kh_er_render::keyblade::PREFIX).map(str::to_string)).collect::<Vec<_>>() {
+            // (AUDIT-B W-HANDOVER) or the weapon clip's own window whoever equips it (a shotlock's equip set: placement::clip_parent)
+            if let Some(b) = kh_core::combat::forms::placement::part_parent(form.cmd, &model, seq_now, time_now).or_else(|| kh_core::combat::forms::placement::clip_parent(&model, seq_now, time_now)).and_then(|name| {
+                let (bone, loc, rot) = kh_core::combat::forms::placement::socket(name).unwrap_or((name, Vec3::ZERO, Vec3::ZERO));
+                let socket = kh_anim::Trs { translation: loc, rotation: kh_anim::blend::Rotator { pitch: rot.x, yaw: rot.y, roll: rot.z }.quat(), scale: Vec3::ONE };
+                index_of(bone).and_then(|i| pose.component.get(i)).map(|b| socket.then(b))
+            }) {
+                kh_er_render::keyblade::part_on_bone(&mut forms, &model, &b, &to_world);
+            }
+        }
+        for t in &combat.thrown {
+            let at = kh_anim::Trs { translation: t.position - t.velocity * (1.0 - alpha) * STEP + coords::dir_er_to_kh(render_offset(control)), rotation: t.rotation, scale: Vec3::ONE };
+            kh_er_render::keyblade::part_thrown(&mut forms, t.model, at, t.clip().0, t.clip_time());
+        }
+        // the finisher / accompany pawns of the running finish, each with its own clip
+        if let Some(row) = form.row() {
+            let finish = self.sora.finish();
+            let off = coords::dir_er_to_kh(render_offset(control));
+            let yaw_d = crate::interp::yaw_drawn(&self.out_before, &self.out, alpha);
+            let anim_time = crate::interp::clip_time(self.out_before.anim.name == self.out.anim.name, self.out_before.anim.time, self.out.anim.time, alpha);
+            let wf = row.weapon_form;
+            let pawn = |model: &str, ground: Vec3, yaw: f32, clip: Option<&str>, time: f32| kh_er_render::keyblade::form_pawn(&hand_kb, wf, model, ground, yaw, clip, time);
+            // F-SHIELD: Pegasus with its Chariot / the Frying Pan, at Sora
+            // (AUDIT-A SHIELD) placed by KH3's links (Sora rides the Chariot behind Pegasus), M_B425 as its heaviest sample
+            for p in kh_core::combat::forms::shield::finisher_pawns_at(finish, form.cmd, &self.out.anim) {
+                let (at, yaw) = kh_core::combat::forms::shield::place_on(feet + off, yaw_d, &p);
+                forms.extend(pawn(p.model, at, yaw, p.clip, anim_time));
+            }
+            // F-HAMMER: Clock Drill's Clock where it was spawned
+            for p in kh_core::combat::forms::hammer::finisher_pawns(finish, form.cmd) {
+                forms.extend(pawn(p.model, p.at + off, p.yaw, Some(p.clip), anim_time));
+            }
+            // F-STAFF: Mirage Staff's tower
+            if let Some(t) = kh_core::combat::forms::staff::tower(finish, combat) {
+                forms.extend(pawn(t.model, t.position + off, t.yaw, Some(t.clip), t.time));
+            }
+            // F-SHIP: Storm Flag's Kraken, at Sora on its M_F420's clock
+            for p in kh_core::combat::forms::ship::finisher_pawns(finish) {
+                forms.extend(pawn(p.model, feet + off, yaw_d, p.clip, finish.map_or(0.0, |f| f.root_len)));
+            }
+            // F-NANO: FINISH_GM's gate (Sora and his weapons hidden meanwhile: below)
+            if combat.nano.hide_sora {
+                forms.clear();
+                hand_hidden = true;
+            }
+            if let Some(g) = combat.nano.gate {
+                forms.extend(pawn(g.model, g.position + off, g.yaw, Some(g.clip), g.time));
+            }
+        }
+        // (AUDIT-B F-NANO, INT line 3) the flying Rocket Fists (TresProjGM_RocketPunch: TresCharMesh0 = w_so173, its AnimBP has
+        // only the FullBody slot and nothing plays it: the reference pose), along their flight (yaw and pitch); they outlive
+        // the form. Their effects (ead_so170_com0 group 1620) come through the effect seam.
+        for r in combat.nano.rocket_views().filter(|r| r.stage == 1) {
+            let off = coords::dir_er_to_kh(render_offset(control));
+            let yaw = r.forward.y.atan2(r.forward.x);
+            let pitch = r.forward.z.clamp(-1.0, 1.0).asin();
+            if let Some(mut m) = kh_er_render::keyblade::model_at("w_so173", r.position + off, yaw.to_degrees()) {
+                m.to_world.rotation = glam::Quat::from_rotation_z(yaw) * glam::Quat::from_rotation_y(-pitch) * glam::Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2);
+                forms.push(m);
+            }
+        }
+        kbdraw::apply_form_chains(&mut forms, alpha); // (KEYCHAIN-DUAL) each Keyblade part with its own keychain (`step_chain`)
+        let weapon = if hand_hidden { None } else { weapon };
+        // (F-NANO 1, SHOT-C rush, INT-F) his body hidden while FINISH_GM's gate holds him or Noise Flux dashes
+        let body_hidden = combat.nano.hide_sora || magic.shot_body_hidden;
         kh_er_render::submit(kh_er_render::FrameInput {
             camera: kh_er_render::Camera { right: camera.right, up: camera.up, forward: camera.forward, position: camera.position, fov: camera.fov, aspect: camera.aspect, near: camera.near, far: camera.far },
             origin: self.world.frame.origin,
             clock: self.clock - (1.0 - alpha) * STEP, // (INT) the drawn time (between the steps, as his pose)
-            body: Some(kh_er_render::Body { component_to_world: to_world, local: pose.local, component: pose.component }),
+            body: (!body_hidden).then_some(kh_er_render::Body { component_to_world: to_world, local: pose.local, component: pose.component }),
             weapon,
             forms,
         });
@@ -4236,7 +5148,7 @@ impl SoraHost {
             erlog!("interp: {}", if on { "r.interp ON (default): Sora, the camera, the friends, the effects, the team props, the carried enemies and the HUD's world marks are drawn between the two latest fixed steps (r.interp = 0: the latest step)" } else { "r.interp = 0: everything of ours is drawn at the latest fixed step" });
         }
         if crate::interp::discontinuous(&self.out_before, &self.out) {
-            if self.int.snaps < 20 || self.int.snaps % 100 == 0 {
+            if self.int.snaps < 20 || self.int.snaps.is_multiple_of(100) {
                 erlog!("interp: a jump of {:.0} cm / {:.0} deg between two steps (teleport / reseat / warp / a turn set at once): drawn at the latest step, not blended (snap {})", self.out_before.position.distance(self.out.position), ((self.out.yaw - self.out_before.yaw + 540.0).rem_euclid(360.0) - 180.0).abs(), self.int.snaps + 1);
             }
             self.out_before = self.out.clone();
@@ -4262,7 +5174,7 @@ impl SoraHost {
     /// keeps the steps' places).
     fn int_drawn_feet(&self, control: &Control) -> (Option<Vec3>, Vec<(kh_host::party::PartyChara, Vec3)>) {
         let alpha = crate::interp::alpha(control, self.accumulator);
-        let sora = (!crate::interp::discontinuous(&self.out_before, &self.out)).then(|| self.out_before.position.lerp(self.out.position, alpha)).unwrap_or(self.out.position);
+        let sora = if !crate::interp::discontinuous(&self.out_before, &self.out) { self.out_before.position.lerp(self.out.position, alpha) } else { self.out.position };
         #[cfg(feature = "party")]
         if let Some(core) = self.party.core() {
             use kh_host::party::PartyChara;
@@ -4316,6 +5228,8 @@ impl SoraHost {
         }
         #[cfg(feature = "party")]
         crate::allybody::post_physics(self.world.frame); // (ER party S3) the ally bodies written again after the physics
+        #[cfg(feature = "party")]
+        crate::mimic_boss::write_bodies(self.world.frame); // (MIMIC-BOSS) the Mimic Tear boss's body again after the physics
         self.assert_flags(player, control);
         self.targets.puppets.reassert_at(crate::interp::alpha(control, self.accumulator)); // (INT) the enemies we carry, between the steps as he is
 
@@ -4355,6 +5269,14 @@ impl SoraHost {
         self.submit(control);
         #[cfg(feature = "party")]
         self.party_draw(control); // (ER party S4) the friends handed to the renderer
+        // (CUTSCENE-ANIM) in a real-time cutscene Mimic Sora is hidden as the AI friends are (partydraw U6): he is no figure of the
+        // scene's and would stand idle in its shots; `cut.mimic = 1`: drawn as in play
+        #[cfg(feature = "party")]
+        if self.cutscene && control.flag("cut.mimic") != Some(true) {
+            kh_er_render::mimic::clear_mimic();
+        } else {
+            crate::spirit_mimic::draw(control, crate::interp::alpha(control, self.accumulator)); // (MIMIC SORA) to the renderer, the Mimic Tear's look
+        }
         self.int_draw_fx(control); // (fx) the effects' draw list of the frame (INT: between the steps, on him as drawn)
         if tick {
             if let Some(trace) = self.trace.as_mut() {
@@ -4543,6 +5465,34 @@ fn ladder_state(player: &PlayerIns) -> i8 {
     unsafe { std::ptr::read(&player.chr_ins.modules.ladder.state as *const _ as *const i8) }
 }
 
+/// (GRABS) KH3 Sora's caught clips' lengths (his AnimSet rows CatchStart / CatchLoop / CatchEnd in the pack).
+fn sora_catch_lengths() -> crate::grabs::Lengths {
+    crate::grabs::sora_lengths()
+}
+
+/// (GRABS) The caught sequence's clip in Sora's body slot (the ladder leap's route: `Show::Clip`).
+fn catch_show(s: crate::grabs::Shown) -> Option<crate::ladder::Show> {
+    crate::grabs::catch_request(s).map(|r| crate::ladder::Show::Clip { anim: r.name, time: r.time, looping: r.looping, play: 0x0100_0000 + s.play })
+}
+
+/// (GRABS) THE ABDUCTION'S WARP: the two flags the Abductor's m14 events set, then what the game's own EMEVD `WarpPlayer`
+/// writes into GameMan (the same three fields) for its destination. No death: no rune is
+/// dropped, no game over; the load that follows makes the party anew round the leader at the arrival point.
+fn abduct_warp(a: &crate::grabs::Abduction) -> bool {
+    use fromsoftware_shared::FromStatic;
+    let flags: Vec<String> = a.flags.iter().map(|f| format!("{f}{}", if crate::loot::set_event_flag(*f) { "" } else { " (NOT WRITTEN)" })).collect();
+    // SAFETY: game thread; the singleton lives as long as the game; three plain fields of it (the SDK's layout)
+    let Ok(gm) = (unsafe { eldenring::cs::GameMan::instance_mut() }) else {
+        erlog!("!!! grab: (GRABS) the Abductor's warp: no GameMan, NOT warped (flags {})", flags.join(", "));
+        return false;
+    };
+    gm.initial_area_entity_id = a.point;
+    gm.move_map_target = eldenring::cs::BlockId::from_parts(a.area, a.block, a.region, a.index);
+    gm.warp_requested = true;
+    erlog!("grab: (GRABS) THE ABDUCTOR LET GO: flags {} set; THE GAME'S WARP to m{:02}_{:02}_{:02}_{:02} point {} asked (Volcano Manor; no death, no rune lost)", flags.join(", "), a.area, a.block, a.region, a.index, a.point);
+    true
+}
+
 /// (IMPL_ER57) The body's throw node: its state (SDK `ThrowNodeState` as a number; `None`: the module or node is not
 /// readable) and the handle bits of the other party of the paired animation (`CSPairAnimNode::counter_party`). Every read
 /// goes through `probe` (a bad pointer gives "not read", never a fault).
@@ -4578,7 +5528,13 @@ fn render_offset(control: &Control) -> Vec3 {
     Vec3::new(control.f32("r.dx").unwrap_or(0.0), 0.0, control.f32("r.dz").unwrap_or(0.0))
 }
 
-/// The mesh component in the KH3 world: at the actor origin, turned by the yaw minus 90 degrees.
+/// The mesh component in the KH3 world: at the actor origin, turned by the yaw minus 90 degrees; (F-LOCO, INT-F) tilted by
+/// the actor's pitch about the capsule centre (kh-host rig.rs, the effects' rule too).
 fn component_to_world(out: &Output) -> Trs {
-    Trs { translation: out.position, rotation: Quat::from_rotation_z((out.yaw - 90.0).to_radians()), scale: Vec3::ONE }
+    kh_host::rig::component_to_world(out)
+}
+
+/// (F-LOCO, INT-F) kh-host rig.rs `pitch_about`.
+fn pitch_about(t: &mut Trs, yaw: f32, pitch: f32, centre: Vec3) {
+    kh_host::rig::pitch_about(t, yaw, pitch, centre);
 }

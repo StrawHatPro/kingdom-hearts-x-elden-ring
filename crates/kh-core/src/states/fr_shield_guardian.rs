@@ -63,12 +63,11 @@ impl PlayerState for FrShieldGuardian {
                 self.link.play_end(cx, "M_1501", -1.0);
                 self.link.sub = 5;
             }
-            5 => {
-                if cx.pawn.anim.ended {
+            5
+                if cx.pawn.anim.ended => {
                     self.link.sub = 6;
                     cx.pawn.queue.do_finish();
                 }
-            }
             _ => {}
         }
     }

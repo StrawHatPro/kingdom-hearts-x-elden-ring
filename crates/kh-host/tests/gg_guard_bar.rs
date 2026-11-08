@@ -6,7 +6,7 @@
 
 use kh_core::{PadButtons, Sora, TargetId, Vec3};
 use kh_host::hud::{Frame, Hud, HudTargets, TargetView};
-use kh_host::hud_layers::{draw_movie_in, stage_root, Draw, Drawn, Perf};
+use kh_host::hud_layers::{draw_movie_in, stage_root, Draw, DrawArea, Drawn, Perf};
 use kh_host::party::{GuardLook, GuardValues, PartyChara, PartyHudSlot};
 
 struct NoTargets;
@@ -24,7 +24,7 @@ fn picture(fonts: &kh_ui::Fonts, movie: &kh_ui::Movie) -> Vec<u8> {
     let (stage, view) = stage_root(1920.0, 1080.0);
     let mut draw = Draw::default();
     let mut renderer = kh_ui::render::Renderer::new(fonts.clone());
-    match draw_movie_in(&mut draw, &mut renderer, movie, &stage, (1920.0, 1080.0), true, Perf::default(), Some(view)) {
+    match draw_movie_in(&mut draw, &mut renderer, movie, &stage, DrawArea { size: (1920.0, 1080.0), clip: Some(view) }, true, Perf::default()) {
         Drawn::Picture(..) => draw.rgba,
         _ => panic!("the status HUD drew nothing"),
     }
@@ -37,7 +37,7 @@ fn colour_of(fonts: &kh_ui::Fonts, movie: &kh_ui::Movie, path: &str) -> ([f32; 3
     assert!(hidden.set_visible(path, false), "{path}");
     let without = picture(fonts, &hidden);
     let (mut n, mut sum) = (0f32, [0f32; 3]);
-    for (p, q) in full.chunks_exact(4).zip(without.chunks_exact(4)) {
+    for (p, q) in full.as_chunks::<4>().0.iter().zip(without.as_chunks::<4>().0) {
         if p[3] > 200 && p.iter().zip(q).any(|(x, y)| x.abs_diff(*y) > 24) {
             n += 1.0;
             for c in 0..3 {

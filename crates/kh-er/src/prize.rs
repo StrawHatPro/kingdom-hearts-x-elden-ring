@@ -52,7 +52,9 @@
 //! | `prize.log` | sheet prize.log_flight (1) | 1 = a line per orb when it flies to him or vanishes: where it burst out, its first ground contact, where it lay |
 //! | `prize.munny_rate` | sheet er.munny_per_rune (1) | munny per rune |
 //! | `prize.munny_hp` | sheet er.munny_per_max_hp (0.4) | munny per hit point when no rune value is read |
-//! | `prize.weights` | sheet er.slot1_weights (67,36,10) | HP, MP, focus shares of the first slot |
+//! | `prize.weights` | sheet er.slot1_weights (67,36,10) | HP, MP, focus shares of the first slot (the focus share only while Sora is in the active party) |
+//! | `prize.focus.after` | sheet prize.focus.after_hp / _mp / _focus (16.4,25,40) | (FOCUSORB) percent chance of a focus slot beside a kill's HP / MP / focus first slot (KH3's second-slot share); `0,0,0` = none, `100,100,100` = every kill. Only while Sora is in the active party (leading or AI), never in a cutscene, after his death or after a load was asked for (`LOAD_EPOCH`) |
+//! | `prize.focus.count` | sheet prize.focus.count (2) | (FOCUSORB) orbs of that focus slot (small in tiers 0 / 1, large in tier 2) |
 //! | `prize.test` | - | ONE-SHOT: `hp[,runes[,times]]` drops what an enemy of that maximum HP would, 3 m in front of Sora |
 //! | `munny.mirror` | 1 | the rune counter shows Sora's munny; purchases cost munny; rune gains become munny |
 //! | `prize.munny_sound` | 1 | (MUNNYSE) the munny orbs' get sound (KH3's se00000_024) is played by this host (fx.rs `world_sound`, 3D at the orb, whoever leads), paced by prizemap `MunnyChime`; 0 = through Sora's own step as before |
@@ -130,7 +132,7 @@ static SESSION: Mutex<Session> = Mutex::new(Session { munny: None, died: false }
 static HELD_FILE: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
 
 /// Where the marker file goes (frame.rs, once).
-pub fn set_root(root: &std::path::Path) {
+pub fn set_held_file() {
     if let Ok(mut file) = HELD_FILE.lock() {
         *file = Some(crate::log::dir().join("kh-munny-held.txt"));
     }
@@ -159,6 +161,12 @@ pub fn forget_session() {
 
 /// Counts the loads asked for (and the visits of the title): a wallet made before the latest one is frozen.
 static LOAD_EPOCH: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// (P9b ACQUISITION) The loads asked for so far: a kill reported after it changed belongs to the abandoned session
+/// (weaponsrc.rs: no rare drop for it).
+pub(crate) fn load_epoch() -> u32 {
+    LOAD_EPOCH.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// What the held-munny file says: (munny, the character key it belongs to). A file without a key (written before
 /// IMPL_ER13: one file for every slot) belongs to nobody any more.
@@ -346,6 +354,25 @@ impl ErPrizes {
         Rule::default().with_overrides(control.str("prize.weights"), control.f32("prize.munny_rate"), control.f32("prize.munny_hp"))
     }
 
+    /// (FOCUSORB) The rule with its focus side: the sheet's `prize.focus.*` rows, the keys `prize.focus.after` /
+    /// `prize.focus.count` over them.
+    fn focus_rule(&self, control: &Control) -> Rule {
+        Self::rule(control).with_focus(self.rules.focus_after, self.rules.focus_count, control.str("prize.focus.after"), control.f32("prize.focus.count"))
+    }
+
+    /// (FOCUSORB) SORA IS IN THE ACTIVE PARTY (leading or as an AI member): the party runtime's `lead.sora_active` as
+    /// its feed publishes it; no party = Sora alone. One rule for every leader: membership, no name.
+    fn sora_in_party(control: &Control) -> bool {
+        #[cfg(feature = "party")]
+        let active = crate::partyui::live(control).then(|| crate::partyui::feed(|f| f.sora_active)).flatten();
+        #[cfg(not(feature = "party"))]
+        let active: Option<bool> = {
+            let _ = control;
+            None
+        };
+        crate::prizemap::sora_present(active)
+    }
+
     /// AN ENEMY SORA KILLED (sora.rs, where the EXP is given): the stat orbs burst out now; the
     /// munny orbs follow when the wallet knows what the game awarded.
     /// (IMPL_ER22) KH3's `AllPrizeCollection` (the boss finish, when the white-out is full): every orb on the field
@@ -360,7 +387,7 @@ impl ErPrizes {
             return;
         }
         self.configure(control);
-        let rule = Self::rule(control);
+        let rule = self.focus_rule(control); // (FOCUSORB)
         // `prize.runes = 0`: the rows are not read: every kill is priced by the guess from its maximum HP (the old rule)
         let guess = control.flag("prize.runes") == Some(false);
         let row = if guess { RuneRow::Unread } else { rune_value(npc_param) };
@@ -369,7 +396,11 @@ impl ErPrizes {
             self.said_runes = true;
             erlog!("prize: the first kill: NpcParam {npc_param} getSoul reads {row:?} (the munny is what the game itself adds to its counter; a row's value is the fallback; a row without one is worth what the game awards, nothing else)");
         }
-        let mut drop = rule.drop_for(max_hp, soul, &mut self.rule_rng);
+        // (FOCUSORB) focus orbs only with Sora in the active party, not in the quiet times, not after a load was asked for
+        let sora_in = Self::sora_in_party(control);
+        let loading = self.epoch != LOAD_EPOCH.load(std::sync::atomic::Ordering::Relaxed);
+        let focus = crate::prizemap::focus_drops(sora_in, self.cutscene || self.dead, loading);
+        let mut drop = rule.drop_with(max_hp, soul, &mut self.rule_rng, focus);
         // (IMPL_ER19) no rune value in the row: no fallback (the guess only with prize.runes = 0)
         let unpriced = soul.is_none() && !guess;
         if unpriced {
@@ -387,6 +418,10 @@ impl ErPrizes {
             crate::prizemap::hp_amounts(slot, hp_small, hp_large);
             self.host.prizes.drop_orbs(at, slot.kind, slot.count, &slot.amounts, &mods, false);
         }
+        // (FOCUSORB) KH3's second-slot focus, thrown with the first slot (FP_CONVERTER etc. through `mods`)
+        if let Some(slot) = drop.focus.as_ref().filter(|_| !quiet) {
+            self.host.prizes.drop_orbs(at, slot.kind, slot.count, &[], &mods, false);
+        }
         self.host.take(sora);
         let key = self.next_key;
         self.next_key = self.next_key.wrapping_add(1).max(1);
@@ -398,7 +433,7 @@ impl ErPrizes {
         self.waiting.insert(key, Waiting { at, tier: drop.tier, target: id, soul });
         let getter = kh_prize::Getter::sora(sora, sora.output().capsule_center);
         erlog!(
-            "prize: target {id} (NpcParam {npc_param}, max HP {max_hp}, {}) KILLED by Sora -> tier {}: {} now, bursting out {:.0} cm above its centre = {:+.0} cm from Sora's centre in height, {:.0} cm from him (his magnet radius: {}); its munny when the game's award is known ({})",
+            "prize: target {id} (NpcParam {npc_param}, max HP {max_hp}, {}) KILLED by Sora -> tier {}: {}{} now, bursting out {:.0} cm above its centre = {:+.0} cm from Sora's centre in height, {:.0} cm from him (his magnet radius: {}); its munny when the game's award is known ({})",
             match row {
                 RuneRow::Value(r) => format!("rune value {r}"),
                 RuneRow::Zero => "its row names NO rune value".to_string(),
@@ -406,6 +441,12 @@ impl ErPrizes {
             },
             drop.tier,
             drop.slots.first().map_or(String::new(), |s| format!("{:?} x{}", s.kind, s.count)),
+            // (FOCUSORB) the focus side of the drop
+            match (&drop.focus, focus) {
+                (Some(s), _) => format!(" + {:?} x{} (focus orbs: Sora in the party)", s.kind, s.count),
+                (None, true) => " (no focus slot this time)".to_string(),
+                (None, false) => format!(" (NO focus orbs: {})", if !sora_in { "Sora is not in the active party" } else if loading { "a load was asked for" } else { "a cutscene / after his death" }),
+            },
             at.z - centre.z,
             at.z - getter.point.z,
             (at - getter.point).truncate().length(),
@@ -424,14 +465,15 @@ impl ErPrizes {
         if let Some(value) = self.test.fired(control).filter(|_| self.on) {
             let parts: Vec<i32> = value.split(',').filter_map(|p| p.trim().parse::<i32>().ok()).collect();
             if let Some(&hp) = parts.first() {
-                let rule = Self::rule(control);
+                let rule = self.focus_rule(control); // (FOCUSORB)
+                let focus = crate::prizemap::focus_drops(Self::sora_in_party(control), false, false);
                 let mods = kh_prize::host::mods_of(sora);
                 let times = parts.get(2).copied().unwrap_or(1).clamp(1, 200);
                 let mut orbs = 0;
                 for _ in 0..times {
-                    let mut drop = rule.drop_for(hp, parts.get(1).copied(), &mut self.rule_rng);
+                    let mut drop = rule.drop_with(hp, parts.get(1).copied(), &mut self.rule_rng, focus);
                     let (hp_small, hp_large) = self.hp_values(control);
-                    for slot in &mut drop.slots {
+                    for slot in drop.slots.iter_mut().chain(drop.focus.iter_mut()) {
                         crate::prizemap::hp_amounts(slot, hp_small, hp_large);
                         self.host.prizes.drop_orbs(capsule_center + forward * 300.0 + Vec3::Z * spawn_height, slot.kind, slot.count, &slot.amounts, &mods, false);
                         orbs += slot.count;

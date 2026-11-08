@@ -1,22 +1,18 @@
 //! (DON-SPELLB) Part B's presentation and polish: Aero Barrier's look over the whole duration and its fade, the cast poses
 //! and their timing, the ultimates through ZETTA's presentation, the Releases' gesture, Gravity's recovery.
-#![allow(dead_code, unused_imports)]
 use super::abilities::DonAbility;
 use super::attune::Slot;
 use super::cast::{self, CastTarget, SORA_MEMBER};
 use super::combat::{CastPlan, Refusal};
 use super::element::Element;
 use super::learn::DonLearned;
-use super::magic_fx::{self, fx, FxLog, DON_HIT_FLAG};
-use super::react::Reaction;
-use super::spells::{hybrid_pairs, ArcaneLine, SpellRef};
-use super::status::{Apply, Size};
+use super::magic_fx::{self, fx};
+use super::spells::{ArcaneLine, SpellRef};
 use super::tune::data;
 use crate::host::PartyHost;
 use crate::ids::{Chara, MemberId};
 use crate::{Party, PartyConfig, SoraView};
 use glam::Vec3;
-use kh_core::enums::ETresDamageKind as Kind;
 use kh_core::host::{Attach, EffectHandle, EffectSpawn, HitRecord, HitResult, HurtShape, TargetDefense, TargetFlags, TargetId, TargetInfo, Targets};
 use kh_core::test_world::TestWorld;
 
@@ -45,14 +41,6 @@ impl Dummies {
         let flags = TargetFlags::ALIVE | TargetFlags::HITTABLE | TargetFlags::LOCKABLE | TargetFlags::ENEMY;
         TargetInfo { id: d.id, position: d.pos, center: d.pos + Vec3::Z * 90.0, velocity: d.vel, yaw: 180.0, radius: 50.0, half_height: 90.0, flags: TargetFlags(flags), hp: d.hp, hp_max: d.hp_max }
     }
-
-    fn hits_on(&self, id: u32) -> Vec<HitRecord> {
-        self.hits.iter().filter(|h| h.target.0 == id).copied().collect()
-    }
-
-    fn damage_on(&self, id: u32) -> f32 {
-        self.hits_on(id).iter().map(|h| h.damage).sum()
-    }
 }
 
 impl Targets for Dummies {
@@ -79,6 +67,13 @@ impl Targets for Dummies {
     }
     fn size_class(&self, id: TargetId) -> u8 {
         self.list.iter().find(|d| d.id == id).map_or(0, |d| d.size)
+    }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
     }
 }
 
@@ -220,18 +215,6 @@ impl Rig {
 
     fn spawned(&self, name: &str) -> usize {
         self.effects.spawned.iter().filter(|e| e.1 == name).count()
-    }
-
-    fn status(&self, id: u32) -> Option<super::status::TargetStatus> {
-        self.party.don.status.get(id).copied()
-    }
-
-    fn log(&self) -> &[FxLog] {
-        &self.party.don_fx.log
-    }
-
-    fn reacted(&self, r: Reaction) -> bool {
-        self.log().iter().any(|e| matches!(e, FxLog::Hit { reactions, .. } if reactions.contains(&r)))
     }
 }
 
@@ -478,11 +461,12 @@ fn status_handle(rig: &Rig, name: &str) -> Option<u32> {
 #[test]
 fn every_status_wears_its_own_look_on_the_enemy_while_it_lasts() {
     use super::status::TargetStatus;
-    let cases: [(&str, fn(&mut TargetStatus)); 9] = [
+    type Wear = fn(&mut TargetStatus);
+    // (FREEZE-FX) Frozen is not among them: KH3's own rows by the shared route (a_frozen_enemy_wears_kh3s_rows_not_a_look)
+    let cases: [(&str, Wear); 8] = [
         (fx::WET, |s| s.wet = 2.0),
         (fx::CHILL_STACKS[0], |s| (s.chill, s.chill_left) = (1, 2.0)),
         (fx::CHILL_STACKS[3], |s| (s.chill, s.chill_left) = (4, 2.0)),
-        (fx::FROZEN, |s| s.frozen = 2.0),
         (fx::BURN, |s| s.burn = 2.0),
         (fx::REVEAL, |s| s.reveal = 2.0),
         (fx::EXPOSED, |s| (s.reveal, s.exposed) = (2.0, true)),
@@ -529,19 +513,17 @@ fn chill_stacks_and_exposed_swap_the_look_and_stack_with_the_others() {
     assert_eq!(rig.spawned(fx::WET) + rig.spawned(fx::BURN), 2, "the others stay as they were");
 }
 
+/// (FREEZE-FX, the user 2026-11-07: "make sure frozen effects are applied to anything that gets frozen by blizzard") A Frozen
+/// enemy wears none of Donald's status looks: its ice and its break are KH3's own rows (ead_com_abn0 0xC1C / 0xC1F), put on it
+/// by the one shared route of every freeze (kh-core combat::freeze_look, run by the Elden Ring host for whoever froze it).
 #[test]
-fn a_thawing_frozen_breaks_its_ice_with_a_shatter_burst() {
+fn a_frozen_enemy_wears_kh3s_rows_not_a_look() {
     let mut rig = Rig::new(&[Vec3::new(600.0, 0.0, 0.0)]);
     rig.party.don.status.entry(1, super::status::Size::Small).frozen = 1.0;
     rig.idle(2);
-    assert_eq!(rig.spawned(fx::FROZEN_IN), 1, "the freeze-in burst");
-    assert_eq!(rig.spawned(fx::FROZEN_OUT), 0);
-    let ice = status_handle(&rig, fx::FROZEN).unwrap();
     rig.secs(1.1);
-    assert!(rig.effects.stopped_now.contains(&ice), "the ice goes at once");
-    assert_eq!(rig.spawned(fx::FROZEN_OUT), 1, "and breaks");
-    for n in [fx::FROZEN_IN, fx::FROZEN_OUT] {
-        assert!(!n.starts_with("vs_abn_frz"), "KH3's freeze in / out draw Sora's body: never on an enemy");
+    for n in [fx::FROZEN, fx::FROZEN_IN, fx::FROZEN_OUT] {
+        assert_eq!(rig.spawned(n), 0, "{n}: no mod-made frozen look");
     }
 }
 

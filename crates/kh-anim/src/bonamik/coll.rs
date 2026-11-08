@@ -53,9 +53,9 @@ pub fn fn_143afc140(ps: &[Particle], o: &mut CollObj) {
         let l2 = ((nx * nx) + (ny * ny)) + (nz * nz);
         if l2 > C_1E8 {
             let y = rsqrt(l2);
-            nx = nx * y;
-            ny = ny * y;
-            nz = nz * y;
+            nx *= y;
+            ny *= y;
+            nz *= y;
         }
         o.f20 = [nx, ny, nz];
     } else {
@@ -77,22 +77,22 @@ pub fn fn_143afc140(ps: &[Particle], o: &mut CollObj) {
 pub fn fn_143ae62b0(ps: &[Particle], ty: i32, a: usize, b: Option<usize>, c: Option<usize>) -> CollObj {
     let mut o = CollObj { f0: a, f8: b, f10: c, f18: ty, f1c: -1, f20: [0.0; 3], f2c: [0.0; 3], f38: 0, f3c: [-1; 8], f5c: 0.009999999776482582_f64 as f32, f60: 0.0, f64: 0.0, f68: [0.0; 3], f74: [0.0; 3], f80: 0.0 };
     fn_143b10190(ps, &mut o);
-    let r;
-    if ((ty - 2) as u32 & 0xFFFF_FFFD) == 0 {
+    
+    let r = if ((ty - 2) as u32 & 0xFFFF_FFFD) == 0 {
         let (pa, pb) = (&ps[o.f0], &ps[o.f8.expect("capsule end")]);
         let (dx, dz, dy) = (pa.f0[0] - pb.f0[0], pa.f0[2] - pb.f0[2], pa.f0[1] - pb.f0[1]);
         let m = pa.f25c.max(pb.f25c); // fmaxf (import at 0x145C0E380)
-        r = m + (sqrt(((dy * dy) + (dx * dx)) + (dz * dz)) * 0.5);
+        m + (sqrt(((dy * dy) + (dx * dx)) + (dz * dz)) * 0.5)
     } else if ((ty - 1) as u32 & 0xFFFF_FFFD) == 0 {
-        r = ps[o.f0].f25c;
+        ps[o.f0].f25c
     } else if ty == 6 {
         fn_143afc140(ps, &mut o);
         let a = ps[o.f0].f0;
         let (dz, dy, dx) = (a[2] - o.f2c[2], a[1] - o.f2c[1], a[0] - o.f2c[0]);
-        r = sqrt(((dy * dy) + (dx * dx)) + (dz * dz)) + o.f5c;
+        sqrt(((dy * dy) + (dx * dx)) + (dz * dz)) + o.f5c
     } else {
-        r = 0.0;
-    }
+        0.0
+    };
     o.f80 = r;
     if o.f18 == 6 {
         fn_143afc140(ps, &mut o);
@@ -365,9 +365,9 @@ pub fn fn_143b1b9f0(ps: &mut [Particle], pi: usize, o: &CollObj) {
     if p.f276 != 0 {
         return;
     }
-    p.f0[0] = cx + p.f0[0];
-    p.f0[2] = cz + p.f0[2];
-    p.f0[1] = cy + p.f0[1];
+    p.f0[0] += cx;
+    p.f0[2] += cz;
+    p.f0[1] += cy;
     p.f279 = 1;
     p.f64 = [cx + p.f64[0], cy + p.f64[1], cz + p.f64[2]];
     let (vy, vz, vx) = (p.f0[1] - p.fc[1], p.f0[2] - p.fc[2], p.f0[0] - p.fc[0]);
@@ -377,13 +377,13 @@ pub fn fn_143b1b9f0(ps: &mut [Particle], pi: usize, o: &CollObj) {
     let lim = fr * pen;
     let tt = ((ty * ty) + (tx * tx)) + (tz * tz);
     if tt >= lim * lim {
-        p.f0[0] = p.f0[0] - (tx * fr);
-        p.f0[1] = p.f0[1] - (fr * ty);
-        p.f0[2] = p.f0[2] - (fr * tz);
+        p.f0[0] -= tx * fr;
+        p.f0[1] -= fr * ty;
+        p.f0[2] -= fr * tz;
     } else {
-        p.f0[0] = p.f0[0] - tx;
-        p.f0[1] = p.f0[1] - ty;
-        p.f0[2] = p.f0[2] - tz;
+        p.f0[0] -= tx;
+        p.f0[1] -= ty;
+        p.f0[2] -= tz;
     }
 }
 
@@ -398,7 +398,7 @@ fn min1(s: f32) -> f32 {
 
 /// 0x143b1c700 (rcx = p1, rdx = p2, r8 = off vec3*, xmm3 = R): sphere vs sphere
 pub fn fn_143b1c700(ps: &mut [Particle], p1: usize, p2: usize, off: V3, mut r: f32) {
-    if !(r >= C_1E4) {
+    if r.partial_cmp(&C_1E4).is_none_or(std::cmp::Ordering::is_lt) {
         r = ps[p2].f25c;
     }
     let sum = ps[p1].f25c + r;
@@ -410,37 +410,37 @@ pub fn fn_143b1c700(ps: &mut [Particle], p1: usize, p2: usize, off: V3, mut r: f
     if dd >= sum * sum {
         return;
     }
-    if !(dd > 0.0) {
+    if dd.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
         return;
     }
     let k1 = ps[p1].f276;
     let l = sqrt(dd);
     let mut pen = sum - l;
     let inv = 1.0 / l;
-    ny = ny * inv;
-    nz = nz * inv;
-    nx = nx * inv;
+    ny *= inv;
+    nz *= inv;
+    nx *= inv;
     if k1 == 0 && ps[p2].f276 == 0 {
-        pen = pen * 0.5;
+        pen *= 0.5;
     }
     let (mut vx, mut vy, mut vz) = (Z[0], Z[1], Z[2]);
     if k1 == 0 {
-        vx = vx + (ps[p1].f0[0] - ps[p1].fc[0]);
-        vy = vy + (p1y - ps[p1].fc[1]);
-        vz = vz + (p1z - ps[p1].fc[2]);
+        vx += ps[p1].f0[0] - ps[p1].fc[0];
+        vy += p1y - ps[p1].fc[1];
+        vz += p1z - ps[p1].fc[2];
     }
     if ps[p2].f276 == 0 {
-        vx = vx - (p2x - ps[p2].fc[0]);
-        vy = vy - (p2y - ps[p2].fc[1]);
-        vz = vz - (p2z - ps[p2].fc[2]);
+        vx -= p2x - ps[p2].fc[0];
+        vy -= p2y - ps[p2].fc[1];
+        vz -= p2z - ps[p2].fc[2];
     }
     let vn = ((nx * vx) + (ny * vy)) + (nz * vz);
     let (tx, ty, tz) = (vx - (nx * vn), vy - (ny * vn), vz - (nz * vn));
     let tt = ((ty * ty) + (tx * tx)) + (tz * tz);
     if k1 == 0 {
         let (cy, cx, cz) = (ny * pen, nx * pen, nz * pen);
-        ps[p1].f0[0] = cx + ps[p1].f0[0];
-        ps[p1].f0[2] = cz + ps[p1].f0[2];
+        ps[p1].f0[0] += cx;
+        ps[p1].f0[2] += cz;
         let y1 = cy + ps[p1].f0[1];
         ps[p1].f0[1] = y1;
         ps[p1].f279 = 1;
@@ -449,36 +449,36 @@ pub fn fn_143b1c700(ps: &mut [Particle], p1: usize, p2: usize, off: V3, mut r: f
         if tt >= g * g {
             if tt > 0.0 {
                 let s = min1(g / sqrt(tt));
-                ps[p1].f0[0] = ps[p1].f0[0] - (s * tx);
-                ps[p1].f0[1] = ps[p1].f0[1] - (ty * s);
-                ps[p1].f0[2] = ps[p1].f0[2] - (tz * s);
+                ps[p1].f0[0] -= s * tx;
+                ps[p1].f0[1] -= ty * s;
+                ps[p1].f0[2] -= tz * s;
             }
         } else {
             ps[p1].f0[1] = y1 - ty;
-            ps[p1].f0[0] = ps[p1].f0[0] - tx;
-            ps[p1].f0[2] = ps[p1].f0[2] - tz;
+            ps[p1].f0[0] -= tx;
+            ps[p1].f0[2] -= tz;
         }
     }
     if ps[p2].f276 == 0 {
         let (cx, cy, cz) = (nx * pen, ny * pen, nz * pen);
-        ps[p2].f0[0] = ps[p2].f0[0] - cx;
-        ps[p2].f0[1] = ps[p2].f0[1] - cy;
-        ps[p2].f0[2] = ps[p2].f0[2] - cz;
+        ps[p2].f0[0] -= cx;
+        ps[p2].f0[1] -= cy;
+        ps[p2].f0[2] -= cz;
         ps[p2].f279 = 1;
         ps[p2].f64 = [ps[p2].f64[0] - cx, ps[p2].f64[1] - cy, ps[p2].f64[2] - cz];
         let g = pen * ps[p2].f268;
         if tt >= g * g {
-            if !(tt > 0.0) {
+            if tt.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
                 return;
             }
             let s = min1(g / sqrt(tt));
-            ps[p2].f0[0] = (s * tx) + ps[p2].f0[0];
-            ps[p2].f0[2] = (tz * s) + ps[p2].f0[2];
-            ps[p2].f0[1] = (ty * s) + ps[p2].f0[1];
+            ps[p2].f0[0] += s * tx;
+            ps[p2].f0[2] += tz * s;
+            ps[p2].f0[1] += ty * s;
         } else {
-            ps[p2].f0[0] = tx + ps[p2].f0[0];
-            ps[p2].f0[2] = tz + ps[p2].f0[2];
-            ps[p2].f0[1] = ty + ps[p2].f0[1];
+            ps[p2].f0[0] += tx;
+            ps[p2].f0[2] += tz;
+            ps[p2].f0[1] += ty;
         }
     }
 }
@@ -504,7 +504,7 @@ pub fn fn_143b1b110(ps: &mut [Particle], p: usize, a: usize, b: usize, concave: 
     let ee = ((ey * ey) + (ex * ex)) + (ez * ez);
     if t > 0.0 {
         if ee > t {
-            t = t / ee;
+            t /= ee;
         } else {
             t = 1.0;
         }
@@ -513,7 +513,7 @@ pub fn fn_143b1b110(ps: &mut [Particle], p: usize, a: usize, b: usize, concave: 
     }
     let (dx, dy, dz) = (ps[p].f0[0] - ((ex * t) + ax), ps[p].f0[1] - ((ey * t) + ay), ps[p].f0[2] - ((ez * t) + az));
     let dd = ((dy * dy) + (dx * dx)) + (dz * dz);
-    if !(r >= C_1E4) {
+    if r.partial_cmp(&C_1E4).is_none_or(std::cmp::Ordering::is_lt) {
         r = ((1.0 - t) * ps[a].f25c) + (t * ps[b].f25c);
         if concave.abs() > C_1E4 {
             let u = t - 0.5;
@@ -524,7 +524,7 @@ pub fn fn_143b1b110(ps: &mut [Particle], p: usize, a: usize, b: usize, concave: 
     if dd >= sum * sum {
         return;
     }
-    if !(dd > 0.0) {
+    if dd.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
         return;
     }
     let k = ps[p].f276;
@@ -534,30 +534,30 @@ pub fn fn_143b1b110(ps: &mut [Particle], p: usize, a: usize, b: usize, concave: 
     let (nx, ny, nz) = (inv * dx, inv * dy, inv * dz);
     if k == 0 {
         if ps[a].f276 == 0 {
-            pen = pen * 0.5;
+            pen *= 0.5;
         }
     } else {
-        pen = pen / ((0.5 - t).abs() + 0.5);
+        pen /= (0.5 - t).abs() + 0.5;
     }
     let (mut vx, mut vy, mut vz) = (Z[0], Z[1], Z[2]);
     if k == 0 {
-        vx = vx + (ps[p].f0[0] - ps[p].fc[0]);
-        vy = vy + (ps[p].f0[1] - ps[p].fc[1]);
-        vz = vz + (ps[p].f0[2] - ps[p].fc[2]);
+        vx += ps[p].f0[0] - ps[p].fc[0];
+        vy += ps[p].f0[1] - ps[p].fc[1];
+        vz += ps[p].f0[2] - ps[p].fc[2];
     }
     if ps[a].f276 == 0 {
         let w = 1.0 - t;
-        vx = vx - (((ps[a].f0[0] - ps[a].fc[0]) * w) + ((ps[b].f0[0] - ps[b].fc[0]) * t));
-        vy = vy - (((ps[a].f0[1] - ps[a].fc[1]) * w) + ((ps[b].f0[1] - ps[b].fc[1]) * t));
-        vz = vz - (((ps[a].f0[2] - ps[a].fc[2]) * w) + ((ps[b].f0[2] - ps[b].fc[2]) * t));
+        vx -= ((ps[a].f0[0] - ps[a].fc[0]) * w) + ((ps[b].f0[0] - ps[b].fc[0]) * t);
+        vy -= ((ps[a].f0[1] - ps[a].fc[1]) * w) + ((ps[b].f0[1] - ps[b].fc[1]) * t);
+        vz -= ((ps[a].f0[2] - ps[a].fc[2]) * w) + ((ps[b].f0[2] - ps[b].fc[2]) * t);
     }
     let vn = ((vy * ny) + (vx * nx)) + (vz * nz);
     let (mut tx, mut ty, mut tz) = (vx - (nx * vn), vy - (ny * vn), vz - (nz * vn));
     let tt = ((ty * ty) + (tx * tx)) + (tz * tz);
     if k == 0 {
         let (cy, cx, cz) = (ny * pen, nx * pen, nz * pen);
-        ps[p].f0[0] = cx + ps[p].f0[0];
-        ps[p].f0[2] = cz + ps[p].f0[2];
+        ps[p].f0[0] += cx;
+        ps[p].f0[2] += cz;
         let y1 = cy + ps[p].f0[1];
         ps[p].f0[1] = y1;
         ps[p].f279 = 1;
@@ -566,72 +566,81 @@ pub fn fn_143b1b110(ps: &mut [Particle], p: usize, a: usize, b: usize, concave: 
         if tt >= g * g {
             if tt > 0.0 {
                 let s = min1(g / sqrt(tt));
-                ps[p].f0[0] = ps[p].f0[0] - (s * tx);
-                ps[p].f0[1] = ps[p].f0[1] - (ty * s);
-                ps[p].f0[2] = ps[p].f0[2] - (tz * s);
+                ps[p].f0[0] -= s * tx;
+                ps[p].f0[1] -= ty * s;
+                ps[p].f0[2] -= tz * s;
             }
         } else {
             ps[p].f0[1] = y1 - ty;
-            ps[p].f0[0] = ps[p].f0[0] - tx;
-            ps[p].f0[2] = ps[p].f0[2] - tz;
+            ps[p].f0[0] -= tx;
+            ps[p].f0[2] -= tz;
         }
     }
     if ps[a].f276 == 0 {
         let w = 1.0 - t;
         let mut g = w * pen;
         let (cx, cy, cz) = (nx * g, ny * g, nz * g);
-        ps[a].f0[0] = ps[a].f0[0] - cx;
-        ps[a].f0[1] = ps[a].f0[1] - cy;
-        ps[a].f0[2] = ps[a].f0[2] - cz;
+        ps[a].f0[0] -= cx;
+        ps[a].f0[1] -= cy;
+        ps[a].f0[2] -= cz;
         ps[a].f279 = 1;
         ps[a].f64 = [ps[a].f64[0] - cx, ps[a].f64[1] - cy, ps[a].f64[2] - cz];
-        g = g * ps[a].f268;
+        g *= ps[a].f268;
         if tt >= g * g {
             if tt > 0.0 {
                 let s = min1(g / sqrt(tt));
                 let (sx, sy) = (tx * s, s * ty);
-                ps[a].f0[2] = (s * tz) + ps[a].f0[2];
-                ps[a].f0[1] = sy + ps[a].f0[1];
-                ps[a].f0[0] = sx + ps[a].f0[0];
+                ps[a].f0[2] += s * tz;
+                ps[a].f0[1] += sy;
+                ps[a].f0[0] += sx;
             }
         } else {
             let (sx, sy) = (tx * w, ty * w);
-            ps[a].f0[2] = (w * tz) + ps[a].f0[2];
-            ps[a].f0[1] = sy + ps[a].f0[1];
-            ps[a].f0[0] = sx + ps[a].f0[0];
+            ps[a].f0[2] += w * tz;
+            ps[a].f0[1] += sy;
+            ps[a].f0[0] += sx;
         }
     }
     if ps[b].f276 == 0 {
         let mut g = pen * t;
         let (cx, cy, cz) = (nx * g, ny * g, nz * g);
-        ps[b].f0[0] = ps[b].f0[0] - cx;
-        ps[b].f0[1] = ps[b].f0[1] - cy;
-        ps[b].f0[2] = ps[b].f0[2] - cz;
+        ps[b].f0[0] -= cx;
+        ps[b].f0[1] -= cy;
+        ps[b].f0[2] -= cz;
         ps[b].f279 = 1;
         ps[b].f64 = [ps[b].f64[0] - cx, ps[b].f64[1] - cy, ps[b].f64[2] - cz];
-        g = g * ps[a].f268; // friction of a (rdx), as coded
+        g *= ps[a].f268; // friction of a (rdx), as coded
         if tt >= g * g {
-            if !(tt > 0.0) {
+            if tt.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
                 return;
             }
             let s = min1(g / sqrt(tt));
-            tx = tx * s;
-            ty = ty * s;
-            tz = tz * s;
+            tx *= s;
+            ty *= s;
+            tz *= s;
         } else {
-            tx = tx * t;
-            ty = ty * t;
-            tz = tz * t;
+            tx *= t;
+            ty *= t;
+            tz *= t;
         }
-        ps[b].f0[2] = tz + ps[b].f0[2];
-        ps[b].f0[1] = ty + ps[b].f0[1];
-        ps[b].f0[0] = tx + ps[b].f0[0];
+        ps[b].f0[2] += tz;
+        ps[b].f0[1] += ty;
+        ps[b].f0[0] += tx;
     }
 }
 
+/// One side of fn_143b15850: the capsule between two particles, with its taper value.
+#[derive(Clone, Copy)]
+pub struct Capsule {
+    pub p1: usize,
+    pub p2: usize,
+    pub taper: f32,
+}
+
 /// 0x143b15850: capsule a1-a2 vs capsule b1-b2 (off is added to b1/b2; R > 0 overrides the b radius)
-#[allow(clippy::too_many_arguments)]
-pub fn fn_143b15850(ps: &mut [Particle], a1: usize, a2: usize, c1: f32, b1: usize, b2: usize, c2: f32, off: V3, mut r: f32) {
+pub fn fn_143b15850(ps: &mut [Particle], first: Capsule, second: Capsule, off: V3, mut r: f32) {
+    let Capsule { p1: a1, p2: a2, taper: c1 } = first;
+    let Capsule { p1: b1, p2: b2, taper: c2 } = second;
     if a1 == b1 || a1 == b2 || b1 == a2 {
         return;
     }
@@ -708,7 +717,7 @@ pub fn fn_143b15850(ps: &mut [Particle], a1: usize, a2: usize, c1: f32, b1: usiz
         let u = s - 0.5;
         r1 = ((((u * 4.0) * u) * r1) * c1) + ((1.0 - c1) * r1);
     }
-    if !(r >= C_1E4) {
+    if r.partial_cmp(&C_1E4).is_none_or(std::cmp::Ordering::is_lt) {
         r = ((1.0 - t) * ps[b1].f25c) + (t * ps[b2].f25c);
         if c2.abs() > C_1E4 {
             let u = t - 0.5;
@@ -719,7 +728,7 @@ pub fn fn_143b15850(ps: &mut [Particle], a1: usize, a2: usize, c1: f32, b1: usiz
     if dd >= sum * sum {
         return;
     }
-    if !(dd > 0.0) {
+    if dd.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
         return;
     }
     let k1 = ps[a1].f276;
@@ -728,7 +737,7 @@ pub fn fn_143b15850(ps: &mut [Particle], a1: usize, a2: usize, c1: f32, b1: usiz
     let inv = 1.0 / l;
     let (nx, ny, nz) = (inv * px, inv * py, inv * pz);
     if k1 == 0 && ps[b1].f276 == 0 {
-        pen = pen * 0.5;
+        pen *= 0.5;
     }
     let k2 = ps[b1].f276;
     let w2 = 1.0 - t;
@@ -744,14 +753,14 @@ pub fn fn_143b15850(ps: &mut [Particle], a1: usize, a2: usize, c1: f32, b1: usiz
     }
     let (mut vx, mut vy, mut vz) = (Z[0], Z[1], Z[2]);
     if k1 == 0 {
-        vx = vx + (((a1x - ps[a1].fc[0]) * w1) + ((ps[a2].f0[0] - ps[a2].fc[0]) * s));
-        vy = vy + (((ps[a1].f0[1] - ps[a1].fc[1]) * w1) + ((ps[a2].f0[1] - ps[a2].fc[1]) * s));
-        vz = vz + (((ps[a1].f0[2] - ps[a1].fc[2]) * w1) + ((ps[a2].f0[2] - ps[a2].fc[2]) * s));
+        vx += ((a1x - ps[a1].fc[0]) * w1) + ((ps[a2].f0[0] - ps[a2].fc[0]) * s);
+        vy += ((ps[a1].f0[1] - ps[a1].fc[1]) * w1) + ((ps[a2].f0[1] - ps[a2].fc[1]) * s);
+        vz += ((ps[a1].f0[2] - ps[a1].fc[2]) * w1) + ((ps[a2].f0[2] - ps[a2].fc[2]) * s);
     }
     if k2 == 0 {
-        vx = vx - (((ps[b1].f0[0] - ps[b1].fc[0]) * w2) + ((ps[b2].f0[0] - ps[b2].fc[0]) * t));
-        vy = vy - (((ps[b1].f0[1] - ps[b1].fc[1]) * w2) + ((ps[b2].f0[1] - ps[b2].fc[1]) * t));
-        vz = vz - (((ps[b1].f0[2] - ps[b1].fc[2]) * w2) + ((ps[b2].f0[2] - ps[b2].fc[2]) * t));
+        vx -= ((ps[b1].f0[0] - ps[b1].fc[0]) * w2) + ((ps[b2].f0[0] - ps[b2].fc[0]) * t);
+        vy -= ((ps[b1].f0[1] - ps[b1].fc[1]) * w2) + ((ps[b2].f0[1] - ps[b2].fc[1]) * t);
+        vz -= ((ps[b1].f0[2] - ps[b1].fc[2]) * w2) + ((ps[b2].f0[2] - ps[b2].fc[2]) * t);
     }
     let vn = ((vy * ny) + (vx * nx)) + (vz * nz);
     let (mut tx, mut ty, mut tz) = (vx - (vn * nx), vy - (vn * ny), vz - (vn * nz));
@@ -759,90 +768,90 @@ pub fn fn_143b15850(ps: &mut [Particle], a1: usize, a2: usize, c1: f32, b1: usiz
     if k1 == 0 {
         let (cx, cy, cz) = (nx * g1, ny * g1, nz * g1);
         ps[a1].f0[0] = a1x + cx;
-        ps[a1].f0[1] = cy + ps[a1].f0[1];
-        ps[a1].f0[2] = cz + ps[a1].f0[2];
+        ps[a1].f0[1] += cy;
+        ps[a1].f0[2] += cz;
         ps[a1].f279 = 1;
         ps[a1].f64 = [cx + ps[a1].f64[0], cy + ps[a1].f64[1], cz + ps[a1].f64[2]];
         let g = g1 * ps[a1].f268;
         if tt >= g * g {
             if tt > 0.0 {
                 let k = min1(g / sqrt(tt));
-                ps[a1].f0[0] = ps[a1].f0[0] - (k * tx);
-                ps[a1].f0[1] = ps[a1].f0[1] - (ty * k);
-                ps[a1].f0[2] = ps[a1].f0[2] - (tz * k);
+                ps[a1].f0[0] -= k * tx;
+                ps[a1].f0[1] -= ty * k;
+                ps[a1].f0[2] -= tz * k;
             }
         } else {
-            ps[a1].f0[0] = ps[a1].f0[0] - (tx * w1);
-            ps[a1].f0[1] = ps[a1].f0[1] - (ty * w1);
-            ps[a1].f0[2] = ps[a1].f0[2] - (w1 * tz);
+            ps[a1].f0[0] -= tx * w1;
+            ps[a1].f0[1] -= ty * w1;
+            ps[a1].f0[2] -= w1 * tz;
         }
     }
     if ps[a2].f276 == 0 {
         let (cx, cy, cz) = (nx * g2, ny * g2, nz * g2);
-        ps[a2].f0[0] = cx + ps[a2].f0[0];
-        ps[a2].f0[1] = cy + ps[a2].f0[1];
-        ps[a2].f0[2] = cz + ps[a2].f0[2];
+        ps[a2].f0[0] += cx;
+        ps[a2].f0[1] += cy;
+        ps[a2].f0[2] += cz;
         ps[a2].f279 = 1;
         ps[a2].f64 = [cx + ps[a2].f64[0], cy + ps[a2].f64[1], cz + ps[a2].f64[2]];
         let g = g2 * ps[a1].f268; // friction of a1 (rcx), as coded
         if tt >= g * g {
             if tt > 0.0 {
                 let k = min1(g / sqrt(tt));
-                ps[a2].f0[0] = ps[a2].f0[0] - (k * tx);
-                ps[a2].f0[1] = ps[a2].f0[1] - (ty * k);
-                ps[a2].f0[2] = ps[a2].f0[2] - (tz * k);
+                ps[a2].f0[0] -= k * tx;
+                ps[a2].f0[1] -= ty * k;
+                ps[a2].f0[2] -= tz * k;
             }
         } else {
-            ps[a2].f0[0] = ps[a2].f0[0] - (tx * s);
-            ps[a2].f0[1] = ps[a2].f0[1] - (ty * s);
-            ps[a2].f0[2] = ps[a2].f0[2] - (tz * s);
+            ps[a2].f0[0] -= tx * s;
+            ps[a2].f0[1] -= ty * s;
+            ps[a2].f0[2] -= tz * s;
         }
     }
     if ps[b1].f276 == 0 {
         let (cx, cy, cz) = (nx * g3, ny * g3, nz * g3);
-        ps[b1].f0[0] = ps[b1].f0[0] - cx;
-        ps[b1].f0[1] = ps[b1].f0[1] - cy;
-        ps[b1].f0[2] = ps[b1].f0[2] - cz;
+        ps[b1].f0[0] -= cx;
+        ps[b1].f0[1] -= cy;
+        ps[b1].f0[2] -= cz;
         ps[b1].f279 = 1;
         ps[b1].f64 = [ps[b1].f64[0] - cx, ps[b1].f64[1] - cy, ps[b1].f64[2] - cz];
         let g = g3 * ps[b1].f268;
         if tt >= g * g {
             if tt > 0.0 {
                 let k = min1(g / sqrt(tt));
-                ps[b1].f0[0] = (tx * k) + ps[b1].f0[0];
-                ps[b1].f0[1] = (ty * k) + ps[b1].f0[1];
-                ps[b1].f0[2] = (tz * k) + ps[b1].f0[2];
+                ps[b1].f0[0] += tx * k;
+                ps[b1].f0[1] += ty * k;
+                ps[b1].f0[2] += tz * k;
             }
         } else {
-            ps[b1].f0[1] = (ty * w2) + ps[b1].f0[1];
-            ps[b1].f0[0] = (w2 * tx) + ps[b1].f0[0];
-            ps[b1].f0[2] = (tz * w2) + ps[b1].f0[2];
+            ps[b1].f0[1] += ty * w2;
+            ps[b1].f0[0] += w2 * tx;
+            ps[b1].f0[2] += tz * w2;
         }
     }
     if ps[b2].f276 == 0 {
         let (cx, cy, cz) = (nx * g4, ny * g4, nz * g4);
-        ps[b2].f0[0] = ps[b2].f0[0] - cx;
-        ps[b2].f0[1] = ps[b2].f0[1] - cy;
-        ps[b2].f0[2] = ps[b2].f0[2] - cz;
+        ps[b2].f0[0] -= cx;
+        ps[b2].f0[1] -= cy;
+        ps[b2].f0[2] -= cz;
         ps[b2].f279 = 1;
         ps[b2].f64 = [ps[b2].f64[0] - cx, ps[b2].f64[1] - cy, ps[b2].f64[2] - cz];
         let g = g4 * ps[b2].f268;
         if tt >= g * g {
-            if !(tt > 0.0) {
+            if tt.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
                 return;
             }
             let k = min1(g / sqrt(tt));
-            tx = tx * k;
-            ty = ty * k;
-            tz = tz * k;
+            tx *= k;
+            ty *= k;
+            tz *= k;
         } else {
-            tx = tx * t;
-            ty = ty * t;
-            tz = tz * t;
+            tx *= t;
+            ty *= t;
+            tz *= t;
         }
-        ps[b2].f0[2] = tz + ps[b2].f0[2];
-        ps[b2].f0[1] = ty + ps[b2].f0[1];
-        ps[b2].f0[0] = tx + ps[b2].f0[0];
+        ps[b2].f0[2] += tz;
+        ps[b2].f0[1] += ty;
+        ps[b2].f0[0] += tx;
     }
 }
 
@@ -850,7 +859,7 @@ pub fn fn_143b15850(ps: &mut [Particle], a1: usize, a2: usize, c1: f32, b1: usiz
 pub fn bounds_overlap(s: &CollObj, c: &CollObj) -> bool {
     let (dy, dx, dz) = (s.f74[1] - c.f74[1], s.f74[0] - c.f74[0], s.f74[2] - c.f74[2]);
     let rr = s.f80 + c.f80;
-    !(((dy * dy) + (dx * dx)) + (dz * dz) >= rr * rr)
+    (((dy * dy) + (dx * dx)) + (dz * dz)).partial_cmp(&(rr * rr)).is_none_or(std::cmp::Ordering::is_lt)
 }
 
 /// 0x143b13a20 (rcx = S sphere object, rdx = collider C); jump table 0x143b13b50
@@ -885,7 +894,7 @@ pub fn fn_143b13620(ps: &mut [Particle], s: &CollObj, c: &CollObj) {
                 let c8 = c.f8.expect("capsule end");
                 fn_143b1b110(ps, s.f0, c.f0, c8, c.f64, [0.0; 3], 0.0);
                 fn_143b1b110(ps, s8, c.f0, c8, c.f64, [0.0; 3], 0.0);
-                fn_143b15850(ps, s.f0, s8, s.f64, c.f0, c8, c.f64, [0.0; 3], 0.0);
+                fn_143b15850(ps, Capsule { p1: s.f0, p2: s8, taper: s.f64 }, Capsule { p1: c.f0, p2: c8, taper: c.f64 }, [0.0; 3], 0.0);
             }
         }
         // (ER69) NOT TRANSCRIBED, a FALLBACK instead of a stop (an outfit's asset reaches it; Sora's never): 0x143b1bc20 / 0x143b16420 (inverse sphere / capsule): no contact
@@ -1006,7 +1015,7 @@ pub fn fn_143b1aba0(sc: &mut Scene) {
             } else if sb == 2 {
                 if let (Some(ac), Some(bc)) = (ps[a].f198, ps[b].f198) {
                     let (ca, cb) = (ps[a].f284, ps[b].f284);
-                    fn_143b15850(ps, a, ac, ca, b, bc, cb, z, 0.0);
+                    fn_143b15850(ps, Capsule { p1: a, p2: ac, taper: ca }, Capsule { p1: b, p2: bc, taper: cb }, z, 0.0);
                 }
             } else if sb == 6 {
                 if let Some(bo) = ps[b].f2a0 {
@@ -1056,8 +1065,8 @@ pub fn fn_143b12da0(p: &mut Particle, pt: V3, n: V3) -> i32 {
     let pen = r - d;
     let (cx, cy, cz) = (n[0] * pen, n[1] * pen, n[2] * pen);
     p.f0[0] = cx + ox;
-    p.f0[2] = cz + p.f0[2];
-    p.f0[1] = cy + p.f0[1];
+    p.f0[2] += cz;
+    p.f0[1] += cy;
     p.f64 = [cx + p.f64[0], cy + p.f64[1], cz + p.f64[2]];
     let (my, mz, mx) = (p.f0[1] - oy, p.f0[2] - oz, p.f0[0] - ox);
     let mn = ((mx * n[0]) + (my * n[1])) + (mz * n[2]);
@@ -1067,11 +1076,11 @@ pub fn fn_143b12da0(p: &mut Particle, pt: V3, n: V3) -> i32 {
     let tt = ((ty * ty) + (tx * tx)) + (tz * tz);
     let (y, z);
     if tt >= lim * lim {
-        p.f0[0] = p.f0[0] - (tx * fr);
+        p.f0[0] -= tx * fr;
         y = p.f0[1] - (fr * ty);
         z = p.f0[2] - (fr * tz);
     } else {
-        p.f0[0] = p.f0[0] - tx;
+        p.f0[0] -= tx;
         y = p.f0[1] - ty;
         z = p.f0[2] - tz;
     }

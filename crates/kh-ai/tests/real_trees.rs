@@ -1,7 +1,6 @@
 //! The friends' real trees (build/sora_pack/party/ai) on a kinematic host.
 
-mod common;
-use common::*;
+use crate::common::*;
 use glam::Vec3;
 use kh_ai::bt::{AuxKind, Library, NodeKind};
 use kh_ai::*;

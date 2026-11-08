@@ -90,9 +90,26 @@ impl PlayerState for Idle {
             self.sub = 1;
             return;
         }
+        // (weapons P2) pawn+0x1460 bit 0: resumed after a Keyblade switch (Idle::Begin [I], actions spec II.3: "if
+        // stick >= 0.8 && TryRun: DoFinish; Draw(1, 1, 1.0); Play BattleStart; sub = 1; bit cleared").
+        if super::weapon_change::take_glide_resume(s) {
+            let (yaw, magnitude) = (s.stick_yaw, s.stick_magnitude);
+            if magnitude >= s.params().input_walk_run_threshold {
+                let mut me = StateData::Idle(*self);
+                super::run::try_run(&mut me, cx, yaw, magnitude);
+                if !cx.pawn.queue.nothing_queued() {
+                    cx.pawn.queue.do_finish();
+                    return;
+                }
+            }
+            actions::draw(cx, true);
+            cx.pawn.anim.play_with(AnimId::BattleStart, PlayArgs::mode(2, -1.0));
+            self.sub = 1;
+            return;
+        }
         // The idle name; not replayed when it is the current clip or an idle break is playing.
         let name = actions::idle_name(s.actions.weapon_out, battle_anim, self.locked);
-        let current = s.anim.name;
+        let current = s.anim.logical; // (F-LOCO) the state's name (the form's anim set may have replaced the row)
         if name != AnimId::IdleN {
             if name != current {
                 s.anim.play_with(name, PlayArgs::mode(2, -1.0));
@@ -126,8 +143,13 @@ impl PlayerState for Idle {
                 return;
             }
         }
-        let battle_anim = actions::battle_anim(cx.pawn);
-        let battle = cx.pawn.actions.battle;
+        // (F-LOCO) the battle flag (vt+0x1740), forced on in forms 0x85 / 0x87 / 0x88 / 0x8B (Idle Tick 0x1413944D0: forms `keeps_battle_stance`)
+        // (FORM-LOCO2) the user's rule: forced on in EVERY held form until it ends (forms `holds_battle_stance`); there the
+        // pose also needs the form weapon out (it stays drawn): a weapon away (Rage Form's `battleAnim` is on without it)
+        // counts as "not in the battle pose", so the battle start below draws it and plays BattleStart
+        let held = crate::combat::forms::holds_battle_stance(cx.pawn.combat.form.cmd);
+        let battle_anim = actions::battle_anim(cx.pawn) && (cx.pawn.actions.weapon_out || !held);
+        let battle = cx.pawn.actions.battle || held;
         if self.sub == 0 {
             // vt+0x1E68(1); vt+0x1E78(1); vt+0x1E88(1); vt+0x1E98(1): bits 1 - 4, not bit 0.
             let a = &mut cx.pawn.actions;

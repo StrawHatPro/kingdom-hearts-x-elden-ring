@@ -166,8 +166,11 @@ pub struct BodyView {
     pub in_damage_reaction: bool,
     /// Item slots: `FriendEvaluationData` row names ("POTION", "ETHER", ...) of the items still
     /// held, `None` for empty / used slots.
-    pub items: [Option<&'static str>; 4],
+    pub items: [Option<&'static str>; ITEM_SLOTS],
 }
+
+/// The friends' item slots a body shows (kh-party `status::MAX_SLOTS`).
+pub const ITEM_SLOTS: usize = 5;
 
 impl Default for BodyView {
     fn default() -> BodyView {
@@ -192,7 +195,7 @@ impl Default for BodyView {
             ride_on: false,
             can_battle: false,
             in_damage_reaction: false,
-            items: [None; 4],
+            items: [None; ITEM_SLOTS],
         }
     }
 }

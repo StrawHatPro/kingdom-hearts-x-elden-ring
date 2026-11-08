@@ -952,6 +952,21 @@ Unison on the leader's combo: `PadState::finisher_pending` -> the host rolls `Fr
 `take_formation_closed`, `camp_panels`, `set_ai_members(list)` (Customize's dynamic friends list; Sora's entry while a
 friend leads; edits come back as `PartyMenuEdit::Ai { chara: Sora, .. }`).
 
+(LEADER RESET, 2026-11-02, THE USER: "Make it so this kind of thing never happens loading from any character after dying as
+another character") `new_character()`: the one reset every new leader and every new character goes through. It makes the
+command menu a new movie and a new display, as when the HUD was loaded: rows, texts, places, cursor, sub lists, the shortcut
+panel and its cooldown gauges, situation commands and the battle colour are all set again from the next frame's menu. It
+also puts out and forgets the old leader's pieces: Donald's stars, Y costs, Resonance badges, target statuses, Quick Cast's
+lit name and his hidden focus gauge; Goofy's GUARD bar, Resolve pips, Stagger gauge and Danger Sense marks. `set_leader` runs
+it by itself whenever the leader asked for differs from the current one (or the one the shrink is heading to). The Elden
+Ring host (kh-er hud.rs) also calls it on every in-session load (`SESSION_LOAD`), on a new character's first HUD frame
+(`HudHost::new` sets `NEW_CHARACTER`) and at `title_end`. Nothing in it is per character, so a new character needs no line
+of his own. Under it, kh-ui `HudCommand::set_main_two_rows(false)` puts Goofy's moved Items row back on its own line. Before,
+it only handed the row back to `cmdMain`'s timeline, which places it once and never again, so Donald's Attunement or Sora's
+Items stayed on Magic's line. Separately, an all-empty model (the title's snapshot) no longer counts as a two-row list.
+Tests: kh-partyhost `tests/leader_reset.rs` (every pair, each way: death -> game over -> Load, title -> Load, plain swap;
+pictures in `build/sora_tmp/party/LEADER-RESET/shots/`), kh-ui `tests/leader_rows.rs`.
+
 ### P.4 kh-ui additions
 `SavePointCommand::PartyFormation` (+ `PARTY_FORMATION_TEXT`, `MAX_COMMANDS` 7: a seventh slot cloned from `cmd6`),
 `Movie::clone_child`, `TopEntry::PartyFormation`, `FormationRows`, `CampMenu::open_formation / formation_answer`,
@@ -1259,7 +1274,7 @@ off, or `party.er = 0`, or Sora leading, every body rule of sora.rs reads Sora's
   step per 50 cm rung right / left in turn, the dismount; retargeted onto his skeleton, hands and feet on the rungs).
   Key `party.climb_capture` (default 1).
 - STATUSES (status.rs): `request_member(member, leader, why)` (the leader's = the player body; an ally's queued for S3:
-  `take_ally_cures()` + `cure_chr(&mut ChrIns, why)`), `request_all(members, leader, why)` (the save point, S6),
+  `take_ally_cures()` + `cure_chr(&mut ChrIns, why)`), `request_member` once per member (the save point, S6),
   `on_party_effect(effect name, member, leader)` (a Cure landing on a member, S5 / S1), `on_party_item(item, member,
   leader)` (S1: kh-party `ItemUsed`); Sora's own events go to his body (`on_events_of`: his ally body while a friend leads).
 - figure.rs: `rows_for(skeleton)` (the rows a skeleton has: Donald 40 of 52, Goofy 46 with `kubi` -> `kubi1`),
@@ -1501,7 +1516,14 @@ impl FriendStatus { kit_goofy_sync_level(), kit_goofy_sync_sora(&AbilitySet), ki
   progression.rs (`kit:<GOOFY KIT NAME>` reward tokens), kh-app party_draw.rs (`pad_mesh_pitch` with the team pitch) and
   player.rs (`party-word x3g`).
 - A guarded hit returns `HitResult { accepted: true, damage_dealt: 0, guarded: true }`; an invincible one `accepted: false`.
-- Sora's side: `LeaderFeed::sora_abilities` FUSION_SPIN / FUSION_ROCKET / GLIDE give Goofy's Fusions / Tornado Copter (decisions 3, 8).
+  (2026-11-02, the user: a guarded blow plays the guard sound, not a hit sound, and leaves no blood, for every character, new
+  ones included.) The Elden Ring host turns every `guarded` result into one call: `kh-er` `guardblow::guarded(who, at)`. The
+  friend leader's goes through `LeaderBody::hit_now`, the AI friends' through the glue, and Sora's through his core's
+  `PlayerGuarded` (or a reflect `PlayerGuard`). That call marks the blow as giving no blood (`blood::note_guarded`). It plays
+  his row `guard_sound.<name>` from `sora-er-host.json`: a sound name, `kit` (his kit plays its own, as Goofy and Donald do)
+  or `-` for none. A character with no row gets `guard_sound.default`, KH3's common guard sound. So a new character only
+  has to answer `guarded`. He must not play a hurt reaction or a hurt voice for that blow.
+- Sora's side: `LeaderFeed::sora_abilities` FUSION_SPIN / FUSION_ROCKET / GLIDE give Goofy's Fusions (decisions 3, 8; his Tornado Copter was removed by the 2026-11-02 overhaul).
 - X3G-b: `Party::goofy_mode_actor(id) -> Option<(Vec3, f32)>` (Shield Guardian running: his actor); kh-camera
   `StateEventCameras::pad_shield(on: bool)` (D3's shield_01 on the accompany pawn; the runtime's `team_camera` feeds the leading
   Goofy as that pawn during the mode and ends it after). Superslide = B4's `NpcStateId::SuperSlide` fed by the pad; aerial recovery
@@ -1593,6 +1615,34 @@ idle Sora 1.5 m away means "yes" and the move starts; a lapsed latch (a command 
 a late "no" and the friend's own finisher. kh-core `tests/fx1_team_move.rs` (2): the gate's conditions, and a fusion
 that is not replaced by Spiral Rush (this test fails without the `refine` guard). The test-level run is in
 build/sora_tmp/er/party/s0/fx1/ (see the FX1 section of REBASELINE.md).
+
+## Shields guard, the attacker bounces off (2026-11-02; additive)
+
+The user, 2026-11-02: "fix 'Shields don't count as guarding.' and in fact make the character who attacks a shield bounce off
+playing their animation from KH3. This means Sora, Donald, Goofy and whoever we add in the future".
+
+- SEAM (kh-core `host/targets.rs`): `TargetBody::shield: Option<Shield { yaw, half_arc }>`, set by a host together with
+  `guarding` while its game says the body guards; `TargetBody::seen_from(from, at)` keeps the guard only for a blow from
+  inside the arc. EVERY classification of a host body asks it first: Sora's `combat/hit.rs` (his swing from where he
+  stands, a shot from the side its shape touched), the friends' `actions::deliver`, `goofy_shots::deliver_seen`,
+  `donald_shots::deliver_seen` (the blow's direction), Donald's spells `magic_fx::classify` (the spell's origin).
+- RULE (kh-core `combat/classify.rs` GUARDED tail): a host's shield repels EVERY swing it guards (attacker REFLECT), also a
+  "no clash" one (a combo's later swings, every friend row: m_ReflectLevel 0); KH3's own guards keep KH3's rule.
+- BOUNCE, ONE PATH (kh-party `repel.rs`): `after_swing(p, attacker_result, from)` after a member's OWN swing (a clip's attack
+  window; a kit shape riding his body, `Area::follow`; Donald's physical kit shape, the Wand Bonk) -> `reflect_from` /
+  `reflect_hold` -> `NpcPawn::begin_reflect`: TresNpcState_Reflect with the rows `repel.clip` / `repel.air_clip` of HIS OWN
+  set (party-hurt; AttackReflect / AttackAirReflect, sequences 1235 / 1236 of both sets), else `repel.fallback_clip`
+  (M_0201); first a hold of `repel.hold` (0.05 s, the impact); the command / combo dropped. Shots never bounce their caster.
+  A member added later needs only those clips in his set.
+- EFFECTS: a guarded hit shows KH3's `vs_com_haj00` (its se00001_037 rides it) and no hit sound, in `hitfx::on_contact`
+  (victim result GUARD counts even when a host says nothing), Goofy's `step_areas` (no combo landing / Stagger
+  either), Donald's `land` and his spells.
+- ELDEN RING (kh-er `shieldguard.rs`): see sheet rows `guard.shield.*` of sora-er-host. The game's guard flag (TAE
+  ChrActionFlag 3 SET_GUARD_TYPE on CSChrActionFlagModule), the NpcParam row's guardAngle / guard cut rates; a GUARDED hit
+  goes to the game as the player's bullet without dmgLevel / poise (the game's guard takes its cut, stamina, guard break),
+  the KH side expects the chip; reconcile learns no ratio from it and never retries or HP-writes a guarded bullet.
+- Tests: kh-core `tests/shield_bounce.rs` (3), `combat/classify.rs` (1); kh-party `tests/shield_bounce.rs` (3: AI Donald
+  and Goofy, pad Goofy's shove, from behind, open body), `repel.rs` (2); kh-er `shieldguard.rs` (5).
 
 ## Conversation (stream CV1, 2026-10-16; state note build/sora_tmp/er/IMPL_CV1_STATE.md)
 
@@ -1949,8 +1999,8 @@ build/sora_tmp/party/IMPL_CV3_STATE.md.
   leader's weapon tip while `kh_er_render::pointlight::keyblade_wanted()` and `lead.light != Some(Sora)` (U5).
 - 2026-10-15 ER S2 -> S6: a friend leader's KO is handed to the game as Sora's death (`died` -> the body's HP 0); the KH3
   game-over menu (`hud::gameover_holds`) is driven by Sora's HP today: please open it for the leader's KO
-  (`rt.lead.leader_state.1`) and revive the leader at the respawn. The save point: `status::request_all(active, leader,
-  why)` cures every member's body.
+  (`rt.lead.leader_state.1`) and revive the leader at the respawn. The save point: `status::request_member(member, leader,
+  why)` for each active member cures every member's body.
 - 2026-10-15 ER S2 -> S1 / S5: a Cure or an item landing on a member: `status::on_party_effect(name, member, leader)` /
   `status::on_party_item(item, member, leader)` (Sora's own Cure on the friends comes through `heal_ally`: route those
   heals' effect kinds too).

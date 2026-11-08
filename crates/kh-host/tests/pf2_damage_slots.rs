@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use kh_core::{PadButtons, Sora, TargetId, UiSnapshot, Vec3};
 use kh_host::formation::Formation;
 use kh_host::hud::{Frame, Hud, HudTargets, TargetView};
-use kh_host::hud_layers::{draw_movie_in, stage_root, Draw, Drawn, Perf};
+use kh_host::hud_layers::{draw_movie_in, stage_root, Draw, DrawArea, Drawn, Perf};
 use kh_host::party::{PartyChara, PartyHudSlot};
 use PartyChara::*;
 
@@ -82,7 +82,8 @@ fn the_damage_flash_lands_on_the_character_hit_for_every_leader() {
     let mut log = String::from("case\tseats\thit\tflash slots\tface there\n");
 
     // (name, formation in slot order, leader, Sora in the party, the seats the formation order gives)
-    let cases: Vec<(&str, Vec<PartyChara>, PartyChara, bool, Vec<PartyChara>)> = vec![
+    type Case = (&'static str, Vec<PartyChara>, PartyChara, bool, Vec<PartyChara>);
+    let cases: Vec<Case> = vec![
         ("sora_leads", vec![Sora, Donald, Goofy], Sora, true, vec![Sora, Donald, Goofy]),
         ("goofy_leads", vec![Sora, Donald, Goofy], Goofy, true, vec![Goofy, Sora, Donald]),
         ("donald_leads", vec![Sora, Donald, Goofy], Donald, true, vec![Donald, Sora, Goofy]),
@@ -116,7 +117,7 @@ fn the_damage_flash_lands_on_the_character_hit_for_every_leader() {
         }
         if let Some(movie) = hud.movie("HudStatus") {
             let mut draw = Draw::default();
-            if let Drawn::Picture(rect, _) = draw_movie_in(&mut draw, &mut renderer, movie, &stage, (w, h), true, Perf::default(), Some(view)) {
+            if let Drawn::Picture(rect, _) = draw_movie_in(&mut draw, &mut renderer, movie, &stage, DrawArea { size: (w, h), clip: Some(view) }, true, Perf::default()) {
                 let _ = kh_ui::def::write_png(&out.join(format!("{name}_0_before.png")), rect.2 as u32, rect.3 as u32, &draw.rgba);
             }
         }
@@ -140,7 +141,7 @@ fn the_damage_flash_lands_on_the_character_hit_for_every_leader() {
             step(&mut hud, &sora, &snapshot, 5);
             if let Some(movie) = hud.movie("HudStatus") {
                 let mut draw = Draw::default();
-                if let Drawn::Picture(rect, _) = draw_movie_in(&mut draw, &mut renderer, movie, &stage, (w, h), true, Perf::default(), Some(view)) {
+                if let Drawn::Picture(rect, _) = draw_movie_in(&mut draw, &mut renderer, movie, &stage, DrawArea { size: (w, h), clip: Some(view) }, true, Perf::default()) {
                     let _ = kh_ui::def::write_png(&out.join(format!("{name}_{}_hit_{}_slot{k}.png", k + 1, c.name().to_lowercase())), rect.2 as u32, rect.3 as u32, &draw.rgba);
                 }
             }

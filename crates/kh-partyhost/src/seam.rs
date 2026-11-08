@@ -78,7 +78,11 @@ impl LeaderSink for RuntimeLeaderSink<'_> {
         match self.runtime.leader {
             None => {
                 if let Some(h) = hit.sora {
-                    self.sora.take_hit(h);
+                    // (GF-ARTS, R14) Goofy's Interpose absorbs it
+                    let at = self.sora.output().position;
+                    if !self.runtime.party.cover_sora(at, h.amount, h.causer_position, (h.causer != kh_core::TargetId::NONE).then_some(h.causer)) {
+                        self.sora.take_hit(h);
+                    }
                 }
             }
             Some(id) => {
@@ -129,6 +133,9 @@ pub struct AllyWant {
     /// Hits are refused now (Die / Warp / FR states): the body stays but is invincible.
     pub invulnerable: bool,
     pub ko: bool,
+    /// (MIMIC SORA, THE USER 2026-11-03: "build mimic Sora") Mimic Sora's body (`chara` Sora): a fourth key of the host's pool, never
+    /// AI Sora's body (the runtime never wants one: kh-er's spirit_mimic.rs adds it).
+    pub mimic: bool,
 }
 
 fn friend_capsule(v: &MemberView) -> (f32, f32, f32) {
@@ -153,7 +160,7 @@ impl PartyRuntime {
                 velocity: v.velocity,
                 on_floor: v.on_ground,
                 capsule: friend_capsule(v),
-                invulnerable: friend_refuses_hits(v) || self.party.don_zetta_invincible(v.id), // (ZETTA round 5) Donald through Zettaflare's sequence
+                invulnerable: friend_refuses_hits(v) || self.party.don_zetta_invincible(v.id) || self.party.goofy_evades(v.id), // (ZETTA round 5) Donald through Zettaflare's sequence
                 in_fr: matches!(v.state, NpcStateId::Fr(_)),
                 ko: v.ko,
                 airborne: !v.on_ground,
@@ -185,13 +192,13 @@ impl PartyRuntime {
         let mut out = Vec::new();
         if self.leader.is_some() && self.lead.sora_active {
             let ko = status.hp < 1;
-            out.push(AllyWant { chara: PartyChara::Sora, feet: sora.position, yaw: sora.yaw, capsule: SORA_CAPSULE, hittable: !ko, invulnerable: status.damage_invalid || format!("{:?}", sora.state).starts_with("Fr"), ko });
+            out.push(AllyWant { chara: PartyChara::Sora, feet: sora.position, yaw: sora.yaw, capsule: SORA_CAPSULE, hittable: !ko, invulnerable: status.damage_invalid || format!("{:?}", sora.state).starts_with("Fr"), ko, mimic: false });
         }
         for v in &self.current {
             if Some(v.id) == self.leader {
                 continue;
             }
-            out.push(AllyWant { chara: party_chara(v.chara), feet: v.position, yaw: v.yaw, capsule: friend_capsule(v), hittable: !v.ko, invulnerable: friend_refuses_hits(v) || self.party.don_zetta_invincible(v.id) /* (ZETTA round 5) */, ko: v.ko });
+            out.push(AllyWant { chara: party_chara(v.chara), feet: v.position, yaw: v.yaw, capsule: friend_capsule(v), hittable: !v.ko, invulnerable: friend_refuses_hits(v) || self.party.don_zetta_invincible(v.id) || self.party.goofy_evades(v.id) /* (ZETTA round 5) */, ko: v.ko, mimic: false });
         }
         out
     }

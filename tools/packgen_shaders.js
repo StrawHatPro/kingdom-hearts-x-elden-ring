@@ -5,10 +5,13 @@
 //   1. the hair translations (er87 / er91 genh): our scripts' fixes laid on the folder's translated materials
 //   2. per character folder (Sora, his outfits, Donald, Goofy, the team props): kh-shaderc's whole build, then the
 //      exclusive modes the folder has (finale, hycap, h91, probe3 / probe4, skincg, velo88, zdraw)
+//      2b. (KBFX) the keyblades' materials in Sora's vertex layout (kb_dirs; step `kb`, also run with `char`)
 //   3. the rebuild groups: every character pixel shader the DLL can load, with its defines and materials source
 //   4. per effect root (vfx, party/vfx, xsi/vfx): kh-shaderc --vfx on the root's shading tables
 //   5. the effect tables' overlay shaders (the streams' er/<name>_<s>.*.dxil): kh-shaderc --vfx --only over the overlay
 //      translator runs (tools/packgen_overlays.js)
+//   (SETUP-TOOLS 2026-11-07) 3b anti (KH1's anti-mode owners), 3c mimic (the Mimic Tear's writers and pool), 3d fxcopy (the
+//      effects' fog-copy / lit-kit shaders): the runs the deploys made by hand (recipe anti_jobs, mimic_sets, mimic_pool, fx_copies)
 //
 //   node tools/packgen_shaders.js [--shaderc EXE] [--dxc EXE] [--jobs N] [--only STEP,...]
 //     --shaderc  kh-shaderc.exe (default: KH_SHADERC, tools/bin/kh-shaderc.exe, target/release/kh-shaderc.exe)
@@ -99,8 +102,31 @@ const skipped = [];
       const hlsl = path.join(ROOT, 'build', 'packgen', 'hlsl', d.er.replace(/[\\/]/g, '_'));
       const base = ['--pack', abs(d.pack), '--hlsl', hlsl, ...d.args.map((a) => (/^build\//.test(a) ? abs(a) : a))];
       shaderc(base, d.er);
-      for (const m of d.modes) shaderc(m === 'zdraw' ? [...base, '--only', m, '--out', abs(path.join('build/sora_pack', d.er))] : [...base, '--only', m], `${d.er} --only ${m}`);
+      // (zdraw, FREEZE-FX iceshell: kh-shaderc writes them to its own default folder unless --out names the folder's er/)
+      for (const m of d.modes) shaderc(m === 'zdraw' || m === 'iceshell' ? [...base, '--only', m, '--out', abs(path.join('build/sora_pack', d.er))] : [...base, '--only', m], `${d.er} --only ${m}`);
       console.log(`packgen_shaders: ${d.er}: whole build${d.modes.length ? ' + ' + d.modes.join(', ') : ''}`);
+    }
+  }
+  // ---- 2b. (KBFX) the keyblades' own materials (recipe kb_dirs): drawn in SORA's library (kh-er-render keyblade.rs: the `kb:`
+  // slots take his vertex shader), so built in kh-shaderc's normal mode, never --party: their KH_C5xx blocks with the main
+  // pack's KHS block (tools/splice_kb_wgsl.js), every set the renderer may pick (tools/kb_shader_jobs.js, `--rebuild`, in
+  // parallel parts), then the block-compressed textures (`--only tex`)
+  if (step('char') || step('kb')) {
+    const node = (a) => { const r = cp.spawnSync(process.execPath, a, { cwd: ROOT, encoding: 'utf8' }); log(`> node ${a.join(' ')}\n${r.stdout || ''}${r.stderr || ''}`); if (r.status !== 0) throw new Error(`${a[0]} failed: ${r.stderr || r.stdout}`); };
+    for (const d of recipe.kb_dirs || []) {
+      if (!exists(abs(path.join(d.pack, 'materials', 'materials.json')))) { skipped.push(`kb ${d.pack}: no materials/materials.json`); continue; }
+      const work = abs(d.work), wgsl = path.join(work, 'materials.wgsl'), jobs = path.join(work, 'jobs.json'), out = abs(path.join('build/sora_pack', d.er));
+      const hlsl = path.join(ROOT, 'build', 'packgen', 'hlsl', d.er.replace(/[\\/]/g, '_'));
+      node([path.join(ROOT, 'tools', 'splice_kb_wgsl.js'), abs(d.pack), abs(d.main), wgsl]);
+      node([path.join(ROOT, 'tools', 'kb_shader_jobs.js'), abs(d.pack), jobs, '--split', String(JOBS)]);
+      fs.mkdirSync(out, { recursive: true });
+      const base = ['--pack', abs(d.pack), '--materials', wgsl, '--out', out];
+      const failed = await parallel(Array.from({ length: JOBS }, (_, i) => ({ what: `${d.er} part ${i}`, argv: [...base, '--rebuild', jobs.replace(/\.json$/, `_${i}.json`), '--hlsl', `${hlsl}_${i}`] })));
+      if (failed.length) throw new Error(`kh-shaderc failed (${failed.join(', ')}): build/packgen/logs/shaders.log`);
+      shaderc([...base, '--only', 'tex', '--hlsl', hlsl], `${d.er} --only tex`);
+      const want = JSON.parse(fs.readFileSync(jobs, 'utf8')).jobs.map((j) => `${j.name}.${j.stage}.dxil`).filter((f) => !exists(path.join(out, f)));
+      if (want.length) throw new Error(`${d.er}: ${want.length} shader(s) of the job list not built: ${want.slice(0, 6).join(', ')}`);
+      console.log(`packgen_shaders: ${d.er}: ${JSON.parse(fs.readFileSync(jobs, 'utf8')).jobs.length} shaders in Sora's layout + the textures`);
     }
   }
   // (outfit forms) an outfit that wears KH3 Sora's own wear-form clothes has copies of their block-compressed textures
@@ -146,11 +172,50 @@ const skipped = [];
     console.log(`packgen_shaders: ${tasks.length - failed.length} of ${recipe.nf_groups.length} rebuild groups${failed.length ? '; FAILED: ' + failed.join(', ') : ''}`);
     if (failed.length) process.exitCode = 1;
   }
+  // ---- 3b. (SETUP-TOOLS; AUDIT-C ANLOOK, FINAL's final_post.ps1) the anti-mode owners an outfit got (tools/outfit_anti_owners.js):
+  // their every set, then the hair twin's ER91 hair path over the er91 genh translation (after the hair step and the folder's
+  // whole build, as the deploys ran them)
+  if (step('anti')) {
+    for (const a of recipe.anti_jobs || []) {
+      if (!exists(abs(a.jobs)) || !exists(abs(a.materials))) { skipped.push(`anti ${a.jobs}: no ${!exists(abs(a.jobs)) ? a.jobs : a.materials}`); continue; }
+      shaderc(['--pack', abs(a.pack), '--materials', abs(a.materials), '--rebuild', abs(a.jobs), '--out', abs(path.join('build/sora_pack', a.er)), '--hlsl', path.join(ROOT, 'build', 'packgen', 'hlsl', 'anti_' + path.basename(a.jobs, '.json'))], `anti ${a.jobs}`);
+    }
+    if ((recipe.anti_jobs || []).length) console.log(`packgen_shaders: ${recipe.anti_jobs.length} anti-mode job list(s)`);
+  }
+  // ---- 3c. (SETUP-TOOLS; MIMIC-BOSS, DEPLOY3 mimic_writers.ps1) the Mimic Tear's G-buffer writers of every translation that has
+  // them (<variant>[_S]_gb3_mm / _gb3_mf and their shaders_mimic*.json indexes) and the pool (mmpool.vs / .ps), from the current
+  // harness (the char / groups steps leave them as they were)
+  if (step('mimic')) {
+    let n = 0;
+    for (const m of recipe.mimic_sets || []) {
+      if (!exists(abs(m.pack))) { skipped.push(`mimic ${m.pack}: no pack folder`); continue; }
+      for (const mode of ['mimic', 'mimicform']) {
+        const a = ['--pack', abs(m.pack), '--only', mode, '--out', abs(path.join('build/sora_pack', m.er)), '--hlsl', path.join(ROOT, 'build', 'packgen', 'hlsl', 'mimic')];
+        if (m.suffix) a.push('--materials', abs(path.join(m.pack, 'materials', `materials_${m.suffix}.wgsl`)), '--suffix', m.suffix);
+        shaderc(a, `${m.er}${m.suffix ? ' [' + m.suffix + ']' : ''} --only ${mode}`); n++;
+      }
+    }
+    if (recipe.mimic_pool) { shaderc(['--pack', abs(recipe.mimic_pool.pack), '--only', 'mimicpool', '--out', abs(path.join('build/sora_pack', recipe.mimic_pool.er)), '--hlsl', path.join(ROOT, 'build', 'packgen', 'hlsl', 'mimic')], 'mimicpool'); n++; }
+    if (n) console.log(`packgen_shaders: the Mimic Tear's writers (${n} run(s))`);
+  }
+  // ---- 3d. (SETUP-TOOLS; PARTY-NATIVE) the effects' fog-copy and lit-kit shaders (fxfog.vs / fxfog_rows / fxfog_vol, fxlit_*)
+  if (step('fxcopy')) {
+    for (const c of recipe.fx_copies || []) shaderc(['--only', c.only, '--out', abs(path.join('build/sora_pack', c.er)), '--hlsl', path.join(ROOT, 'build', 'packgen', 'hlsl', c.only)], `--only ${c.only}`);
+    if ((recipe.fx_copies || []).length) console.log(`packgen_shaders: ${recipe.fx_copies.map((c) => c.only).join(', ')}`);
+  }
   // ---- 4. the effect roots
   if (step('vfx')) {
     for (const p of recipe.vfx_roots) {
       if (!exists(abs(path.join(p, 'vfx', 'shaders', 'shading.json')))) { skipped.push(`vfx ${p}: no shading table`); continue; }
       shaderc(['--vfx', '--pack', abs(p), '--jobs', String(JOBS)], 'vfx ' + p);
+      // (KBFX) a root of vfx_check_roots: every owner class its table translated must now be built (the er/<s|m|d><id> files
+      // are keyed by the table's owner ids: a table made after the build leaves materials on another owner's shader)
+      if ((recipe.vfx_check_roots || []).includes(p)) {
+        const table = JSON.parse(fs.readFileSync(abs(path.join(p, 'vfx', 'shaders', 'shading.json')), 'utf8'));
+        const built = new Set(JSON.parse(fs.readFileSync(abs(path.join(p, 'vfx', 'er', 'shaders.json')), 'utf8')).shaders.map((s) => s.file));
+        const missing = Object.values(table.owners).flatMap((o) => [['sprite', 's'], ['mesh', 'm'], ['decal', 'd']].filter(([c]) => o[c] && o[c].ok).map(([, l]) => `${l}${o.id}.ps.dxil`)).filter((f) => !built.has(f));
+        if (missing.length) throw new Error(`vfx ${p}: ${missing.length} translated owner shader(s) not built: ${missing.slice(0, 6).join(', ')}`);
+      }
       console.log(`packgen_shaders: ${p}/vfx/er`);
     }
   }

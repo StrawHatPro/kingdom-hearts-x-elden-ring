@@ -328,8 +328,8 @@ pub fn setup_core(data: &Json, owner: Owner, cfg: &Cfg, teleport_distance: Optio
             return Err("group id != index".to_string());
         }
         core.f1c0[i] = match grp.get("refUpVec").as_f64() {
-            Some(v) if v == 0.0 => up0,
-            Some(v) if v == 1.0 => [0.0, -1.0, 0.0],
+            Some(0.0) => up0,
+            Some(1.0) => [0.0, -1.0, 0.0],
             _ => [0.0, 0.0, 1.0],
         };
         core.f414[i] = i as i32;
@@ -580,7 +580,7 @@ pub fn setup_core(data: &Json, owner: Owner, cfg: &Cfg, teleport_distance: Optio
 
 /// Step 0x143b0cb60 (rcx core, rdx cfg, xmm2 dtSim, xmm3 r)
 pub fn step(core: &mut Core, _cfg: &Cfg, dt_sim: f32, r: f32, rng: &mut Rng) {
-    if !(dt_sim >= 1e-8_f64 as f32) {
+    if dt_sim.partial_cmp(&(1e-8_f64 as f32)).is_none_or(std::cmp::Ordering::is_lt) {
         return;
     }
     let n = core.f674;
@@ -597,7 +597,7 @@ pub fn step(core: &mut Core, _cfg: &Cfg, dt_sim: f32, r: f32, rng: &mut Rng) {
     let (wind_v, preset_wind) = wind::step_wind_143b0ce63(core);
     for _sub in 0..n {
         if !core.f3778.f0.is_empty() {
-            wind::fn_143b123b0(r, core, h, inv_h, inv_n, g, wind_v, &preset_wind, rng);
+            wind::fn_143b123b0(r, core, wind::IntegrateStep { h, inv_h, inv_n, g, wind: wind_v }, &preset_wind, rng);
         }
         if ground.valid && core.f65d != 0 {
             coll::fn_143b19d80(core, ground.ok, ground.pos, ground.normal);
@@ -731,7 +731,7 @@ pub fn core_update(core: &mut Core, cfg: &Cfg, dt: f32, rng: &mut Rng, stats: &m
                     stats.steps += 1;
                 }
             } else {
-                core.f33ec = core.f33ec * ((if step_before < core.f383c { 1 } else { 0 }) + 1);
+                core.f33ec *= (if step_before < core.f383c { 1 } else { 0 }) + 1;
                 core.f670 = 0.0;
                 for i in 0..core.f33ec {
                     if i > 0 {
@@ -782,6 +782,6 @@ pub fn core_update(core: &mut Core, cfg: &Cfg, dt: f32, rng: &mut Rng, stats: &m
         hfps::fn_143aefb30(core);
     }
     if dtp > small {
-        core.f3714 = dt_sim + core.f3714;
+        core.f3714 += dt_sim;
     }
 }

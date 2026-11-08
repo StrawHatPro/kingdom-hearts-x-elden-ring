@@ -15,8 +15,8 @@
 //! - `walk-run`: the stick 0.4 (walk) / 1.0 (run) every 4 s for 24 s on open ground: the friends' speed against the
 //!   leader's in each phase (settled part), steps where a friend runs while the leader walks (gap under 450 cm), speed
 //!   spikes, the acceleration's 95th percentile, the foot slide.
-//! `cargo test -p kh-er --lib --release fol2_ -- --nocapture --test-threads=1`; `FOL2_TRACE=<scenario prefix>` prints a
-//! line per 6 steps; `FOL2_OUT=<dir>` writes one CSV per scenario (the plots' input).
+//!   `cargo test -p kh-er --lib --release fol2_ -- --nocapture --test-threads=1`; `FOL2_TRACE=<scenario prefix>` prints a
+//!   line per 6 steps; `FOL2_OUT=<dir>` writes one CSV per scenario (the plots' input).
 
 use glam::{Vec2, Vec3};
 use kh_core::test_world::TestWorld;
@@ -25,8 +25,7 @@ use kh_host::party::PartyChara;
 
 use super::*;
 
-#[path = "../../../../kh-partyhost/src/sm_metrics.rs"]
-mod metrics;
+use crate::sm_metrics as metrics;
 use metrics::{DrawnSample, SimSample};
 
 fn load_posers(core: &mut PartyCore) -> bool {
@@ -69,7 +68,7 @@ fn step_with(r: &mut Run, stick: Option<(f32, f32)>) {
     let f = forward(lead.yaw);
     r.core.camera.position = lead.position - f * 450.0 + Vec3::Z * 220.0;
     r.core.camera.rotation = kh_camera::Rot { pitch: -15.0, yaw: lead.yaw, roll: 0.0 };
-    r.core.step(&mut r.sora, &r.out, STEP, TargetId::NONE, &r.world, &Ik(&r.world), &mut r.fakes, &mut r.null.audio, &mut r.null.effects, None, r.t);
+    r.core.step(&mut r.sora, CoreStep { out: &r.out, dt: STEP, lock_on: TargetId::NONE, world: &r.world, ik: &Ik(&r.world), targets: &mut r.fakes, audio: &mut r.null.audio, effects: &mut r.null.effects, sora_look: None, now: r.t });
     r.t += STEP as f64;
 }
 
@@ -307,10 +306,10 @@ pub fn run(s: &Scenario) -> Option<Vec<Follow>> {
         let mate = &tracks[1 - i];
         let settle = ((s.secs - 5.0) / STEP) as usize;
         let (mut sm, mut sa, mut sc, mut ns) = (0.0, 0.0, 0.0, 0u32);
-        for k in a..b {
+        for (k, lead) in (a..b).zip(&lead_pos[a..b]) {
             let dm = h(tr.pos[k] - mate.pos[k]).length() - tr.radius - mate.radius;
             f.min_mate = f.min_mate.min(dm);
-            f.min_lead = f.min_lead.min(h(tr.pos[k] - lead_pos[k]).length() - tr.radius - 35.0);
+            f.min_lead = f.min_lead.min(h(tr.pos[k] - *lead).length() - tr.radius - 35.0);
             if s.half > 0.0 && tr.pos[k].x > 700.0 {
                 f.min_wall = f.min_wall.min(s.half - tr.pos[k].y.abs() - tr.radius);
             }
@@ -401,7 +400,7 @@ fn fol2_sm_regression() {
     let on = std::env::var("FOL2").map_or(true, |v| v != "off");
     kh_party::locomotion::FOL2_ON.store(on, std::sync::atomic::Ordering::Relaxed);
     kh_ai::formation::ON.store(on, std::sync::atomic::Ordering::Relaxed);
-    eprintln!("FOL2 SM | scenario | member | rule | {} | gap mean | stops", super::sm::metrics::HEADER);
+    eprintln!("FOL2 SM | scenario | member | rule | {} | gap mean | stops", metrics::HEADER);
     for s in super::sm::scenarios() {
         let Some(o) = super::sm::run(&s, super::sm::Clock::Jitter, 30.0, None) else {
             eprintln!("SKIPPED");
@@ -413,7 +412,7 @@ fn fol2_sm_regression() {
             }
             let g = o.gap_mean.iter().find(|x| &x.0 == m).map_or(0.0, |x| x.1);
             let st = o.stops.iter().find(|x| &x.0 == m).map_or(0, |x| x.1);
-            eprintln!("FOL2 SM | {:<22} | {:<7} | {} | {:5.0} | {}", s.name, m, super::sm::metrics::line(rep), g, st);
+            eprintln!("FOL2 SM | {:<22} | {:<7} | {} | {:5.0} | {}", s.name, m, metrics::line(rep), g, st);
         }
     }
     kh_party::locomotion::FOL2_ON.store(true, std::sync::atomic::Ordering::Relaxed); // back to the default

@@ -190,7 +190,7 @@ pub struct Params {
     /// (KH3's attack choice: lock point more than 160 above him = the rising attack and air combos). 0 = KH3's own measure.
     pub terrain_slope: f32,
     /// `hud.enemy_gauge.hp_scale` (IMPL_ER13): Elden Ring HP x this = the HP Sora's enemy gauge shows (KH3: one bar per 200 HP,
-    /// 20 stock squares, shown HP capped at 24,000).
+    /// 20 stock squares; (BOSS-BARS) no cap on the HP shown: the "+N" counter counts every bar).
     pub gauge_hp_scale: f32,
     /// `grace.flame.sfx.undiscovered` / `.discovered` (IMPL_ER17): the sfx ids of a site of grace's own light (the effect of
     /// its map object AEG099_060), not drawn while KH3's save points stand for the graces.
@@ -230,6 +230,9 @@ pub struct Params {
     /// (IMPL_ER21) rows `react.poise.*`, `react.revenge.*`, `react.endurance.*`, `react.chain.*`: what keeps an armoured
     /// body from being staggered again and again (bossguard.rs).
     pub guard: crate::bossguard::GuardRules,
+    /// (REVENGE) rows `react.revenge.boss*`, `react.boss_stun*`: KH3's revenge and hit-stun of Elden Ring's bosses
+    /// (bossrevenge.rs).
+    pub boss: crate::bossrevenge::BossRules,
     /// (IMPL_ER45) rows `poise.*`: Elden Ring's poise decides how hard an ordinary (not armoured) enemy is to stagger (poise.rs).
     pub poise: crate::poise::PoiseRules,
     /// (IMPL_ER22) `finish.*`: KH3's boss finish (finish.rs).
@@ -255,6 +258,9 @@ pub struct Params {
     /// (0 Beginner, 1 Standard, 2 Proud, 3 Critical). The user, 2026-10-16: "keep everything as it was on 'normal' mode" = 1
     /// (decision dec032); Critical by the control key `difficulty = critical`.
     pub new_game_level: u8,
+    /// (THE USER 2026-11-02: "Shields don't count as guarding") rows `guard.shield.*`: the game's own guard as KH3's
+    /// (shieldguard.rs).
+    pub shield: crate::shieldguard::ShieldRules,
 }
 
 /// (IMPL_ER61; the user, 2026-10-14: "seriously nerf shotlock, it is one shotting enemies with four health bars")
@@ -332,7 +338,7 @@ impl ShotlockLedger {
     /// whether the cap cut it. A hit the cap has emptied still lands (its reaction, sound and effect) with the least
     /// damage there is (1 HP asked).
     pub fn adjust(&mut self, rules: &ShotlockRules, out_scale: f32, target: u32, max_hp: i32, step: u64, kh: f32) -> (f32, bool) {
-        if !(kh > 0.0) {
+        if kh.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
             return (kh, false);
         }
         let gap = (rules.gap * STEPS_PER_SECOND) as u64;
@@ -410,10 +416,14 @@ pub struct PrizeRules {
     /// the user, 2026-10-13: "Scale up the HP orbs a tiny bit, maybe to +20 max": 20 for the large one, KH3's 1 : 5 kept).
     pub hp_small: i32,
     pub hp_large: i32,
+    /// (FOCUSORB) `prize.focus.after_hp / _mp / _focus`: percent chance of a focus slot beside a kill's HP / MP / focus
+    /// first slot (KH3's second-slot share; prizemap `FOCUS_SECOND`); `prize.focus.count`: its orbs.
+    pub focus_after: [f32; 3],
+    pub focus_count: u32,
 }
 
 impl PrizeRules {
-    pub const DEFAULT: PrizeRules = PrizeRules { spawn_height: 80.0, glow: 3.27, size: 1.0, award_wait: 5.0, award_wait_unpriced: 20.0, munny_expire_pays: false, log_flight: true, hp_small: 4, hp_large: 20 };
+    pub const DEFAULT: PrizeRules = PrizeRules { spawn_height: 80.0, glow: 3.27, size: 1.0, award_wait: 5.0, award_wait_unpriced: 20.0, munny_expire_pays: false, log_flight: true, hp_small: 4, hp_large: 20, focus_after: crate::prizemap::FOCUS_SECOND, focus_count: crate::prizemap::FOCUS_COUNT /* (FOCUSORB) */ };
 }
 
 /// How many id ranges `own.anim.*` can hold.
@@ -442,7 +452,8 @@ fn default_own_moves() -> [(i32, i32); OWN_ANIMS] {
     o[..OWN_MOVE_DEFAULTS.len()].copy_from_slice(&OWN_MOVE_DEFAULTS);
     o
 }
-const OWN_MOVE_DEFAULTS: [(i32, i32); 2] = [(60060, 60060), (60030, 60030)];
+// (ER-TWEAKS 2026-11-06) the double door's 60030 is no followed row any more: every door / lever leaves the leader free (doorfree.rs)
+const OWN_MOVE_DEFAULTS: [(i32, i32); 1] = [(60060, 60060)];
 const OWN_ANIM_DEFAULTS: [(i32, i32); 7] = [(60071, 60071), (26011, 26011), (68000, 68000), (26031, 26031), (68010, 68012), (68050, 68050), (68211, 68212)];
 
 impl Default for Params {
@@ -482,6 +493,7 @@ impl Default for Params {
             savepoint_sfx: 1,
             ground: crate::savepoint_rules::Ground::DEFAULT,
             guard: crate::bossguard::GuardRules::DEFAULT,
+            boss: crate::bossrevenge::BossRules::DEFAULT,
             poise: crate::poise::PoiseRules::DEFAULT,
             finish: crate::finish::FinishRules::DEFAULT,
             anim: AnimRules { timings: default_timings(), ..AnimRules::DEFAULT },
@@ -491,6 +503,7 @@ impl Default for Params {
             diff_in: 1.0,                // (DF)
             mp_cost_scale_critical: 1.0, // (DF)
             new_game_level: 1,           // (DF, dec032) Standard
+            shield: crate::shieldguard::ShieldRules::DEFAULT, // (2026-11-02)
         }
     }
 }
@@ -602,6 +615,10 @@ impl Params {
                 ("prize.log_flight", Some(v)) => { p.prize.log_flight = v != 0.0; true }
                 ("prize.hp.small", Some(v)) if (1.0..=9999.0).contains(&v) => { p.prize.hp_small = v as i32; true }
                 ("prize.hp.large", Some(v)) if (1.0..=9999.0).contains(&v) => { p.prize.hp_large = v as i32; true }
+                ("prize.focus.after_hp", Some(v)) if (0.0..=100.0).contains(&v) => { p.prize.focus_after[0] = v; true } // (FOCUSORB)
+                ("prize.focus.after_mp", Some(v)) if (0.0..=100.0).contains(&v) => { p.prize.focus_after[1] = v; true } // (FOCUSORB)
+                ("prize.focus.after_focus", Some(v)) if (0.0..=100.0).contains(&v) => { p.prize.focus_after[2] = v; true } // (FOCUSORB)
+                ("prize.focus.count", Some(v)) if (0.0..=16.0).contains(&v) && v.fract() == 0.0 => { p.prize.focus_count = v as u32; true } // (FOCUSORB)
                 ("savepoint.sfx", Some(v)) if (0.0..=2.0).contains(&v) => { p.savepoint_sfx = v as u8; true }
                 ("react.poise.basic", Some(v)) if (0.0..=1.0).contains(&v) => { p.guard.poise_basic = v; true }
                 ("react.poise.max_share", Some(v)) if v > 0.0 => { p.guard.poise_max_share = v; true }
@@ -613,6 +630,7 @@ impl Params {
                 ("react.chain.max", Some(v)) if (0.0..=100.0).contains(&v) => { p.guard.chain_max = v as u32; true }
                 ("react.chain.window", Some(v)) if (0.0..=600.0).contains(&v) => { p.guard.chain_window = v; true }
                 ("react.chain.cooldown", Some(v)) if (0.0..=600.0).contains(&v) => { p.guard.chain_cooldown = v; true }
+                (key, Some(v)) if key.starts_with("react.revenge.boss") || key == "react.revenge.mimic_limit" || key.starts_with("react.revenge.retarget") || key == "react.boss_stun" || key.starts_with("react.boss_stun.") => p.boss.apply_row(key, v), // (REVENGE)
                 ("target.point.max_height", Some(v)) if v > 0.0 => { p.point_max_height = v; true }
                 ("target.point.terrain_slope", Some(v)) if (0.0..=60.0).contains(&v) => { p.terrain_slope = v; true }
                 ("hud.enemy_gauge.hp_scale", Some(v)) if v > 0.0 => { p.gauge_hp_scale = v; true }
@@ -625,6 +643,7 @@ impl Params {
                 ("magic.mp_cost_scale", Some(v)) if (0.1..=10.0).contains(&v) => { p.mp_cost_scale = v; true } // (IMPL_ER61)
                 ("magic.mp_cost_scale.critical", Some(v)) if (0.1..=10.0).contains(&v) => { p.mp_cost_scale_critical = v; true } // (DF)
                 (key, Some(v)) if key.starts_with("damage.shotlock.") => p.shotlock.apply_row(key, v), // (IMPL_ER61)
+                (key, Some(v)) if key.starts_with("guard.shield.") => p.shield.apply_row(key, v), // (2026-11-02) shieldguard.rs
                 ("damage.in.scale", Some(v)) if v >= 0.0 => { p.in_scale = v; true }
                 ("damage.in.blow_share", Some(v)) => { p.blow_share = v; true }
                 ("damage.in.min_share", Some(v)) => { p.min_share = v; true }
@@ -643,6 +662,7 @@ impl Params {
                 (key, Some(v)) if key.starts_with("poise.") => p.poise.apply_row(key, v),
                 (key, Some(v)) if key.starts_with("break.") || key.starts_with("damage.element.") => p.breaking.apply_row(key, v),
                 (key, Some(_)) if key.starts_with("blood.") => true, // (IMPL_ER60) read by blood.rs
+                (key, _) if key.starts_with("guard_sound.") => true, // (THE USER 2026-11-02) read by guardblow.rs
                 _ => false,
             };
             if !ok {
@@ -655,7 +675,7 @@ impl Params {
     /// Elden Ring hit points a hit of `kh_damage` takes off a target (at least 1 for a hit that
     /// does any damage).
     pub fn damage_out(&self, kh_damage: f32) -> i32 {
-        if !(kh_damage > 0.0) {
+        if kh_damage.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
             return 0;
         }
         ((kh_damage * self.out_scale).round() as i32).max(1)

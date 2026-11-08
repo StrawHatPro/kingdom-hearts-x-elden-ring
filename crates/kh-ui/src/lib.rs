@@ -21,6 +21,8 @@ pub mod camp;
 pub mod camp_custom;
 pub mod camp_equip;
 pub mod camp_menu;
+pub mod camp_options; // (CAMP-OPTIONS) the tabbed Config screen: Elden Ring's options in its own tabs, KH3's look
+pub mod camp_parry; // (GOOFY, THE USER 2026-11-02) Goofy's Parry Techniques page: Abilities > Goofy > Y "Show Next List"
 pub mod command;
 pub mod command_debug;
 pub mod controls;
@@ -34,11 +36,20 @@ pub mod savepoint;
 // (saveload) the Save and Load screens (movie SaveLoad: the slot lists; docs/sora-saveload-spec.md)
 pub mod saveload;
 pub mod geom;
+pub mod glyphs; // (BUTTON-ICONS) which glyph a button icon draws: the remap tables, the chosen set (Xbox / PlayStation / keyboard + mouse)
 pub mod hud_command;
+// (F-HUD) the formchange HUD: the ShooterMode scope, the multi-lock markers (forms_hud), the form style / logo of the
+// command menu (forms_hud_style), the operation guide HudOperation (forms_hud_operation). INT: keep these three lines.
+pub mod forms_hud;
+pub mod forms_hud_operation;
+pub mod forms_hud_style;
+pub mod hud_goofy; // (GOOFY) the Stagger gauge under the enemy's HP gauge, the red "!" over a perilous attacker
 pub mod hud_guard; // (GOOFY-GG) Goofy's silver GUARD bar above MP
-pub mod hud_resonance; // (DON-UI) Donald's Resonance ring, pips, ultimate mark, worn-spell icons (status HUD)
+pub mod hud_resonance; // (DON-UI) Donald's Resonance ring, pips, ultimate mark (status HUD)
+pub mod hud_buffs; // (ALLY-BUFF, THE USER 2026-11-03) Donald's helpful spells on whoever has them, whoever leads (status HUD)
 pub mod hud_arcane; // (DON-UI) Donald's Arcane Flow stars, Zettaflare tracker (command HUD), target status icons
 pub mod hud_side;
+pub mod hud_spirit; // (SUMMON, THE USER 2026-11-02) the summoned spirit's KH gauge: name, HP, time left (KH3's guest slot)
 pub mod hud_status;
 pub mod hud_target;
 // (IMPL_ER37) the item pictures and help-text ids by item key (data/item_icons.json)
@@ -62,6 +73,10 @@ pub mod render;
 pub mod shop;
 // (SHOP) KH3's own Moogle shop screen (movie 41_shop/Shop) on the same logic
 pub mod shop_moogle;
+// (THE USER 2026-11-02) the Spirit Tuning screen (Roderika's spirit tuning in the Elden Ring mod: gloveworts power up ashes)
+pub mod tuning;
+// (weapons P6b) KH3's Workshop screens (movie 41_shop/Shop): synthesis, Keyblade Forge, milestones, goals, materials
+pub mod workshop;
 
 pub use def::{MovieDef, Pack, PackError};
 pub use geom::{Cx, Matrix, Rect};

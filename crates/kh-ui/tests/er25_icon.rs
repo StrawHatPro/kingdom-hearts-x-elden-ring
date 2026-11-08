@@ -13,8 +13,9 @@ fn the_obtained_popup_draws_the_items_picture() {
     let Some(mut pack) = Pack::open_default().map_err(|_| eprintln!("SKIPPED: no build/sora_pack/ui")).ok() else { return };
     let icons = pack.data("item_icons").expect("data/item_icons.json (tools/sora_ui_pack.js 1.5.0)");
     let files = icons["icons"].as_object().unwrap();
-    // (IMPL_ER37) 240 items + 55 weapons + 12 key items with a picture (tools/sora_ui_pack.js 1.5.1)
-    assert_eq!(files.len(), 307, "one picture per item of sheets/port/sora-item-table.json, Keyblade and key item");
+    // (IMPL_ER37) 240 items + 55 weapons + 12 key items with a picture (tools/sora_ui_pack.js 1.5.1); (weapons P9b, INT) + Dead of
+    // Night's (WEP_KEYBLADE_SO_18), added to the pack's item_icons.json by P9b
+    assert_eq!(files.len(), 308, "one picture per item of sheets/port/sora-item-table.json, Keyblade and key item");
     for key in ["ITEM_POTION", "ITEM_LASTELIXIR", "MAT_ITEM01", "MAT_ITEM53", "PRT_ITEM04", "ACC_ITEM12", "ITEM_POWERUP"] {
         let texture = pack.texture(files[key].as_str().unwrap()).unwrap_or_else(|e| panic!("{key}: {e:?}"));
         assert!(texture.width > 0 && texture.height > 0);

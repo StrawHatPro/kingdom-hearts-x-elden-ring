@@ -437,7 +437,7 @@ impl AiController {
         let mut near = params::CURE_NEAR_DISTANCE;
         let mut best: Option<CureInfo> = None;
         let mut far: Vec<CureInfo> = Vec::new();
-        for (_, (info, d)) in &shared.cure_candidates {
+        for (info, d) in shared.cure_candidates.values() {
             if near <= *d {
                 far.push(info.clone());
             } else {
@@ -490,8 +490,8 @@ impl AiController {
     /// - and: no floor within 5000 cm under the pawn (when it does not swim), or the player swims
     ///   and is >= D away (3D), or no floor under the player, or the nav path to the player is
     ///   >= D long (no path: infinite). D = 3000 cm, 1000 cm in the first 3 s of a battle
-    ///   (`UTresFriendComponent` +0x314, set to 3.0 when the battle starts 0x14127BC10).
-    /// The goal is the best point of the game's `EQSQuery_NpcWarp` (FriendData.WarpQuery) [A].
+    ///   > (`UTresFriendComponent` +0x314, set to 3.0 when the battle starts 0x14127BC10).
+    ///   > The goal is the best point of the game's `EQSQuery_NpcWarp` (FriendData.WarpQuery) [A].
     fn warp_decision(&mut self, dt: f32, body: &mut dyn AiBody, world: &dyn AiWorld, shared: &mut AiShared) -> bool {
         let bv = body.view();
         let p = world.player();
@@ -573,14 +573,13 @@ impl AiController {
         let d_np = n - pp;
         let near_player = d_np.truncate().length_squared() < 1200.0 * 1200.0;
         let mut start = false;
-        if p.attacking {
-            if t.is_some() {
+        if p.attacking
+            && t.is_some() {
                 self.st.attack_flow_timer = 0.0;
                 if !self.st.attack_flow_phase && d_np != glam::Vec3::ZERO && near_player {
                     start = true;
                 }
             }
-        }
         if !self.st.attack_flow_phase {
             let d_ne = e.map(|e| n - e).unwrap_or(glam::Vec3::ZERO);
             let enemy_near = t.is_some() && d_ne != glam::Vec3::ZERO && d_ne.truncate().length_squared() < 1000.0 * 1000.0;
@@ -685,12 +684,11 @@ impl AiController {
         self.bt = Some(bt);
         // MoveTo abort 0x1404A8700: the pawn kept moving for m_AbortMoveTimeToKeepMoving; the
         // Stop lands then unless a newer command took over
-        if tracked.issued {
-            if self.st.keep_moving_until.map(|t| t > self.st.time).unwrap_or(false) {
+        if tracked.issued
+            && self.st.keep_moving_until.map(|t| t > self.st.time).unwrap_or(false) {
                 // a command issued in the same tick as the abort replaces the motion
                 self.st.keep_moving_until = None;
             }
-        }
         if let Some(t) = self.st.keep_moving_until {
             if t <= self.st.time {
                 self.st.keep_moving_until = None;

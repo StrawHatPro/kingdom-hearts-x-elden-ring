@@ -396,9 +396,12 @@ mod tests {
         move |f| Some(on.contains(&f))
     }
 
+    /// A step that was not a plain hold: (time, act, end).
+    type Step = (f32, Act, Option<End>);
+
     /// Runs the machine against a script of (what is seen, for how many seconds); returns every step that was not a
     /// plain hold, with its time, and whether the cover was up in each second.
-    fn run(drive: &mut Drive, script: &[(Seen, f32)]) -> (Vec<(f32, Act, Option<End>)>, Vec<bool>) {
+    fn run(drive: &mut Drive, script: &[(Seen, f32)]) -> (Vec<Step>, Vec<bool>) {
         let (mut out, mut covers, mut t) = (Vec::new(), Vec::new(), 0.0f32);
         for (seen, seconds) in script {
             for _ in 0..(*seconds / DT).round() as usize {

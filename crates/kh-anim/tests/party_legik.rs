@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use glam::{Quat, Vec3};
-use kh_anim::legik::{remove_twist, solve_two_bone_positions, to_swing_twist};
+use kh_anim::legik::{remove_twist, solve_two_bone_positions, to_swing_twist, Stretch};
 use kh_anim::{sweep_obb, Animator, BodySlot, Frame, IkShape, IkWorld, NoIkWorld, Obb, Pack, Settings, ShapeHit, SweepHit, Trs};
 
 fn pack_dir(npc: &str) -> Option<PathBuf> {
@@ -24,12 +24,12 @@ fn pack_dir(npc: &str) -> Option<PathBuf> {
 fn stock_two_bone_solve_reaches_and_bends_toward_the_target() {
     // upper 40, lower 40, effector 60 away: the joint lies off the line, toward the joint target
     let (root, effector, target) = (Vec3::ZERO, Vec3::new(0.0, 0.0, -60.0), Vec3::new(50.0, 0.0, -30.0));
-    let (joint, end) = solve_two_bone_positions(root, effector, target, 40.0, 40.0, false, 1.0, 1.2);
+    let (joint, end) = solve_two_bone_positions(root, effector, target, 40.0, 40.0, Stretch { allow: false, start_ratio: 1.0, max_scale: 1.2 });
     assert!((end - effector).length() < 1.0e-4, "end {end}");
     assert!(((joint - root).length() - 40.0).abs() < 1.0e-3 && ((end - joint).length() - 40.0).abs() < 1.0e-3, "lengths kept: {joint}");
     assert!(joint.x > 20.0 && joint.y.abs() < 1.0e-4, "bent toward +X: {joint}");
     // out of reach: straight along the line, the end at full length
-    let (joint, end) = solve_two_bone_positions(root, Vec3::new(0.0, 0.0, -100.0), target, 40.0, 40.0, false, 1.0, 1.2);
+    let (joint, end) = solve_two_bone_positions(root, Vec3::new(0.0, 0.0, -100.0), target, 40.0, 40.0, Stretch { allow: false, start_ratio: 1.0, max_scale: 1.2 });
     assert!((end - Vec3::new(0.0, 0.0, -80.0)).length() < 1.0e-4 && (joint - Vec3::new(0.0, 0.0, -40.0)).length() < 1.0e-4);
 }
 

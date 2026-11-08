@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use glam::Vec3;
 use kh_audio::autose::BoneFrame;
-use kh_audio::{Engine, Language, Listener, Materials, Mixer, Motion, Pack};
+use kh_audio::{AutoSeTick, Engine, Language, Listener, Materials, Mixer, Motion, Pack};
 
 const DT: f32 = 1.0 / 60.0;
 const FRAMES: usize = 800;
@@ -54,7 +54,7 @@ fn the_recorded_walk_run_and_jump_render_to_step_sounds_at_the_footfall_interval
         // The listener follows 4 m behind and 1.5 m above him, looking along +X: the test level's camera, roughly.
         let listener = Listener { position: positions[0] + Vec3::new(-400.0, 0.0, 150.0), forward: Vec3::X, right: Vec3::Y };
         // Surface 10 (rock); the enable windows of the clips apply.
-        for event in engine.auto_se(DT, &frame, 10, Some((anim.as_str(), time)), &listener, &|bone| kh_audio::autose::BONES.iter().position(|b| *b == bone).map(|i| positions[i])) {
+        for event in engine.auto_se(AutoSeTick { dt: DT, frame: &frame, surface: 10, anim: Some((anim.as_str(), time)), listener: &listener, bone: &|bone| kh_audio::autose::BONES.iter().position(|b| *b == bone).map(|i| positions[i]) }) {
             events.push((k, event.motion));
         }
         // The landing clip's explicit notify, as the core sends it through the seam.

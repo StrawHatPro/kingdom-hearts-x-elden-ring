@@ -45,7 +45,7 @@ pub struct Event {
 }
 
 fn words(b: &[u8]) -> Vec<i32> {
-    b.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    b.as_chunks::<4>().0.iter().map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
 }
 
 /// The events of an EMEVD file (decompressed).
@@ -210,10 +210,9 @@ pub fn boss_plan(inst: &[Event], entity: u32) -> Option<BossPlan> {
     let enabled: Vec<i32> = phase.iter().flat_map(|ev| ev.ins.iter().filter(|i| i.is(2004, 5) && i.word(1) == 1).map(|i| i.word(0))).collect();
     let (defeat, shape) = if let Some(d) = defeats.iter().find(|(_, x)| *x == e) {
         (d, PlanShape::SameCharacter)
-    } else if let Some(d) = defeats.iter().find(|(_, x)| enabled.contains(x)) {
-        (d, PlanShape::NextCharacter)
     } else {
-        return None;
+        let d = defeats.iter().find(|(_, x)| enabled.contains(x))?;
+        (d, PlanShape::NextCharacter)
     };
     let cutscenes: Vec<i32> = phase.iter().flat_map(|ev| cut_ids(ev)).collect();
     let post_cut = cut_ids(defeat.0);

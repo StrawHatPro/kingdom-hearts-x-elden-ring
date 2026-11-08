@@ -57,12 +57,15 @@ pub fn roster_centre(i: usize, n: usize) -> (f32, f32) {
 
 // ------------------------------------------------------------------------------------------------ the pictures
 
+/// A save slot's bust: (texture, its rectangle, its scale and shift inside the 256 x 256 bust box).
+type Bust = (Arc<Texture>, [f32; 4], (f32, f32, f32));
+
 /// The pictures of the screen, read from the packs once (`CampMenuView::load`).
 #[derive(Default)]
 pub struct FormationArt {
     /// key -> the save slot's bust (`/Game/UI/Icon/MenuFace/MenuFaceEx*`, 256 x 256; pack build/sora_pack/saveload).
     /// key -> (texture, its rectangle, its scale and shift inside the 256 x 256 bust box).
-    portraits: HashMap<String, (Arc<Texture>, [f32; 4], (f32, f32, f32))>,
+    portraits: HashMap<String, Bust>,
     /// key -> the HUD face sheet and its first cell (`01_hud/face/NpcEx*`, the cell 128 x 128).
     faces: HashMap<String, (Arc<Texture>, [f32; 4])>,
     /// The camp's character-window pattern (`15_campmenu/CampMenu01`, the 280 x 684 diamond field at its top left).
@@ -116,6 +119,15 @@ impl FormationArt {
         art
     }
 
+    /// (OF) THE USER 2026-11-03: "make sure Sora's HUD changes for his costumes": Sora's bust from the HUD face sheet of the
+    /// outfit he wears (`01_hud/face/Pc*Sora01*`, every one with his normal face in its 256 x 256 cell 0 as PcExSora01, so
+    /// the same scale and shift). Read by the next Party Formation screen that opens.
+    pub fn set_sora_bust(&mut self, face_sheet: Arc<Texture>) {
+        if face_sheet.width >= 256 && face_sheet.height >= 256 {
+            self.portraits.insert("sora".to_string(), (face_sheet, [0.0, 0.0, 256.0, 256.0], SORA_BUST_SHIFT));
+        }
+    }
+
     /// Which pictures are there (tests).
     pub fn summary(&self) -> (usize, usize, bool, bool, bool) {
         (self.portraits.len(), self.faces.len(), self.pattern.is_some(), self.yubi.is_some(), self.list_library.is_some() && self.crown.is_some())
@@ -124,7 +136,7 @@ impl FormationArt {
 
 // ------------------------------------------------------------------------------------------------ shapes
 
-fn rect_edges(x0: f32, y0: f32, x1: f32, y1: f32) -> Vec<Edge> {
+pub(crate) fn rect_edges(x0: f32, y0: f32, x1: f32, y1: f32) -> Vec<Edge> {
     vec![Edge::Line([x0, y0, x1, y0]), Edge::Line([x1, y0, x1, y1]), Edge::Line([x1, y1, x0, y1]), Edge::Line([x0, y1, x0, y0])]
 }
 
@@ -141,7 +153,7 @@ fn circle_edges(r: f32) -> Vec<Edge> {
     out
 }
 
-fn polyline(points: &[(f32, f32)], closed: bool) -> Vec<Edge> {
+pub(crate) fn polyline(points: &[(f32, f32)], closed: bool) -> Vec<Edge> {
     let mut out: Vec<Edge> = points.windows(2).map(|w| Edge::Line([w[0].0, w[0].1, w[1].0, w[1].1])).collect();
     if closed && points.len() > 2 {
         let (a, b) = (points[points.len() - 1], points[0]);
@@ -167,7 +179,7 @@ fn bounds_of(edges: &[Edge], pad: f32) -> Rect0 {
     Rect0 { x0: x0 - pad, y0: y0 - pad, x1: x1 + pad, y1: y1 + pad }
 }
 
-fn shape(fills: Vec<Fill>, strokes: Vec<Stroke>) -> Arc<Shape> {
+pub(crate) fn shape(fills: Vec<Fill>, strokes: Vec<Stroke>) -> Arc<Shape> {
     let mut edges: Vec<Edge> = fills.iter().flat_map(|f| f.edges.clone()).collect();
     edges.extend(strokes.iter().flat_map(|s| s.edges.clone()));
     let pad = strokes.iter().map(|s| s.width).fold(0.0, f32::max);
@@ -175,7 +187,7 @@ fn shape(fills: Vec<Fill>, strokes: Vec<Stroke>) -> Arc<Shape> {
 }
 
 /// A linear gradient across (x0..x1) (horizontal) or (y0..y1) (vertical) of the rectangle.
-fn gradient(x0: f32, y0: f32, x1: f32, y1: f32, vertical: bool, stops: &[(f32, [f32; 4])]) -> Paint {
+pub(crate) fn gradient(x0: f32, y0: f32, x1: f32, y1: f32, vertical: bool, stops: &[(f32, [f32; 4])]) -> Paint {
     let (mx, my, w, h) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, (x1 - x0).max(1.0), (y1 - y0).max(1.0));
     let matrix = if vertical { Matrix::new(0.0, h / 32768.0, -w / 32768.0, 0.0, mx, my) } else { Matrix::new(w / 32768.0, 0.0, 0.0, h / 32768.0, mx, my) };
     Paint::Gradient { radial: false, matrix, stops: stops.to_vec() }
@@ -412,15 +424,15 @@ impl Shapes {
 /// the character id, the matrix and the colour transform).
 const CH: u32 = 0x7F50_0000;
 
-fn node(name: String, ch: u32, kind: Kind, matrix: Matrix, cx: Cx) -> Node {
+pub(crate) fn node(name: String, ch: u32, kind: Kind, matrix: Matrix, cx: Cx) -> Node {
     Node { ch, depth: 0, born: 1, z: None, name: Some(Arc::from(name.as_str())), matrix, cx, clip: 0, blend: 0, visible: true, script_visible: None, script_matrix: true, ratio: 0.0, kind }
 }
 
-fn alpha(a: f32) -> Cx {
+pub(crate) fn alpha(a: f32) -> Cx {
     Cx { mul: [1.0, 1.0, 1.0, a.clamp(0.0, 1.0)], add: [0.0; 4] }
 }
 
-fn tint(rgb: f32, a: f32) -> Cx {
+pub(crate) fn tint(rgb: f32, a: f32) -> Cx {
     Cx { mul: [rgb, rgb, rgb, a.clamp(0.0, 1.0)], add: [0.0; 4] }
 }
 
@@ -517,8 +529,8 @@ impl FormationScene {
         let refused = feed.refused.clone().filter(|_| feed.stamp != self.feed.stamp || feed.refused != self.feed.refused);
         let old_slots = std::mem::replace(&mut self.slot_of, new_slots);
         self.feed = feed.clone();
-        for i in 0..self.portraits.len() {
-            let (was, now) = (old_slots[i], self.slot_of[i]);
+        for (i, &was) in old_slots[..self.portraits.len()].iter().enumerate() {
+            let now = self.slot_of[i];
             if was == now {
                 continue;
             }

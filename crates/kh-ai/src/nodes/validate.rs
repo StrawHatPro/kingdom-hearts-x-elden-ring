@@ -9,10 +9,10 @@
 //! - `bValidateOrientation` (bit 1) -> 0x140520A80 -> vt+0x3F8 = slot 127 0x140432D20,
 //! - `bValidateExecution` (bit 2) -> 0x140518050 -> vt+0x408 = slot 129 (`TresNpcAttackDefinitionBase`
 //!   0x14121E9F0, `…Magic` 0x14121EBF0, `…JumpBase` 0x14121EB60),
-//! and passes when every enabled check passes (asm 0x14047FCF1..0x14047FE1E). A vector key
-//! (any value, valid or not) uses the location variants vt+0x3E0 / 0x3F0 / 0x400 (0x140520A20 /
-//! 0x140520A60 / 0x140518030 -> CDO slots 124 / 126 / 128): every friend definition's vtable
-//! holds 0x14041F1E0 there (`mov al,1; ret`, C4): a vector target passes all three checks.
+//!   and passes when every enabled check passes (asm 0x14047FCF1..0x14047FE1E). A vector key
+//!   (any value, valid or not) uses the location variants vt+0x3E0 / 0x3F0 / 0x400 (0x140520A20 /
+//!   0x140520A60 / 0x140518030 -> CDO slots 124 / 126 / 128): every friend definition's vtable
+//!   holds 0x14041F1E0 there (`mov al,1; ret`, C4): a vector target passes all three checks.
 //!
 //! The class defaults are the native constructors' (the friends' blueprints have no bytecode and
 //! only serialise what differs, so the merged pack properties override these):

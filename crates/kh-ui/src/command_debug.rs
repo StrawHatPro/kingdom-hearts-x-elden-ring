@@ -153,7 +153,7 @@ impl DebugCommandSystem {
             // Link rows need full MP.
             _ => (self.mp >= self.mp_max && !self.mp_charging, false),
         };
-        MenuRow { text: e.name.clone(), enabled, mp_short, quantity: if list == 2 { e.quantity } else { 0 }, flash: false }
+        MenuRow { text: e.name.clone(), enabled, mp_short, quantity: if list == 2 { e.quantity } else { 0 }, flash: false, ..MenuRow::default() }
     }
 
     /// Rebuilds the rows from the debug lists and the MP state.

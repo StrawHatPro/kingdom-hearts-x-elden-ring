@@ -39,7 +39,7 @@
 //! |---|---|---|
 //! | `savepoint.autounlock` | 1 | 0 = a grace is discovered only by the game's own "Touch grace" (needs `savepoint.sit = 1` to be pressable) |
 //! | `savepoint.sit` | 0 | 1 = the rules before IMPL_ER26: the Site of Grace entry, the game's own touch, Y by its prompt |
-//! | `savepoint.load` | 1 | (SV) the Load entry (KH3's Load screen; needs `saveload.kh`); `saveload.confirm_load` 1 = its Yes / No question, `saveload.delete` 1 = Y deletes a slot (Yes / No) on the Save and Load screens, `saveload.cover` 1 = the load goes through black (`saveload.fade_in` 0.25 s, `saveload.fade_out` 0.5 s) |
+//! | `savepoint.load` | 1 | (SV) the Load entry (KH3's Load screen; needs `saveload.kh`); `saveload.confirm_load` 1 = its Yes / No question, `saveload.delete` 1 = Y deletes a slot (Yes / No) on the Save and Load screens (and, SAVE-DELETE, on the title's Load screen), `saveload.cover` 1 = the load goes through black (`saveload.fade_in` 0.25 s, `saveload.fade_out` 0.5 s) |
 //! | `savepoint.passtime` | 1 | the Pass Time entry; `savepoint.passtime.morning / .noon / .nightfall` = `H:M` (7:00, 12:00, 20:00); `savepoint.passtime.reset = 1`: the world is reset with it |
 //! | `savepoint.respawn` | 1 | the Respawn Enemies entry |
 //! | `savepoint.respawn_on_save` | 0 | 1 = the world is reset after every completed Save |
@@ -215,6 +215,17 @@ struct StoryRest {
 struct Rest {
     flags: u32,
     bonfire: u32,
+}
+
+/// What a save point frame is told: the leader on his floor, Elden Ring's prompt is up, its interface; `y_held` / `lb_held`:
+/// the pad's Y and LB as the player holds them (before any masking); `dt`: the frame's seconds.
+pub struct SpFrame {
+    pub on_floor: bool,
+    pub prompt: bool,
+    pub ui: ErUi,
+    pub y_held: bool,
+    pub lb_held: bool,
+    pub dt: f32,
 }
 
 pub struct ErSavePoints {
@@ -536,6 +547,7 @@ impl ErSavePoints {
     /// (CV3 round 4, sora.rs tells before `frame`) THE LEADER'S FIGHT AND LIFE, whoever leads (conv.rs
     /// `leader_facts`): Sora out of the party is not stepped and his battle flag / HP are frozen (the user's FINAL5
     /// session: no Save offered after Donald's unlock, Goofy leading). `frame`'s `on_floor` is the leader's too.
+    #[cfg(feature = "party")]
     pub fn set_leader(&mut self, battle: bool, alive: bool) {
         self.leader = Some((battle, alive));
     }
@@ -557,10 +569,9 @@ impl ErSavePoints {
     }
 
     /// ONCE PER GAME FRAME (`ChrIns_PrePhysics`, after the targets were read and Elden Ring's
-    /// interface was looked at). `y_held`: the pad's Y as the player holds it (before any masking).
+    /// interface was looked at).
     /// Returns true when Y belongs to the save point this frame (hidden from Elden Ring and from Sora).
-    #[allow(clippy::too_many_arguments)]
-    pub fn frame(&mut self, control: &Control, player: &PlayerIns, targets: &ErTargets, frame: Frame, sora: &mut Sora, on_floor: bool, prompt: bool, ui: ErUi, y_held: bool, lb_held: bool, dt: f32) -> bool {
+    pub fn frame(&mut self, control: &Control, player: &PlayerIns, targets: &ErTargets, frame: Frame, sora: &mut Sora, SpFrame { on_floor, prompt, ui, y_held, lb_held, dt }: SpFrame) -> bool {
         let dt = dt.clamp(0.0, 0.1);
         self.seconds += dt;
         self.on = control.on("savepoint.kh");
@@ -676,6 +687,14 @@ impl ErSavePoints {
                     let discovered = flag_set(flag);
                     erlog!("savepoint: a site of grace (entity {entity}, discovery flag {flag}: {}) at Elden Ring ({:.2}, {:.2}, {:.2}): a KH3 save point stands there", match discovered { Some(true) => "DISCOVERED", Some(false) => "not discovered yet", None => "unknown" }, er_pos.x, er_pos.y, er_pos.z);
                     let mut sp = SavePoint::new(self.data.clone(), root);
+                    // (INTERACT-MARK, the user 2026-11-05: "do option 1") a save point whose area is the user's choice, not KH3's
+                    // (savepoint_area.rs: the Roundtable Hold's, at table level; KH3's capsule sizes, its centre and base moved)
+                    if let Some(area) = crate::savepoint_area::of(entity) {
+                        (sp.data.reactor, sp.data.recover) = area.capsules(height);
+                        sp.data.ring = Some(area.ring(height)); // (the user's correction: from the floor next to the table, all around)
+                        let (lo, hi) = area.edge.iter().fold((f32::INFINITY, 0.0f32), |(a, b), e| (a.min(*e), b.max(*e)));
+                        erlog!("savepoint: grace {entity}: (INTERACT-MARK) ITS AREA IS THE USER'S CHOICE (sheet kh-savepoint-areas): KH3's capsules (reactor {} / {} cm, recover {} / {} cm) with their base {:.2} m over the grace and their centre ({:+.2}, {:+.2}) m from it, and a band of KH3's reach ({} cm) around the table's edge ({lo:.2} .. {hi:.2} m) from the floor: the Save from the floor next to the table and from its top", area.reactor.0, area.reactor.1, area.recover.0, area.recover.1, area.base, area.centre.0, area.centre.1, area.reach.0);
+                    }
                     // (IMPL_ER19) KH3 keeps "accessed" per save point: its 3 s first-visit burst plays once. The save points
                     // here are made anew whenever a grace comes into reach: a DISCOVERED grace is one he was at.
                     if discovered == Some(true) && !control.on("savepoint.first") {
@@ -1086,6 +1105,9 @@ impl ErSavePoints {
             }
             self.talk_offer = talk;
             let opened = crate::hud::open_savepoint_grace(menu);
+            if opened {
+                crate::spirit::leave(kh_core::command::summon::LeaveReason::SavePoint); // (THE USER 2026-11-02: "going into the save point menu instantly ends the summon"; no refund)
+            }
             self.menu_shown = menu;
             self.menu_at = here.map(|p| p.entity);
             self.save_at = None;
@@ -1523,7 +1545,8 @@ impl ErSavePoints {
                 let d = capsule.0 - (p.sp.root + p.sp.data.reactor.2);
                 p.sp.idle();
                 let r = capsule.0 - (p.sp.root + p.sp.data.recover.2);
-                p.step = SavePointStep { in_reactor: d.truncate().length() <= capsule.1 + p.sp.data.reactor.0 && d.z.abs() <= capsule.2 + p.sp.data.reactor.1 * 0.5, in_recover: r.truncate().length() <= capsule.1 + p.sp.data.recover.0 && r.z.abs() <= capsule.2 + p.sp.data.recover.1 * 0.5, ..SavePointStep::default() };
+                let ring = p.sp.data.ring.as_ref().map_or((false, false), |g| g.contains(p.sp.root, capsule)); // (INTERACT-MARK) the band around the Roundtable's table
+                p.step = SavePointStep { in_reactor: (d.truncate().length() <= capsule.1 + p.sp.data.reactor.0 && d.z.abs() <= capsule.2 + p.sp.data.reactor.1 * 0.5) || ring.0, in_recover: (r.truncate().length() <= capsule.1 + p.sp.data.recover.0 && r.z.abs() <= capsule.2 + p.sp.data.recover.1 * 0.5) || ring.1, ..SavePointStep::default() };
                 // (IMPL_ER21) he stands in it needing recovery and the game offers no rest: KH3's refusal sound, once a visit
                 if heal && rest_rule && p.step.in_recover && needs && p.waited > REFUSE_AFTER && !p.refused_told {
                     p.refused_told = true;

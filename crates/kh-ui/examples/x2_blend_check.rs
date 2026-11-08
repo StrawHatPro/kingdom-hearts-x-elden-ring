@@ -10,7 +10,7 @@
 //! darkening (new minus old), and how many changed pixels were a dark veil in the old picture (darker than the scene).
 //! The worst samples are written as OUT_DIR/<movie>_<n>.png (old | new over the bright scene, then over grey).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use kh_ui::def::{write_png, Op, SpriteDef};
@@ -56,7 +56,7 @@ fn compare(old: &Canvas, new: &Canvas, st: &mut Stats) -> usize {
     let mut score = 0;
     for (k, (_, bg)) in SCENES.iter().enumerate() {
         let b = [(bg[0] * 255.0) as i32, (bg[1] * 255.0) as i32, (bg[2] * 255.0) as i32];
-        for (p, q) in old.px.chunks_exact(4).zip(new.px.chunks_exact(4)) {
+        for (p, q) in old.px.as_chunks::<4>().0.iter().zip(new.px.as_chunks::<4>().0) {
             if p[3] <= 0.0 && q[3] <= 0.0 {
                 continue;
             }
@@ -87,7 +87,7 @@ fn compare(old: &Canvas, new: &Canvas, st: &mut Stats) -> usize {
 fn picture(old: &Canvas, new: &Canvas) -> Vec<u8> {
     // 2 x 2: old | new over the bright scene, old | new over grey (full stage, halved)
     let (w2, h2) = (W / 2, H / 2);
-    let mut out = vec![0u8; (W * H * 4) as usize];
+    let mut out = vec![0u8; W * H * 4];
     for (row, (_, bg)) in SCENES.iter().rev().enumerate() {
         for (col, c) in [old, new].iter().enumerate() {
             for y in 0..h2 {
@@ -128,7 +128,7 @@ fn main() {
         let keep = |score: usize, old: &Canvas, new: &Canvas, worst: &mut Vec<(usize, Vec<u8>)>| {
             if score > 0 && (worst.len() < 3 || worst.iter().any(|w| w.0 < score)) {
                 worst.push((score, picture(old, new)));
-                worst.sort_by(|a, b| b.0.cmp(&a.0));
+                worst.sort_by_key(|a| std::cmp::Reverse(a.0));
                 worst.truncate(3);
             }
         };
@@ -187,5 +187,4 @@ fn main() {
         }
     }
     println!("ALL: {} samples | grey: >8 {} (veil {}), brighter {}, darker {} | bright: >8 {} (veil {}), brighter {}, darker {}", total.samples, total.over8[0], total.veil[0], total.brighter[0], total.darker[0], total.over8[1], total.veil[1], total.brighter[1], total.darker[1]);
-    let _ = Path::new(".");
 }

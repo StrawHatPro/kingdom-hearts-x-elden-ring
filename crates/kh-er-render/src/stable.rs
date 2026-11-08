@@ -29,9 +29,9 @@
 //! 7. THE CUT AT SIX LIGHTS ON HIM (`sora_lights`) and at twelve effect lights in the pass (`rank`): hard, so two lights
 //!    swapping places popped. FIX: the last lights kept fade out as the first one dropped catches up (`soft_cut`), and the
 //!    pass ranks the effects' lights by what they give HIM (`rank_near`).
-//! Everything the probes give is eased with a time constant that depends on HIS speed: `r.light_tau_still_s` (1 s) while he
-//! stands (then only the camera moves), `r.light_tau_s` (0.3 s) from `r.light_move_cms` (120 cm/s) on: walking into the
-//! shade still shows within a few tenths of a second.
+//!    Everything the probes give is eased with a time constant that depends on HIS speed: `r.light_tau_still_s` (1 s) while he
+//!    stands (then only the camera moves), `r.light_tau_s` (0.3 s) from `r.light_move_cms` (120 cm/s) on: walking into the
+//!    shade still shows within a few tenths of a second.
 //!
 //! `r.light_stable = 0`: every one of these back to the behaviour before (the probes' old easing, the camera-placed hero
 //! light, the screen's environment taps, the raw exposure, the gate without its hold, the hard cuts).
@@ -122,7 +122,7 @@ pub fn settings() -> Settings {
 
 /// The time-constant blend of one step: `1 - exp(-dt / tau)` (frame-rate independent; 1 for tau 0).
 pub fn blend(dt: f32, tau: f32) -> f32 {
-    if !(tau > 1.0e-4) {
+    if tau.partial_cmp(&1.0e-4).is_none_or(std::cmp::Ordering::is_le) {
         return 1.0;
     }
     (1.0 - (-dt.max(0.0) / tau).exp()).clamp(0.0, 1.0)
@@ -168,6 +168,26 @@ pub struct Filter {
     feet: Option<Vec3>,
     /// His speed (cm/s), eased over 0.15 s.
     pub speed: f32,
+    /// (VIEWLIGHT) the ground's received light over his body's, learnt while both read (eased over `BODY_RATIO_TAU`); 0 = not yet
+    pub body_ratio: f32,
+    /// (VIEWLIGHT) how long (s) the game has handed over a directional light unlike the one held (`SUN_SWITCH_S`)
+    sun_new: f32,
+}
+
+/// (VIEWLIGHT, the user: "lighting is flickery on the KH models"; the round's log, an interior with the camera turning: the
+/// directional light read from the game switched for about a second to ANOTHER light (dir (0.25, 0.68, -0.69) colour 0.12 ->
+/// dir (0.70, 0.71, 0.12) colour 0.21 and back) while nothing at his feet changed, and the level his look is handed went
+/// x91 -> x68 -> x77 -> x89.) A directional light unlike the held one (more than ~14 degrees away or 22 % brighter / darker) is
+/// taken only once it has been handed over for `SUN_SWITCH_S` without a break; the game's own slow changes (the clock) never
+/// step that far in a frame and are followed as before.
+pub const SUN_SWITCH_S: f32 = 2.0;
+const SUN_SAME_COS: f32 = 0.97;
+const SUN_SAME_LOG: f32 = 0.2;
+
+/// The directional light `now` is another light than `held` (direction or brightness), not the same one drifting.
+fn another_sun(now: (Vec3, Vec3), held: (Vec3, Vec3)) -> bool {
+    let (a, b) = (luma(now.1).max(1.0e-6), luma(held.1).max(1.0e-6));
+    now.0.normalize_or_zero().dot(held.0.normalize_or_zero()) < SUN_SAME_COS || (a / b).ln().abs() > SUN_SAME_LOG
 }
 
 impl Filter {
@@ -207,6 +227,27 @@ impl Filter {
         } else if !raw.probed() && prev.probed() {
             (out.scene_px, out.direct_px, out.albedo_px, out.mask, out.taps) = (prev.scene_px, prev.direct_px, prev.albedo_px, prev.mask, prev.taps);
         }
+        // (VIEWLIGHT) the light on his body: eased as the probes; while none read, the last
+        if raw.body_taps >= 1.0 && prev.body_taps >= 1.0 {
+            out.body_px = prev.body_px.lerp(raw.body_px, a);
+        } else if raw.body_taps < 1.0 && prev.body_taps >= 1.0 {
+            (out.body_px, out.body_taps) = (prev.body_px, prev.body_taps);
+        }
+        // (VIEWLIGHT) the body's light scaled to the ground's: learnt (in the log domain, BODY_RATIO_TAU) while the ground reads well
+        // (enough taps) and the body too, so the blend of the two (light.rs `received`) changes no level when the taps come and go
+        if out.probed() && out.taps >= 4.0 && out.body_taps >= 1.0 {
+            let lu = |c: Vec3| luma(c);
+            let g = lu(crate::light::ground_light(if out.direct_px.max_element() > 0.0 { out.direct_px } else { out.scene_px }, out.albedo_px));
+            let b = lu(out.body_px);
+            if g > 1.0e-7 && b > 1.0e-7 {
+                let now = (g / b).clamp(0.05, 20.0);
+                // (a ratio within 3 % of the learnt one is the place's own slow drift: followed over BODY_RATIO_TAU; a larger step
+                // is the body's light moving without the ground's (a bright background behind him): followed only over BODY_RATIO_HOLD)
+                let tau = if self.body_ratio > 0.0 && (now / self.body_ratio).ln().abs() < 0.03 { BODY_RATIO_TAU } else { BODY_RATIO_HOLD };
+                self.body_ratio = if self.body_ratio > 0.0 { (self.body_ratio.ln() + (now.ln() - self.body_ratio.ln()) * blend(dt, tau)).exp() } else { now };
+            }
+        }
+        out.body_ratio = self.body_ratio;
         // the picture's top (only the fallback of the sky without constants, or with r.env_screen)
         if prev.env_taps >= 1.0 {
             out.env_px = if raw.env_taps >= 1.0 { prev.env_px.lerp(raw.env_px, a_env) } else { prev.env_px };
@@ -216,9 +257,15 @@ impl Filter {
         match (raw.sun, prev.sun) {
             (Some((d, c)), Some((pd, pc))) => {
                 self.sun_missing = 0.0;
-                out.sun = Some((pd.lerp(d, a_move).normalize_or(d), pc.lerp(c, a_move)));
-                out.sky = (prev.sky.0.lerp(raw.sky.0, a_move).normalize_or(raw.sky.0), prev.sky.1.lerp(raw.sky.1, a_move));
-                out.shadow_color = prev.shadow_color.lerp(raw.shadow_color, a_move);
+                // (VIEWLIGHT) another light: held until it has lasted SUN_SWITCH_S, then eased in as before
+                self.sun_new = if another_sun((d, c), (pd, pc)) { self.sun_new + dt } else { 0.0 };
+                if self.sun_new > 0.0 && self.sun_new < SUN_SWITCH_S {
+                    (out.sun, out.sky, out.shadow_color) = (prev.sun, prev.sky, prev.shadow_color);
+                } else {
+                    out.sun = Some((pd.lerp(d, a_move).normalize_or(d), pc.lerp(c, a_move)));
+                    out.sky = (prev.sky.0.lerp(raw.sky.0, a_move).normalize_or(raw.sky.0), prev.sky.1.lerp(raw.sky.1, a_move));
+                    out.shadow_color = prev.shadow_color.lerp(raw.shadow_color, a_move);
+                }
             }
             (None, Some(_)) => {
                 self.sun_missing += dt;
@@ -318,7 +365,7 @@ pub fn seg_dist(p1: Vec3, q1: Vec3, p2: Vec3, q2: Vec3) -> f32 {
 /// Whether his body (the frame's capsules: `caps[2k]` = end a + radius, `caps[2k + 1]` = end b, w > 0.5 when there) hides
 /// the point `p` from the camera.
 pub fn hidden_by(caps: &[Vec4], camera: Vec3, p: Vec3) -> bool {
-    caps.chunks_exact(2).any(|c| c[1].w > 0.5 && seg_dist(camera, p, c[0].truncate(), c[1].truncate()) < c[0].w + BODY_MARGIN)
+    caps.as_chunks::<2>().0.iter().any(|c| c[1].w > 0.5 && seg_dist(camera, p, c[0].truncate(), c[1].truncate()) < c[0].w + BODY_MARGIN)
 }
 
 /// One tap of the world probe as the shader wrote it (texels 64 + k: direct light x surface colour, 80 + k: surface colour,
@@ -344,7 +391,7 @@ pub fn parse_taps(words: &[f32]) -> [Option<Tap>; WORLD_TAPS] {
         let d = texel(TAP_TEXELS + k);
         let tap = Tap { direct: d.truncate(), albedo: texel(TAP_TEXELS + 16 + k).truncate(), scene: texel(TAP_TEXELS + 32 + k).truncate(), mask: texel(TAP_TEXELS + 48 + k) };
         let finite = tap.direct.is_finite() && tap.albedo.is_finite() && tap.scene.is_finite() && tap.mask.is_finite();
-        (d.w > 0.5 && finite && tap.albedo.min_element() > crate::light::DARK).then_some(tap)
+        (d.w > 0.5 && finite && tap.albedo.dot(Vec3::new(0.2126, 0.7152, 0.0722)) > crate::light::DARK).then_some(tap) // (VIEWLIGHT) by luminance
     })
 }
 
@@ -358,6 +405,10 @@ pub struct TapMemory {
 }
 
 pub const MEMORY_MOVE: f32 = 25.0;
+/// (VIEWLIGHT) how fast (s) the body-to-ground ratio follows a change of place
+pub const BODY_RATIO_TAU: f32 = 4.0;
+/// (VIEWLIGHT) how slowly (s) a step of that ratio (the body's light alone moving) is followed
+pub const BODY_RATIO_HOLD: f32 = 120.0;
 pub const MEMORY_AGE: f32 = 8.0;
 
 impl TapMemory {
@@ -405,12 +456,16 @@ struct State {
     memory_at: Option<Instant>,
 }
 
-static STATE: Mutex<State> = Mutex::new(State { filter: Filter { light: None, sun_missing: 0.0, scene_missing: 0.0, feet: None, speed: 0.0 }, gate: Gate { dark: false, primed: false, pending: 0.0 }, at: None, gate_at: None, facing: None, facing_at: None, memory: TapMemory { taps: [None; WORLD_TAPS] }, memory_at: None });
+static STATE: Mutex<State> = Mutex::new(State { filter: Filter { light: None, sun_missing: 0.0, scene_missing: 0.0, feet: None, speed: 0.0, body_ratio: 0.0, sun_new: 0.0 }, gate: Gate { dark: false, primed: false, pending: 0.0 }, at: None, gate_at: None, facing: None, facing_at: None, memory: TapMemory { taps: [None; WORLD_TAPS] }, memory_at: None });
+
+static TAPS_SEEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// (gfx.rs, at the read-back of the game-data texture) The world probe's taps of that frame into the memory.
 pub(crate) fn read_taps(words: &[f32], feet: Option<Vec3>) {
     let Some(feet) = feet else { return };
     let taps = parse_taps(words);
+    // (VIEWLIGHT, log) how many of the world taps counted in the latest frame read
+    TAPS_SEEN.store(taps.iter().flatten().count() as u32, std::sync::atomic::Ordering::Relaxed);
     let mut st = STATE.lock().unwrap_or_else(|e| e.into_inner());
     let dt = st.memory_at.map_or(0.0, |t| t.elapsed().as_secs_f32());
     st.memory_at = Some(Instant::now());
@@ -517,9 +572,11 @@ pub fn status() -> String {
     }
     let st = STATE.lock().unwrap_or_else(|e| e.into_inner());
     format!(
-        "(IMPL_ER86) steady light on: probes {} r {:.0} cm, tau {:.2} s (his speed {:.0} cm/s), exposure tau {:.1} s, env {}, gate hold {:.1} s (dark {}), hero anchor {}",
+        "(IMPL_ER86) steady light on: probes {} r {:.0} cm ((VIEWLIGHT) {} of 16 world taps counted, {} remembered), tau {:.2} s (his speed {:.0} cm/s), exposure tau {:.1} s, env {}, gate hold {:.1} s (dark {}), hero anchor {}",
         if s.probe_world { "WORLD" } else { "screen" },
         s.probe_radius,
+        TAPS_SEEN.load(std::sync::atomic::Ordering::Relaxed),
+        st.memory.taps.iter().flatten().count(),
         st.filter.tau(&s),
         st.filter.speed,
         s.tau_exposure,
@@ -533,6 +590,95 @@ pub fn status() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// (VIEWLIGHT) the corridor at night: no sun, the carpet's ground taps and the body's light, frame by frame
+    fn corridor(taps: f32, body: f32) -> GameLight {
+        GameLight {
+            sun: Some((Vec3::Y, Vec3::ZERO)),
+            scene: true,
+            exposure: 56.0,
+            pre_exposure: 1.0,
+            scene_px: Vec3::new(0.0006, 0.0004, 0.0003),
+            direct_px: Vec3::new(0.0006, 0.0004, 0.0003),
+            albedo_px: if taps >= 1.0 { Vec3::new(0.16, 0.14, 0.13) } else { Vec3::ZERO },
+            mask: Vec4::ONE,
+            taps,
+            body_px: Vec3::splat(body),
+            body_taps: 6.0,
+            ..Default::default()
+        }
+    }
+
+    fn level_series(frames: &[GameLight]) -> Vec<f32> {
+        let s = Settings::default();
+        let mut f = Filter::default();
+        let mut level = 0.0;
+        frames
+            .iter()
+            .map(|raw| {
+                let l = f.step(Some(raw), Some(Vec3::ZERO), 1.0 / 60.0, &s).unwrap();
+                let r = crate::light::rig_for(&l, Vec3::Y, crate::light::CALIBRATION_DEFAULT, 1.0, true);
+                level = crate::light::ease_level(level, r.out_scale, 1.0 / 60.0);
+                level
+            })
+            .collect()
+    }
+
+    fn worst_step(v: &[f32]) -> f32 {
+        v.windows(2).map(|w| (w[1] / w[0]).ln().abs()).fold(0.0, f32::max)
+    }
+
+    #[test]
+    fn viewlight_taps_crossing_the_threshold_do_not_flicker() {
+        // 5 s settled with good taps (the ratio learnt), then the tap count jumping 0 / 1 / 2 / 3 / 6 every frame for 2 s, the
+        // body's light (0.004) and the ground's the same place throughout
+        let mut frames: Vec<GameLight> = (0..300).map(|_| corridor(12.0, 0.004)).collect();
+        frames.extend((0..120).map(|k| corridor([0.0, 1.0, 2.0, 3.0, 6.0][k % 5], 0.004)));
+        let v = level_series(&frames);
+        let after = &v[300..];
+        let worst = worst_step(after);
+        assert!(worst < 0.01, "a frame stepped the level by {:.2} %", worst * 100.0);
+        let (lo, hi) = after.iter().fold((f32::MAX, 0.0f32), |(a, b), x| (a.min(*x), b.max(*x)));
+        assert!(hi / lo < 1.05, "the level wandered {:.1} %", (hi / lo - 1.0) * 100.0);
+    }
+
+    #[test]
+    fn viewlight_a_bright_background_alone_moves_nothing() {
+        // settled 10 s, then a bright window passes behind him for 1.5 s: the game's light read at his own pixels x1.6, the ground's
+        // (world-checked taps) unchanged
+        let s = Settings::default();
+        let mut f = Filter::default();
+        let mut seen = Vec::new();
+        for k in 0..(600 + 90 + 120) {
+            let body = if (600..690).contains(&k) { 0.0064 } else { 0.004 };
+            let l = f.step(Some(&corridor(12.0, body)), Some(Vec3::ZERO), 1.0 / 60.0, &s).unwrap();
+            // what reaches his look: the body's light (as the capture's) x the bleed fix
+            seen.push(crate::light::luma_of(l.body_px) * crate::light::bleed_fix(&l));
+        }
+        let base = seen[599];
+        let worst = seen[600..].iter().map(|x| (x / base - 1.0).abs()).fold(0.0, f32::max);
+        assert!(worst < 0.02, "the background moved his light by {:.1} %", worst * 100.0);
+    }
+
+    #[test]
+    fn viewlight_a_passing_switch_of_the_games_directional_light_moves_nothing() {
+        // (the round's log, the camera turning in an interior: the sun read switched to another light for ~1 s and back)
+        let held = (Vec3::new(0.25, 0.682, -0.687).normalize(), Vec3::new(0.0787, 0.123, 0.2));
+        let other = (Vec3::new(0.696, 0.707, 0.123).normalize(), Vec3::new(0.1682, 0.2181, 0.3375));
+        let at = |sun: (Vec3, Vec3)| GameLight { sun: Some(sun), ..corridor(12.0, 0.004) };
+        let mut frames: Vec<GameLight> = (0..300).map(|_| at(held)).collect();
+        frames.extend((0..60).map(|_| at(other)));
+        frames.extend((0..180).map(|_| at(held)));
+        let v = level_series(&frames);
+        let worst = v[300..].iter().map(|x| (x / v[299]).ln().abs()).fold(0.0, f32::max);
+        assert!(worst < 0.01, "the passing light moved the level {:.2} %", worst * 100.0);
+        // a light that stays is taken after SUN_SWITCH_S
+        let mut lasting: Vec<GameLight> = (0..300).map(|_| at(held)).collect();
+        lasting.extend((0..360).map(|_| at(other)));
+        let w = level_series(&lasting);
+        assert!((w[659] / w[299]).ln().abs() > 0.1, "the new light was taken: {} -> {}", w[299], w[659]);
+        assert!((w[400] / w[299]).ln().abs() < 0.01, "not before {SUN_SWITCH_S} s");
+    }
 
     fn lit(scene: f32, sun: Option<Vec3>) -> GameLight {
         GameLight {

@@ -23,7 +23,7 @@ use glam::{Quat, Vec3};
 
 use crate::blend::{find_between, normalise, slerp_not_normalised, transform_blend, Rotator};
 use crate::json::Json;
-use crate::legik::{solve_two_bone_ik, IkShape, IkWorld};
+use crate::legik::{solve_two_bone_ik, IkInput, IkShape, Stretch};
 use crate::pack::Skeleton;
 use crate::Trs;
 
@@ -142,14 +142,14 @@ impl CollTwoBoneIk {
 
     /// One update + evaluation of the node. `local` / `component` = the node's input pose (the previous node's
     /// output); `local` receives the result.
-    #[allow(clippy::too_many_arguments)]
-    pub fn evaluate(&mut self, skeleton: &Skeleton, local: &mut [Trs], component: &[Trs], alpha: f32, dt: f32, c2w: &Trs, world: &dyn IkWorld) {
+    pub fn evaluate(&mut self, input: IkInput<'_>, local: &mut [Trs], alpha: f32, dt: f32) {
+        let IkInput { skeleton, component, c2w, world } = input;
         self.report = CollIkReport::default();
         // Update 0x140555200: stock (ActualAlpha = AlphaScaleBias (1, 0) applied, clamped), then the jump flag.
         let actual = alpha.clamp(0.0, 1.0);
         let jumped = self.previous_alpha <= 1.0e-5 && actual >= 0.99999;
         self.previous_alpha = actual;
-        if !(actual > 1.0e-5) {
+        if actual.partial_cmp(&1.0e-5).is_none_or(std::cmp::Ordering::is_le) {
             return;
         }
         self.report.alpha = actual;
@@ -185,7 +185,7 @@ impl CollTwoBoneIk {
         let effector_cs = e.transform_point(effector);
         let joint_target = component[self.joint_target_bone].transform_point(self.joint_target);
         let (mut r, mut j, mut f) = (component[self.root], component[self.joint], component[self.foot]);
-        solve_two_bone_ik(&mut r, &mut j, &mut f, joint_target, effector_cs, self.allow_stretching, self.start_stretch_ratio, self.max_stretch_scale);
+        solve_two_bone_ik(&mut r, &mut j, &mut f, joint_target, effector_cs, Stretch { allow: self.allow_stretching, start_ratio: self.start_stretch_ratio, max_scale: self.max_stretch_scale });
 
         let mut end_rotation = f.rotation;
         if self.maintain_hit_normal {

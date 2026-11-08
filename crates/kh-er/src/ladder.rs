@@ -259,7 +259,7 @@ pub fn from_bottom(state: i8, feet: Vec3, bottom: Vec3, top: Vec3) -> bool {
     }
 }
 
-#[cfg_attr(not(feature = "party"), allow(dead_code))]
+#[cfg(any(test, feature = "party"))]
 fn forward(yaw: f32) -> Vec3 {
     let (s, c) = yaw.to_radians().sin_cos();
     Vec3::new(c, s, 0.0)
@@ -269,7 +269,7 @@ fn forward(yaw: f32) -> Vec3 {
 /// left, then twice as far, each on a floor (`floor`: the floor near a point, None = none) the landing reaches in a clear
 /// line (`clear`); a place with no floor tries one `side` further from the edge (ahead), and at the last the landing
 /// itself (nobody falls).
-#[cfg_attr(not(feature = "party"), allow(dead_code))]
+#[cfg(any(test, feature = "party"))]
 pub fn slots(to: Vec3, facing: f32, n: usize, side: f32, floor: impl Fn(Vec3) -> Option<Vec3>, clear: impl Fn(Vec3, Vec3) -> bool) -> Vec<Vec3> {
     // (KH3 / UE axes: X forward, Y right, Z up; facing +X his right is +Y)
     let (f, right) = (forward(facing), forward(facing + 90.0));

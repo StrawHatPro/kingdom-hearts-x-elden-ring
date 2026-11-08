@@ -78,6 +78,21 @@ pub unsafe fn deal_hp(route: Route, chr: &mut ChrIns, attacker: Option<FieldInsH
     Outcome { dealt: before - after, hp_after: after, route: "direct HP write (STOPGAP)" }
 }
 
+/// (THE IN-GAME TESTER 2026-11-03, hitcap.rs) Gives `amount` HP back to a living `chr` (at most its maximum): what the
+/// game's pipeline took over a hit's expected HP. A dead body is left dead.
+///
+/// # Safety
+/// As `deal_hp`.
+pub unsafe fn give_back_hp(chr: &mut ChrIns, amount: i32) -> Outcome {
+    let (before, max) = (chr.modules.data.hp, chr.modules.data.max_hp);
+    if amount <= 0 || before <= 0 {
+        return Outcome { dealt: 0, hp_after: before, route: "nothing given back" };
+    }
+    let after = (before + amount).min(max.max(before));
+    chr.modules.data.as_mut().hp = after;
+    Outcome { dealt: before - after, hp_after: after, route: "given back to its HP directly" }
+}
+
 /// The stopgap for one hit record.
 ///
 /// # Safety

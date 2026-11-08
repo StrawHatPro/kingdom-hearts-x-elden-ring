@@ -41,8 +41,20 @@ pub fn host_key_id(index: usize, icon_id: Option<u32>) -> String {
     }
 }
 
-/// (IMPL_ER43) The icon number of a host key item's row id (`HOSTKEY_3.icon264` -> 264); other ids: `None`.
+/// (THE USER 2026-11-03) THE SHARED ELDEN RING ICON ROUTE: the picture id of Elden Ring's icon number `icon_id`
+/// (`EquipParamGoods.iconId` ...; `ERICON_2100`). Any screen's [`ItemArt::icon`] gives Elden Ring's own `MENU_ItemIcon_<n>`
+/// for it (the pack's `er_icons`, 160 x 160, drawn by `tres.controls.Icon` scaled to the KH3 clip it is loaded into). A
+/// host that knows a goods id finds its icon number in the game's params (kh-er `ericon::goods_icon_key`).
+pub fn er_icon_key(icon_id: u32) -> String {
+    format!("ERICON_{icon_id}")
+}
+
+/// (IMPL_ER43) The icon number of a host key item's row id (`HOSTKEY_3.icon264` -> 264); (THE USER 2026-11-03) and of an
+/// [`er_icon_key`] (`ERICON_2100` -> 2100); other ids: `None`.
 pub fn host_icon_id(id: &str) -> Option<u32> {
+    if let Some(n) = id.strip_prefix("ERICON_") {
+        return n.parse().ok();
+    }
     let (key, rest) = id.split_once('.')?;
     if !key.starts_with("HOSTKEY_") {
         return None;
@@ -84,6 +96,12 @@ impl ItemArt {
                 }
             }
         }
+        // (THE USER 2026-11-03) the host's items that wear an Elden Ring icon (the gloveworts): that picture under their key
+        for (key, icon_id) in icon_aliases() {
+            if let Some(texture) = art.host_icon(icon_id) {
+                art.icons.insert(key, texture);
+            }
+        }
         art
     }
 
@@ -116,9 +134,76 @@ impl ItemArt {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// (THE USER 2026-11-03: "gloveworts should use their Elden Ring icon in all of the KH menus and notifications") A HOST ITEM
+// THAT WEARS AN ELDEN RING ICON. The host registers (item key, Elden Ring icon number) pairs ([`set_icon_aliases`]; kh-host
+// does it from its item table's `er_icon` column: the gloveworts' `EquipParamGoods.iconId`, 2100 .. 2119), and every picture
+// map of the screens gets Elden Ring's own `MENU_ItemIcon_<n>` under that key: the camp menu's Items / Materials lists and
+// panes, the shops, the Spirit Tuning screen ([`ItemArt::load`]) and the HUD's OBTAINED popup ([`add_alias_icons`]). The
+// pictures are the pack's `er_icons` (tools/er_icons.js cuts them from the player's own install: 160 x 160, drawn by
+// `tres.controls.Icon` scaled to the clip's size, as Elden Ring's key items already are). No index or no file: no picture.
+
+static ALIASES: Mutex<Vec<(String, u32)>> = Mutex::new(Vec::new());
+
+/// The host's (item key, Elden Ring icon number) pairs; replaces the last list.
+pub fn set_icon_aliases(list: Vec<(String, u32)>) {
+    if let Ok(mut a) = ALIASES.lock() {
+        *a = list;
+    }
+}
+
+/// The registered pairs.
+pub fn icon_aliases() -> Vec<(String, u32)> {
+    ALIASES.lock().map(|a| a.clone()).unwrap_or_default()
+}
+
+/// The registered items' Elden Ring pictures, read from the pack's `er_icons`, put under their keys in a key -> picture map
+/// (the HUD's OBTAINED popup keeps its own map).
+pub fn add_alias_icons(pack: &mut Pack, icons: &mut HashMap<String, Arc<Texture>>) {
+    let aliases = icon_aliases();
+    if aliases.is_empty() {
+        return;
+    }
+    let Ok(data) = pack.data("er_icons") else { return };
+    for (key, icon_id) in aliases {
+        let Some(file) = data["icons"][icon_id.to_string()].as_str() else { continue };
+        if let Ok((width, height, rgba)) = crate::def::read_png(&pack.dir.join(file)) {
+            icons.insert(key, Arc::new(Texture { file: file.to_string(), width, height, rgba }));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// (THE USER 2026-11-03: "gloveworts should use their Elden Ring icon in all of the KH menus and notifications") A
+    /// registered key shows Elden Ring's picture of its icon number (the same file the key items use), loaded once; an
+    /// unregistered key keeps KH3's; a number the index lacks gives none.
+    #[test]
+    fn registered_keys_wear_their_elden_ring_icons() {
+        let dir = std::env::temp_dir().join(format!("kh_ui_alias_icons_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("er_icons")).unwrap();
+        let file = std::fs::File::create(dir.join("er_icons/02100.png")).unwrap();
+        let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), 2, 2);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.write_header().unwrap().write_image_data(&[200u8; 16]).unwrap();
+        let mut art = ItemArt { pack_dir: dir.clone(), ..ItemArt::default() };
+        art.host_icons.insert(2100, "er_icons/02100.png".into());
+        set_icon_aliases(vec![("MAT_GLOVE_GRAVE_01".into(), 2100), ("MAT_GLOVE_GHOST_01".into(), 2110)]);
+        assert_eq!(icon_aliases().len(), 2);
+        for (key, icon_id) in icon_aliases() {
+            if let Some(t) = art.host_icon(icon_id) {
+                art.icons.insert(key, t);
+            }
+        }
+        let grave = art.icon("MAT_GLOVE_GRAVE_01").expect("Elden Ring's icon 2100");
+        assert_eq!((grave.width, grave.height, grave.file.as_str()), (2, 2, "er_icons/02100.png"));
+        assert!(Arc::ptr_eq(&grave, &art.host_icon(2100).unwrap()), "one load, shared with the icon number");
+        assert!(art.icon("MAT_GLOVE_GHOST_01").is_none(), "no file for 2110 in this index: no picture");
+        set_icon_aliases(Vec::new());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn host_ids_map_to_the_game_keys() {
@@ -140,6 +225,8 @@ mod tests {
         assert_eq!(host_icon_id("HOSTKEY_3"), None);
         assert_eq!(host_icon_id("WEP_KEYBLADE_SO_00.upgrade.3"), None);
         assert_eq!(host_icon_id("HOSTKEY_3.iconX"), None);
+        // (THE USER 2026-11-03) the shared route: any Elden Ring icon number
+        assert_eq!((er_icon_key(2100).as_str(), host_icon_id(&er_icon_key(2100)), host_icon_id("ERICON_x")), ("ERICON_2100", Some(2100), None));
 
         let dir = std::env::temp_dir().join(format!("kh_ui_er_icons_{}", std::process::id()));
         std::fs::create_dir_all(dir.join("er_icons")).unwrap();
@@ -154,6 +241,7 @@ mod tests {
         assert_eq!((icon.width, icon.height, &icon.rgba[..]), (2, 1, &[255u8, 0, 0, 255, 0, 255, 0, 128][..]));
         assert!(Arc::ptr_eq(&icon, &art.icon("HOSTKEY_5.icon264").unwrap()), "loaded once");
         assert!(art.icon("HOSTKEY_0.icon265").is_none() && art.icon("HOSTKEY_0.icon7").is_none() && art.icon("HOSTKEY_0").is_none());
+        assert!(Arc::ptr_eq(&icon, &art.icon(&er_icon_key(264)).unwrap()), "the shared route: the same picture");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

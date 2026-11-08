@@ -39,7 +39,7 @@ fn safe_normal(d: V3) -> V3 {
     if l2 == 1.0 || l2.is_nan() {
         return [d[0], d[1], d[2]];
     }
-    if !(l2 >= EPS8) {
+    if l2.partial_cmp(&EPS8).is_none_or(std::cmp::Ordering::is_lt) {
         return [0.0, 0.0, 0.0];
     }
     let y = rsqrt(l2);
@@ -48,7 +48,7 @@ fn safe_normal(d: V3) -> V3 {
 
 /// shortest arc from +X to the unit vector v, as coded (143af60f6..143af6163)
 fn arc_from_x(v: V3) -> Q4 {
-    if !(v[0] >= M9999) {
+    if v[0].partial_cmp(&M9999).is_none_or(std::cmp::Ordering::is_lt) {
         return [0.0, 1.0, 0.0, 0.0];
     }
     let s = sqrt((v[0] + v[0]) + 2.0);
@@ -61,7 +61,7 @@ fn arc_from_x(v: V3) -> Q4 {
 fn qnorm_safe(v: Q4) -> Q4 {
     let (s0, s1, s2, s3) = (v[0] * v[0], v[1] * v[1], v[2] * v[2], v[3] * v[3]);
     let n = (s1 + s3) + (s0 + s2);
-    if !(EPS8 <= n) {
+    if EPS8.partial_cmp(&n).is_none_or(std::cmp::Ordering::is_gt) {
         return [0.0, 0.0, 0.0, 1.0];
     }
     let y = rsqrt(n);
@@ -97,15 +97,15 @@ pub fn fn_143afb8e0(rec: &mut Kdi) {
     let _ = n;
     let (mut s_t, mut s_r) = (0.0f32, 0.0f32);
     for e in &rec.f8 {
-        s_t = s_t + e.f30;
-        s_r = s_r + e.f34;
+        s_t += e.f30;
+        s_r += e.f34;
     }
     for e in rec.f8.iter_mut() {
         if s_t > 0.0 {
-            e.f30 = e.f30 / s_t;
+            e.f30 /= s_t;
         }
         if s_r > 0.0 {
-            e.f34 = e.f34 / s_r;
+            e.f34 /= s_r;
         }
     }
 }
@@ -150,7 +150,7 @@ pub fn setup_pin_kdi(sc: &mut Scene, links: &[LinkDesc], base: i32) {
 /// 0x142d90ca0 (rcx out, rdx a, r8 b, xmm3 alpha): stock FQuat::Slerp_NotNormalized
 pub fn fn_142d90ca0(a: Q4, b: Q4, alpha: f32) -> Q4 {
     let mut raw = ((a[1] * b[1]) + (a[0] * b[0])) + (a[2] * b[2]);
-    raw = raw + (a[3] * b[3]);
+    raw += a[3] * b[3];
     let ad = raw.abs();
     let (s0, mut s1);
     if ad >= P9999 {
@@ -159,7 +159,7 @@ pub fn fn_142d90ca0(a: Q4, b: Q4, alpha: f32) -> Q4 {
         s1 = alpha;
     } else {
         let mut x: f32 = -1.0;
-        if !(ad < -1.0) {
+        if ad.partial_cmp(&-1.0).is_none_or(std::cmp::Ordering::is_ge) {
             x = if ad < 1.0 { ad } else { 1.0 }; // comiss ad,-1 ; jb keep -1 ; minss ad,1
         }
         if ad.is_nan() {
@@ -170,7 +170,7 @@ pub fn fn_142d90ca0(a: Q4, b: Q4, alpha: f32) -> Q4 {
         s0 = ((((1.0 - alpha) * om) as f64).sin() as f32) * inv;
         s1 = (((om * alpha) as f64).sin() as f32) * inv;
     }
-    if !(raw >= 0.0) {
+    if raw.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_lt) {
         s1 = -s1; // comiss raw,0 ; jae keep
     }
     [(s1 * b[0]) + (s0 * a[0]), (s1 * b[1]) + (s0 * a[1]), (s1 * b[2]) + (s0 * a[2]), (s1 * b[3]) + (s0 * a[3])]
@@ -183,7 +183,7 @@ fn twist_normal(v: V3) -> V3 {
     if l == 1.0 {
         return v;
     }
-    if !(1e-8 <= l) {
+    if 1e-8.partial_cmp(&l).is_none_or(std::cmp::Ordering::is_gt) {
         return [0.0; 3];
     }
     let k = rsqrt(l);
@@ -196,7 +196,7 @@ fn twist_acos(c: f32) -> f32 {
     let poly = ((1.5707288 - (a * 0.2121144)) + ((a * a) * 0.074261)) - (((a * a) * a) * 0.0187293);
     let r = sqrt(1.0 - a) * poly;
     if c < 0.0 {
-        3.1415927 - r
+        std::f32::consts::PI - r
     } else {
         r
     }
@@ -224,9 +224,9 @@ pub fn fn_143b03380(sc: &mut Scene, p: usize) {
         let n = sc.f0[c].f2e0[k];
         let e = twist_normal(sub(sc.f0[n].f0, sc.f0[c].f0));
         let w = sc.f0[c].f300[k] as f32;
-        sx = sx + (((e[2] * d[1]) - (e[1] * d[2])) * w);
-        sz = sz + (((e[1] * d[0]) - (e[0] * d[1])) * w);
-        sy = sy + (((e[0] * d[2]) - (e[2] * d[0])) * w);
+        sx += ((e[2] * d[1]) - (e[1] * d[2])) * w;
+        sz += ((e[1] * d[0]) - (e[0] * d[1])) * w;
+        sy += ((e[0] * d[2]) - (e[2] * d[0])) * w;
     }
     let s0 = twist_normal([sx, sy, sz]);
     let dot = ((s0[1] * d[1]) + (s0[0] * d[0])) + (s0[2] * d[2]);
@@ -235,21 +235,21 @@ pub fn fn_143b03380(sc: &mut Scene, p: usize) {
     let triple = ((((zy * v[2]) - (zz * v[1])) * d[0]) + (((zz * v[0]) - (zx * v[2])) * d[1])) + (((zx * v[1]) - (zy * v[0])) * d[2]);
     let ang = if triple < 0.0 { -twist_acos(cosang) } else { twist_acos(cosang) };
     let target = sc.f0[c].f318;
-    if !(0.0001 < (ang - target).abs()) {
+    if 0.0001.partial_cmp(&((ang - target).abs())).is_none_or(std::cmp::Ordering::is_ge) {
         return;
     }
     let mut h = (ang - target) * 0.5;
     let k = if h < 0.0 { (h * 0.15915494) - 0.5 } else { (h * 0.15915494) + 0.5 };
-    h = h - ((k as i32) as f32 * 6.2831855);
+    h -= (k as i32) as f32 * 6.2831855;
     let mut sign = -1.0f32;
     if h <= 1.5707964 {
         if -1.5707964 <= h {
             sign = 1.0;
         } else {
-            h = -3.1415927 - h;
+            h = -std::f32::consts::PI - h;
         }
     } else {
-        h = 3.1415927 - h;
+        h = std::f32::consts::PI - h;
     }
     let h2 = h * h;
     let sn = (((((((2.7525562e-06 - (h2 * 2.3889859e-08)) * h2) - 0.00019840874) * h2) + 0.008333331) * h2 - 0.16666667) * h2 + 1.0) * h;
@@ -309,9 +309,9 @@ pub fn fn_143b0cb60_kdi_pass(sc: &mut Scene) {
             let (d, w) = (&sc.f0[e.f0], e.f30);
             let v = [d.f140[0] * e.f8[0], d.f140[1] * e.f8[1], d.f140[2] * e.f8[2]];
             let r = qrot(d.f20, v);
-            ax = ax + ((r[0] + d.f0[0]) * w);
-            ay = ay + ((r[1] + d.f0[1]) * w);
-            az = az + ((r[2] + d.f0[2]) * w);
+            ax += (r[0] + d.f0[0]) * w;
+            ay += (r[1] + d.f0[1]) * w;
+            az += (r[2] + d.f0[2]) * w;
         }
         sc.f0[c].f0 = [ax, ay, az]; // 143b0df68
         sc.f0[c].f160 = sc.f0[c].f20; // 143b0df7e
@@ -327,8 +327,8 @@ pub fn fn_143af6960(sc: &Scene, pin: usize) -> V3 {
     [r[0] + p.f0[0], r[1] + p.f0[1], r[2] + p.f0[2]]
 }
 
-/// 0x143b1a4d0 (xmm0 r [only passed on], rdx link): hard rest length for the child, recursive
-pub fn fn_143b1a4d0(sc: &mut Scene, r: f32, link: usize) {
+/// 0x143b1a4d0 (rdx link; the game's xmm0 r is only passed on, so it is not taken here): hard rest length for the child, recursive
+pub fn fn_143b1a4d0(sc: &mut Scene, link: usize) {
     let l = sc.f40[link];
     let (p1, p2) = (l.f0, l.f8);
     let (a, b) = (sc.f0[p1].f0, sc.f0[p2].f0);
@@ -345,7 +345,7 @@ pub fn fn_143b1a4d0(sc: &mut Scene, r: f32, link: usize) {
     }
     for k in 0..sc.f0[p2].f1a8 {
         let next = sc.f0[p2].f1b0[k];
-        fn_143b1a4d0(sc, r, next);
+        fn_143b1a4d0(sc, next);
     }
 }
 
@@ -376,7 +376,7 @@ pub fn fn_143b15610(r: f32, core: &mut Core) {
         let p = core.f3778.f758[i].f8;
         for k in 0..core.f3778.f0[p].f1a8 {
             let l = core.f3778.f0[p].f1b0[k];
-            fn_143b1a4d0(&mut core.f3778, r, l);
+            fn_143b1a4d0(&mut core.f3778, l);
         }
     }
     for i in 0..core.f3778.f768.len() {
@@ -384,7 +384,7 @@ pub fn fn_143b15610(r: f32, core: &mut Core) {
         let p = core.f3778.f768[i].f0;
         for k in 0..core.f3778.f0[p].f1a8 {
             let l = core.f3778.f0[p].f1b0[k];
-            fn_143b1a4d0(&mut core.f3778, r, l);
+            fn_143b1a4d0(&mut core.f3778, l);
         }
     }
 }

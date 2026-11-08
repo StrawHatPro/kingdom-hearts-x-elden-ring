@@ -84,6 +84,14 @@ pub fn yaw_kh_of_er_quat(q: Quat) -> f32 {
     yaw_kh_of_er_dir(q * MODEL_FORWARD)
 }
 
+/// (AUDIT-B W-FIN) A rotation (the 3 x 3 of a model node's world matrix, column vectors, Elden Ring axes; any scale in it
+/// is taken out) as the core's rotation: the same turn with the axes relabelled (`kh = A er`, A = the map above).
+pub fn rot_er_to_kh(m: glam::Mat3) -> Quat {
+    let col = |v: Vec3| unit_er_to_kh(v.normalize_or_zero());
+    // the basis vectors of KH3 x / y / z are Elden Ring z / x / y: their images, relabelled
+    Quat::from_mat3(&glam::Mat3::from_cols(col(m.z_axis), col(m.x_axis), col(m.y_axis))).normalize()
+}
+
 /// The moving frame between the two spaces: where KH3's origin is in Elden Ring's physics space.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Frame {
@@ -160,6 +168,17 @@ mod tests {
         }
         // Yaw 90 is to the right of yaw 0 in KH3; in Elden Ring that is +X.
         assert!(close(facing_er(90.0), Vec3::X));
+    }
+
+    /// (AUDIT-B W-FIN) A node turned in Elden Ring space turns the same way in KH3 space: its images of the axes agree.
+    #[test]
+    fn rotations_relabel_like_directions() {
+        let m = glam::Mat3::from_quat(Quat::from_rotation_y(0.7) * Quat::from_rotation_x(-0.4)) * 1.3;
+        let q = rot_er_to_kh(m);
+        for v in [Vec3::X, Vec3::Y, Vec3::Z, Vec3::new(0.3, -1.0, 2.0)] {
+            let er = (m * unit_kh_to_er(v)).normalize() * v.length();
+            assert!((q * v - unit_er_to_kh(er)).length() < 1e-4, "{v}");
+        }
     }
 
     #[test]

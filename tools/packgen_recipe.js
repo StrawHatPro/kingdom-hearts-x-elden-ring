@@ -52,7 +52,7 @@ const VFX_ROOTS = ['party/vfx', 'xsi/vfx'];
 // Names, defines and arguments only (our build's), from this pack's folders and the NF stream's rebuild plan
 // (build/sora_tmp/party/NF/plan: every character pixel shader the DLL can load, with its defines and materials source).
 if (mode === 'shaders') {
-  const MODES = [['skincg', 'skin_cg.vs.dxil'], ['velo88', 'skin_v88.vs.dxil'], ['finale', 'finale.ps.dxil'], ['hycap', 'hycap.ps.dxil'], ['h91', 'h91.vs.dxil'], ['probe3', 'probe3.ps.dxil'], ['probe4', 'probe4.ps.dxil'], ['zdraw', 'zdraw.vs.dxil']];
+  const MODES = [['skincg', 'skin_cg.vs.dxil'], ['velo88', 'skin_v88.vs.dxil'], ['finale', 'finale.ps.dxil'], ['hycap', 'hycap.ps.dxil'], ['h91', 'h91.vs.dxil'], ['probe3', 'probe3.ps.dxil'], ['probe4', 'probe4.ps.dxil'], ['zdraw', 'zdraw.vs.dxil'], ['bluehour', 'bluehour.ps.dxil'] /* (AUDIT-C TF) */, ['iceshell', 'iceshell.vs.dxil'] /* (FREEZE-FX) */];
   const dirs = [];
   const add = (pack, args) => {
     const er = path.join(DEVPACK, pack, 'materials', 'er'); if (!fs.existsSync(er)) return;
@@ -61,15 +61,23 @@ if (mode === 'shaders') {
   add('', []);
   for (const o of fs.readdirSync(path.join(DEVPACK, 'outfits')).sort()) add('outfits/' + o, []);
   for (const m of fs.readdirSync(path.join(DEVPACK, 'party')).sort()) if (fs.existsSync(path.join(DEVPACK, 'party', m, 'materials', 'er'))) add('party/' + m, ['--party', '--main-pack', 'build/sora_pack']);
+  // (KEYBLADES) the keyblades' and the Moogle shop's own libraries (tools/sora_keyblades_pack.js), built as the party's
+  // (KBFX) the keyblades' own: drawn in SORA's library (his vertex layout), so not as the party's: kb_dirs (tools/packgen_shaders.js
+  // 2b: tools/splice_kb_wgsl.js + tools/kb_shader_jobs.js, kh-shaderc --rebuild, then --only tex)
+  for (const d of ['npc/shop']) if (fs.existsSync(path.join(DEVPACK, d, 'materials', 'materials.json'))) { fs.mkdirSync(path.join(DEVPACK, d, 'materials', 'er'), { recursive: true }); add(d, ['--party', '--main-pack', 'build/sora_pack']); }
+  const kbDirs = fs.existsSync(path.join(DEVPACK, 'keyblades', 'materials', 'materials.json')) ? [{ pack: 'build/sora_pack/keyblades', main: 'build/sora_pack', er: 'keyblades/materials/er', work: 'build/packgen/kb' }] : [];
   const NF = path.join(ROOT, 'build', 'sora_tmp', 'party', 'NF', 'plan');
   const plan = readJson(path.join(NF, 'groups.json'));
+  // (SETUP-TOOLS) a --party folder with its own native set (shaders_hy3.json: the Moogles n_ex014 / n_ex028, ER-NATIVE) that no
+  // rebuild group writes gets kh-shaderc --only hy3 after its whole build (FINAL's final_post.ps1 did it by hand)
+  for (const d of dirs) if (d.args.includes('--party') && fs.existsSync(path.join(DEVPACK, d.er, 'shaders_hy3.json')) && !plan.groups.some((g) => g.er === d.er)) d.modes.push('hy3');
   const groups = plan.groups.map((g) => ({ id: g.id, er: g.er, pack: g.pack, materials: g.materials, args: g.args, copies: g.copies, jobs: readJson(path.join(NF, g.id + '.json')).jobs.map((j) => ({ name: j.name, stage: j.stage, entry: j.entry, defines: j.defines })) }));
   // the hair translations the plan's groups read (er87 / er91 genh), from the folder's materials: the scripts of the hair
   // streams (tools/research er/er87/tools, er/er91/tools)
   const hairSrc = (name) => { const m = /^(main|[a-z0-9]+?)(?:_(cg|cg2|real))?$/.exec(name); const base = m[1] === 'main' ? 'build/sora_pack/materials' : `build/sora_pack/outfits/${m[1]}/materials`; return { wgsl: `${base}/materials${m[2] ? '_' + m[2] : ''}.wgsl`, json: `${base}/materials.json` }; };
   const hair = { er87: [], er91: [] };
   for (const k of ['er87', 'er91']) for (const f of fs.readdirSync(path.join(ROOT, 'build', 'sora_tmp', 'er', k, 'genh')).sort()) { const n = f.replace(/\.wgsl$/, ''); hair[k].push({ name: n, ...hairSrc(n) }); }
-  const vfx = ['build/sora_pack', 'build/sora_pack/party', 'build/sora_pack/xsi'].filter((p) => fs.existsSync(path.join(ROOT, p, 'vfx', 'er')));
+  const vfx = ['build/sora_pack', 'build/sora_pack/party', 'build/sora_pack/xsi', 'build/sora_pack/keyblades'].filter((p) => fs.existsSync(path.join(ROOT, p, 'vfx', 'er'))); // (KEYBLADES) + the keyblades' effect root
   // the outfits' own shader sets (ER81 / ER85: tools/sora_material_pack.js --own-khs): outfit, post-process material,
   // suffix, the world whose controller is the preset (from each set's own_shaders.json: its world preset's source names the
   // map), the KHS_Control values chosen against a reference (--control)
@@ -97,10 +105,36 @@ if (mode === 'shaders') {
     const er = path.join(DEVPACK, root, 'er'); if (!fs.existsSync(er)) continue;
     for (const f of fs.readdirSync(er).filter((x) => /^shaders_[a-z0-9]+\.json$/.test(x)).sort()) {
       const fam = f.slice(8, -5);
-      for (const s of readJson(path.join(er, f)).shaders) vfxOverlays.push({ root: 'build/sora_pack/' + root, stage: `${table}_${fam}`, table: 'materials.wgsl', only: s.name.replace(new RegExp('_' + fam + '$'), ''), file: s.file });
+      // (SETUP-TOOLS) every built file of the family (`<name>_<fam>.<stage>.dxil`), not only the index's: kh-shaderc makes an
+      // owner's fog / native / lit variants (PARTY-NATIVE: f*, g*, n*, l*) beside it, and the DLL reads them by name
+      const listed = readJson(path.join(er, f)).shaders.map((s) => s.file);
+      const files = [...new Set([...listed, ...fs.readdirSync(er).filter((x) => x.endsWith(`_${fam}.ps.dxil`) || x.endsWith(`_${fam}.vs.dxil`))])].sort();
+      for (const file of files) vfxOverlays.push({ root: 'build/sora_pack/' + root, stage: `${table}_${fam}`, table: 'materials.wgsl', only: file.slice(0, file.indexOf('.')).replace(new RegExp('_' + fam + '$'), ''), file });
     }
   }
-  const out = { about: 'tools/packgen_shaders.js: the kh-shaderc runs of the pack (tools/packgen_recipe.js shaders). Our build\'s names, defines and arguments only.', char_dirs: dirs, hair, nf_groups: groups, vfx_roots: vfx, vfx_overlays: vfxOverlays };
+  // (KBFX) vfx_check_roots: the roots whose every translated owner must be built (the keyblades' own table: tools/packgen_shaders.js 4)
+  // (SETUP-TOOLS) (AUDIT-C ANLOOK) the anti-mode owners an outfit got (tools/outfit_anti_owners.js: materials named <slot>@anti):
+  // their every set (the job list the tool writes) and the hair twin's ER91 hair path (over the er91 genh translation;
+  // tools/packgen/recipes/anti_h91_<outfit>.json, our names and defines)
+  const anti = [];
+  for (const o of fs.readdirSync(path.join(DEVPACK, 'outfits')).sort()) {
+    const mj = path.join(DEVPACK, 'outfits', o, 'materials', 'materials.json');
+    if (!fs.existsSync(mj) || !Object.keys(readJson(mj).materials).some((n) => n.endsWith('@anti'))) continue;
+    anti.push({ pack: `build/sora_pack/outfits/${o}`, materials: `build/sora_pack/outfits/${o}/materials/materials.wgsl`, jobs: `build/packgen/anti_jobs_${o}.json`, er: `outfits/${o}/materials/er` });
+    if (fs.existsSync(path.join(ROOT, 'tools', 'packgen', 'recipes', `anti_h91_${o}.json`))) anti.push({ pack: `build/sora_pack/outfits/${o}`, materials: `build/sora_tmp/er/er91/genh/${o}.wgsl`, jobs: `tools/packgen/recipes/anti_h91_${o}.json`, er: `outfits/${o}/materials/er` });
+  }
+  // (SETUP-TOOLS) (MIMIC-BOSS; DEPLOY3 mimic_writers.ps1) the Mimic Tear's G-buffer writers (--only mimic / mimicform) of every
+  // translation that has them (its er/shaders_mimic*.json index), and the pool (--only mimicpool)
+  const mimic = [];
+  for (const d of dirs.filter((x) => !x.args.includes('--party'))) {
+    const er = path.join(DEVPACK, d.er);
+    const suffixes = [...new Set(fs.readdirSync(er).map((x) => /^shaders_mimic(?:form)?(?:_([a-z0-9]+))?.json$/.exec(x)).filter(Boolean).map((m) => m[1] || ''))].sort();
+    for (const s of suffixes) mimic.push({ pack: d.pack, er: d.er, suffix: s || null });
+  }
+  const mimicPool = fs.existsSync(path.join(DEVPACK, 'materials', 'er', 'mmpool.ps.dxil')) ? { pack: 'build/sora_pack', er: 'materials/er' } : null;
+  // (SETUP-TOOLS) (PARTY-NATIVE) the effects' fog-copy and lit-kit shaders (kh-shaderc --only fxfog / --only fxlit), into the main root
+  const fxCopies = ['fxfog', 'fxlit'].filter((m) => fs.readdirSync(path.join(DEVPACK, 'vfx', 'er')).some((x) => x.startsWith(m))).map((m) => ({ only: m, er: 'vfx/er' }));
+  const out = { about: 'tools/packgen_shaders.js: the kh-shaderc runs of the pack (tools/packgen_recipe.js shaders). Our build\'s names, defines and arguments only.', char_dirs: dirs, kb_dirs: kbDirs, hair, nf_groups: groups, vfx_roots: vfx, vfx_overlays: vfxOverlays, vfx_check_roots: vfx.filter((p) => p === 'build/sora_pack/keyblades'), anti_jobs: anti, mimic_sets: mimic, mimic_pool: mimicPool, fx_copies: fxCopies };
   const text = JSON.stringify(out, null, 1) + '\n';
   if (JP.test(text)) throw new Error('Japanese text in the shader recipe');
   fs.mkdirSync(path.join(ROOT, 'tools', 'packgen', 'recipes'), { recursive: true });
@@ -167,6 +201,11 @@ const EXCLUDE = [
   /^audio\/outfits\//,                          // the KH1 outfit's own voice (the user's clips): not in a release
   /(^|\/)vfx\/shaders\/(shading|materials)[^/]*\.(json|wgsl)$/, // the effect tables: the replay's vfx-tables step (and the streams' overlays)
   /^xsi\/weapons\/shards_(vfb|xwd)\/[^/]+\.glb$/, // the fragment models: the replay's xsi-shards step (after the recipes)
+  // (SETUP-TOOLS) the keyblades' effect root and manifest: the replay's keyblades-effects step makes them again after the recipes
+  // (tools/packgen.js), so a recipe for them would be overwritten
+  /^keyblades\/vfx\//, /^keyblades\/manifest\.json$/,
+  // (SETUP-TOOLS) development leftovers in the pack that nothing reads (a backup copy; the KH1 HUD face trial of tools/sora_hud_faces.js)
+  /\.p9b-backup$/, /^ui\/movies\/FacePcEx1Sora01Made\.json$/, /^ui\/textures\/Scaleform\/01_hud\/face\/PcEx1Sora01Made\.png$/,
 ];
 // the streams' own outputs the replay makes before the recipes (tools/packgen.js replay: zetta-audio, zetta-clips), by their
 // path from the repository root
@@ -175,13 +214,20 @@ const STREAM_OUT = ['build/sora_tmp/party/ZETTA/pack'];
 // against the overlay translator runs of the sandbox (tools/packgen_overlays.js: build/packgen/vfx_stage/<run>) and the
 // root tables: written as overlays_<root>.json (tools/packgen_replay.js apply --overlays)
 const OVERLAYS = args.includes('--overlays');
+// (SETUP-TOOLS) --late: the third pass, the keyblades' effect root and manifest (the replay's keyblades-effects step makes them
+// again after the file recipes, then keyblades-cubes / keyblades-attach): what the development streams changed there after the
+// keyblades pack (AUDIT-B's crack effects, AUDIT-A's shield effects, VFX-RING's mesh, the table), against the pack as those
+// steps left it: written as late_<root>.json (tools/packgen_replay.js apply --late, the replay's replay-late step)
+const LATE = args.includes('--late');
+const LATE_RE = [/^keyblades\/vfx\//, /^keyblades\/manifest\.json$/];
+const LATE_SKIP = [/\.dxil$/i, /\/er\/shaders[^/]*\.json$/, /\/er\/tex\/[^/]+\.dds$/];
 const OVERLAY = [/(^|\/)vfx\/shaders\/(shading|materials)_[a-z0-9]+\.(json|wgsl)$/, /(^|\/)vfx\/er\/shaders_[a-z0-9]+\.json$/];
 const STAGE_REL = 'build/packgen/vfx_stage';
 const corpusRoots = OVERLAYS ? [['root', path.join(SB, STAGE_REL), STAGE_REL]] : [['pack', SBPACK], ['scratch', SCRATCH], ...STREAM_OUT.map((p) => ['root', path.join(SB, p), p])];
 const devFiles = walkFiles(DEVPACK);
 const targets = [];
 for (const r of devFiles) {
-  if (OVERLAYS ? !OVERLAY.some((re) => re.test(r)) : EXCLUDE.some((re) => re.test(r))) continue;
+  if (LATE ? (!LATE_RE.some((re) => re.test(r)) || LATE_SKIP.some((re) => re.test(r))) : OVERLAYS ? !OVERLAY.some((re) => re.test(r)) : EXCLUDE.some((re) => re.test(r))) continue;
   const sb = path.join(SBPACK, r);
   const want = fs.readFileSync(path.join(DEVPACK, r));
   if (fs.existsSync(sb) && fs.readFileSync(sb).equals(want)) continue; // the pack tools make it already
@@ -190,13 +236,16 @@ for (const r of devFiles) {
 // AUX: files outside the pack the later steps read (the streams' effect pack manifests: tools/sora_vfx_shaders.js reads
 // their texture records for the party and XS tables). Written to their own path (relative to the repository root).
 const AUX = ['build/sora_tmp/party/impl_e/vfx_party/manifest.json', ...['DON-KIT', 'DON-MAGIC', 'ZETTA', 'DON-SPELLB', 'AUD', 'HYB', 'YFX'].map((s) => `build/sora_tmp/party/${s}/pack/vfx/manifest.json`)];
-if (!OVERLAYS) for (const a of AUX) if (fs.existsSync(path.join(DEVROOT, a))) targets.push('aux:' + a);
+if (!OVERLAYS && !LATE) for (const a of AUX) if (fs.existsSync(path.join(DEVROOT, a))) targets.push('aux:' + a);
 console.log(`targets: ${targets.length} files the pack tools do not make as they are`);
 
 // ---------------------------------------------------------------- corpus index (by hash; JSON values on demand)
 const byHash = new Map(); const corpusFiles = [];
 for (const [tag, dir, rel0] of corpusRoots) for (const f of walkFiles(dir)) {
   if (OVERLAYS && !/^[a-z0-9_]+\/(shading\.json|materials\.wgsl)$/.test(f)) continue; // (the runs' tables only)
+  // (SETUP-TOOLS) before the late pass the keyblades' effect root is the pack step's first pass, which the replay's
+  // keyblades-effects step makes again: no recipe may take values from it (they were not the same from one build to the next)
+  if (!LATE && tag === 'pack' && /^keyblades\/vfx\//.test(f)) continue;
   const p = path.join(dir, f); const st = fs.statSync(p); if (st.size > 64 << 20) continue;
   const id = tag === 'root' ? `root:${rel0}/${f}` : `${tag}:${f}`; corpusFiles.push(id);
   const h = sha(fs.readFileSync(p)); if (!byHash.has(h)) byHash.set(h, id);
@@ -407,11 +456,11 @@ for (let r of targets) {
   unresolved.push([r, 'binary file not in the corpus']);
 }
 stats.unresolved = unresolved.length;
-const PREFIX = OVERLAYS ? 'overlays' : 'files';
+const PREFIX = LATE ? 'late' : OVERLAYS ? 'overlays' : 'files';
 fs.mkdirSync(OUTDIR, { recursive: true });
 for (const f of fs.readdirSync(OUTDIR)) if (f.startsWith(PREFIX + '_') && f.endsWith('.json')) fs.unlinkSync(path.join(OUTDIR, f));
 for (const [root, recs] of Object.entries(recipes)) { const text = JSON.stringify({ root, files: recs }) + '\n'; if (JP.test(text)) throw new Error(`${PREFIX}_${root}: Japanese text in a recipe`); fs.writeFileSync(path.join(OUTDIR, `${PREFIX}_${root.replace(/\//g, '_')}.json`), text); }
 const byReason = {}; for (const [r, why, inCore] of unresolved) { const k = rootOf(r) + (inCore ? ' (the pack tools make another version)' : ' (missing)') + ': ' + why.replace(/^\d+ values/, 'N values'); byReason[k] = (byReason[k] || 0) + 1; }
-fs.writeFileSync(path.join(OUTDIR, OVERLAYS ? 'report_overlays.json' : 'report.json'), JSON.stringify({ about: 'tools/packgen_recipe.js compile: what the replay recipes make and what they cannot', stats, unresolved_by_reason: byReason, unresolved: unresolved.map(([r, why, inCore]) => ({ file: r, why, pack_tools_make_another_version: !!inCore })) }, null, 1) + '\n');
+fs.writeFileSync(path.join(OUTDIR, LATE ? 'report_late.json' : OVERLAYS ? 'report_overlays.json' : 'report.json'), JSON.stringify({ about: 'tools/packgen_recipe.js compile: what the replay recipes make and what they cannot', stats, unresolved_by_reason: byReason, unresolved: unresolved.map(([r, why, inCore]) => ({ file: r, why, pack_tools_make_another_version: !!inCore })) }, null, 1) + '\n');
 console.log(JSON.stringify(stats));
 for (const [k, v] of Object.entries(byReason).sort()) console.log(String(v).padStart(6), k);

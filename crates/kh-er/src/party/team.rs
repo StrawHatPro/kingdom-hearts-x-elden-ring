@@ -190,7 +190,6 @@ pub fn zetta_cinematic() -> bool {
 /// THE CAMERA LAYERING of one fixed step (cam.rs through `TeamCam`, and the offline harness): kh-partyhost's
 /// `team_camera` (the step's events and the link pawns' actor actions into the state-event cameras, then their view
 /// with the collision pass against `world`) over `view`.
-#[allow(clippy::too_many_arguments)]
 pub fn layer(rt: &mut PartyRuntime, dt: f32, events: &[kh_core::Event], sora: &Output, view: &mut CameraView, world: &dyn kh_core::World, stick: CameraInput) -> LayerOut {
     let reset_field = rt.team_camera(dt, events, sora, view, world, stick);
     // (ZFIN round 7) Zettaflare's event white (the test level's white plate, finish.rs) and its cinematic (the HUD hidden)

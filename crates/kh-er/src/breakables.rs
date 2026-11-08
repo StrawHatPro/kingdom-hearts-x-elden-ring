@@ -344,7 +344,7 @@ fn utf16_at(at: usize) -> Option<String> {
     if !probe::read(at, &mut b) {
         return None;
     }
-    let units: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|u| *u != 0).collect();
+    let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|u| *u != 0).collect();
     let s = String::from_utf16_lossy(&units);
     (!s.is_empty() && s.chars().all(|c| c.is_ascii_graphic())).then_some(s)
 }
@@ -640,7 +640,7 @@ pub fn frame(t: &mut crate::targets::ErTargets, control: &Control, projectiles: 
         p.next_scan = p.clock + rules.scan_interval * 0.5;
         p.scan_no += 1;
         let layer = filters[p.scan_no as usize % 2];
-        if p.scan_no % 20 == 0 {
+        if p.scan_no.is_multiple_of(20) {
             p.revalidate();
         }
         p.scan(sora, 16, layer);

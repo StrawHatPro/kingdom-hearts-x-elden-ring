@@ -1116,15 +1116,14 @@ impl EnemyReaction {
                 self.sub = 3;
                 return false;
             }
-            3 | 4 | 5 => {
+            3..=5 => {
                 self.turn(self.facing, dt * 30.0);
-                if self.sub == 3 {
-                    if self.anim_end() {
+                if self.sub == 3
+                    && self.anim_end() {
                         self.play(Clip::BlowLoop);
                         self.timer = P.parabola_loop_min_time;
                         self.sub = 4;
                     }
-                }
                 if self.sub == 4 {
                     self.timer -= dt;
                     if self.timer <= 0.0 {

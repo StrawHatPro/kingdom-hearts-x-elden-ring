@@ -40,7 +40,7 @@ pub fn diff(a: &[u8], b: &[u8], w: usize, out: Option<&Path>) -> Diff {
     let mut d = Diff { max: 0, mean: 0.0, over8: 0, over32: 0, pixels: a.len() / 4 };
     let mut img = Vec::with_capacity(a.len());
     let mut sum = 0u64;
-    for (p, q) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+    for (p, q) in a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0) {
         let m = (0..3).map(|i| (p[i] as i32 - q[i] as i32).unsigned_abs()).max().unwrap();
         d.max = d.max.max(m);
         sum += m as u64;

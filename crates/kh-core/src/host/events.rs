@@ -142,6 +142,15 @@ pub enum EventKind {
     /// of the state-event camera blueprints: a `TresAnimNotifyState_BpEvent` of Sora's clip `seq`
     /// began (`begin`) or ended. Emitted by the FR states for their clips.
     AnimBpEvent { seq: &'static str, param: i32, begin: bool },
+    /// (THE USER 2026-11-02: "Give Sora the ability to 'Summon' from the command menu, but he uses Elden Ring's spirit
+    /// ashes") The Summon command (`command::summon`): the chant began (KH3's Link camera starts on it), its call came
+    /// (the host summons equipped `slot`'s ash now), or "Unsummon" was chosen. `mp`: at Chant the MP cost paid (the refund's base), at Unsummon the MP already given back (the
+    /// host ends the spirit).
+    Summon { phase: crate::command::summon::SummonPhase, slot: u8, mp: i32 },
+    /// (AUDIT-C) A face play the CODE asks for (not a clip notify): FUN_1405A8980(pawn+0x440, row, blend -1 = the clip's own,
+    /// 0, rate 1, 0) on both face slots, by the face anim set's row name (EndStyle 0x14141CA20 case 0x8B: "ANTI_01" out of
+    /// battle, "ANTI_02" in battle). The pose host plays it (kh-anim `Animator::play_face_row`).
+    FaceAnim { row: &'static str },
 }
 
 impl EventKind {
@@ -185,6 +194,8 @@ impl EventKind {
             EventKind::PlayerSpecificAction { .. } => "specific-action",
             EventKind::TeamAttack { .. } => "team-attack",
             EventKind::AnimBpEvent { .. } => "anim-bp-event",
+            EventKind::Summon { .. } => "summon",
+            EventKind::FaceAnim { .. } => "face-anim",
         }
     }
 }

@@ -32,7 +32,7 @@ mod oodle {
             if module.is_null() {
                 return None;
             }
-            let f = GetProcAddress(module, b"OodleLZ_Decompress\0".as_ptr());
+            let f = GetProcAddress(module, c"OodleLZ_Decompress".as_ptr().cast());
             (!f.is_null()).then(|| std::mem::transmute::<*mut c_void, Decompress>(f))
         }
     }

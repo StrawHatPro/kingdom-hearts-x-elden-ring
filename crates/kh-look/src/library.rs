@@ -36,6 +36,9 @@ pub struct Slot {
     pub owner_id: u16,
     /// The material instance's name (`p_ex001_mat0_Inst`): what the mesh's tables name.
     pub instance_name: String,
+    /// (BLOOD-RED) KH3's base material at the root of the instance's parent chain (materials.json `root`, its object name:
+    /// `SQEX_Mouth`, `SQEX_WhiteEyeMaterial`, `p_ex001_Basemat` ...): what kind of surface the slot really is.
+    pub root: String,
     pub masked: bool,
     pub translucent: bool,
     pub two_sided: bool,
@@ -93,6 +96,18 @@ impl ObjectRows {
     }
 }
 
+/// One row of a wear form: (material instance, image, point).
+pub type WearForm = (String, Option<TextureRef>, Option<TextureRef>);
+
+/// What the uniform block of a slot reads of the frame. `exposure` multiplies the colour in front of the host's tone
+/// curve; `debug` is KH_CHAR_DEBUG's channel (0 = the picture).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LookFrame {
+    pub clock: f32,
+    pub exposure: f32,
+    pub debug: f32,
+}
+
 /// (IMPL_ER23B) THE WEAR FORMS (`wear_forms` of materials.json = `UTresWearformSet` of the pawn's equipment component):
 /// per form, for each of Sora's material instances it names, the image and the "point" texture. The equipment
 /// component (0x1417915A0 start, 0x141790C80 tick) puts the new form's textures into `FormChangeTex1` /
@@ -102,7 +117,7 @@ impl ObjectRows {
 #[derive(Clone, Debug, Default)]
 pub struct WearForms {
     /// form -> (material instance, image, point).
-    pub forms: HashMap<u8, Vec<(String, Option<TextureRef>, Option<TextureRef>)>>,
+    pub forms: HashMap<u8, Vec<WearForm>>,
     /// The form whose textures are in `FormChangeTex0`, the one sliding in, the slide and its length.
     pub worn: u8,
     pub target: u8,
@@ -115,12 +130,20 @@ pub struct WearForms {
     /// (ER69) The plain recolour instead of the styled look where an outfit has both (form + 100 = the plain one).
     pub plain: bool,
     pub direct_saved: Vec<(usize, usize, Option<TextureRef>)>,
+    /// (weapons P5b) The library has had its first frame: a library loaded while a form is on (an outfit put on at Boc during a
+    /// form, a load) wears that form's costume at once on its first frame instead of sliding it in.
+    pub stepped: bool,
 }
 
 /// The slide's length when a form is put on (`pawn.vt+0x1498(form, 1.0)`) and when it ends
 /// (`pawn.vt+0x13E0(1, 0, 0, 0.2)`) [decompiled C; kh-app char_material.rs has the same two].
 pub const WEAR_FORM_ON_SECONDS: f32 = 1.0;
 pub const WEAR_FORM_OFF_SECONDS: f32 = 0.2;
+/// (F-POLISH) Rage Form's end: EndStyle 0x14141CA20 loads the 0.2 s above ([0x145C9C4CC] at 0x14141CAED) and case 0x8B
+/// overrides it with 0 (`xorps xmm8, xmm8` at 0x14141CD44) before vt+0x13E0(1, 0, 0, xmm8): the look leaves at once.
+pub const WEAR_FORM_RAGE_OFF_SECONDS: f32 = 0.0;
+/// Rage Form's wear form (WearformSet m_Forms[7]).
+const WEAR_FORM_RAGE: u8 = 7;
 /// The mesh the wear forms belong to.
 pub const WEAR_MESH: &str = "sora";
 
@@ -139,6 +162,8 @@ pub struct Library {
     pub dir: PathBuf,
     pub generator: String,
     owners: HashMap<String, OwnerCb>,
+    /// (EYES-SF) Per owner, the names of the parameters its shader reads, as it spells them ([`Library::feed`]).
+    spellings: HashMap<String, Vec<String>>,
     pub khs: Khs,
     /// Sora's bone pose -> material parameter rows.
     pub bone_table: Vec<BoneParam>,
@@ -162,83 +187,24 @@ impl Library {
         out
     }
 
+    /// (weapons P5b) The wear forms (1..=10) this library has a look for: a costume of its own (`forms`, the WearformSet's) or a
+    /// direct replacement (`direct`, an outfit's form colours; the plain variants 100+ are not wear forms). Sorted.
+    pub fn wear_form_list(&self) -> Vec<u8> {
+        let mut out: Vec<u8> = self.wear.forms.keys().chain(self.wear.direct.keys()).copied().filter(|f| (1..100).contains(f)).collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     /// (IMPL_ER23B) ONE FRAME OF THE COSTUME CHANGE: `wanted` = the wear form the pawn has applied
     /// (`kh_core` `combat.form.wear_form`: 0 NORMAL, 5 Second Form), `dt` = the frame's game time. Writes
     /// `FormChangeSlide` on the slots that have the parameter and returns the texture bindings that changed
-    /// (also written into `Slot::textures`). A form the pack has no textures for changes nothing.
+    /// (also written into `Slot::textures`). (weapons P5b) Every wear form 1..10 (`ETresCharWearForm`; 7 = Rage Form) takes this
+    /// path; a form the library has no costume for gives the normal clothes (form 0), and a library's FIRST frame puts the
+    /// wanted form on at once (no slide: the outfit was changed or loaded while the form was on).
     pub fn step_wear(&mut self, wanted: u8, dt: f32) -> Vec<WearChange> {
-        let mut changes = Vec::new();
-        // (ER69) the direct replacements: put on / taken off at once when the form changes
-        let alt = wanted.saturating_add(100);
-        let direct_wanted = if wanted != 0 && self.wear.plain && self.wear.direct.contains_key(&alt) { alt } else if self.wear.direct.contains_key(&wanted) { wanted } else { 0 };
-        if direct_wanted != self.wear.direct_on {
-            for (slot, texture, before) in std::mem::take(&mut self.wear.direct_saved) {
-                if let Some(t) = self.slots.get_mut(slot).and_then(|s| s.textures.get_mut(texture)) {
-                    *t = before.clone();
-                    if let Some(file) = before {
-                        changes.push(WearChange { slot, texture, file });
-                    }
-                }
-            }
-            for (material, parameter, file) in self.wear.direct.get(&direct_wanted).cloned().unwrap_or_default() {
-                for (k, slot) in self.slots.iter_mut().enumerate().filter(|(_, s)| s.mesh == WEAR_MESH && s.instance_name == material) {
-                    let Some(texture) = slot.texture_names.iter().position(|n| *n == parameter) else { continue };
-                    let Some(t) = slot.textures.get_mut(texture) else { continue };
-                    self.wear.direct_saved.push((k, texture, t.clone()));
-                    *t = Some(file.clone());
-                    changes.push(WearChange { slot: k, texture, file: file.clone() });
-                }
-            }
-            self.wear.direct_on = direct_wanted;
-        }
-        if self.wear.forms.is_empty() {
-            return changes;
-        }
-        let (slots, wear) = (&mut self.slots, &mut self.wear);
-        let mut put = |form: u8, tex: &str, point: &str, changes: &mut Vec<WearChange>| {
-            for (material, image, point_file) in wear.forms.get(&form).into_iter().flatten() {
-                for (k, slot) in slots.iter_mut().enumerate().filter(|(_, s)| s.mesh == WEAR_MESH && s.instance_name == *material) {
-                    for (parameter, file) in [(tex, image), (point, point_file)] {
-                        let (Some(file), Some(texture)) = (file, slot.texture_names.iter().position(|n| n == parameter)) else { continue };
-                        if slot.textures.get(texture).is_some_and(|t| t.as_ref() != Some(file)) {
-                            slot.textures[texture] = Some(file.clone());
-                            changes.push(WearChange { slot: k, texture, file: file.clone() });
-                        }
-                    }
-                }
-            }
-        };
-        if wanted != wear.target && wear.forms.contains_key(&wanted) {
-            // A slide still running is finished at once (its textures become the worn ones).
-            if wear.target != wear.worn {
-                let target = wear.target;
-                put(target, "FormChangeTex0", "FormChangePointTex0", &mut changes);
-                wear.worn = target;
-            }
-            wear.target = wanted;
-            wear.slide = 0.0;
-            wear.length = if wanted == 0 { WEAR_FORM_OFF_SECONDS } else { WEAR_FORM_ON_SECONDS };
-            put(wanted, "FormChangeTex1", "FormChangePointTex1", &mut changes);
-        }
-        let mut slide = 0.0;
-        if wear.target != wear.worn {
-            // [D] a linear ramp (the interpolator object of the equipment component was not read).
-            wear.slide += dt.max(0.0) / wear.length.max(1.0e-3);
-            if wear.slide >= 1.0 {
-                let target = wear.target;
-                put(target, "FormChangeTex0", "FormChangePointTex0", &mut changes);
-                wear.worn = target;
-                wear.slide = 0.0;
-            }
-            slide = wear.slide;
-        }
-        for slot in self.slots.iter_mut().filter(|s| s.mesh == WEAR_MESH && s.texture_names.iter().any(|n| n == "FormChangeTex1")) {
-            match slot.scalars.get_mut("FormChangeSlide") {
-                Some(s) => *s = slide,
-                None => drop(slot.scalars.insert("FormChangeSlide".to_string(), slide)),
-            }
-        }
-        changes
+        // (MIMIC-BOSS hotfix 3, MB3-FORMLEAK) the rule itself is [`step_wear_in`]: a copy of Sora keeps a wear state of his own
+        step_wear_in(&mut self.slots, &mut self.wear, wanted, dt)
     }
 
     pub fn load(pack_dir: &Path) -> Result<Library, String> {
@@ -279,9 +245,11 @@ impl Library {
         if !json.get("format").and_then(Value::as_str).is_some_and(|f| f.starts_with("kh3-sora-materials/")) {
             return Err("materials.json: format is not kh3-sora-materials/1 (node tools/sora_material_pack.js)".to_string());
         }
-        let mut owners = HashMap::new();
+        let (mut owners, mut spellings) = (HashMap::new(), HashMap::new());
         for (name, owner) in json.get("owners").and_then(Value::as_object).into_iter().flatten() {
             owners.insert(name.clone(), OwnerCb::parse(owner));
+            let reads = ["scalars", "vectors"].iter().flat_map(|kind| owner.get("parameters").and_then(|p| p.get(*kind)).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string));
+            spellings.insert(name.clone(), reads.collect::<Vec<String>>());
         }
         let v3 = |v: &Value| Vec3::new(v[0].as_f64().unwrap_or(0.0) as f32, v[1].as_f64().unwrap_or(0.0) as f32, v[2].as_f64().unwrap_or(0.0) as f32);
         let (mut bounds, mut bone_table) = (HashMap::new(), Vec::new());
@@ -314,6 +282,7 @@ impl Library {
                 slot: slot.clone(),
                 owner_id: owner.get("id").and_then(Value::as_u64).unwrap_or(0) as u16,
                 instance_name: record.get("asset").and_then(Value::as_str).and_then(|a| a.rsplit('.').next()).unwrap_or("").to_string(),
+                root: record.get("root").and_then(Value::as_str).and_then(|a| a.rsplit(['.', '/']).next()).unwrap_or("").to_string(),
                 masked: blend == "BLEND_Masked" && ok(owner.get("mask")),
                 translucent: blend == "BLEND_Translucent",
                 two_sided: record.get("two_sided").and_then(Value::as_bool).unwrap_or(false),
@@ -325,7 +294,8 @@ impl Library {
             });
         }
         // (IMPL_ER59) UE's parameter names are FNames: compared WITHOUT case. KH2 Sora's table writes `atama_wp` where
-        // its eye materials read `atama_WP`: the table's names take the materials' spelling.
+        // its eye materials read `atama_WP`: the table's names take the materials' spelling. (EYES-SF) This is only the
+        // table's own name (the first owner's spelling); `feed` writes each slot under ITS owner's spelling.
         let mut spelled: HashMap<String, String> = HashMap::new();
         for owner in json.get("owners").and_then(Value::as_object).into_iter().flat_map(|o| o.values()) {
             for kind in ["scalars", "vectors"] {
@@ -348,7 +318,7 @@ impl Library {
             };
             wear.forms.insert(form, f.get("materials").and_then(Value::as_array).into_iter().flatten().map(|m| (m.get("material").and_then(Value::as_str).unwrap_or("").to_string(), texture(m, "image"), texture(m, "point"))).collect());
         }
-        Ok(Library { dir, generator: json.get("generator").and_then(Value::as_str).unwrap_or("?").to_string(), owners, khs: Khs::parse(json), bone_table, bounds, slots, wear })
+        Ok(Library { dir, generator: json.get("generator").and_then(Value::as_str).unwrap_or("?").to_string(), owners, spellings, khs: Khs::parse(json), bone_table, bounds, slots, wear })
     }
 
     /// (XW) Takes in another library's slots, shader owners and mesh bounds (the XS form weapons' translated materials,
@@ -362,6 +332,9 @@ impl Library {
         let have: Vec<String> = self.slots.iter().map(|s| s.mesh.clone()).collect();
         for (name, owner) in other.owners {
             self.owners.insert(format!("{owner_prefix}{name}"), owner);
+        }
+        for (name, reads) in other.spellings {
+            self.spellings.insert(format!("{owner_prefix}{name}"), reads);
         }
         for (mesh, b) in other.bounds {
             self.bounds.entry(mesh).or_insert(b);
@@ -385,10 +358,18 @@ impl Library {
     }
 
     /// Writes the frame's bone-driven parameters onto the slots of a mesh they name.
+    /// (EYES-SF, the user 2026-11-07: "san fransokyo sora's eyes are broken") EACH SLOT UNDER ITS OWN OWNER'S SPELLING: UE's
+    /// parameter names are FNames (compared without case), and one mesh's owners may spell a name differently. San
+    /// Fransokyo's visor reads `atama_wp`, its eyes / face / hair `atama_WP`; the table took the visor's spelling (the first
+    /// owner by name), so the eyes kept atama_WP at its default (0,0,0) and their lid shadow covered the whole eye (grey
+    /// whites, a black iris, no highlight). A name the slot's owner does not read keeps the table's spelling.
     pub fn feed(&mut self, mesh: &str, values: &[BoneValue]) {
+        let spellings = &self.spellings;
         for slot in self.slots.iter_mut().filter(|s| s.mesh == mesh) {
+            let reads = spellings.get(&slot.owner);
             for (name, value, only) in values {
-                if only.is_empty() || only.iter().any(|m| *m == slot.instance_name) {
+                if only.is_empty() || only.contains(&slot.instance_name) {
+                    let name = reads.and_then(|r| r.iter().find(|n| n.eq_ignore_ascii_case(name))).unwrap_or(name);
                     // (every frame: no new key strings once the names are in)
                     match slot.vectors.get_mut(name) {
                         Some(v) => *v = *value,
@@ -413,10 +394,9 @@ impl Library {
         }
     }
 
-    /// The uniform block of a slot for this frame. `exposure` multiplies the colour in front of
-    /// the host's tone curve; `debug` is KH_CHAR_DEBUG's channel (0 = the picture).
-    #[allow(clippy::too_many_arguments)]
-    pub fn params(&self, slot: &Slot, object: &ObjectRows, rig: &Rig, khs: Option<&KhsState>, clock: f32, exposure: f32, debug: f32) -> Params {
+    /// The uniform block of a slot for this frame.
+    pub fn params(&self, slot: &Slot, object: &ObjectRows, rig: &Rig, khs: Option<&KhsState>, frame: LookFrame) -> Params {
+        let LookFrame { clock, exposure, debug } = frame;
         let mut p = Params::default();
         if let Some(owner) = self.owners.get(&slot.owner) {
             owner.eval(&slot.scalars, &slot.vectors, clock, &mut p.m);
@@ -444,6 +424,102 @@ impl Library {
         p.look = Vec4::new(exposure, if key_of_level { 1.0 } else { 0.0 }, if ambient_of_level { 1.0 } else { 0.0 }, 0.0);
         p
     }
+}
+
+/// (MIMIC-BOSS hotfix 3, MB3-FORMLEAK) [`Library::step_wear`] on any slots and wear state: the player's library, or a copy of
+/// Sora's OWN slot textures and wear state (kh-er-render copy_wear.rs), so that a copy changes clothes only with his own form.
+pub fn step_wear_in(slots: &mut [Slot], wear: &mut WearForms, wanted: u8, dt: f32) -> Vec<WearChange> {
+    let mut changes = Vec::new();
+    let first = !wear.stepped;
+    wear.stepped = true;
+    // (ER69) the direct replacements: put on / taken off at once when the form changes
+    let alt = wanted.saturating_add(100);
+    let direct_wanted = if wanted != 0 && wear.plain && wear.direct.contains_key(&alt) { alt } else if wear.direct.contains_key(&wanted) { wanted } else { 0 };
+    if direct_wanted != wear.direct_on {
+        for (slot, texture, before) in std::mem::take(&mut wear.direct_saved) {
+            if let Some(t) = slots.get_mut(slot).and_then(|s| s.textures.get_mut(texture)) {
+                *t = before.clone();
+                if let Some(file) = before {
+                    changes.push(WearChange { slot, texture, file });
+                }
+            }
+        }
+        for (material, parameter, file) in wear.direct.get(&direct_wanted).cloned().unwrap_or_default() {
+            for (k, slot) in slots.iter_mut().enumerate().filter(|(_, s)| s.mesh == WEAR_MESH && s.instance_name.eq_ignore_ascii_case(&material)) {
+                let Some(texture) = slot.texture_names.iter().position(|n| *n == parameter) else { continue };
+                let Some(t) = slot.textures.get_mut(texture) else { continue };
+                wear.direct_saved.push((k, texture, t.clone()));
+                *t = Some(file.clone());
+                changes.push(WearChange { slot: k, texture, file: file.clone() });
+            }
+        }
+        wear.direct_on = direct_wanted;
+    }
+    if wear.forms.is_empty() {
+        return changes;
+    }
+    let mut put = |form: u8, tex: &str, point: &str, changes: &mut Vec<WearChange>| {
+        for (material, image, point_file) in wear.forms.get(&form).into_iter().flatten() {
+            for (k, slot) in slots.iter_mut().enumerate().filter(|(_, s)| s.mesh == WEAR_MESH && s.instance_name.eq_ignore_ascii_case(material)) {
+                for (parameter, file) in [(tex, image), (point, point_file)] {
+                    let (Some(file), Some(texture)) = (file, slot.texture_names.iter().position(|n| n == parameter)) else { continue };
+                    if slot.textures.get(texture).is_some_and(|t| t.as_ref() != Some(file)) {
+                        slot.textures[texture] = Some(file.clone());
+                        changes.push(WearChange { slot: k, texture, file: file.clone() });
+                    }
+                }
+            }
+        }
+    };
+    // (weapons P5b) the costume worn for `wanted`: its own, else the normal clothes (a library without form 0 keeps what it has)
+    let goal = if wear.forms.contains_key(&wanted) {
+        wanted
+    } else if wear.forms.contains_key(&0) {
+        0
+    } else {
+        wear.target
+    };
+    if first && wear.forms.contains_key(&goal) {
+        // (weapons P5b) on at once: both texture pairs hold the form, no slide (form 0 too: a pack's instance may start
+        // with another form's point texture bound, Monstropolis's p_mi001_mat4: KH3's set gives the normal one)
+        put(goal, "FormChangeTex0", "FormChangePointTex0", &mut changes);
+        put(goal, "FormChangeTex1", "FormChangePointTex1", &mut changes);
+        wear.worn = goal;
+        wear.target = goal;
+        wear.slide = 0.0;
+    } else if goal != wear.target {
+        // A slide still running is finished at once (its textures become the worn ones).
+        if wear.target != wear.worn {
+            let target = wear.target;
+            put(target, "FormChangeTex0", "FormChangePointTex0", &mut changes);
+            wear.worn = target;
+        }
+        // (F-POLISH) leaving Rage Form's 7: at once (EndStyle case 0x8B).
+        let off = if wear.target == WEAR_FORM_RAGE { WEAR_FORM_RAGE_OFF_SECONDS } else { WEAR_FORM_OFF_SECONDS };
+        wear.target = goal;
+        wear.slide = 0.0;
+        wear.length = if goal == 0 { off } else { WEAR_FORM_ON_SECONDS };
+        put(goal, "FormChangeTex1", "FormChangePointTex1", &mut changes);
+    }
+    let mut slide = 0.0;
+    if wear.target != wear.worn {
+        // [D] a linear ramp (the interpolator object of the equipment component was not read).
+        wear.slide += dt.max(0.0) / wear.length.max(1.0e-3);
+        if wear.slide >= 1.0 {
+            let target = wear.target;
+            put(target, "FormChangeTex0", "FormChangePointTex0", &mut changes);
+            wear.worn = target;
+            wear.slide = 0.0;
+        }
+        slide = wear.slide;
+    }
+    for slot in slots.iter_mut().filter(|s| s.mesh == WEAR_MESH && s.texture_names.iter().any(|n| n == "FormChangeTex1")) {
+        match slot.scalars.get_mut("FormChangeSlide") {
+            Some(s) => *s = slide,
+            None => drop(slot.scalars.insert("FormChangeSlide".to_string(), slide)),
+        }
+    }
+    changes
 }
 
 #[cfg(test)]
@@ -483,7 +559,7 @@ mod tests {
         assert_eq!((hammer.mesh.as_str(), hammer.owner.as_str(), hammer.owner_id), ("xsi:w_so052", "xsi:w_so050_mat0_Inst", 400));
         assert!(hammer.textures.iter().flatten().all(|t| Path::new(&t.file).is_absolute() && Path::new(&t.file).is_file()));
         let rows = ObjectRows::new(&kh_anim::Trs::IDENTITY, lib.bounds_of("xsi:w_so052"));
-        let p = lib.params(hammer, &rows, &crate::stand_in::rig(), None, 0.0, 1.0, 0.0);
+        let p = lib.params(hammer, &rows, &crate::stand_in::rig(), None, LookFrame { clock: 0.0, exposure: 1.0, debug: 0.0 });
         assert!(p.m.iter().any(|v| *v != Vec4::ZERO), "the owner's constant buffer evaluates");
         assert_ne!(lib.bounds_of("xsi:w_so052"), lib.bounds_of("no such mesh"));
         assert_eq!(lib.merge(Library::load(&xsi).unwrap(), "xsi:"), 0);
@@ -553,6 +629,83 @@ mod tests {
         assert!(lib.step_wear(9, 1.0 / 60.0).is_empty() && lib.wear.target == 0);
     }
 
+    /// A library with the cloth slot of `the_wear_form_slides_in_and_out` and wear forms 0, 2, 5 and 7 (7: the normal image with
+    /// another point texture, as KH3's Anti).
+    fn three_form_library() -> (Library, usize) {
+        let json: Value = serde_json::from_str(
+            r#"{"format":"kh3-sora-materials/1","generator":"t",
+            "owners":{"O":{"id":7,"lighting_model":"MSM_Subsurface","base":{"ok":true},"mask":{"ok":true},
+                "slots":[{"parameter":"Normal"},{"parameter":"FormChangeTex0"},{"parameter":"FormChangeTex1"},{"parameter":"FormChangePointTex0"},{"parameter":"FormChangePointTex1"}],
+                "vec":[],"sca":[{"s":"FormChangeSlide","d":0.0}]}},
+            "materials":{
+              "cloth":{"mesh":"sora","owner":"O","asset":"/Game/X/cloth_Inst.cloth_Inst","blend_mode":"BLEND_Masked","scalars":{"FormChangeSlide":0},"vectors":{},
+                "textures":[{"file":"textures/n.png","mips":9},{"file":"textures/d0.png","srgb":true,"mips":9},{"file":"textures/d0.png","srgb":true,"mips":9},{"file":"textures/f0.png","srgb":true,"mips":9},{"file":"textures/f0.png","srgb":true,"mips":9}]}},
+            "wear_forms":{
+              "0":{"name":"Normal","materials":[{"material":"cloth_Inst","image":{"file":"textures/d0.png","srgb":true,"mips":9},"point":{"file":"textures/f0.png","srgb":true,"mips":9}}]},
+              "5":{"name":"Limit","materials":[{"material":"cloth_Inst","image":{"file":"textures/d5.png","srgb":true,"mips":9},"point":{"file":"textures/f5.png","srgb":true,"mips":9}}]}},
+            "mesh_facts":{}}"#,
+        )
+        .unwrap();
+        let mut lib = Library::from_json(PathBuf::from("x"), &json).unwrap();
+        // (weapons P5b) the other forms come from wear_extra.json (tools/sora_outfit_forms.js all-forms phase); 5 is not replaced
+        lib.add_wear_extra(&serde_json::from_str(
+            r#"{"forms":{
+              "2":{"name":"Wisdom","materials":[{"material":"cloth_Inst","image":{"file":"textures/d2.png","srgb":true,"mips":9},"point":{"file":"textures/f2.png","srgb":true,"mips":9}}]},
+              "5":{"name":"not this","materials":[{"material":"cloth_Inst","image":{"file":"textures/WRONG.png","srgb":true,"mips":9}}]},
+              "7":{"name":"Anti","materials":[{"material":"cloth_Inst","image":{"file":"textures/d0.png","srgb":true,"mips":9},"point":{"file":"textures/f7.png","srgb":true,"mips":9}}]}}}"#,
+        ).unwrap());
+        let cloth = lib.slots.iter().position(|s| s.slot == "cloth").unwrap();
+        (lib, cloth)
+    }
+
+    /// (weapons P5b) EVERY WEAR FORM through the same switch: a form of wear_extra.json slides in and out like Second Form,
+    /// Rage Form (7) puts its point texture on the normal image, materials.json's own form 5 is never replaced, and a form the
+    /// library has no costume for gives the normal clothes (not the form worn before).
+    #[test]
+    fn every_wear_form_goes_on_and_off_and_a_missing_one_is_the_normal_clothes() {
+        let (mut lib, cloth) = three_form_library();
+        assert_eq!(lib.wear_form_list(), [2, 5, 7]);
+        let worn = |lib: &Library| (lib.slots[cloth].textures[1].as_ref().unwrap().file.clone(), lib.slots[cloth].textures[3].as_ref().unwrap().file.clone());
+        let settle = |lib: &mut Library, form: u8| {
+            for _ in 0..90 {
+                lib.step_wear(form, 1.0 / 60.0);
+            }
+        };
+        lib.step_wear(0, 1.0 / 60.0);
+        for (form, image, point) in [(2, "textures/d2.png", "textures/f2.png"), (5, "textures/d5.png", "textures/f5.png"), (7, "textures/d0.png", "textures/f7.png")] {
+            settle(&mut lib, form);
+            assert_eq!((lib.wear.worn, worn(&lib)), (form, (image.to_string(), point.to_string())), "wear form {form} on");
+            settle(&mut lib, 0);
+            assert_eq!((lib.wear.worn, worn(&lib)), (0, ("textures/d0.png".to_string(), "textures/f0.png".to_string())), "wear form {form} off");
+        }
+        // in Second Form, a form without a costume here (9): the normal clothes slide back, not Second Form's kept
+        settle(&mut lib, 5);
+        settle(&mut lib, 9);
+        assert_eq!((lib.wear.worn, lib.wear.target, worn(&lib).0.as_str()), (0, 0, "textures/d0.png"));
+    }
+
+    /// (weapons P5b, the user: "Changing outfit at Boc during a form re-applies the wear form at once") A library loaded while a
+    /// form is on (the renderer loads the new outfit's library; the host keeps reporting the form) wears it on its first frame:
+    /// both texture pairs hold the form's costume and the slide is 0 (nothing slides in).
+    #[test]
+    fn a_library_loaded_during_a_form_wears_it_at_once() {
+        let (mut lib, cloth) = three_form_library();
+        let changes = lib.step_wear(2, 0.0);
+        let mut bound: Vec<(usize, &str)> = changes.iter().map(|c| (c.texture, c.file.file.as_str())).collect();
+        bound.sort_unstable();
+        assert_eq!(bound, [(1, "textures/d2.png"), (2, "textures/d2.png"), (3, "textures/f2.png"), (4, "textures/f2.png")]);
+        assert_eq!((lib.wear.worn, lib.wear.target, lib.slots[cloth].scalars["FormChangeSlide"]), (2, 2, 0.0));
+        assert!(lib.step_wear(2, 1.0 / 60.0).is_empty(), "nothing more to do");
+        // the form's end afterwards slides as always (0.2 s)
+        assert!(!lib.step_wear(0, 1.0 / 60.0).is_empty());
+        assert!(lib.wear.worn == 2 && lib.wear.target == 0 && lib.slots[cloth].scalars["FormChangeSlide"] > 0.0);
+        // a library whose first frame is the normal clothes slides a later form in (Sora's start)
+        let (mut fresh, _) = three_form_library();
+        assert!(fresh.step_wear(0, 0.0).is_empty());
+        fresh.step_wear(5, 1.0 / 60.0);
+        assert!(fresh.wear.worn == 0 && fresh.wear.target == 5, "slides in");
+    }
+
     /// (ER69) An outfit without a form costume: its base colour is replaced while the form is on, put back after.
     #[test]
     fn a_direct_form_texture_comes_and_goes() {
@@ -593,12 +746,50 @@ mod tests {
         assert_eq!(slot.textures, vec![Some(TextureRef { file: "textures/a.png".to_string(), srgb: true, mips: true }), None, Some(TextureRef { file: "textures/t.png".to_string(), srgb: false, mips: false })]);
         let object = ObjectRows::new(&kh_anim::Trs::IDENTITY, lib.bounds_of("sora"));
         let rig = crate::stand_in::rig();
-        let p = lib.params(&slot, &object, &rig, None, 2.0, 1.0, 0.0);
+        let p = lib.params(&slot, &object, &rig, None, LookFrame { clock: 2.0, exposure: 1.0, debug: 0.0 });
         // The vector row, then the scalar row; the instance's value wins over the compiled default.
         assert_eq!((p.m[0], p.m[1].x), (Vec4::new(1.0, 2.0, 3.0, 4.0), 0.25));
         // A rig without spots: the host's key light; no in-shader curve; KHS off without a state.
         assert_eq!((p.light_dir.w, p.misc, p.khs.x, p.look.y), (0.0, Vec4::new(0.0, 2.0, 0.0, 1.0), 0.0, 0.0));
         lib.set_scalar("sora", "Fade", 1.0);
-        assert_eq!(lib.params(&lib.slots[0], &object, &rig, None, 0.0, 1.0, 0.0).m[1].x, 1.0);
+        assert_eq!(lib.params(&lib.slots[0], &object, &rig, None, LookFrame { clock: 0.0, exposure: 1.0, debug: 0.0 }).m[1].x, 1.0);
+    }
+
+    /// (EYES-SF) Two owners of one mesh spelling a bone parameter differently (San Fransokyo: the visor `atama_wp`, the eyes
+    /// `atama_WP`; "A_visor" sorts first, as SQEX_VisorGrass_DisplayMode did): each slot's block gets the fed value.
+    #[test]
+    fn a_bone_parameter_reaches_every_owner_whatever_its_spelling() {
+        let json: Value = serde_json::from_str(
+            r#"{"format":"kh3-sora-materials/1","generator":"t",
+            "owners":{"A_visor":{"id":1,"lighting_model":"MSM_DefaultLit","base":{"ok":true},"mask":{"ok":true},"parameters":{"scalars":[],"vectors":["atama_wp"]},
+                    "vec":[{"v":"atama_wp","d":[0,0,0,0]}],"sca":[]},
+                "eye":{"id":2,"lighting_model":"MSM_Subsurface","base":{"ok":true},"mask":{"ok":true},"parameters":{"scalars":[],"vectors":["atama_WP"]},
+                    "vec":[{"v":"atama_WP","d":[0,0,0,0]}],"sca":[]}},
+            "materials":{"visor":{"mesh":"sora","owner":"A_visor","asset":"/Game/X/visor_Inst.visor_Inst","blend_mode":"BLEND_Translucent","scalars":{},"vectors":{},"textures":[]},
+                "eye":{"mesh":"sora","owner":"eye","asset":"/Game/X/eye_Inst.eye_Inst","blend_mode":"BLEND_Masked","scalars":{},"vectors":{},"textures":[]}},
+            "mesh_facts":{"sora":{"bounds":{"origin":[0,0,88],"extent":[75,40,88],"radius":122},"bone_params":[{"bone":"atama","check":"WORLD_ABS_TRANS","parameter":"atama_WP","set":"VECTOR","materials":[],
+                "normalize":false,"normalize_min":[0,0,0],"normalize_max":[0,0,0],"set_min":[0,0,0],"set_max":[0,0,0]}]}}}"#,
+        )
+        .unwrap();
+        let mut lib = Library::from_json(PathBuf::from("x"), &json).unwrap();
+        let head = kh_anim::Trs { translation: Vec3::new(1.0, 2.0, 142.0), ..kh_anim::Trs::IDENTITY };
+        let values = crate::bone_parameters(&lib.bone_table, |_| Some((head, head, head)));
+        lib.feed("sora", &values);
+        let object = ObjectRows::new(&kh_anim::Trs::IDENTITY, lib.bounds_of("sora"));
+        let rig = crate::stand_in::rig();
+        for slot in &lib.slots {
+            let p = lib.params(slot, &object, &rig, None, LookFrame { clock: 0.0, exposure: 1.0, debug: 0.0 });
+            assert_eq!(p.m[0], Vec4::new(1.0, 2.0, 142.0, 1.0), "{}", slot.slot);
+        }
+        // the real San Fransokyo pack (skipped without it): every slot whose owner reads atama_WP holds the head's place
+        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../build/sora_pack/outfits/sanfransokyo");
+        let Ok(mut sf) = Library::load(&pack) else { return };
+        let values = crate::bone_parameters(&sf.bone_table, |_| Some((head, head, head)));
+        sf.feed("sora", &values);
+        let eyes: Vec<&Slot> = sf.slots.iter().filter(|s| s.slot.contains("_E_mat")).collect();
+        assert!(eyes.len() >= 3);
+        for slot in eyes {
+            assert_eq!(slot.vectors.get("atama_WP").map(|v| v[2]), Some(142.0), "{}", slot.slot);
+        }
     }
 }

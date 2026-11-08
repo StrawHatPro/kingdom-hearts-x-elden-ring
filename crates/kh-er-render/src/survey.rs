@@ -34,7 +34,37 @@ enum Event {
     Fullscreen(crate::cbcap::Table),
     /// (IMPL_ER17) A depth target left DEPTH_WRITE: the caster pass that drew into it ended; what the list bound then.
     Cast { resource: usize, after: i32, pass: SunPass },
+    /// (HAIR-BLEED) A copy of one texture into another: CopyResource (`subresources` None) or a subresource-to-subresource
+    /// CopyTextureRegion (`CopyRegion`).
+    Copy { dst: usize, src: usize, subresources: Option<CopyRegion> },
 }
+
+/// (HAIR-BLEED) A copy the game made of its scene depth or of a G-buffer target inside its G-buffer stage (before the KH
+/// characters' depth and G-buffer went in at the early split): the copy of the scene WITHOUT them that its later passes read
+/// (er7 / 2.7.2 surveys: the depth and the normal, in the last G-buffer list, before its decal pass). gfx.rs makes it again
+/// right after their G-buffer pass, from the same source into the same destination, with the destination's state at the split.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StageCopy {
+    pub dst: usize,
+    pub src: usize,
+    /// None = CopyResource; Some = CopyTextureRegion (subresource to subresource).
+    pub subresources: Option<CopyRegion>,
+    /// The destination's state (per its first subresource) at the end of the split's list; 0 = unknown (then it is not redone).
+    pub dst_state: i32,
+}
+
+/// (HAIR-BLEED) A CopyTextureRegion between two subresources: where it lands and the source box (None = the whole subresource).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CopyRegion {
+    pub dst_sub: u32,
+    pub src_sub: u32,
+    pub at: [u32; 3],
+    /// left, top, front, right, bottom, back
+    pub area: Option<[u32; 6]>,
+}
+
+/// (HAIR-BLEED) At most this many copies are kept per submission.
+pub const STAGE_COPIES: usize = 4;
 
 /// (IMPL_ER17) One caster pass of the game into a shadow atlas: the vertex-stage constant buffer table of its draws
 /// (cbSceneParam of the pass at b8: the light's view-projection), its viewport (x, y, width, height) and scissor.
@@ -123,6 +153,10 @@ static ORIGINAL_BARRIER: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_TARGETS: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_CLEAR_DEPTH: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_RESET: AtomicUsize = AtomicUsize::new(0);
+static ORIGINAL_COPY: AtomicUsize = AtomicUsize::new(0);
+static ORIGINAL_COPY_REGION: AtomicUsize = AtomicUsize::new(0);
+type CopyFn = unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void);
+type CopyRegionFn = unsafe extern "system" fn(*mut c_void, *const D3D12_TEXTURE_COPY_LOCATION, u32, u32, u32, *const D3D12_TEXTURE_COPY_LOCATION, *const D3D12_BOX);
 
 type BarrierFn = unsafe extern "system" fn(*mut c_void, u32, *const D3D12_RESOURCE_BARRIER);
 type TargetsFn = unsafe extern "system" fn(*mut c_void, u32, *const D3D12_CPU_DESCRIPTOR_HANDLE, i32, *const D3D12_CPU_DESCRIPTOR_HANDLE);
@@ -142,6 +176,9 @@ pub fn install() -> Result<(), String> {
         patch(vtable, entry!(ID3D12GraphicsCommandList_Vtbl, ResourceBarrier), barrier_hook as *const () as usize, &ORIGINAL_BARRIER, "ID3D12GraphicsCommandList::ResourceBarrier")?;
         patch(vtable, entry!(ID3D12GraphicsCommandList_Vtbl, OMSetRenderTargets), targets_hook as *const () as usize, &ORIGINAL_TARGETS, "ID3D12GraphicsCommandList::OMSetRenderTargets")?;
         patch(vtable, entry!(ID3D12GraphicsCommandList_Vtbl, ClearDepthStencilView), clear_depth_hook as *const () as usize, &ORIGINAL_CLEAR_DEPTH, "ID3D12GraphicsCommandList::ClearDepthStencilView")?;
+        // (HAIR-BLEED) the game's copies of its depth and G-buffer (redone with the KH characters in them: gfx.rs)
+        patch(vtable, entry!(ID3D12GraphicsCommandList_Vtbl, CopyResource), copy_hook as *const () as usize, &ORIGINAL_COPY, "ID3D12GraphicsCommandList::CopyResource")?;
+        patch(vtable, entry!(ID3D12GraphicsCommandList_Vtbl, CopyTextureRegion), copy_region_hook as *const () as usize, &ORIGINAL_COPY_REGION, "ID3D12GraphicsCommandList::CopyTextureRegion")?;
     }
     Ok(())
 }
@@ -304,6 +341,60 @@ unsafe extern "system" fn clear_depth_hook(this: *mut c_void, view: D3D12_CPU_DE
     original(this, view, flags, depth, stencil, count, rects)
 }
 
+/// (HAIR-BLEED) A copy between two textures: kept as an event, and the destination becomes a known resource (its later
+/// barriers are followed, so its state at the early split is known: gfx.rs redoes the copy there).
+unsafe fn note_copy(list: usize, dst: usize, src: usize, subresources: Option<CopyRegion>) {
+    if dst == 0 || src == 0 || DEAD.load(Ordering::Relaxed) || is_ours() {
+        return;
+    }
+    let _ = std::panic::catch_unwind(|| {
+        let known = STATE.lock().ok().and_then(|g| g.as_ref().map(|s| s.resources.contains_key(&dst))).unwrap_or(true);
+        if !known {
+            // The game is using the resource in this very call: it is alive.
+            let raw = dst as *mut c_void;
+            if let Some(resource) = ID3D12Resource::from_raw_borrowed(&raw) {
+                let d = resource.GetDesc();
+                if d.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D {
+                    let planes = if matches!(d.Format, DXGI_FORMAT_R32G8X24_TYPELESS | DXGI_FORMAT_D32_FLOAT_S8X24_UINT | DXGI_FORMAT_R24G8_TYPELESS | DXGI_FORMAT_D24_UNORM_S8_UINT) { 2 } else { 1 };
+                    let subresources = (d.MipLevels as usize * d.DepthOrArraySize as usize * planes).clamp(1, 64);
+                    let name = name_of(resource);
+                    if let Ok(mut guard) = STATE.lock() {
+                        if let Some(state) = guard.as_mut() {
+                            let checked = state.frame;
+                            // (its state now is the copy's destination state; the game's next barrier names it)
+                            state.resources.insert(dst, Info { width: d.Width, height: d.Height, format: d.Format, flags: d.Flags, mips: d.MipLevels, layers: d.DepthOrArraySize, samples: d.SampleDesc.Count, name, states: vec![D3D12_RESOURCE_STATE_COPY_DEST.0; subresources], seen: 0, depth_writes: 0, mismatch: u64::MAX, checked });
+                        }
+                    }
+                }
+            }
+        }
+        record(list, Event::Copy { dst, src, subresources });
+    });
+}
+
+unsafe extern "system" fn copy_hook(this: *mut c_void, dst: *mut c_void, src: *mut c_void) {
+    note_copy(this as usize, dst as usize, src as usize, None);
+    let original: CopyFn = std::mem::transmute(ORIGINAL_COPY.load(Ordering::Relaxed));
+    original(this, dst, src)
+}
+
+unsafe extern "system" fn copy_region_hook(this: *mut c_void, dst: *const D3D12_TEXTURE_COPY_LOCATION, x: u32, y: u32, z: u32, src: *const D3D12_TEXTURE_COPY_LOCATION, area: *const D3D12_BOX) {
+    if !dst.is_null() && !src.is_null() {
+        let (d, s) = (&*dst, &*src);
+        if d.Type == D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX && s.Type == D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX {
+            let dp: usize = std::mem::transmute_copy(&d.pResource);
+            let sp: usize = std::mem::transmute_copy(&s.pResource);
+            let area = (!area.is_null()).then(|| {
+                let b = &*area;
+                [b.left, b.top, b.front, b.right, b.bottom, b.back]
+            });
+            note_copy(this as usize, dp, sp, Some(CopyRegion { dst_sub: d.Anonymous.SubresourceIndex, src_sub: s.Anonymous.SubresourceIndex, at: [x, y, z], area }));
+        }
+    }
+    let original: CopyRegionFn = std::mem::transmute(ORIGINAL_COPY_REGION.load(Ordering::Relaxed));
+    original(this, dst, x, y, z, src, area)
+}
+
 unsafe extern "system" fn reset_hook(this: *mut c_void, allocator: *mut c_void, pipeline: *mut c_void) -> HRESULT {
     if !DEAD.load(Ordering::Relaxed) && !is_ours() {
         crate::cbcap::on_reset(this as usize);
@@ -373,6 +464,9 @@ pub struct Submission {
     /// The first target of the LAST such pair: the diffuse light accumulation (which, by the time
     /// our list runs, holds all diffuse light times the surface colour: light.rs).
     pub light2: Option<usize>,
+    /// (ER-NATIVE) The SECOND target of that last pair: the specular light accumulation (the light passes' SV_Target1, already
+    /// x F0, + the environment specular; IMPL_ER78_STATE.md A). Readable at our list's point like the first.
+    pub spec2: Option<usize>,
     /// The screen-space shadow mask (a full-size R8G8B8A8 target drawn full screen in this submission).
     pub mask: Option<usize>,
     /// The G-buffer target that holds the surface colour (the one R8G8B8A8 typeless target of the five).
@@ -402,6 +496,16 @@ pub struct Submission {
     /// submission (and read by the game's forward stage) are made. `early_states`: the scene depth's two planes'
     /// states at that point (the end of that list).
     pub early_split: usize,
+    /// (HAIR-BLEED) the early depth's place is the FIRST G-buffer list after the stage's depth clear (`GB_FIRST`), not the last:
+    /// `early_split`, `early_states` and `gbuffer` then describe that list. The game copies its scene depth and G-buffer normal in
+    /// the middle of its G-buffer stage (er7 survey, deferred submission list 30: depth and normal to COPY_SOURCE, then the decal
+    /// pass); everything of the game that reads those copies (its light passes among them) saw the world BEHIND the KH characters
+    /// when their depth went in after the last G-buffer list. True when this frame's split is that first list.
+    pub early_first: bool,
+    /// (HAIR-BLEED) the copies of the scene depth and of the G-buffer the game made in the lists up to the early split
+    /// (`StageCopy`), `stage_copy_count` of them.
+    pub stage_copies: [StageCopy; STAGE_COPIES],
+    pub stage_copy_count: usize,
     /// (RSF2 round 14) THE EFFECTS' HALF-SIZE DEPTH: the first list of this submission that wrote a half-size depth of the scene
     /// depth's format (the game's forward stage rebuilds it there, before its half-size effects: fire, embers, glows); the index
     /// after it, the resource, its two planes' states and the scene depth's planes at that point. 0 = none.
@@ -436,6 +540,33 @@ pub static TEST_LIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::Atomi
 /// (HY, offline harness only) a resource taken as the game's screen-space shadow mask (0 = none).
 pub static TEST_MASK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// (HAIR-BLEED, TESTING AID ONLY) `r.hybrid_gb_first` (default 0 = the KH G-buffer pass after the game's LAST G-buffer list, as
+/// IMPL_ER53, with the stage's copies redone: `StageCopy`). Other values move the pass earlier in the stage: 1 = right after its
+/// depth clear (found only while `r.survey` logs: the clear hook records only then, so in play it is the first G-buffer list,
+/// before the clear: the KH characters are wiped, MEASURED in game 2026-11-05), 2 = after the list before the last, 10 + N =
+/// after list N. In game every earlier place lost part of them to the game's later G-buffer lists (the hair after list 15, the
+/// head and hair after list 28): the route stays at the last list and redoes the copies instead.
+pub static GB_FIRST: AtomicU32 = AtomicU32::new(0);
+
+/// (HAIR-BLEED) Where the KH characters' G-buffer pass goes, from the lists of the deferred submission: the first G-buffer list at
+/// or after the last list that cleared the scene depth while the G-buffer was bound (`last_clear`), when there is one before the
+/// last G-buffer list (`last`); `None` = the last list (as before). List indices are 0-based; the split is the index + 1.
+pub fn first_gbuffer_list(gbuffer_lists: &[usize], last_clear: Option<usize>, last: usize) -> Option<usize> {
+    let first = gbuffer_lists.iter().copied().find(|k| last_clear.is_none_or(|c| *k >= c))?;
+    (first < last).then_some(first)
+}
+
+/// (HAIR-BLEED) The split's list for a `r.hybrid_gb_first` mode (see `GB_FIRST`); `None` = the last G-buffer list.
+pub fn gbuffer_split_list(mode: u32, gbuffer_lists: &[usize], last_clear: Option<usize>, last: usize) -> Option<usize> {
+    let allowed = |k: &usize| last_clear.is_none_or(|c| *k >= c) && *k < last;
+    match mode {
+        1 => first_gbuffer_list(gbuffer_lists, last_clear, last),
+        2 => gbuffer_lists.iter().copied().rfind(allowed),
+        m if m >= 10 => gbuffer_lists.iter().copied().filter(allowed).find(|k| *k == (m - 10) as usize),
+        _ => None,
+    }
+}
+
 pub fn on_execute(queue: usize, count: u32, lists: *const *mut c_void) -> Submission {
     let mut out = Submission::default();
     let Ok(mut guard) = STATE.lock() else { return out };
@@ -445,6 +576,8 @@ pub fn on_execute(queue: usize, count: u32, lists: *const *mut c_void) -> Submis
     let depth = state.held.as_ref().map(|(p, _)| *p).and_then(|p| state.resources.get(&p).map(|i| (p, i.width, i.height)));
     let (mut g_buffer, mut hdr): (bool, Option<usize>) = (false, None);
     let mut pairs: Vec<usize> = Vec::new();
+    // (ER-NATIVE) the second member of each pair, in the order of `pairs`
+    let mut seconds: Vec<usize> = Vec::new();
     let mut velocity: Option<usize> = None;
     let mut mask: Option<usize> = None;
     let mut albedo: Option<usize> = None;
@@ -456,6 +589,14 @@ pub fn on_execute(queue: usize, count: u32, lists: *const *mut c_void) -> Submis
     let mut open_splits: Vec<usize> = Vec::new();
     // (IMPL_ER80) the latest pair of full-size HDR targets drawn with the scene depth written (the composite: scene + glow)
     let mut hdr_pair: Option<(usize, usize)> = None;
+    // (HAIR-BLEED) every G-buffer list of the submission (index, the depth's planes and the G-buffer's targets at its end) and
+    // the last list that cleared the depth bound with four or more targets (the G-buffer stage's depth clear)
+    let mut gb_lists: Vec<(usize, [i32; 2], [crate::hybrid::GbTarget; crate::hybrid::ROLES], usize)> = Vec::new();
+    let mut last_clear: Option<usize> = None;
+    // (HAIR-BLEED) the copies of this submission (list index, destination, source, subresources) and, at the end of the latest
+    // G-buffer list, the copies made so far with their destinations' states then
+    let mut copies: Vec<(usize, usize, usize, Option<CopyRegion>)> = Vec::new();
+    let mut copies_at_gb: Vec<StageCopy> = Vec::new();
     state.submissions += 1;
     if logging {
         state.lines.push(format!("submission {} on queue {queue:#x}: {count} list(s)", state.submissions));
@@ -471,6 +612,8 @@ pub fn on_execute(queue: usize, count: u32, lists: *const *mut c_void) -> Submis
         // The scene depth's state inside this list (its depth plane).
         let mut depth_now = depth.and_then(|(p, ..)| state.resources.get(&p)).and_then(|i| i.states.first().copied()).unwrap_or(0);
         let mut depth_only_view = 0usize;
+        // (HAIR-BLEED) the depth view and target count of the latest target set in this list
+        let mut bound: (usize, u32) = (0, 0);
         // (IMPL_ER53) this list drew into the G-buffer
         let mut g_buffer_here = false;
         // (RSF2 round 14) a half-size depth of the scene depth's format went to DEPTH_WRITE in this list
@@ -574,12 +717,21 @@ pub fn on_execute(queue: usize, count: u32, lists: *const *mut c_void) -> Submis
                         if targets.len() == 2 && targets.iter().all(hdr_full) && depth_now & D3D12_RESOURCE_STATE_DEPTH_READ.0 != 0 && depth_now & D3D12_RESOURCE_STATE_DEPTH_WRITE.0 == 0 {
                             if !pairs.contains(&targets[0]) {
                                 pairs.push(targets[0]);
+                                seconds.push(targets[1]);
                             }
                             if out.table_count < out.tables.len() && !out.tables[..out.table_count].contains(&table) {
                                 out.tables[out.table_count] = table;
                                 out.table_count += 1;
                             }
                         }
+                    }
+                }
+                Event::Copy { dst, src, subresources } => {
+                    if copies.len() < 64 {
+                        copies.push((k, dst, src, subresources));
+                    }
+                    if logging {
+                        lines.push(format!("      (HAIR-BLEED) copy {} <- {} {subresources:?}", describe(dst, state.resources.get(&dst)), describe(src, state.resources.get(&src))));
                     }
                 }
                 Event::Cast { resource, after, pass } => {
@@ -595,6 +747,7 @@ pub fn on_execute(queue: usize, count: u32, lists: *const *mut c_void) -> Submis
                     if count == 0 {
                         depth_only_view = depth;
                     }
+                    bound = (depth, count);
                     sets += 1;
                     if logging {
                         lines.push(format!("      targets {count} (first view {first:#x}) depth view {depth:#x}"));
@@ -602,6 +755,9 @@ pub fn on_execute(queue: usize, count: u32, lists: *const *mut c_void) -> Submis
                 }
                 Event::ClearDepth { view, flags, depth } => {
                     clears += 1;
+                    if view != 0 && view == bound.0 && bound.1 >= 4 && flags & D3D12_CLEAR_FLAG_DEPTH.0 != 0 {
+                        last_clear = Some(k);
+                    }
                     if logging {
                         lines.push(format!("      clear depth view {view:#x} flags {flags} to {depth}"));
                     }
@@ -630,6 +786,19 @@ pub fn on_execute(queue: usize, count: u32, lists: *const *mut c_void) -> Submis
                     if let Some(i) = state.resources.get(t).filter(|i| i.mismatch != state.frame && !open_splits.contains(t)) {
                         *slot = crate::hybrid::GbTarget { resource: *t, format: i.format.0, width: i.width, height: i.height, state: i.states.first().copied().unwrap_or(0) };
                     }
+                }
+                // (HAIR-BLEED) kept per list: the first one after the depth clear may become the split
+                gb_lists.push((k, planes, out.gbuffer, out.gbuffer_count));
+                // (HAIR-BLEED) the copies of the scene depth / the G-buffer made up to here, with their destinations' states now
+                // (a destination contradicted in this frame, or with a split barrier open, stays unknown: not redone)
+                copies_at_gb.clear();
+                for (_, dst, src, subresources) in &copies {
+                    let from_stage = *src == depth || g_buffer_set.contains(src);
+                    if !from_stage || copies_at_gb.iter().any(|c| c.dst == *dst) || copies_at_gb.len() >= STAGE_COPIES {
+                        continue;
+                    }
+                    let dst_state = state.resources.get(dst).filter(|i| i.mismatch != state.frame && !open_splits.contains(dst)).and_then(|i| i.states.first().copied()).unwrap_or(0);
+                    copies_at_gb.push(StageCopy { dst: *dst, src: *src, subresources: *subresources, dst_state });
                 }
             }
         }
@@ -685,6 +854,35 @@ pub fn on_execute(queue: usize, count: u32, lists: *const *mut c_void) -> Submis
         let ok = |p: Option<usize>| p.and_then(|p| state.resources.get(&p)).is_none_or(|i| i.mismatch != frame);
         out.clean = ok(depth.map(|d| d.0)) && ok(hdr) && ok(out.velocity.map(|v| v.0)) && ok(finished);
     }
+    // (HAIR-BLEED) the KH characters' G-buffer pass right after the stage's depth clear: the first G-buffer list from there, when
+    // the stage has more G-buffer lists after it (its copies of the depth and normal, its decals, are made in those)
+    // (the "Kingdom Hearts 3" style, `r.hybrid_native = 0`: the route from before ER-NATIVE, the split after the last list as ever)
+    let mode = GB_FIRST.load(Ordering::Relaxed);
+    if mode != 0 && out.early_split > 0 && crate::hybrid::settings().native {
+        let indices: Vec<usize> = gb_lists.iter().map(|g| g.0).collect();
+        // (never before the end of the sun's caster passes: his real shadow is drawn at that split first, hook.rs)
+        let from = last_clear.max(out.sun.map(|s| s.split.saturating_sub(1)));
+        if let Some(first) = gbuffer_split_list(mode, &indices, from, out.early_split - 1) {
+            if let Some((k, planes, targets, count)) = gb_lists.iter().find(|g| g.0 == first).copied() {
+                out.early_split = k + 1;
+                out.early_states = planes;
+                out.gbuffer = targets;
+                out.gbuffer_count = count;
+                out.early_first = true;
+            }
+        }
+        if logging {
+            state.lines.push(format!("    (HAIR-BLEED) G-buffer lists {indices:?}, the stage's depth clear in list {last_clear:?}, from list {from:?}: the KH G-buffer pass after list {} ({})", out.early_split.saturating_sub(1), if out.early_first { "the first" } else { "the last" }));
+        }
+    }
+    // (HAIR-BLEED) the stage's copies made before the early split (at the last G-buffer list: every one of them)
+    if !out.early_first && out.early_split > 0 {
+        out.stage_copy_count = copies_at_gb.len().min(STAGE_COPIES);
+        out.stage_copies[..out.stage_copy_count].copy_from_slice(&copies_at_gb[..out.stage_copy_count]);
+        if logging {
+            state.lines.push(format!("    (HAIR-BLEED) the G-buffer stage's copies redone after the KH G-buffer pass: {:?}", &out.stage_copies[..out.stage_copy_count]));
+        }
+    }
     if let (true, Some(target)) = (g_buffer, hdr) {
         out.scene = state.resources.get(&target).and_then(|i| i.states.first().copied()).map(|s| (target, s));
         let readable = |l: &usize| *l != target && state.resources.get(l).is_some_and(|i| i.states.iter().all(|s| *s & D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE.0 != 0));
@@ -692,6 +890,7 @@ pub fn on_execute(queue: usize, count: u32, lists: *const *mut c_void) -> Submis
         // (the pass the directional light draws in is the LAST of them: where there is no
         // environment pass in front of it, it is the only one)
         out.light2 = pairs.last().copied().filter(readable).or_else(|| Some(TEST_LIGHT.load(Ordering::Relaxed)).filter(|t| *t != 0).filter(readable));
+        out.spec2 = seconds.last().copied().filter(|s| out.light2 == pairs.last().copied() && Some(*s) != out.light2).filter(readable);
         out.mask = mask.filter(readable).or_else(|| Some(TEST_MASK.load(Ordering::Relaxed)).filter(|t| *t != 0).filter(readable));
         // (IMPL_ER80) the glow source: the other member of the latest pair that holds the scene target; full size, a float
         // HDR format, not contradicted this frame, no split barrier open on it
@@ -833,4 +1032,27 @@ pub fn hold_main_depth() -> Option<(u32, u32)> {
             .map(|i| (i.width as u32, i.height))?
     };
     scene_depth(width, height).map(|_| (width, height))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // (HAIR-BLEED) the er7 survey's deferred submission: list 0 binds the G-buffer for its clears, list 10 clears the scene depth
+    // with the G-buffer bound and lists 10..31 draw it (the depth and normal copies in list 30): the split goes after list 10
+    #[test]
+    fn the_kh_gbuffer_pass_goes_after_the_stages_depth_clear() {
+        let lists: Vec<usize> = std::iter::once(0).chain(10..=31).collect();
+        assert_eq!(first_gbuffer_list(&lists, Some(10), 31), Some(10));
+        // no depth clear seen: the first G-buffer list
+        assert_eq!(first_gbuffer_list(&lists, None, 31), Some(0));
+        // a single G-buffer list, or the clear in the last one: the last list as before
+        assert_eq!(first_gbuffer_list(&[31], Some(10), 31), None);
+        assert_eq!(first_gbuffer_list(&lists, Some(31), 31), None);
+        assert_eq!(GB_FIRST.load(Ordering::Relaxed), 0, "r.hybrid_gb_first is a testing aid, 0 by default");
+        assert_eq!(gbuffer_split_list(2, &lists, Some(10), 31), Some(30));
+        assert_eq!(gbuffer_split_list(10 + 20, &lists, Some(10), 31), Some(20));
+        assert_eq!(gbuffer_split_list(10 + 5, &lists, Some(10), 31), None);
+        assert_eq!(gbuffer_split_list(0, &lists, Some(10), 31), None);
+    }
 }

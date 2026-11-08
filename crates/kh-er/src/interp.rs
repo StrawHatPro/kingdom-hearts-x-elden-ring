@@ -9,7 +9,7 @@
 //! - Sora's pose and transform, the Keyblade and the form weapons, his clip times (sora.rs `submit`);
 //! - the camera (cam.rs `post`; a cut is never blended: `camera_cut`);
 //! - the friends (partydraw.rs, `PosedMember::posed`), the hero light's carrier, the team props (`Props`);
-//! - the effects (fx.rs `draw_at`): emitter nodes, particles (born ones with their emitter), trails' heads, decals, the
+//! - the effects (fx.rs `draw_drawn`): emitter nodes, particles (born ones with their emitter), trails' heads, decals, the
 //!   effects' point lights (kh-vfx);
 //! - the enemies in a KH3 reaction (puppet.rs `reassert_at`);
 //! - the HUD's world marks and the bubbles' tails: projected through the view drawn in THIS frame (`drawn_camera`).

@@ -12,9 +12,9 @@
 //! - `Settings.BloomThreshold`: 72.83 s 10, 74.33 s 5 (KH3's default -1 before): `bloom_threshold`;
 //! - `Settings.BloomIntensity` -1 at 72.83 s: not applied (a negative intensity has no meaning in UE 4.17's composite;
 //!   untraced, taken as "left as it is").
-//! KH3's effect materials divide their emissive by the eye adaptation (SQEXEnableEmissiveRevEyeAdaptation): an exposure
-//! change leaves them as they are. So `exposure_ev` darkens the WORLD and the characters, not the effects; the hosts
-//! follow that (Elden Ring: our characters only, its world is left alone).
+//!   KH3's effect materials divide their emissive by the eye adaptation (SQEXEnableEmissiveRevEyeAdaptation): an exposure
+//!   change leaves them as they are. So `exposure_ev` darkens the WORLD and the characters, not the effects; the hosts
+//!   follow that (Elden Ring: our characters only, its world is left alone).
 
 use std::sync::Mutex;
 

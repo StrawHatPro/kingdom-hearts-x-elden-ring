@@ -95,6 +95,6 @@ mod tests {
 
     #[test]
     fn face_self_radius_is_his_own_place() {
-        assert!(SELF_RADIUS > 50.0 && SELF_RADIUS < 300.0);
+        const { assert!(SELF_RADIUS > 50.0 && SELF_RADIUS < 300.0) };
     }
 }

@@ -7,7 +7,8 @@
 //!   8 EndFlowWait, 9 NextLap, 10 MenuJobWait, 11 Finish; its state setter is RVA 0xB0F070 (`fn(step, state)`,
 //!   current state at step + 0x48, asked state at + 0x4C).
 //! - the dialogs of the title's menu job, each made by one factory: `TitleTopDialog` (0x81F460), `ProfileLoadDialog`
-//!   (Load Game, 0x81F950), `ChrMakeBaseSelectDialog` ("Select Character Base", 0x8A3370).
+//!   (Load Game, 0x81F950), `ChrMakeBaseSelectDialog` ("Select Character Base", 0x8A3370), (NG delete)
+//!   `ProfileDeleteDialog` (New Game with every slot in use, 0x81F700).
 //!
 //! WHAT WE DO: those functions are detoured (each used only where 2.7.1.0 has it and only when its first bytes
 //! are the ones read from the file) to KNOW the flow; `STEP_BeginNewGame` (0xB0DC50) can also be HELD: while
@@ -71,12 +72,15 @@ pub(crate) const BEGIN_NEW_GAME: Known = Known { name: "TitleStep::STEP_BeginNew
 pub(crate) const MAKE_BASE_SELECT: Known = Known { name: "ChrMakeBaseSelectDialog factory", rva: 0x008A_3370, rva_2_7_2_0: 0x008A_3820 /* (PORT) */, bytes: "40 57 48 83 ec 50 48 c7 44 24 30 fe ff ff ff 48 89 5c 24 60 48 89 74 24 68 49 8b f9 49 8b f0 48 8b da 4c 8b 05 ?? ?? ?? ?? 4c 89 44 24 38 ba 08 00 00 00 b9 b8 26 00 00" };
 pub(crate) const MAKE_TITLE_TOP: Known = Known { name: "TitleTopDialog factory", rva: 0x0081_F460, rva_2_7_2_0: 0x0081_F910 /* (PORT) */, bytes: "48 8b c4 56 57 41 56 48 81 ec 90 00 00 00 48 c7 40 80 fe ff ff ff 48 89 58 08 48 8b f2 4c 8b f1 33 db 89 5c 24 20 4c 8b 05 ?? ?? ?? ?? 4c 89 40 18" };
 pub(crate) const MAKE_PROFILE_LOAD: Known = Known { name: "ProfileLoadDialog factory", rva: 0x0081_F950, rva_2_7_2_0: 0x0081_FE00 /* (PORT) */, bytes: "40 56 57 41 56 48 81 ec 90 00 00 00 48 c7 44 24 28 fe ff ff ff 48 89 9c 24 b0 00 00 00 48 8b f2 4c 8b f1 33 db 89 5c 24 20 e8 ?? ?? ?? ?? 4c 8b 05 ?? ?? ?? ??" };
+/// (NG delete) `ProfileDeleteDialog` (New Game with every slot in use: "Delete selected profile and begin a new game?"):
+/// its RTTI's vtable is written by the constructor RVA 0x9A3F80 / 0x9A4430 (2.7.2.0), whose one caller is this factory
+/// (read from both files 2026-11-02, the same way giving the recorded ProfileLoadDialog factory). Its bytes are
+/// ProfileLoadDialog's to the byte (only call targets differ): the recorded RVAs alone place it.
+pub(crate) const MAKE_PROFILE_DELETE: Known = Known { name: "ProfileDeleteDialog factory", rva: 0x0081_F700, rva_2_7_2_0: 0x0081_FBB0, bytes: "40 56 57 41 56 48 81 ec 90 00 00 00 48 c7 44 24 28 fe ff ff ff 48 89 9c 24 b0 00 00 00 48 8b f2 4c 8b f1 33 db 89 5c 24 20 e8 ?? ?? ?? ?? 4c 8b 05 ?? ?? ?? ??" };
 
 /// The states of `CS::TitleStep` (the game's own names).
 pub const STATE_NAMES: [&str; 12] = ["InitMenu", "BeginXR117Dialog", "BeginLogo", "BeginTitle", "BeginNewGame", "PlayGame", "GameStepWait", "EndFlow", "EndFlowWait", "NextLap", "MenuJobWait", "Finish"];
-pub const ST_BEGIN_TITLE: i32 = 3;
 pub const ST_BEGIN_NEW_GAME: i32 = 4;
-pub const ST_PLAY_GAME: i32 = 5;
 pub const ST_GAME_STEP_WAIT: i32 = 6;
 pub const ST_MENU_JOB_WAIT: i32 = 10;
 
@@ -109,6 +113,7 @@ static ORIG_BEGIN_NEW: AtomicUsize = AtomicUsize::new(0);
 static ORIG_BASE: AtomicUsize = AtomicUsize::new(0);
 static ORIG_TOP: AtomicUsize = AtomicUsize::new(0);
 static ORIG_LOAD: AtomicUsize = AtomicUsize::new(0);
+static ORIG_DELETE: AtomicUsize = AtomicUsize::new(0);
 
 /// The title step's state as its setter was last asked (-1: never), and when (ms tick).
 static STATE: AtomicI32 = AtomicI32::new(-1);
@@ -116,10 +121,14 @@ static STATE_AT: AtomicU64 = AtomicU64::new(0);
 /// When each dialog was last made (ms tick; 0 = never in this run).
 static TOP_AT: AtomicU64 = AtomicU64::new(0);
 static LOAD_AT: AtomicU64 = AtomicU64::new(0);
+/// (TITLE-AUDIO) When the NG delete list (ProfileDeleteDialog) was last made.
+static DELETE_AT: AtomicU64 = AtomicU64::new(0);
 static BASE_AT: AtomicU64 = AtomicU64::new(0);
 /// `STEP_BeginNewGame`: when it was first called for the current new game (0: not in it), calls held back.
 static BEGIN_AT: AtomicU64 = AtomicU64::new(0);
 static HELD_CALLS: AtomicU32 = AtomicU32::new(0);
+/// (NG) A new game began since the last character start (taken once by save.rs `on_start`).
+static NEW_GAME_BEGUN: AtomicBool = AtomicBool::new(false);
 /// The hold is asked for until this tick (renewed by `hold_new_game`; it lapses by itself).
 static HOLD_UNTIL: AtomicU64 = AtomicU64::new(0);
 /// This new game's hold was given up for good (the choices are made).
@@ -155,6 +164,7 @@ unsafe extern "C" fn begin_new_game_hook(step: *mut u8, time: *mut u8) {
     let t = now();
     if BEGIN_AT.compare_exchange(0, t, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
         HELD_CALLS.store(0, Ordering::Relaxed);
+        NEW_GAME_BEGUN.store(true, Ordering::Relaxed);
         STATE.store(ST_BEGIN_NEW_GAME, Ordering::Relaxed);
         STATE_AT.store(t, Ordering::Relaxed);
         if told() {
@@ -184,15 +194,19 @@ unsafe extern "C" fn base_hook(a: usize, b: usize, c: usize, d: usize, e: usize,
 unsafe extern "C" fn top_hook(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) -> usize {
     let original: FactoryFn = std::mem::transmute(ORIG_TOP.load(Ordering::Relaxed));
     TOP_AT.store(now(), Ordering::Relaxed);
+    NEW_GAME_BEGUN.store(false, Ordering::Relaxed); // (NG) back at the title: that new game never started a character
     if told() {
         erlog!("title: TitleTopDialog is being made (the title menu)");
     }
+    // (SAVE-DELETE) the menu reads Continue's slot as it is made: the user's rule is in it first (slots.rs)
+    let _ = std::panic::catch_unwind(|| crate::slots::apply_title_continue("the title menu is being made"));
     original(a, b, c, d, e, f)
 }
 
 unsafe extern "C" fn load_hook(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) -> usize {
     let original: FactoryFn = std::mem::transmute(ORIG_LOAD.load(Ordering::Relaxed));
     LOAD_AT.store(now(), Ordering::Relaxed);
+    NEW_GAME_BEGUN.store(false, Ordering::Relaxed); // (NG) a load is asked for: not the new game's character
     if told() {
         erlog!("title: ProfileLoadDialog is being made (Load Game)");
     }
@@ -203,15 +217,27 @@ unsafe extern "C" fn load_hook(a: usize, b: usize, c: usize, d: usize, e: usize,
     made
 }
 
+unsafe extern "C" fn delete_hook(a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) -> usize {
+    let original: FactoryFn = std::mem::transmute(ORIG_DELETE.load(Ordering::Relaxed));
+    DELETE_AT.store(now(), Ordering::Relaxed); // (TITLE-AUDIO)
+    if told() {
+        erlog!("title: ProfileDeleteDialog is being made (New Game with every slot in use)");
+    }
+    // (NG delete) KH3's delete list on the title: the cover goes up inside this call
+    let _ = std::panic::catch_unwind(crate::titleload::before_delete_dialog);
+    original(a, b, c, d, e, f)
+}
+
 /// Detours the title flow's functions (once per payload; undone by the renderer's shutdown with every other inline hook).
 pub fn install() {
     let mut n = 0;
-    let hooks: [(&Known, usize, &AtomicUsize, &'static str); 5] = [
+    let hooks: [(&Known, usize, &AtomicUsize, &'static str); 6] = [
         (&SET_STATE, set_state_hook as *const () as usize, &ORIG_SET_STATE, "title step state"),
         (&BEGIN_NEW_GAME, begin_new_game_hook as *const () as usize, &ORIG_BEGIN_NEW, "title begin new game"),
         (&MAKE_BASE_SELECT, base_hook as *const () as usize, &ORIG_BASE, "character base dialog"),
         (&MAKE_TITLE_TOP, top_hook as *const () as usize, &ORIG_TOP, "title top dialog"),
         (&MAKE_PROFILE_LOAD, load_hook as *const () as usize, &ORIG_LOAD, "profile load dialog"),
+        (&MAKE_PROFILE_DELETE, delete_hook as *const () as usize, &ORIG_DELETE, "profile delete dialog"),
     ];
     for (known, hook, original, what) in hooks {
         let Some(f) = at(known) else { continue };
@@ -224,12 +250,12 @@ pub fn install() {
             }
         }
     }
-    erlog!("title: {n} of 5 functions of the title's flow are detoured (state setter, BeginNewGame, the three dialog factories)");
+    erlog!("title: {n} of 6 functions of the title's flow are detoured (state setter, BeginNewGame, the four dialog factories)");
 }
 
 /// The hooks are gone (the renderer's shutdown removed every inline hook).
 pub fn uninstalled() {
-    for o in [&ORIG_SET_STATE, &ORIG_BEGIN_NEW, &ORIG_BASE, &ORIG_TOP, &ORIG_LOAD] {
+    for o in [&ORIG_SET_STATE, &ORIG_BEGIN_NEW, &ORIG_BASE, &ORIG_TOP, &ORIG_LOAD, &ORIG_DELETE] {
         o.store(0, Ordering::SeqCst);
     }
     HOLD_UNTIL.store(0, Ordering::SeqCst);
@@ -245,28 +271,42 @@ pub fn state() -> i32 {
     STATE.load(Ordering::Relaxed)
 }
 
-/// Milliseconds since "Select Character Base" was last made (`None`: never).
-pub fn base_made_ago() -> Option<u64> {
-    let t = BASE_AT.load(Ordering::Relaxed);
-    (t != 0).then(|| now().saturating_sub(t))
-}
-
-/// Milliseconds since the Load Game list was last made (`None`: never).
-pub fn load_made_ago() -> Option<u64> {
-    let t = LOAD_AT.load(Ordering::Relaxed);
-    (t != 0).then(|| now().saturating_sub(t))
-}
-
 /// Milliseconds since the title menu was last made (`None`: never).
 pub fn top_made_ago() -> Option<u64> {
     let t = TOP_AT.load(Ordering::Relaxed);
     (t != 0).then(|| now().saturating_sub(t))
 }
 
+/// (TITLE-AUDIO) The tick (ms) the title menu was last made (0: never), for titlemusic.rs's rule.
+pub fn top_made_at() -> u64 {
+    TOP_AT.load(Ordering::Relaxed)
+}
+
+/// (TITLE-AUDIO) The tick (ms) the Load Game list was last made (0: never): KH3's Load screen goes up in that call.
+pub fn load_made_at() -> u64 {
+    LOAD_AT.load(Ordering::Relaxed)
+}
+
+/// (TITLE-AUDIO) The tick (ms) the NG delete list was last made (0: never): KH3's delete list goes up in that call.
+pub fn delete_made_at() -> u64 {
+    DELETE_AT.load(Ordering::Relaxed)
+}
+
+/// (TITLE-AUDIO) The tick (ms) "Select Character Base" was last made (0: never): the new game's flow began.
+pub fn base_made_at() -> u64 {
+    BASE_AT.load(Ordering::Relaxed)
+}
+
 /// `STEP_BeginNewGame` is being called (held or not): milliseconds since its first call.
 pub fn begin_new_game_for() -> Option<u64> {
     let t = BEGIN_AT.load(Ordering::Relaxed);
     (t != 0).then(|| now().saturating_sub(t))
+}
+
+/// (NG, save.rs `on_start`) The game's own `STEP_BeginNewGame` ran since the last character start: the character
+/// starting now was just made. Taken once.
+pub fn take_new_game_begun() -> bool {
+    NEW_GAME_BEGUN.swap(false, Ordering::Relaxed)
 }
 
 /// Renews the hold of `STEP_BeginNewGame` for the next 500 ms (call every frame while the flow must wait).
@@ -301,4 +341,15 @@ pub fn watch(on: bool) {
 /// (IMPL_ER15) The Load Game list's factory and the state setter are detoured (titleload.rs needs both).
 pub fn load_hooked() -> bool {
     ORIG_LOAD.load(Ordering::Relaxed) != 0 && ORIG_SET_STATE.load(Ordering::Relaxed) != 0
+}
+
+/// (NG delete) The new game's delete list can be taken over (its factory is detoured).
+pub fn delete_hooked() -> bool {
+    ORIG_DELETE.load(Ordering::Relaxed) != 0 && ORIG_SET_STATE.load(Ordering::Relaxed) != 0
+}
+
+/// (NG delete) Milliseconds since "Select Character Base" was last made (`None`: never): the new game's creation began.
+pub fn base_made_ago() -> Option<u64> {
+    let t = BASE_AT.load(Ordering::Relaxed);
+    (t != 0).then(|| now().saturating_sub(t))
 }

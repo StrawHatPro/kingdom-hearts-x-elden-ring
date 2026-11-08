@@ -84,7 +84,6 @@ fn can_run(state: &mut StateData, s: &Pawn, w: &dyn World) -> bool {
         StateData::Swaying(w) => w.sub == 3 && on_ground(s),
         // (magic implementer) FIREMAGIC: only out of a moving cast after TresEnableChange (magic spec A 5.4).
         StateData::FireMagic(m) => m.can_run(s) && on_ground(s),
-        #[allow(unreachable_patterns)]
         _ => false,
     }
 }
@@ -142,7 +141,6 @@ pub(crate) fn try_run(state: &mut StateData, cx: &mut Ctx, yaw: f32, magnitude: 
             s.queue.set_state(Run { sub: 0, request: true, yaw, magnitude, walk: false, ..Run::RESET });
         }
         // (Unreachable: `can_run` refuses every other state.)
-        #[allow(unreachable_patterns)]
         _ => {}
     }
 }
@@ -248,7 +246,9 @@ fn run_tick(r: &mut Run, cx: &mut Ctx, dt: f32, draw: &mut bool) {
     // The animation set (Part I 9.1 / 9.3): `N` weapon away, `W` weapon out, `B` battle pose; the
     // `W` / `B` names take the play arguments of their `N` twin. The stance inputs at tick start.
     let set = actions::suffix(s);
-    let (battle, battle_anim) = (s.actions.battle, actions::battle_anim(s));
+    // (F-LOCO) the battle flag (vt+0x1740), forced on in forms 0x85 / 0x87 / 0x88 / 0x8B (Run Tick 0x1413AED70: forms `keeps_battle_stance`)
+    // (FORM-LOCO2) the user's rule: forced on in EVERY held form until it ends (forms `holds_battle_stance`)
+    let (battle, battle_anim) = (s.actions.battle || crate::combat::forms::holds_battle_stance(s.combat.form.cmd), actions::battle_anim(s));
     let loop_twin = if is_run { AnimId::RunLoopN } else { AnimId::WalkLoopN };
     let loop_name = run_name(loop_twin, set);
     // PORT OPTION `Tuning::speed_matched_anim` blends the walk and run cycles of the set in use
@@ -317,7 +317,7 @@ fn run_tick(r: &mut Run, cx: &mut Ctx, dt: f32, draw: &mut bool) {
                         // The set changed under the loop (Keyblade drawn / put away, battle pose).
                         s.anim.retarget_locomotion(loco_set);
                     }
-                } else if s.anim.name != loop_name || s.anim.in_locomotion() {
+                } else if s.anim.logical /* (F-LOCO) */ != loop_name || s.anim.in_locomotion() {
                     actions::play_as(s, loop_name, loop_twin);
                 }
             }
@@ -396,7 +396,7 @@ fn run_tick(r: &mut Run, cx: &mut Ctx, dt: f32, draw: &mut bool) {
     // sprint as in the game). The limit is held on a tick without a request.
     if s.tuning.speed_ramp && r.sub == 0 {
         let target = if is_run { 1.0 } else { 0.0 };
-        if r.gait < 0.0 || !(s.tuning.speed_ramp_time > 0.0) {
+        if r.gait < 0.0 || s.tuning.speed_ramp_time.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
             r.gait = target;
         } else if r.request {
             let step = dt / s.tuning.speed_ramp_time;
@@ -430,7 +430,7 @@ fn run_tick(r: &mut Run, cx: &mut Ctx, dt: f32, draw: &mut bool) {
         let p_run = if boosted { crate::params::SORA_PARAMS.speed_run } else { p.speed_run };
         let (walk_speed, run_speed) = (p_run * p.speed_walk_rate, p_run);
         // (The cycle lengths of the set that plays: `WalkLoopB` is 1.2 s, the others as `N`.)
-        let playing = s.anim.locomotion_set().unwrap_or(loco_set);
+        let playing = s.anim.locomotion_played().unwrap_or(loco_set); // (F-LOCO) the clips that play (a form's own lengths)
         let (walk_length, run_length) = (playing.walk.data().length, playing.run.data().length);
         let velocity = s.cmc.velocity;
         let speed = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();

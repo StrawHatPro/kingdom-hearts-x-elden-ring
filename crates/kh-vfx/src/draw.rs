@@ -98,6 +98,65 @@ pub struct MeshInstance {
     pub sub: f32,
 }
 
+/// (VFX-2) One `TypeDataSQEX_SkeletalMesh` component this frame (`crate::def::SkeletalDef`): a skeletal mesh posed by a
+/// clip of its own, drawn with the emitter's material. The host resolves the mesh, the clip and its length.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SkelInstance {
+    /// The skeletal mesh's asset base name (`p_ex001_0`, `w_so050_0`); empty: the owner's mesh (external).
+    pub mesh: String,
+    /// The emitter's material (an index of the material names), `u32::MAX` = none: the mesh keeps its own materials.
+    pub material: u32,
+    /// The component in the world (UE cm, the mesh's own space to world), scale included; with `parent` the place in the
+    /// parent's socket instead (identity: KH3 attaches it there with no offset).
+    pub transform: Affine3A,
+    /// `bAttachParentObject`: the index in `DrawList::skeletal` of the parent emitter's component, and the socket.
+    pub parent: Option<(u32, String)>,
+    /// The `AnimationData` list and the entry playing (the LOOP_END changes are counted here), and seconds since that
+    /// entry started. The host walks the ANIM_END changes by the clips' lengths (`SkelInstance::clip_at`).
+    pub anims: std::sync::Arc<[crate::def::SkelAnim]>,
+    pub anim: usize,
+    pub anim_time: f32,
+    /// Both external flags: the new mesh copies the owner's pose of the moment it was made (held: no clip plays).
+    pub owner_pose: bool,
+    /// The emitter's material modules at this frame (name, value, vector): its dynamic material's parameters.
+    pub params: Vec<(String, [f32; 4], bool)>,
+    pub blend: Blend,
+    /// Seconds the emitter instance has lived (the material's clock).
+    pub time: f32,
+}
+
+impl SkelInstance {
+    /// The clip to show and its time: from the playing entry, every ANIM_END entry hands over to the next when its clip
+    /// (`length`, seconds; None = unknown) has run once; an entry with `bStopAnimation` is held at its `StopTime`. None:
+    /// no clip (the reference pose, or the owner's pose).
+    pub fn clip_at(&self, length: &dyn Fn(&str) -> Option<f32>) -> Option<(String, f32)> {
+        if self.anims.is_empty() || self.owner_pose {
+            return None;
+        }
+        let (mut k, mut t) = (self.anim % self.anims.len(), self.anim_time.max(0.0));
+        for _ in 0..self.anims.len() {
+            let a = &self.anims[k];
+            let len = a.clip.as_deref().and_then(length).filter(|l| *l > 1.0e-4);
+            match (a.change, len, a.stop) {
+                (crate::def::AnimChange::AnimEnd, Some(len), None) if t >= len => {
+                    t -= len;
+                    k = (k + 1) % self.anims.len();
+                }
+                _ => break,
+            }
+        }
+        let a = &self.anims[k];
+        let clip = a.clip.clone()?;
+        let len = length(&clip).filter(|l| *l > 1.0e-4);
+        let time = match (a.stop, len) {
+            (Some(stop), _) => stop,
+            (None, Some(len)) => t % len,
+            (None, None) => t,
+        };
+        Some((clip, time))
+    }
+}
+
 /// (ZA) The sub-UV image of a mesh particle as one float for the hosts' shaders (`kh_mesh_subuv` in both WGSL files):
 /// -(1 + lerp7 | image8 << 7 | (h - 1) << 15 | (v - 1) << 19), exact in an f32; 0 = no sub images.
 pub fn sub_image_code(image: f32, h: u32, v: u32, blend: bool) -> f32 {
@@ -168,6 +227,11 @@ pub struct DrawList {
     /// (VFXR sort) the draws of each live emitter, in the list's order (`DrawGroup`): what a host sorts its translucent
     /// draws by. Every quad / ribbon / mesh / decal belongs to exactly one group.
     pub groups: Vec<DrawGroup>,
+    /// (VFX-2) the skeletal mesh components of the live `TypeDataSQEX_SkeletalMesh` emitters (`SkelInstance`).
+    pub skeletal: Vec<SkelInstance>,
+    /// (VFX-RING S) the ribbons drawn exactly as listed, with their own UVs and B-edge colours (`ribbon_exact_of`), in
+    /// ribbon order: a dynamic shape's strips.
+    pub ribbon_exact: Vec<crate::dynshape::RibbonExact>,
 }
 
 impl DrawList {
@@ -184,6 +248,8 @@ impl DrawList {
         self.screen.clear(); // (VFXR)
         self.char_params.clear(); // (VFXR)
         self.groups.clear(); // (VFXR sort)
+        self.skeletal.clear(); // (VFX-2)
+        self.ribbon_exact.clear(); // (VFX-RING S)
         self.quads.clear();
         self.ribbons.clear();
         self.meshes.clear();
@@ -192,7 +258,7 @@ impl DrawList {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.quads.is_empty() && self.ribbons.is_empty() && self.meshes.is_empty() && self.decals.is_empty()
+        self.quads.is_empty() && self.ribbons.is_empty() && self.meshes.is_empty() && self.decals.is_empty() && self.skeletal.is_empty()
     }
 }
 

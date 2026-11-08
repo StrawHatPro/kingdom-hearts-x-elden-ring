@@ -389,8 +389,11 @@ pub enum SeamNotify {
     /// `TresAnimNotify_PlayActorVoice.m_ActorVoice` (a `TresActorVoice` asset path, from the notify's props): the
     /// field chat line of the talk clips.
     ActorVoice { asset: &'static str },
-    /// One row of an AttachEffect notify: the particle system, its socket, its GroupID.
-    Effect { effect: &'static str, socket: &'static str, group_id: i32 },
+    /// One row of an AttachEffect notify: the particle system, its socket, its GroupID, and its place on that socket
+    /// (the row's LocationOffset cm, RotationOffset pitch / yaw / roll deg, ScaleOffset's uniform part), in the socket's
+    /// frame. (THE USER 2026-11-02: "this effect is not aligned properly": Goofy's shield bash VN_slg_bsh0 sits on
+    /// vfx_root at (100, 0, 80), a metre ahead at shield height; without the offset it sat at his feet behind the lunge.)
+    Effect { effect: &'static str, socket: &'static str, group_id: i32, offset: Vec3, rotation: Vec3, scale: f32 },
 }
 
 impl SeamNotify {
@@ -401,7 +404,8 @@ impl SeamNotify {
             NotifyData::WeaponSe { alias, socket, follow, volume, pitch, fade_out, .. } => vec![SeamNotify::WeaponSe { alias, socket, follow, volume, pitch, fade_out }],
             NotifyData::AutoSe { motion, source, fade_out } => vec![SeamNotify::AutoSe { name: motion.or(source).unwrap_or(""), fade_out }],
             NotifyData::Voice { group, asset, random, fade_out } => vec![SeamNotify::Voice { name: asset.or(group).or(random.first().map(|r| r.0)).unwrap_or(""), fade_out }],
-            NotifyData::Effect { entries } => entries.iter().filter_map(|e| Some(SeamNotify::Effect { effect: e.effect?, socket: e.socket, group_id: e.group_id })).collect(),
+            // Sora's table rows carry no offset (his places come from the effect pack's attach rows)
+            NotifyData::Effect { entries } => entries.iter().filter_map(|e| Some(SeamNotify::Effect { effect: e.effect?, socket: e.socket, group_id: e.group_id, offset: Vec3::ZERO, rotation: Vec3::ZERO, scale: 1.0 })).collect(),
             _ => Vec::new(),
         }
     }
@@ -418,6 +422,14 @@ pub struct PartyNotifyEvent {
     pub state: bool,
     pub phase: NotifyPhase,
     pub data: SeamNotify,
+}
+
+/// Where a pose tick's notifies play. `location`: the pawn's actor location now (cm, core axes). `effect_group`: the
+/// current effect group of the member's play.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NotifyPlace {
+    pub location: Vec3,
+    pub effect_group: i32,
 }
 
 /// The generic notify handler of a party member's clips (the rules of kh-core notify.rs, which serve Sora:
@@ -453,8 +465,8 @@ impl PartyNotify {
     /// The events of one pose tick, in dispatch order. `location`: the pawn's actor location now (cm, core axes; a
     /// weapon sound that does not follow is left there). `effect_group`: the current effect group of the member's play
     /// (0 unless the state gave one: `notify::effect_group_passes`).
-    #[allow(clippy::too_many_arguments)]
-    pub fn dispatch(&mut self, member: PartyMember, ids: &mut SeamHandles, events: &[PartyNotifyEvent], location: Vec3, effect_group: i32, audio: &mut dyn Audio, effects: &mut dyn Effects) {
+    pub fn dispatch(&mut self, member: PartyMember, ids: &mut SeamHandles, events: &[PartyNotifyEvent], place: NotifyPlace, audio: &mut dyn Audio, effects: &mut dyn Effects) {
+        let NotifyPlace { location, effect_group } = place;
         let at = |socket: Option<&'static str>| Attach::Party { member, bone: socket.filter(|s| !s.is_empty() && *s != "None"), offset: Vec3::ZERO };
         for event in events {
             let key = (event.sequence, event.index);
@@ -502,11 +514,13 @@ impl PartyNotify {
                         SeamNotify::Voice { name, fade_out } => sound(self, name, at(Some("atama")), 1.0, 1.0, fade_out),
                         // TresAnimNotify_PlayActorVoice 0x1405604A0: the actor voice's sound at the head [inf: socket].
                         SeamNotify::ActorVoice { asset } => sound(self, asset, at(Some("atama")), 1.0, 1.0, 0.0),
-                        SeamNotify::Effect { effect, socket, group_id } => {
+                        SeamNotify::Effect { effect, socket, group_id, offset, rotation, scale } => {
                             if !effect_group_passes(group_id, true, effect_group) {
                                 continue;
                             }
-                            let handle = ids.spawn(effects, &EffectSpawn { id: EffectId(notify_asset_id(effect)), name: effect, at: at(Some(socket)), rotation: Vec3::ZERO, scale: 1.0, persistent: state });
+                            // on the socket at the row's own offset, turned and scaled as the row says (in the socket's frame)
+                            let on = Attach::Party { member, bone: Some(socket).filter(|s| !s.is_empty() && *s != "None"), offset };
+                            let handle = ids.spawn(effects, &EffectSpawn { id: EffectId(notify_asset_id(effect)), name: effect, at: on, rotation, scale, persistent: state });
                             if state {
                                 self.started.push((key.0, key.1, Started::Effect(handle)));
                             }
@@ -574,21 +588,47 @@ mod tests {
         let begin = [
             ev(0, true, NotifyPhase::Begin, loop_sound),
             ev(1, false, NotifyPhase::Instant, SeamNotify::WeaponSe { alias: "SWING1", socket: Some("R_wep"), follow: false, volume: 1.0, pitch: 1.0, fade_out: 0.0 }),
-            ev(2, true, NotifyPhase::Begin, SeamNotify::Effect { effect: "vn_ex002_trn_loc00", socket: "kh_root", group_id: -1 }),
-            ev(3, true, NotifyPhase::Begin, SeamNotify::Effect { effect: "vn_ex002_trn_awa00", socket: "kh_root", group_id: 1088 }),
+            ev(2, true, NotifyPhase::Begin, SeamNotify::Effect { effect: "vn_ex002_trn_loc00", socket: "kh_root", group_id: -1, offset: Vec3::ZERO, rotation: Vec3::ZERO, scale: 1.0 }),
+            ev(3, true, NotifyPhase::Begin, SeamNotify::Effect { effect: "vn_ex002_trn_awa00", socket: "kh_root", group_id: 1088, offset: Vec3::ZERO, rotation: Vec3::ZERO, scale: 1.0 }),
         ];
-        n.dispatch(PartyMember::GOOFY, &mut ids, &begin, Vec3::new(5.0, 6.0, 0.0), 0, &mut audio, &mut effects);
+        n.dispatch(PartyMember::GOOFY, &mut ids, &begin, NotifyPlace { location: Vec3::new(5.0, 6.0, 0.0), effect_group: 0 }, &mut audio, &mut effects);
         assert_eq!(n.open(), 2);
         assert!(audio.0[0].contains("se00302_010 Party { member: PartyMember(1), bone: None") && audio.0[0].ends_with("loop=true"), "{:?}", audio.0);
         // a weapon sound that does not follow stays where the mesh was
         assert!(audio.0[1].contains("SWING1 World(Vec3(5.0, 6.0, 0.0))"), "{:?}", audio.0);
         // the effect-group rule: the under-water row (group 1088) does not spawn in group 0
         assert_eq!(effects.0, vec![format!("spawn {} vn_ex002_trn_loc00 persistent=true", PARTY_HANDLE_BASE + PARTY_HANDLE_SPAN + 3)]);
-        let end = [ev(0, true, NotifyPhase::End, loop_sound), ev(2, true, NotifyPhase::End, SeamNotify::Effect { effect: "vn_ex002_trn_loc00", socket: "kh_root", group_id: -1 })];
-        n.dispatch(PartyMember::GOOFY, &mut ids, &end, Vec3::ZERO, 0, &mut audio, &mut effects);
+        let end = [ev(0, true, NotifyPhase::End, loop_sound), ev(2, true, NotifyPhase::End, SeamNotify::Effect { effect: "vn_ex002_trn_loc00", socket: "kh_root", group_id: -1, offset: Vec3::ZERO, rotation: Vec3::ZERO, scale: 1.0 })];
+        n.dispatch(PartyMember::GOOFY, &mut ids, &end, NotifyPlace { location: Vec3::ZERO, effect_group: 0 }, &mut audio, &mut effects);
         assert_eq!(n.open(), 0);
         assert!(audio.0[2].starts_with(&format!("stop {} 0.3", PARTY_HANDLE_BASE + PARTY_HANDLE_SPAN + 1)) && audio.0[3].contains("se00302_011"), "{:?}", audio.0);
         assert!(effects.0[1].starts_with("estop"));
+    }
+
+    /// (THE USER 2026-11-02: "this effect is not aligned properly") an AttachEffect row's own offset, rotation and scale
+    /// reach the spawn on its socket: Goofy's shield bash VN_slg_bsh0 on vfx_root at (100, 0, 80), not at his feet.
+    #[test]
+    fn an_effect_rows_offset_on_its_socket_reaches_the_spawn() {
+        #[derive(Default)]
+        struct Spawns(Vec<EffectSpawn>);
+        impl Effects for Spawns {
+            fn spawn(&mut self, _: EffectHandle, s: &EffectSpawn) {
+                self.0.push(*s);
+            }
+            fn stop(&mut self, _: EffectHandle, _: bool) {}
+        }
+        let (mut audio, mut effects, mut n) = (Rec::default(), Spawns::default(), PartyNotify::new());
+        let mut ids = SeamHandles::for_member(PartyMember::GOOFY);
+        let bash = SeamNotify::Effect { effect: "VN_slg_bsh0", socket: "vfx_root", group_id: 0, offset: Vec3::new(100.0, 0.0, 80.0), rotation: Vec3::new(180.0, 0.0, 0.0), scale: 0.5 };
+        let events = [PartyNotifyEvent { sequence: 1, index: 0, state: true, phase: NotifyPhase::Begin, data: bash }];
+        n.dispatch(PartyMember::GOOFY, &mut ids, &events, NotifyPlace { location: Vec3::ZERO, effect_group: 0 }, &mut audio, &mut effects);
+        let s = effects.0[0];
+        assert_eq!(s.at, Attach::Party { member: PartyMember::GOOFY, bone: Some("vfx_root"), offset: Vec3::new(100.0, 0.0, 80.0) });
+        assert_eq!((s.rotation, s.scale, s.persistent), (Vec3::new(180.0, 0.0, 0.0), 0.5, true));
+        // a row on no socket ("None") is on the actor, at its offset
+        let none = SeamNotify::Effect { effect: "fx", socket: "None", group_id: 0, offset: Vec3::Z * 30.0, rotation: Vec3::ZERO, scale: 1.0 };
+        n.dispatch(PartyMember::GOOFY, &mut ids, &[PartyNotifyEvent { sequence: 1, index: 1, state: false, phase: NotifyPhase::Instant, data: none }], NotifyPlace { location: Vec3::ZERO, effect_group: 0 }, &mut audio, &mut effects);
+        assert_eq!(effects.0[1].at, Attach::Party { member: PartyMember::GOOFY, bone: None, offset: Vec3::Z * 30.0 });
     }
 
     #[test]

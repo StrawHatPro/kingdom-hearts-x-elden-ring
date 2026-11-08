@@ -34,6 +34,7 @@ use glam::Vec3;
 use super::spells::{attack_row, AttackRow};
 use super::tables::Sheet;
 use super::{AeroPad, RailNode};
+use crate::combat::hit::ShotStick; // (SHOT-FIX) F-POLISH's attach-to-actor record, shared with the form shots
 use crate::enums::{ETresAbilityKind, ETresDamageAttribute, ETresDamageKind};
 use crate::host::{Attach, EffectHandle, EffectId, EffectSpawn, HitInfo, HitRecord, HurtShape, ReactionResult, SoundId, SoundPlay, TargetFlags, TargetId, TargetInfo};
 use crate::pawn::Ctx;
@@ -204,6 +205,55 @@ pub struct StageDef {
     pub hit_effect: &'static str,
     pub hit_sound: &'static str,
     pub map_hit_effect: &'static str,
+    /// (SHOT-A) The sheet the blueprint is a row of: `Sheet::Proj` (spells, `<family>.<prefix><property>`) or
+    /// `Sheet::Shotlocks` (the ShootFlow classes, `proj.<family>.<property>`); the successor is looked up there.
+    pub sheet: Sheet,
+    /// (SHOT-A) `TresProj_Ragnarok`'s helix values (its native ctor 0x1414700D0, or the blueprint's overrides).
+    pub rolling: Rolling,
+    /// (SHOT-FIX) `m_bAttachToHitActor` (+0x5F0 bit 3): Explode's slot 537 (0x141473E30) attaches the actor to what it
+    /// hit (KeepWorldTransform; `m_AttachToHitActorOffset` +0x5F4 is set by no projectile blueprint: 0); it then rides on
+    /// it for its `m_ExplodeLife`.
+    pub attach_to_hit_actor: bool,
+    /// (SHOT-FIX) `m_ExplodeLife`: the seconds the actor lives on after Shutdown (0x141475670 copies it to +0x758; the tick
+    /// 0x141484B10 counts it down and destroys the actor at <= 0, the tick after for 0: native 0).
+    pub explode_life: f32,
+    /// (SHOT-FIX) `m_bDoDelayFire`, `m_FireDelayTimeMin`, `m_FireDelayTimeMax`: StartFire 0x141474970 waits that long (a
+    /// random time between them when min < max) before DoFire, the actor's collision off meanwhile.
+    pub delay_fire: (bool, f32, f32),
+    /// (HM-MAGIC) `m_CollAutoActivate[0].m_AttackInterval`: with an interval > 0 the hit list is emptied every interval from
+    /// the first hit (TresAtkColl TimerTick 0x14062CFC0, as `combat/hit.rs`'s windows). Only the turn-type
+    /// `TresProj_Mag*CL` actors (magic/hm_set.rs) have one; 0 for every other blueprint (each actor hits an enemy once).
+    pub hit_interval: f32,
+}
+
+/// (SHOT-A) The helix of a `TresProj_Ragnarok` subclass (magic spec G 3.3): `m_RollingSpeed` / `Add` / `Max`,
+/// `m_RollingRadius` / `Add` / `Max`, the opening rate of the radius (Tick 0x141484643).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rolling {
+    pub speed: f32,
+    pub speed_add: f32,
+    pub speed_max: f32,
+    pub radius: f32,
+    pub radius_add: f32,
+    pub radius_max: f32,
+    pub open_rate: f32,
+}
+
+impl Rolling {
+    /// The Kingdom Key Ragnarok's (`kc2.proj_kc_ragnarok.rolling_*`: the native defaults).
+    pub fn kc() -> Rolling {
+        let s = Sheet::Shot;
+        let r = |p: &str| s.num(&format!("kc2.proj_kc_ragnarok.rolling_{p}"));
+        Rolling { speed: r("speed"), speed_add: r("speed_add"), speed_max: r("speed_max"), radius: r("radius"), radius_add: r("radius_add"), radius_max: r("radius_max"), open_rate: r("radius_open_rate") }
+    }
+
+    /// A ShootFlow class's (`proj.<key>.rolling_*` of sora-shotlocks), the Kingdom Key's values where a row is missing.
+    fn shot(key: &str) -> Rolling {
+        let kc = Rolling::kc();
+        let s = Sheet::Shotlocks;
+        let r = |p: &str, d: f32| s.num_or(&format!("proj.{key}.rolling_{p}"), d);
+        Rolling { speed: r("speed", kc.speed), speed_add: r("speed_add", kc.speed_add), speed_max: r("speed_max", kc.speed_max), radius: r("radius", kc.radius), radius_add: r("radius_add", kc.radius_add), radius_max: r("radius_max", kc.radius_max), open_rate: r("radius_open_rate", kc.open_rate) }
+    }
 }
 
 const STAGES: [&str; 4] = ["", "burn_", "barrier_", "bolt_"];
@@ -211,8 +261,26 @@ const STAGES: [&str; 4] = ["", "burn_", "barrier_", "bolt_"];
 impl StageDef {
     /// The stage `prefix` of the spell `family`; `None` when the sheet has no such stage.
     pub fn load(family: &'static str, prefix: &'static str) -> Option<StageDef> {
-        let s = Sheet::Proj;
-        let id = |property: &str| format!("{family}.{prefix}{property}");
+        Self::load_in(Sheet::Proj, family, prefix)
+    }
+
+    /// (SHOT-A) A ShootFlow projectile class of sora-shotlocks by its key ("he_drain" = `TresProjHE_Drain_C`).
+    pub fn shot(key: &'static str) -> Option<StageDef> {
+        Self::load_in(Sheet::Shotlocks, key, "")
+    }
+
+    /// (SHOT-A) A ShootFlow projectile by its blueprint class ("TresProjHE_DrainEx_C"): the `proj.<key>.class` row.
+    pub fn shot_class(class_name: &str) -> Option<StageDef> {
+        let id = Sheet::Shotlocks.rows().iter().find(|(id, v)| id.starts_with("proj.") && id.ends_with(".class") && matches!(v, super::tables::PV::S(c) if *c == class_name))?.0;
+        Self::shot(&id["proj.".len()..id.len() - ".class".len()])
+    }
+
+    /// (SHOT-A) `load` in a given sheet: `Sheet::Proj` rows are `<family>.<prefix><property>`, `Sheet::Shotlocks`
+    /// rows `proj.<family>.<property>` (the prefix is unused there); the class comes from `native_class` in the latter.
+    pub fn load_in(sheet: Sheet, family: &'static str, prefix: &'static str) -> Option<StageDef> {
+        let s = sheet;
+        let shot = sheet == Sheet::Shotlocks;
+        let id = |property: &str| if shot { format!("proj.{family}.{property}") } else { format!("{family}.{prefix}{property}") };
         let class_name = match s.find(&id("class")) {
             Some(super::tables::PV::S(name)) => name,
             _ => return None,
@@ -233,7 +301,10 @@ impl StageDef {
             };
             Some(ShapeDef { kind, row: s.text(&sid("attack_id")), size: s.vec3(&sid("size")), inc_size: s.vec3(&sid("inc_size")), inc_max_size: s.vec3(&sid("inc_max_size")), scale: s.vec3(&sid("scale")), inc_scale: s.vec3(&sid("inc_scale")), inc_max_scale: s.vec3(&sid("inc_max_scale")), offset: s.vec3(&sid("offset")), curve })
         };
-        let class = if family.starts_with("fi") {
+        let class = if shot {
+            // (SHOT-A) the native class decides (TresProj_Ragnarok: the helix); the others are TresProjectileBase.
+            if s.text_or(&id("native_class"), "") == "TresProj_Ragnarok" { ProjClass::Ragnarok } else { ProjClass::Generic }
+        } else if family.starts_with("fi") {
             ProjClass::Fire
         } else if family.starts_with("blizza") && prefix.is_empty() {
             ProjClass::Blizzard
@@ -307,9 +378,17 @@ impl StageDef {
             rail_life: if class == ProjClass::Blizzard { s.num_or(&id("generate_rail_life"), 0.0) } else { 0.0 },
             residue: s.find(&id("residue_class")).is_some(),
             cure,
-            hit_effect: "",
-            hit_sound: "",
-            map_hit_effect: "",
+            // (SHOT-A) the ShootFlow classes name their hit effects; the spells' rows carry none.
+            hit_effect: if shot { s.text_or(&id("hit_effect"), "") } else { "" },
+            hit_sound: if shot { s.text_or(&id("hit_sound"), "") } else { "" },
+            map_hit_effect: if shot { s.text_or(&id("map_hit_effect"), "") } else { "" },
+            sheet,
+            rolling: if shot && class == ProjClass::Ragnarok { Rolling::shot(family) } else { Rolling::kc() },
+            // (SHOT-FIX) the ShootFlow classes' rows (tools/sora_shotlocks.js); the spells' rows carry none (native false / 0)
+            attach_to_hit_actor: s.flag_or(&id("attach_to_hit_actor"), false),
+            explode_life: s.num_or(&id("explode_life"), 0.0),
+            delay_fire: (s.flag_or(&id("do_delay_fire"), false), s.num_or(&id("fire_delay_time_min"), 0.0), s.num_or(&id("fire_delay_time_max"), 0.0)),
+            hit_interval: 0.0, // (HM-MAGIC) the spells' and shotlocks' blueprints: hit once per actor (magic spec I 0.2)
         })
     }
 
@@ -323,6 +402,9 @@ impl StageDef {
     pub fn successor(&self) -> Option<StageDef> {
         if self.respawn_class == "null" || self.respawn_class == "None" {
             return None;
+        }
+        if self.sheet == Sheet::Shotlocks {
+            return StageDef::shot_class(self.respawn_class); // (SHOT-A)
         }
         STAGES.iter().filter_map(|prefix| StageDef::load(self.family, prefix)).find(|stage| stage.class_name == self.respawn_class)
     }
@@ -383,6 +465,13 @@ impl StageDef {
             hit_effect: if ragnarok { "vw_so010_rgn_hit00" } else { "vw_sor_rbs_hit0" },
             hit_sound: if ragnarok { "" } else { "se02001_020" },
             map_hit_effect: if ragnarok { "vw_so010_rgn_wht00" } else { "vw_sor_rbs_wht0" },
+            sheet: Sheet::Shot, // (SHOT-A)
+            rolling: Rolling::kc(), // (SHOT-A)
+            // (SHOT-FIX) TresProjKC_Shot / _Ragnarok set none of these (native: false, 0)
+            attach_to_hit_actor: false,
+            explode_life: 0.0,
+            delay_fire: (false, 0.0, 0.0),
+            hit_interval: 0.0, // (HM-MAGIC)
         }
     }
 }
@@ -493,6 +582,18 @@ pub struct Projectile {
     /// The persistent effect that stands for the actor (stopped when it dies).
     pub effect: Option<EffectHandle>,
     pub dead: bool,
+    /// (SHOT-FIX) Attached to a target actor (FUN_143E8FC60 with KeepWorldTransform: by its spawner, or by Explode's
+    /// `m_bAttachToHitActor`): that actor and the actor's place in its frame; it moves with it (origin and yaw, as
+    /// combat/hit.rs `ShotStick` does for the form shots). Generic: any target the host lists.
+    pub stick: Option<ShotStick>,
+    /// (SHOT-FIX) StartFire's wait (+0x6F4 bit 0 / +0x6F8): DoFire when it runs out (0x141484B10).
+    pub fire_delay: Option<f32>,
+    /// (SHOT-FIX) SetDelayFire's values (+0x5D0 bit 0 `m_bDoDelayFire`, `m_FireDelayTimeMin` / `Max`), read by StartFire.
+    delay_fire: (bool, f32, f32),
+    /// (SHOT-FIX) Exploded and attached: the `m_ExplodeLife` left (+0x758) before the actor is destroyed.
+    linger: Option<f32>,
+    /// (HM-MAGIC) TimerTick's clock of the hit list (rec+8), for a blueprint with a hit interval.
+    hit_timer: f32,
 }
 
 /// A projectile as a host draws it.
@@ -533,7 +634,6 @@ impl Projectile {
     pub fn new(id: u32, args: &SpawnArgs) -> Projectile {
         let def = args.def;
         let direction = if args.direction.length_squared() > 1.0e-8 { args.direction.normalize() } else { Vec3::ZERO };
-        let s = Sheet::Shot;
         let ragnarok = def.class == ProjClass::Ragnarok;
         Projectile {
             id,
@@ -579,13 +679,40 @@ impl Projectile {
             helix_phase: 0,
             helix_angle: 0.0,
             helix_radius: 0.0,
-            helix_radius_add: if ragnarok { s.num("kc2.proj_kc_ragnarok.rolling_radius_add") } else { 0.0 },
-            helix_speed: if ragnarok { s.num("kc2.proj_kc_ragnarok.rolling_speed") } else { 0.0 },
-            helix_speed_add: if ragnarok { s.num("kc2.proj_kc_ragnarok.rolling_speed_add") } else { 0.0 },
+            // (SHOT-A) the class's own helix values (the Kingdom Key's: kc2.proj_kc_ragnarok.rolling_*)
+            helix_radius_add: if ragnarok { def.rolling.radius_add } else { 0.0 },
+            helix_speed: if ragnarok { def.rolling.speed } else { 0.0 },
+            helix_speed_add: if ragnarok { def.rolling.speed_add } else { 0.0 },
             hits: 0,
             effect: None,
             dead: false,
+            // (SHOT-FIX) not attached, not waiting, the class's delayed-fire defaults until SetDelayFire
+            stick: None,
+            fire_delay: None,
+            delay_fire: def.delay_fire,
+            linger: None,
+            hit_timer: 0.0, // (HM-MAGIC)
         }
+    }
+
+    /// (SHOT-FIX) `SetDelayFire(on, min, max)` 0x141482540: only before the actor was fired (+0x6C0 bit 0).
+    pub fn set_delay_fire(&mut self, on: bool, min: f32, max: f32) {
+        if !self.started {
+            self.delay_fire = (on, min, max);
+        }
+    }
+
+    /// (SHOT-FIX) The actor attached to `target` where it is now (FUN_143E8FC60(actor, the target's component,
+    /// KeepWorldTransform DAT_148750ED0)): its place in the target's frame is kept from then on.
+    pub fn attach_to(&mut self, target: &TargetInfo) {
+        self.stick = Some(ShotStick { target: target.id, local: rotate_yaw(self.position - target.position, -target.yaw), bone: None });
+    }
+
+    /// (AUDIT-B W-FIN) Slot 537 (0x141473E30, m_bAttachToHitActor) at a hit on `target`: attached at the hit's bone
+    /// (FHitResult.BoneName, KeepWorldTransform) when the host has bones (combat/hit.rs `ShotStick::at_hit`), else as
+    /// `attach_to`.
+    pub fn attach_to_hit(&mut self, targets: &dyn crate::host::Targets, target: &TargetInfo) {
+        self.stick = Some(ShotStick::at_hit(targets, target, self.position, 0.0));
     }
 
     pub fn view(&self) -> ProjectileView {
@@ -669,8 +796,45 @@ pub(crate) fn spawn_fired_from(cx: &mut Ctx, args: &SpawnArgs, fire_position: Ve
             projectile.rail_closed = true;
         }
     }
+    // (SHOT-FIX) `fire`: StartFire now, which waits first when the class delays its fire (m_bDoDelayFire).
+    if args.fire {
+        let delay = fire_delay_of(cx, projectile.delay_fire);
+        projectile.started = delay.is_none();
+        projectile.fire_delay = delay;
+    }
     cx.pawn.magic.projectiles.push(projectile);
     id
+}
+
+/// (SHOT-FIX) StartFire 0x141474970's wait: with `m_bDoDelayFire` and a min or max above 0, min (a random time in
+/// [min, max) when min < max: the global xorshift's 24 bits x 2^-24, here `PawnMagic::next_random`); else none (DoFire at
+/// once, vt+0x1308).
+fn fire_delay_of(cx: &mut Ctx, (on, min, max): (bool, f32, f32)) -> Option<f32> {
+    if !on || (min <= 0.0 && max <= 0.0) {
+        return None;
+    }
+    Some(if min < max { cx.pawn.magic.next_random() as f32 * 5.960_464_5e-8 * (max - min) + min } else { min })
+}
+
+/// (SHOT-FIX) `StartFire` (0x141474970) of an actor spawned unfired (`SpawnArgs::fire` false): DoFire now, or after its
+/// delay (SetDelayFire); the actor's collision is off meanwhile (FUN_143EAC290(actor, 0): it neither moves nor hits).
+pub(crate) fn start_fire(cx: &mut Ctx, id: u32) {
+    let Some(delay_fire) = cx.pawn.magic.projectiles.iter().find(|p| p.id == id && !p.started).map(|p| p.delay_fire) else { return };
+    let delay = fire_delay_of(cx, delay_fire);
+    if let Some(p) = cx.pawn.magic.projectiles.iter_mut().find(|p| p.id == id) {
+        p.started = delay.is_none();
+        p.fire_delay = delay;
+    }
+}
+
+/// (SHOT-FIX) An attached actor follows its target's origin and yaw (combat/hit.rs's rule for `ShotStick`); a target that
+/// is gone leaves it where it was.
+fn follow_stick(cx: &Ctx, p: &mut Projectile) {
+    let Some(s) = p.stick.filter(ShotStick::stuck) else { return };
+    // (AUDIT-B W-FIN) on the hit's bone when it was attached at one (`ShotStick::follow`), else the origin and yaw
+    if let Some((at, _)) = s.follow(&*cx.host.targets) {
+        p.position = at;
+    }
 }
 
 fn rotate_yaw(v: Vec3, yaw_degrees: f32) -> Vec3 {
@@ -680,11 +844,35 @@ fn rotate_yaw(v: Vec3, yaw_degrees: f32) -> Vec3 {
 
 /// One step of every projectile, rail node and pad. `dt` is the REAL step time.
 pub(crate) fn tick(cx: &mut Ctx, dt: f32) {
+    cx.pawn.magic.shut_down.clear(); // (SHOT-A cannon) this tick's shutdowns only
     let mut list = std::mem::take(&mut cx.pawn.magic.projectiles);
     let mut spawned: Vec<SpawnArgs> = Vec::new();
     let mut inherited: Vec<Vec<TargetId>> = Vec::new();
     for p in list.iter_mut() {
-        if !p.dead && p.started {
+        // (SHOT-FIX) an attached actor rides on its target (the attachment moves it before its own tick)
+        if !p.dead {
+            follow_stick(cx, p);
+        }
+        // (SHOT-FIX) exploded and attached: it lives `m_ExplodeLife` more (0x141484B10's +0x758 branch), then it goes
+        if let Some(left) = p.linger {
+            let left = left - dt;
+            p.linger = Some(left);
+            if left <= 0.0 {
+                p.dead = true;
+            }
+        } else if !p.dead && !p.started {
+            // (SHOT-FIX) StartFire's wait (0x141484B10: +0x6F8 -= dt; at <= 0 collision on and DoFire, then this tick's
+            // own update)
+            if let Some(left) = p.fire_delay {
+                let left = left - dt;
+                p.fire_delay = Some(left);
+                if left <= 0.0 {
+                    p.fire_delay = None;
+                    p.started = true;
+                }
+            }
+        }
+        if !p.dead && p.started && p.linger.is_none() {
             step(cx, p, dt, &mut spawned, &mut inherited);
         }
         if p.dead {
@@ -787,6 +975,19 @@ fn step(cx: &mut Ctx, p: &mut Projectile, dt: f32, spawned: &mut Vec<SpawnArgs>,
     }
     // 7. The attack shapes.
     shapes(cx, p, spawned, inherited);
+    // (HM-MAGIC) TimerTick (0x14062CFC0; magic spec I 0.2, as combat/hit.rs's windows) after the sweep: with an interval the
+    // clock starts at the first hit and empties the whole hit list when it elapses, so every enemy still inside is hit again.
+    if p.def.hit_interval > 0.0 && !p.dead {
+        if p.hit_list.is_empty() {
+            p.hit_timer = 0.0;
+        } else {
+            p.hit_timer += dt;
+            if p.hit_timer >= p.def.hit_interval {
+                p.hit_list.clear();
+                p.hit_timer = 0.0;
+            }
+        }
+    }
 }
 
 /// `OnPutEffect(P)`: Fire's scorch (cosmetic) and Blizzard's rail node (I 4.1).
@@ -856,18 +1057,34 @@ fn put_effect(cx: &mut Ctx, p: &mut Projectile, at: Vec3, last: bool) {
 
 /// Shutdown (slot 532): the particle is deactivated; Blizzard lays its last rail node.
 fn shutdown(cx: &mut Ctx, p: &mut Projectile) {
+    // (SHOT-A cannon) the owner's OnProjectileShutdown (notify interface +0x98) reads the actor as it is now
+    cx.pawn.magic.shut_down.push((p.id, p.position, p.forward));
     if p.def.class == ProjClass::Blizzard && p.def.put_effect {
         let at = p.position;
         put_effect(cx, p, at, true);
     }
 }
 
-/// `Explode(hit)` (slot 573): shutdown, respawn, residues; the actor is gone (ExplodeLife 0).
+/// `Explode(hit)` (slot 573 0x141479100): shutdown, respawn, residues; the actor is gone (ExplodeLife 0).
+/// (SHOT-FIX) Then slot 537 (0x141473E30): with `m_bAttachToHitActor` the actor is attached to the actor it hit
+/// (KeepWorldTransform; `m_AttachToHitActorOffset` is set by no blueprint of Blueprints/Projectile: 0) and rides on it until its `m_ExplodeLife` has run out (the tick
+/// after for 0: the +0x758 countdown); its body particle is deactivated by the Shutdown (vt+0xAE8). A level hit attaches
+/// to static geometry: it stays where it is (the actor is gone as before).
 fn explode(cx: &mut Ctx, p: &mut Projectile, hit: Option<HitWhat>, spawned: &mut Vec<SpawnArgs>, inherited: &mut Vec<Vec<TargetId>>) {
     shutdown(cx, p);
     respawn(cx, p, hit, spawned, inherited);
     residues(cx, p);
     p.dead = true;
+    if let (true, Some(HitWhat::Pawn(id))) = (p.def.attach_to_hit_actor, hit) {
+        if let Some(t) = cx.target(id) {
+            p.attach_to_hit(&*cx.host.targets, &t); // (AUDIT-B W-FIN) the hit's bone
+            if let Some(handle) = p.effect.take() {
+                cx.stop_effect(handle, false);
+            }
+            p.linger = Some(p.def.explode_life.max(0.0));
+            p.dead = false;
+        }
+    }
 }
 
 /// `Respawn(class, hit)` (slot 535; I 6.1).
@@ -953,7 +1170,7 @@ fn do_cure(cx: &mut Ctx, p: &Projectile) {
 
 /// The Ragnarok helix (G 3.3; actor Tick 0x1414845E0, before the base tick).
 fn helix(p: &mut Projectile, dt: f32) {
-    let s = Sheet::Shot;
+    let rolling = p.def.rolling; // (SHOT-A) the class's values (were kc2.proj_kc_ragnarok.rolling_*)
     let apply = |p: &mut Projectile, dt: f32| {
         // The offset (0, 0, radius) rotated by the roll about the actor's forward axis.
         let forward = p.forward;
@@ -970,7 +1187,7 @@ fn helix(p: &mut Projectile, dt: f32) {
         p.position = p.position - old + new;
     };
     let roll_speed = |p: &mut Projectile, dt: f32| {
-        let max = s.num("kc2.proj_kc_ragnarok.rolling_speed_max");
+        let max = rolling.speed_max;
         if p.helix_speed_add != 0.0 {
             p.helix_speed += p.helix_speed_add * dt;
             if (p.helix_speed_add < 0.0 && p.helix_speed <= max) || (p.helix_speed_add > 0.0 && p.helix_speed >= max) {
@@ -987,8 +1204,8 @@ fn helix(p: &mut Projectile, dt: f32) {
             }
         }
         1 => {
-            let full = s.num("kc2.proj_kc_ragnarok.rolling_radius");
-            p.helix_radius += dt * s.num("kc2.proj_kc_ragnarok.rolling_radius_open_rate");
+            let full = rolling.radius;
+            p.helix_radius += dt * rolling.open_rate;
             if p.helix_radius > full {
                 p.helix_radius = full;
                 p.helix_phase = 2;
@@ -997,7 +1214,7 @@ fn helix(p: &mut Projectile, dt: f32) {
             apply(p, dt);
         }
         _ => {
-            let max = s.num("kc2.proj_kc_ragnarok.rolling_radius_max");
+            let max = rolling.radius_max;
             if p.helix_radius_add != 0.0 {
                 p.helix_radius += p.helix_radius_add * dt;
                 if (p.helix_radius_add < 0.0 && p.helix_radius <= max) || (p.helix_radius_add > 0.0 && p.helix_radius >= max) {
@@ -1266,7 +1483,7 @@ fn shapes(cx: &mut Ctx, p: &mut Projectile, spawned: &mut Vec<SpawnArgs>, inheri
         }
         hits.sort_by(|x, y| x.0.total_cmp(&y.0));
         for (time, target, part, point, normal) in hits {
-            apply_hit(cx, p, &shape, &target, part, point, normal, time);
+            apply_hit(cx, p, &shape, &target, TargetHit { part, point, normal, time });
             if p.def.no_destroy_on_hit {
                 // A static actor hits every enemy inside once; its residue is spawned at the
                 // first reported hit.
@@ -1310,9 +1527,18 @@ pub(crate) fn damage_of(cx: &Ctx, target: TargetId, row: Option<&AttackRow>, ful
     compute_damage(&attacker, &defender, &attack, &DamageContext::of(status)).amount
 }
 
+/// Where a shape met a target, and when in the step.
+#[derive(Clone, Copy)]
+struct TargetHit {
+    part: u32,
+    point: Vec3,
+    normal: Vec3,
+    time: f32,
+}
+
 /// One hit of a shape on a target: the hit record, the damage, effects, the bookkeeping.
-#[allow(clippy::too_many_arguments)]
-fn apply_hit(cx: &mut Ctx, p: &mut Projectile, shape: &ShapeDef, target: &TargetInfo, part: u32, point: Vec3, normal: Vec3, time: f32) {
+fn apply_hit(cx: &mut Ctx, p: &mut Projectile, shape: &ShapeDef, target: &TargetInfo, hit: TargetHit) {
+    let TargetHit { part, point, normal, time } = hit;
     let name = p.row_name(shape);
     let row = attack_row(name);
     let counters = p.combo.map(|c| c.clamp(0, 99) as u8);
@@ -1370,7 +1596,7 @@ fn apply_hit(cx: &mut Ctx, p: &mut Projectile, shape: &ShapeDef, target: &Target
         // named by the actor class, the audio side has the table (host/audio.rs).
         cx.play_sound(SoundPlay { id: crate::host::audio::ACTOR_PAWN_HIT, name: p.def.class_name, at: Attach::World(point), volume: 1.0, pitch: 1.0, looping: false, spatial: true });
     }
-    let record = HitRecord { target: target.id, part, attack: u32::MAX, attack_name: name, position: point, direction, damage: amount, damage_kind: kind, attribute, impulse: Vec3::ZERO, attacker: crate::host::HitAttacker { position: cx.pawn.cmc.location, yaw: cx.pawn.yaw, radius: crate::params::SORA_PARAMS.capsule_radius, valid: true }, flags: p.cmd as u32 | (p.shoot_flow as u32) << 8, info };
+    let record = HitRecord { target: target.id, part, attack: u32::MAX, attack_name: name, position: point, direction, damage: amount, damage_kind: kind, attribute, impulse: Vec3::ZERO, attacker: crate::host::HitAttacker { position: cx.pawn.cmc.location, yaw: cx.pawn.yaw, radius: crate::params::SORA_PARAMS.capsule_radius, valid: true }, flags: p.cmd as u32 | (p.shoot_flow as u32) << 8, info, attack_info: Default::default() /* (GOOFY) */ };
     let result = if amount != 0.0 { cx.deliver_hit(&record) } else { Default::default() };
     // The Aero counter (notify 0x14147D060), after the damage call.
     if p.def.class == ProjClass::Aero {

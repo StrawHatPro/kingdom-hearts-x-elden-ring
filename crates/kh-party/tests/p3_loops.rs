@@ -54,6 +54,7 @@ impl Rig {
     fn new() -> (Rig, kh_party::MemberId) {
         let mut party = Party::new(PartyConfig::test_level99());
         let g = party.spawn(Chara::Goofy, Vec3::ZERO, 0.0);
+        party.gof.kh3_ai = true; // (GF-AI) the KH3 actions' own loops: the overhaul replaces them in play
         (Rig { world: TestWorld::floor(), party, audio: Seams::default(), effects: Seams::default(), targets: Default::default() }, g)
     }
 

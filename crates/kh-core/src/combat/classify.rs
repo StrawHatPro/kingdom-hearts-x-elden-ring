@@ -54,6 +54,13 @@ pub enum MapResponse {
     Other,
 }
 
+/// The attack's damage kind and attribute.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DamageClass {
+    pub kind: ETresDamageKind,
+    pub attribute: ETresDamageAttribute,
+}
+
 /// `m_ReflectReaction` as the row names it.
 fn reflect_reaction(info: &HitInfo) -> u8 {
     match info.reflect_reaction {
@@ -67,8 +74,9 @@ fn reflect_reaction(info: &HitInfo) -> u8 {
 /// `Classify(comp, prim, A, C, p7, &info, &noReact)`.
 ///
 /// `take_armor(power, weak) -> left` is `ai.slot70`, `take_reaction(power) -> left` is `ai.slot32`.
-pub fn classify(body: &TargetBody, map: MapResponse, shape: &Shape, kind: ETresDamageKind, attribute: ETresDamageAttribute, info: &mut HitInfo, take_armor: &mut dyn FnMut(i32, bool) -> i32, take_reaction: &mut dyn FnMut(i32) -> i32) -> Classified {
+pub fn classify(body: &TargetBody, map: MapResponse, shape: &Shape, damage: DamageClass, info: &mut HitInfo, take_armor: &mut dyn FnMut(i32, bool) -> i32, take_reaction: &mut dyn FnMut(i32) -> i32) -> Classified {
     use ReactionResult as R;
+    let DamageClass { kind, attribute } = damage;
     let mut out = Classified { victim: R::Damage, attacker: R::None, no_react: false, recorded: true, rule: 0 };
     let finish = |mut out: Classified, info: &mut HitInfo, rule: u8| {
         out.rule = rule;
@@ -137,7 +145,10 @@ pub fn classify(body: &TargetBody, map: MapResponse, shape: &Shape, kind: ETresD
     };
     let guarded = |mut out: Classified, info: &mut HitInfo| {
         out.victim = R::Guard;
-        if shape.no_clash || shape.p7 {
+        // (THE USER 2026-11-02: "make the character who attacks a shield bounce off playing their animation from KH3") a
+        // host's raised shield (`TargetBody::shield`) repels EVERY swing it guards, a combo's later swings and the friends'
+        // "no clash" rows too; KH3's own guards keep KH3's rule (only a swing that may clash is repelled)
+        if shape.p7 || (shape.no_clash && body.shield.is_none()) {
             out.attacker = R::NoReaction;
         } else {
             out.attacker = match reflect_reaction(info) {
@@ -324,7 +335,7 @@ mod tests {
     const LATER: Shape = Shape { no_clash: true, victim_may_refuse: false, reflect_window: false, p7: false };
 
     fn run(body: &TargetBody, shape: &Shape, kind: ETresDamageKind, info: &mut HitInfo, armor_left: i32, reaction_left: i32) -> Classified {
-        classify(body, MapResponse::NoActor, shape, kind, Physical, info, &mut |_, _| armor_left, &mut |_| reaction_left)
+        classify(body, MapResponse::NoActor, shape, DamageClass { kind, attribute: Physical }, info, &mut |_, _| armor_left, &mut |_| reaction_left)
     }
 
     fn plain(body: &TargetBody, shape: &Shape) -> Classified {
@@ -345,7 +356,7 @@ mod tests {
         let open = Shape { reflect_window: true, ..FIRST };
         check(plain(&wall, &FIRST), 1, R::Damage, R::NoReaction, false, true);
         check(plain(&wall, &open), 2, R::Damage, R::Reflect, false, true);
-        check(classify(&wall, MapResponse::Other, &open, Small, Physical, &mut HitInfo::DEFAULT, &mut |_, _| 0, &mut |_| 0), 3, R::Damage, R::NoReaction, false, true);
+        check(classify(&wall, MapResponse::Other, &open, DamageClass { kind: Small, attribute: Physical }, &mut HitInfo { ..HitInfo::DEFAULT }, &mut |_, _| 0, &mut |_| 0), 3, R::Damage, R::NoReaction, false, true);
         // 4: the victim refuses.
         check(plain(&TargetBody { refuses: true, ..TargetBody::DEFAULT }, &Shape { victim_may_refuse: true, ..FIRST }), 4, R::None, R::None, false, true);
         // 5 - 6: armour.
@@ -377,7 +388,7 @@ mod tests {
         // 14 - 17: GUARD / GUARD_NOREACT.
         let (guard, guard_nr) = (body(BodyReaction::Guard), body(BodyReaction::GuardNoReact));
         check(plain(&weak(guard), &FIRST), 14, R::Damage, R::NoReaction, false, true);
-        check(run(&guard, &FIRST, Bind, &mut HitInfo::DEFAULT, 0, 0), 14, R::Damage, R::NoReaction, false, true);
+        check(run(&guard, &FIRST, Bind, &mut HitInfo { ..HitInfo::DEFAULT }, 0, 0), 14, R::Damage, R::NoReaction, false, true);
         check(run(&guard_nr, &FIRST, Small, &mut HitInfo { flags50: HitInfo::FLAG50_IGNORE_GUARD, ..HitInfo::DEFAULT }, 0, 0), 15, R::NoReaction, R::NoReaction, false, true);
         check(plain(&null(guard), &FIRST), 16, R::None, R::NoReaction, true, true);
         let mut info = HitInfo { bad_status: "STUN", bad_time: 8.0, ..HitInfo::DEFAULT };
@@ -431,9 +442,41 @@ mod tests {
             assert_eq!((c.rule, c.victim, c.attacker), (17, R::Guard, R::Reflect), "{reaction:?}");
         }
         assert_eq!(plain(&TargetBody { weak: 1, ..guarding(BodyReaction::Strong) }, &FIRST).rule, 10, "a weakened STRONG body does not guard");
-        assert_eq!(run(&guarding(BodyReaction::Default), &FIRST, Without, &mut HitInfo::DEFAULT, 0, 0).rule, 33);
+        assert_eq!(run(&guarding(BodyReaction::Default), &FIRST, Without, &mut HitInfo { ..HitInfo::DEFAULT }, 0, 0).rule, 33);
         assert_eq!(plain(&guarding(BodyReaction::NoReaction), &FIRST).rule, 9);
         // The Kingdom Key (C 8.2.6, last paragraph): only the first swing is repelled.
         assert_eq!(plain(&guarding(BodyReaction::Default), &LATER).attacker, R::NoReaction);
+    }
+
+    // (THE USER 2026-11-02: "Shields don't count as guarding ... make the character who attacks a shield bounce off") a host's
+    // raised shield: guarded from inside its arc, every swing repelled (a "no clash" one too); from behind a plain hit.
+    #[test]
+    fn a_raised_shield_guards_its_front_and_repels_every_swing() {
+        use crate::host::Shield;
+        // the body at the origin faces +X (yaw 0) with a 90 degree half arc
+        let shield = TargetBody { guarding: true, shield: Some(Shield { yaw: 0, half_arc: 90 }), ..TargetBody::DEFAULT };
+        let at = glam::Vec3::ZERO;
+        let front = shield.seen_from(glam::Vec3::new(200.0, 30.0, 0.0), at);
+        for s in [FIRST, LATER] {
+            let c = plain(&front, &s);
+            assert_eq!((c.rule, c.victim, c.attacker), (17, R::Guard, R::Reflect), "{s:?}");
+        }
+        // an attack the row lets past the guard (m_bInvalidGuard) and a grab still land
+        let c = run(&front, &LATER, Small, &mut HitInfo { flags50: HitInfo::FLAG50_IGNORE_GUARD, ..HitInfo::DEFAULT }, 0, 0);
+        assert_eq!((c.victim, c.attacker), (R::Damage, R::NoReaction));
+        assert_eq!(run(&front, &LATER, Bind, &mut HitInfo { ..HitInfo::DEFAULT }, 0, 0).victim, R::Damage);
+        // from behind and from the side past the arc: not guarding at all, a plain DAMAGE
+        for from in [glam::Vec3::new(-200.0, 0.0, 0.0), glam::Vec3::new(-50.0, 200.0, 0.0)] {
+            let back = shield.seen_from(from, at);
+            assert!(!back.guarding && back.shield.is_none(), "{from:?}");
+            let c = plain(&back, &LATER);
+            assert_eq!((c.rule, c.victim, c.attacker), (33, R::Damage, R::NoReaction), "{from:?}");
+        }
+        // a body without a shield is unchanged by where the attacker stands
+        let open = TargetBody::DEFAULT;
+        assert_eq!(open.seen_from(glam::Vec3::new(-200.0, 0.0, 0.0), at), open);
+        assert_eq!(plain(&open, &FIRST).rule, 33);
+        let kh3 = TargetBody { guarding: true, ..TargetBody::DEFAULT };
+        assert_eq!(kh3.seen_from(glam::Vec3::new(-200.0, 0.0, 0.0), at), kh3, "KH3's own guard has no arc");
     }
 }

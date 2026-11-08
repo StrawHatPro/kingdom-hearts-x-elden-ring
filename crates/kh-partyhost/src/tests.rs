@@ -20,6 +20,13 @@ impl kh_core::Targets for NoEnemies {
     fn apply_hit(&mut self, _hit: &HitRecord) -> HitResult {
         HitResult::default()
     }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
+    }
 }
 
 impl PartyTargets for NoEnemies {
@@ -153,7 +160,7 @@ fn the_friends_record_survives_a_save_and_a_load() {
     let donald = rt.id(PartyChara::Donald).unwrap();
     {
         let s = rt.party.status_mut(donald).unwrap();
-        s.bonuses.0[kh_core::status::BonusCounts::HP_UP5] += 2;
+        s.set_growth(kh_party::growth::Growth { armour_slots: 1, ..Default::default() }); // the record's slot count is his own
         s.items[1] = kh_party::ItemSlot { item: Some(kh_core::status::ItemKind::Elixir), present: true };
     }
     let saved = rt.to_save();
@@ -169,7 +176,7 @@ fn the_friends_record_survives_a_save_and_a_load() {
     step(&mut rt2, &mut sora2, &world);
     let d2 = rt2.id(PartyChara::Donald).unwrap();
     let s2 = rt2.party.status(d2).unwrap();
-    assert_eq!(s2.bonuses.0[kh_core::status::BonusCounts::HP_UP5], rt.party.status(donald).unwrap().bonuses.0[kh_core::status::BonusCounts::HP_UP5]);
+    assert_eq!(s2.armour_slots, rt.party.status(donald).unwrap().armour_slots);
     assert_eq!(s2.items[1].item, Some(kh_core::status::ItemKind::Elixir));
     assert_eq!(FriendRecord::of(PartyChara::Donald, s2), saved.friends[0]);
 }

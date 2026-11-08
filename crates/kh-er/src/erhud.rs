@@ -131,6 +131,15 @@ pub fn hooked() -> bool {
     ORIGINAL.load(Ordering::Relaxed) != 0
 }
 
+/// (THE USER 2026-11-02: "For Spirit Ashes, give them their own KH-styled HUD element instead of using Elden Ring's HUD for
+/// them.") Some of Elden Ring's HUD is hidden now, by the very rule `apply_hook` uses (the timed mask in force, else the one
+/// that stays): spirit.rs hides the game's spirit-ash block for exactly as long.
+pub fn hiding() -> bool {
+    let timed = MASK.load(Ordering::Relaxed);
+    // SAFETY: plain getter.
+    (timed != 0 && unsafe { GetTickCount64() } < UNTIL.load(Ordering::Relaxed)) || STICKY.load(Ordering::Relaxed) != 0
+}
+
 /// Renews what is hidden of Elden Ring's HUD for the next 250 ms (0 = nothing: its whole HUD shows).
 pub fn set(mask: u32) {
     MASK.store(mask, Ordering::Relaxed);
@@ -173,31 +182,6 @@ pub fn parse_mask(text: &str) -> Option<u32> {
         }
     }
     Some(mask)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_mask_text_is_groups_and_tags() {
-        assert_eq!(parse_mask("1, 2,3"), Some(0b1110));
-        assert_eq!(parse_mask("13,tags"), Some(1 << 13 | TAGS));
-        assert_eq!(parse_mask("tags, boss"), Some(TAGS | BOSS));
-        assert_eq!(parse_mask(""), Some(0));
-        assert_eq!(parse_mask("14"), None);
-        assert_eq!(parse_mask("x"), None);
-    }
-
-    /// (IMPL_ER23A) the default: all 14 groups (the compass, group 12, included), the enemy tags, the boss bars.
-    #[test]
-    fn the_default_hides_every_group_the_compass_too() {
-        let mask = parse_mask(DEFAULT_HIDE).unwrap();
-        assert_eq!(mask, 0x3fff | TAGS | BOSS);
-        assert!(mask >> 12 & 1 == 1, "the compass");
-        // the old default (the compass kept) is still sayable
-        assert_eq!(parse_mask("0,1,2,3,4,5,6,7,8,9,10,11,13,tags,boss"), Some(mask & !(1 << 12)));
-    }
 }
 
 // ---------------------------------------------------------------- a boss bar on demand (testing aid)
@@ -249,5 +233,40 @@ pub fn test_boss_bar(ask: Option<(i32, eldenring::cs::FieldInsHandle)>) {
                 erlog!("erhud: dbg.bossbar: the game's boss-bar entry is put back");
             }
         }
+    }
+}
+
+/// (GF-INGAME, test key `atk.wake = cNNNN,bar`) The game's first boss bar on this character, as its boss event would set it.
+pub fn wake_boss_bar(handle: eldenring::cs::FieldInsHandle, fmg: i32) {
+    use eldenring::cs::CSFeManImp;
+    use fromsoftware_shared::FromStatic;
+    // SAFETY: game thread (a task phase); the singleton lives as long as the game.
+    let Ok(fe) = (unsafe { CSFeManImp::instance_mut() }) else { return };
+    fe.boss_health_displays[0].fmg_id = fmg;
+    fe.boss_health_displays[0].field_ins_handle = handle;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_mask_text_is_groups_and_tags() {
+        assert_eq!(parse_mask("1, 2,3"), Some(0b1110));
+        assert_eq!(parse_mask("13,tags"), Some(1 << 13 | TAGS));
+        assert_eq!(parse_mask("tags, boss"), Some(TAGS | BOSS));
+        assert_eq!(parse_mask(""), Some(0));
+        assert_eq!(parse_mask("14"), None);
+        assert_eq!(parse_mask("x"), None);
+    }
+
+    /// (IMPL_ER23A) the default: all 14 groups (the compass, group 12, included), the enemy tags, the boss bars.
+    #[test]
+    fn the_default_hides_every_group_the_compass_too() {
+        let mask = parse_mask(DEFAULT_HIDE).unwrap();
+        assert_eq!(mask, 0x3fff | TAGS | BOSS);
+        assert!(mask >> 12 & 1 == 1, "the compass");
+        // the old default (the compass kept) is still sayable
+        assert_eq!(parse_mask("0,1,2,3,4,5,6,7,8,9,10,11,13,tags,boss"), Some(mask & !(1 << 12)));
     }
 }

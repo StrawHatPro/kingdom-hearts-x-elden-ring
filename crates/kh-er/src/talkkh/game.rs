@@ -154,7 +154,14 @@ pub fn frame(control: &Control, ctx: TalkCtx) {
     if let Ok(mut s) = SKIP_IDS.try_lock() {
         *s = control.str("talk.kh.skip").map(|t| t.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_default();
     }
-    hooks::ENABLED.store(enabled || crate::shopkh::wants_talk_hooks(control), Ordering::Relaxed); // (SHOP) the hooks also run for the KH shop and the smiths
+    // (ER-TWEAKS) Rennala's Rebirth / Cosmetics trim (`rennala.trim`, default on): the hooks also run for it
+    let rennala = super::rennala::on_from(control.flag("rennala.trim"));
+    super::rennala::ON.store(rennala, Ordering::Relaxed);
+    // (ER-TWEAKS follow-up) the Roundtable Hold mirror's "Apply cosmetics" trim (`mirror.trim`, default on): the same
+    let mirror = super::rennala::on_from(control.flag("mirror.trim"));
+    super::rennala::MIRROR_ON.store(mirror, Ordering::Relaxed);
+    let rennala = rennala || mirror;
+    hooks::ENABLED.store(rennala || enabled || crate::shopkh::wants_talk_hooks(control) || crate::boc::wants_talk_hooks(control) || crate::spirittune::wants_talk_hooks(control) || crate::forgekh::wants_talk_hooks(control) /* (P7 SMITHS) */, Ordering::Relaxed); // (SHOP) the hooks also run for the KH shop and the smiths; (THE USER 2026-11-02) and for Boc's Outfits, Roderika's Spirit Tuning
     let bubble = crate::hud::with_hud(|hud| hud.bubble_available()).unwrap_or(false);
     let other_conv = conv::running().filter(|(_, owner)| *owner != OWNER && *owner != OWNER_AMBIENT);
     let ready = enabled && !ctx.cutscene && !ctx.er_menu && bubble && control.flag("conv.on") != Some(false) && other_conv.is_none();

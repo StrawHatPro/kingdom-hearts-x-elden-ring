@@ -13,7 +13,7 @@
 //! | Diving Strike | `dive.rs`; the head-first pose is Jump sub-steps 7 / 8 (states/jump.rs), the strike attack kind 0x35 |
 //! | Sonic Dash | `sonic.rs` (the air-dodge request, attack kinds 0xE0 / 0xE1) |
 //! | Ancient Light | `ancient.rs` (the situation offer LM_UNIONDISCODE 174, attack kind 0xE2) |
-//! | Spectral Rays | `spectral.rs` (the shotlock kind 11, states/shoot_flow.rs; the Customize choice `CommandState::shotlock`) |
+//! | Spectral Rays | `spectral.rs` (the Customize choice `CommandState::shotlock`; the shotlock kind 11 itself: magic/shotlocks/laser.rs (SHOT-A laser)) |
 //! | Critical Counter | KH3's code (states/guard.rs, status/damage.rs); the Elden Ring addition here ([`just_guard`]) |
 //! | Hidden Potential | [`overcome_stats`] (combat/hit.rs `damage`, magic/projectile.rs `damage_of`) |
 //!
@@ -22,6 +22,7 @@
 
 pub mod ancient;
 pub mod chandelier;
+pub mod counter; // (REVENGE) a host-asked counter (the Mimic Tear boss copies' revenge)
 pub mod dive;
 pub mod finishers;
 pub mod light_wave;
@@ -82,6 +83,8 @@ pub struct XsState {
     /// DEBUG (`Sora::debug_xs_finisher`, the test level's script word `xs-finisher`): the next ground finisher is this XS
     /// kind whatever its condition, once (the ability must still be equipped). For captures of the moves.
     pub debug_finisher: Option<u8>,
+    /// (REVENGE) A host-asked counter (`Sora::request_counter`, counter.rs); None in KH3's own play.
+    pub counter: Option<counter::CounterAsk>,
 }
 
 /// (XSI) `HitRecord::flags` bit of a Break Boost hit (XS 2.16): kh-react keeps the endurance open
@@ -119,6 +122,8 @@ pub(crate) fn tick(state: &mut StateData, cx: &mut Ctx, input: &Input, dt: f32) 
     ancient::reconcile_offer(cx);
     rage::tick(state, cx);
     light_wave::tick(cx, input, dt);
+    // (REVENGE) a host-asked counter's request (nothing without one)
+    counter::tick(state, cx, dt);
 }
 
 // ------------------------------------------------------------------------------------------------ attacks
@@ -258,11 +263,7 @@ pub(crate) fn adjust_damage(cx: &mut Ctx, window: &Window, target: &TargetInfo, 
     if window.info.kind == rage::RAGE_RAID && window.row_name == "AN_COUNTER_END" {
         rage::raid_end_hit(cx, target.id);
     }
-    // Spectral Rays: a refracted beam (XS 2.8).
-    if window.group == spectral::GROUP_REFRACT {
-        amount *= X.spectral_refract_scale;
-        cx.pawn.combat.xs.adjusted += 1;
-    }
+    // (SHOT-A laser) Spectral Rays' refracted beams are gone (KH3's kind 11, magic/shotlocks/laser.rs, has none).
     // The spectacle cap (XS 1, Q7): at most a share of the target's maximum HP per use.
     if let Some(sp) = cx.pawn.combat.xs.spectacle.as_mut().filter(|sp| sp.kind == window.info.kind) {
         let per_hp = cx.host.targets.damage_to_hp().max(1.0e-6);

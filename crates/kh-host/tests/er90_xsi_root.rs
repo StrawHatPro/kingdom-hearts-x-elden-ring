@@ -3,8 +3,8 @@
 //!   the main pack's names never;
 //! - the effect-group rule's name filter lets the XS form effects through only with the root read (without it: as before);
 //! - every effect the XS clips (xsi_manifest.json) and the XS code name resolves in one of the roots.
-//! Uses ER90's hard-linked harness pack (build/sora_tmp/er/er90/hpack: the main pack + the staged XSI pack); skipped,
-//! saying so, without it.
+//!   Uses ER90's hard-linked harness pack (build/sora_tmp/er/er90/hpack: the main pack + the staged XSI pack); skipped,
+//!   saying so, without it.
 
 use std::path::PathBuf;
 
@@ -41,7 +41,7 @@ fn er90_the_xsi_root_is_a_third_namespace_and_opens_the_filter_for_the_xs_effect
         return;
     }
     let rig = kh_host::rig::Rig::new(&pack, &loadout, None).expect("Sora's rig");
-    let xs = ["vw_so052_bst1_1", "vw_so088_fin_zmn0", "vw_so192_trf_fns0", "vw_so200_spr_cal00", "vw_so072_stf_przm_one0", "vw_so200_spr_tub00"];
+    let xs = ["vw_so052_bst1_1", "vw_so088_fin_zmn0", "vw_so192_trf_fns0", "vw_so200_spr_cal00", "vw_so072_stf_przm0" /* (INT-F) KH3's laser (M_A481) */, "vw_so200_spr_tub00"];
 
     // ---- without the root: the name filter drops every one of them (as before ER90), nothing new is read
     let mut plain = EffectHost::load(&pack).expect("the main effect pack");
@@ -103,7 +103,7 @@ fn er90_the_xsi_root_is_a_third_namespace_and_opens_the_filter_for_the_xs_effect
         }
     }
     walk(&manifest, &mut names);
-    names.extend(["vg_kg07_pow_bem2", "vp_ant_bdy_ora00", "vw_so072_stf_przm_one0", "vw_so072_stf_przm_one_hit0"].map(str::to_string));
+    names.extend(["vg_kg07_pow_bem2", "vp_ant_bdy_ora00", "vw_so072_stf_przm0", "vw_so072_stf_hit0"].map(str::to_string)); // (INT-F) KH3's laser
     names.sort();
     names.dedup();
     // (vw_so210_*: Light Form's group-2200 rows of the shared clips, the other keyblade's: never spawned with group 2100)

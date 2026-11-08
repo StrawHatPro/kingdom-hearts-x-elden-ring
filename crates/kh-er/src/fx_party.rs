@@ -74,10 +74,13 @@ pub struct PartyFx {
     pub told: String,
 }
 
+/// One member's tap of a party step: (member, step, position, yaw, bones, grounded, anim, weapon).
+pub type PartyTap = (u8, u64, Vec3, f32, HashMap<String, (Vec3, glam::Quat)>, bool, (String, f32), String);
+
 impl PartyFx {
     /// The step's feed: (member, step, position, yaw, bones, grounded, anim, weapon) per tap; the projectiles; whether the
     /// party is running and shown.
-    pub fn feed(&mut self, taps: Vec<(u8, u64, Vec3, f32, HashMap<String, (Vec3, glam::Quat)>, bool, (String, f32), String)>, projectiles: Vec<(u32, Vec3, Vec3)>, active: bool) {
+    pub fn feed(&mut self, taps: Vec<PartyTap>, projectiles: Vec<(u32, Vec3, Vec3)>, active: bool) {
         self.fed = true;
         self.active = active;
         self.ended = self.was_active && !active;
@@ -169,7 +172,7 @@ mod tests {
     use kh_core::host::party::{PartyMember, SeamHandles};
     use kh_core::{SoundHandle, SoundPlay};
 
-    fn tap(member: u8, step: u64) -> (u8, u64, Vec3, f32, HashMap<String, (Vec3, glam::Quat)>, bool, (String, f32), String) {
+    fn tap(member: u8, step: u64) -> PartyTap {
         let mut bones = HashMap::new();
         bones.insert("atama".to_string(), (Vec3::new(10.0, 0.0, 120.0), glam::Quat::IDENTITY));
         bones.insert("wep:vfx_call".to_string(), (Vec3::new(40.0, 0.0, 150.0), glam::Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)));

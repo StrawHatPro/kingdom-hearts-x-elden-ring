@@ -196,6 +196,631 @@
    "-",
    "confirmed",
    "-"
+  ],
+  [
+   "hud.resolve_x",
+   119,
+   "status px",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 7",
+   "the Resolve plate's centre, right of the GUARD part's origin (over the GUARD label)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.resolve_y",
+   -12,
+   "status px",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 7",
+   "the Resolve plate's centre, below the GUARD part's origin (negative = above the bar)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.resolve_pip_w",
+   26,
+   "status px",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 7",
+   "one Resolve pip's width (KH3's style-gauge chevron)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.resolve_pip_h",
+   13,
+   "status px",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 7",
+   "one Resolve pip's height",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.resolve_pip_step",
+   23,
+   "status px",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 7",
+   "from one Resolve pip to the next",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.resolve_plate_pad",
+   7,
+   "status px",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 7",
+   "the plate's margin left and right of the pips",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.resolve_plate_h",
+   19,
+   "status px",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 7",
+   "the plate's height",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.resolve_color_plate",
+   [
+    0.2,
+    0.2,
+    0.23,
+    0.88
+   ],
+   "rgba",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 7",
+   "the plate (multiplies KH3's MP base)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.resolve_color_lit",
+   [
+    0.9,
+    0.93,
+    1,
+    1
+   ],
+   "rgba",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 7",
+   "a filled pip: GUARD's silver, brighter",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.resolve_color_off",
+   [
+    0.3,
+    0.3,
+    0.34,
+    0.95
+   ],
+   "rgba",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 7",
+   "an empty pip",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.resolve_color_zone",
+   [
+    1,
+    0.76,
+    0.22,
+    1
+   ],
+   "rgba",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 7",
+   "In the Zone: all three pips pulse in this gold",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.resolve_zone_hz",
+   2,
+   "1/s",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 7",
+   "the In the Zone pulse",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.stagger_x",
+   -75,
+   "stage px",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 5",
+   "the Stagger gauge's place on hudRight (the armour gauge's own x)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.stagger_y",
+   76,
+   "stage px",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 5",
+   "the Stagger gauge's place on hudRight: under the HP gauge and its bars",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.stagger_color_fill",
+   [
+    1,
+    1,
+    1,
+    1
+   ],
+   "rgba",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 5",
+   "the fill (multiplies the movie's armour gauge)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.stagger_color_loss",
+   [
+    1,
+    0.28,
+    0.18,
+    1
+   ],
+   "rgba",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 5",
+   "the part being lost, as the HP gauge's red",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.stagger_color_broken",
+   [
+    1,
+    1,
+    0.9,
+    1
+   ],
+   "rgba",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 5",
+   "BROKEN: the full gauge blinks in this white",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.stagger_blink",
+   6,
+   "1/s",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 5",
+   "the BROKEN blink",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.peril_lead",
+   0.5,
+   "s",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 4.3",
+   "the red ! shows this long before the attack's hit window opens; Danger Sense adds danger.lead",
+   "-",
+   "confirmed",
+   "about half a second ahead of contact: time to read it and answer"
+  ],
+  [
+   "hud.peril_min_show",
+   0.3,
+   "s",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 4.3",
+   "a late warning stays up at least this long, so it can be read",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.peril_pop",
+   0.08,
+   "s",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 4.3",
+   "the pop in",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.peril_pop_scale",
+   1.7,
+   "x",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 4.3",
+   "the pop starts this much larger",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.peril_fade",
+   0.18,
+   "s",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 4.3",
+   "it fades in this long once the hit window opens, or at once when the attack is called off",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.peril_size",
+   110,
+   "stage px",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 4.3",
+   "the mark's height",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.peril_lift",
+   62,
+   "stage px",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 4.3",
+   "its centre sits this far over the enemy's head",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.peril_color",
+   [
+    0.96,
+    0.07,
+    0.05,
+    1
+   ],
+   "rgba",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 4.3",
+   "the face of the !",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.peril_outline",
+   [
+    0.13,
+    0,
+    0,
+    1
+   ],
+   "rgba",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 4.3",
+   "its outline",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.peril_glow",
+   [
+    1,
+    0.16,
+    0.08,
+    0.75
+   ],
+   "rgba",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 4.3",
+   "the glow around it",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.peril_edge",
+   72,
+   "stage px",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 4.3",
+   "an attacker off the screen: the ! sits on the screen's edge toward it, this far in",
+   "-",
+   "confirmed",
+   "so an attack from behind still warns"
+  ],
+  [
+   "hud.peril_se",
+   19,
+   "static SE index",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 4.3",
+   "the short cue when a ! pops: a static SE of KH3 already in the pack (-1: none)",
+   "-",
+   "confirmed",
+   "se00000_042, 0.25 s, KH3's shotlock mark: a bright tick over the fight"
+  ],
+  [
+   "hud.peril_se_gap",
+   0.2,
+   "s",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 4.3",
+   "at most one cue this often: a crowd's marks do not rattle",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.peril_word_h",
+   28,
+   "stage px",
+   "documentation/GOOFY_OVERHAUL.md 4.3, 11.3; THE USER 2026-11-02: \"Danger Sense ability should indicate what kind of attack it will be\"",
+   "Danger Sense: the kind of attack is named in a word under the red !, this tall (KH3's menu font)",
+   "-",
+   "confirmed",
+   "it pops, fades and sits on the screen edge with the ! (one clip)"
+  ],
+  [
+   "hud.peril_word_gap",
+   5,
+   "stage px",
+   "documentation/GOOFY_OVERHAUL.md 4.3, 11.3; THE USER 2026-11-02: \"Danger Sense ability should indicate what kind of attack it will be\"",
+   "from the foot of the !'s glyph to the top of the word",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.peril_word_max_w",
+   170,
+   "stage px",
+   "documentation/GOOFY_OVERHAUL.md 4.3, 11.3; THE USER 2026-11-02: \"Danger Sense ability should indicate what kind of attack it will be\"",
+   "a longer word is drawn narrower to fit this width",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.peril_word_normal",
+   "STRIKE",
+   "text",
+   "documentation/GOOFY_OVERHAUL.md 4.3, 11.3; THE USER 2026-11-02: \"Danger Sense ability should indicate what kind of attack it will be\"",
+   "the word under the ! for a normal attack: Deflect",
+   "-",
+   "confirmed",
+   "COMPOSED (no KH3 string)"
+  ],
+  [
+   "hud.peril_word_normal_color",
+   [
+    1,
+    1,
+    1,
+    1
+   ],
+   "rgba",
+   "documentation/GOOFY_OVERHAUL.md 4.3, 11.3; THE USER 2026-11-02: \"Danger Sense ability should indicate what kind of attack it will be\"",
+   "that word's colour (its edge is hud.peril_outline)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.peril_word_thrust",
+   "THRUST",
+   "text",
+   "documentation/GOOFY_OVERHAUL.md 4.3, 11.3; THE USER 2026-11-02: \"Danger Sense ability should indicate what kind of attack it will be\"",
+   "the word under the ! for a thrust: Pinning Guard",
+   "-",
+   "confirmed",
+   "COMPOSED (no KH3 string)"
+  ],
+  [
+   "hud.peril_word_thrust_color",
+   [
+    1,
+    0.86,
+    0.25,
+    1
+   ],
+   "rgba",
+   "documentation/GOOFY_OVERHAUL.md 4.3, 11.3; THE USER 2026-11-02: \"Danger Sense ability should indicate what kind of attack it will be\"",
+   "that word's colour (its edge is hud.peril_outline)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.peril_word_sweep",
+   "SWEEP",
+   "text",
+   "documentation/GOOFY_OVERHAUL.md 4.3, 11.3; THE USER 2026-11-02: \"Danger Sense ability should indicate what kind of attack it will be\"",
+   "the word under the ! for a sweep: Hop Counter",
+   "-",
+   "confirmed",
+   "COMPOSED (no KH3 string)"
+  ],
+  [
+   "hud.peril_word_sweep_color",
+   [
+    0.45,
+    1,
+    0.45,
+    1
+   ],
+   "rgba",
+   "documentation/GOOFY_OVERHAUL.md 4.3, 11.3; THE USER 2026-11-02: \"Danger Sense ability should indicate what kind of attack it will be\"",
+   "that word's colour (its edge is hud.peril_outline)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.peril_word_grab",
+   "GRAB",
+   "text",
+   "documentation/GOOFY_OVERHAUL.md 4.3, 11.3; THE USER 2026-11-02: \"Danger Sense ability should indicate what kind of attack it will be\"",
+   "the word under the ! for a grab: Slip Counter",
+   "-",
+   "confirmed",
+   "COMPOSED (no KH3 string)"
+  ],
+  [
+   "hud.peril_word_grab_color",
+   [
+    0.95,
+    0.5,
+    1,
+    1
+   ],
+   "rgba",
+   "documentation/GOOFY_OVERHAUL.md 4.3, 11.3; THE USER 2026-11-02: \"Danger Sense ability should indicate what kind of attack it will be\"",
+   "that word's colour (its edge is hud.peril_outline)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.peril_word_heavy",
+   "HEAVY",
+   "text",
+   "documentation/GOOFY_OVERHAUL.md 4.3, 11.3; THE USER 2026-11-02: \"Danger Sense ability should indicate what kind of attack it will be\"",
+   "the word under the ! for an unblockable heavy: Bull Brace",
+   "-",
+   "confirmed",
+   "COMPOSED (no KH3 string)"
+  ],
+  [
+   "hud.peril_word_heavy_color",
+   [
+    1,
+    0.56,
+    0.16,
+    1
+   ],
+   "rgba",
+   "documentation/GOOFY_OVERHAUL.md 4.3, 11.3; THE USER 2026-11-02: \"Danger Sense ability should indicate what kind of attack it will be\"",
+   "that word's colour (its edge is hud.peril_outline)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.peril_word_projectile",
+   "PROJECTILE",
+   "text",
+   "documentation/GOOFY_OVERHAUL.md 4.3, 11.3; THE USER 2026-11-02: \"Danger Sense ability should indicate what kind of attack it will be\"",
+   "the word under the ! for an arrow or a shot: Shield Reflect",
+   "-",
+   "confirmed",
+   "COMPOSED (no KH3 string)"
+  ],
+  [
+   "hud.peril_word_projectile_color",
+   [
+    0.38,
+    0.9,
+    1,
+    1
+   ],
+   "rgba",
+   "documentation/GOOFY_OVERHAUL.md 4.3, 11.3; THE USER 2026-11-02: \"Danger Sense ability should indicate what kind of attack it will be\"",
+   "that word's colour (its edge is hud.peril_outline)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.peril_word_magic",
+   "MAGIC",
+   "text",
+   "documentation/GOOFY_OVERHAUL.md 4.3, 11.3; THE USER 2026-11-02: \"Danger Sense ability should indicate what kind of attack it will be\"",
+   "the word under the ! for magic or an incantation: Spell Ward",
+   "-",
+   "confirmed",
+   "COMPOSED (no KH3 string)"
+  ],
+  [
+   "hud.peril_word_magic_color",
+   [
+    0.62,
+    0.62,
+    1,
+    1
+   ],
+   "rgba",
+   "documentation/GOOFY_OVERHAUL.md 4.3, 11.3; THE USER 2026-11-02: \"Danger Sense ability should indicate what kind of attack it will be\"",
+   "that word's colour (its edge is hud.peril_outline)",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.stagger_label",
+   "STAGGER",
+   "text",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 5",
+   "the word in the gauge's tab, drawn in KH3's menu font",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.stagger_label_x",
+   -8,
+   "stage px",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 5",
+   "the word's right end, from the gauge's right end",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.stagger_label_y",
+   18,
+   "stage px",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 5",
+   "the word's height centre, from the gauge's origin",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.stagger_label_w",
+   86,
+   "stage px",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 5",
+   "the word's width: it fits the gauge's tab",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.stagger_label_h",
+   13,
+   "stage px",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 5",
+   "the word's height",
+   "-",
+   "confirmed",
+   "-"
+  ],
+  [
+   "hud.stagger_panel_shift",
+   36,
+   "stage px",
+   "build/sora_tmp/party/GOOFY/PLAN.md ruling R20; documentation/GOOFY_OVERHAUL.md 5",
+   "while the gauge shows, the level-up and bonus windows stand this much lower: it sits where their stack starts",
+   "-",
+   "confirmed",
+   "-"
   ]
  ]
 }

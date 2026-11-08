@@ -636,15 +636,23 @@ fn caster_pos(party: &Party, caster: MemberId) -> Option<(Vec3, f32, f32)> {
 
 /// Spawns an effect through the caster's handles (none when he is gone).
 pub fn spawn_fx(cx: &mut Ctx, caster: MemberId, spell: Option<SpellRef>, name: &'static str, at: Attach, scale: f32, persistent: bool) -> Option<EffectHandle> {
-    spawn_fx_tint(cx, caster, spell, name, at, scale, persistent, fx::tint_of(spell, name))
+    spawn_fx_tint(cx, caster, spell, name, FxPlace { at, scale, persistent }, fx::tint_of(spell, name))
+}
+
+/// Where an effect goes and how it lives.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FxPlace {
+    pub at: Attach,
+    pub scale: f32,
+    pub persistent: bool,
 }
 
 /// [`spawn_fx`] with its recolour given (None: its own colours).
-#[allow(clippy::too_many_arguments)]
-pub fn spawn_fx_tint(cx: &mut Ctx, caster: MemberId, spell: Option<SpellRef>, name: &'static str, at: Attach, scale: f32, persistent: bool, tint: Option<Tint>) -> Option<EffectHandle> {
+pub fn spawn_fx_tint(cx: &mut Ctx, caster: MemberId, spell: Option<SpellRef>, name: &'static str, place: FxPlace, tint: Option<Tint>) -> Option<EffectHandle> {
     if name.is_empty() {
         return None;
     }
+    let FxPlace { at, scale, persistent } = place;
     let host = &mut *cx.host;
     let m = cx.party.member_mut(caster)?;
     let h = m.seam.spawn(host.effects, &EffectSpawn { id: EffectId(kh_core::notify::notify_asset_id(name)), name, at, rotation: Vec3::ZERO, scale, persistent });
@@ -769,7 +777,8 @@ pub fn deliver(cx: &mut Ctx, caster: MemberId, spec: &HitSpec, t: &TargetInfo, f
         info.victim_result = ReactionResult::NoReaction;
     }
     hit.info = info;
-    classify(cx.host, &mut hit);
+    classify(cx.host, &mut hit, from, t.position);
+    hit.flags |= cx.party.member(caster).map_or(0, |p| p.hit_flag()); // (PARTY-AI) an AI caster's spell passes through friendly NPCs
     let res = cx.host.targets.apply_hit(&hit);
     // the reactions' damage side, landed or not (the statuses changed already)
     let landed = res.accepted.then(|| Landed { target: t.id, damage: res.damage_dealt, killed: res.killed, outcome: outcome.clone(), kind });
@@ -778,7 +787,9 @@ pub fn deliver(cx: &mut Ctx, caster: MemberId, spec: &HitSpec, t: &TargetInfo, f
             p.events.push(crate::view::PartyEventKind::Hit { target: t.id, damage: res.damage_dealt, killed: res.killed, attack: spec.name });
         }
         push_log(cx.log, FxLog::Hit { spell: spec.spell, target: t.id, damage: res.damage_dealt, reactions: outcome.reactions.clone(), kind });
-        let _ = spawn_fx(cx, caster, Some(spec.spell), spec.hit_fx, Attach::World(t.center), 1.0, false);
+        // (THE USER 2026-11-02: "Shields don't count as guarding") a spell a raised shield guarded shows KH3's guard spark
+        let guarded = res.guarded || matches!(hit.info.victim_result, ReactionResult::Guard | ReactionResult::GuardReflect);
+        let _ = spawn_fx(cx, caster, Some(spec.spell), if guarded { kh_core::combat::hit::EFFECT_GUARD_REFLECT } else { spec.hit_fx }, Attach::World(t.center), 1.0, false);
         if outcome.reactions.contains(&Reaction::Shatter) {
             let _ = spawn_fx(cx, caster, Some(spec.spell), fx::FROZEN_OUT, Attach::World(t.center), status_scale(t).0, false); // (DON-SPELLB status looks) sized to it
         }
@@ -826,15 +837,17 @@ pub fn after_reactions(cx: &mut Ctx, caster: MemberId, spec: &HitSpec, t: &Targe
     }
 }
 
-/// KH3's victim classification with the target's body (as the kit's `deliver`).
-fn classify(host: &mut PartyHost, hit: &mut HitRecord) {
+/// KH3's victim classification with the target's body (as the kit's `deliver`). (THE USER 2026-11-02: "Shields don't count as
+/// guarding") the body as the spell meets it from `from` (its origin; the body at `at`): a host's shield guards only from
+/// inside its arc (kh-core `TargetBody::seen_from`); a guarded spell never bounces its caster (a shot, not his swing).
+fn classify(host: &mut PartyHost, hit: &mut HitRecord, from: Vec3, at: Vec3) {
     let target = hit.target;
-    let body = host.targets.body(target, hit.part);
+    let body = host.targets.body(target, hit.part).seen_from(from, at);
     let shape = kh_core::combat::classify::Shape { no_clash: true, ..Default::default() };
     let (mut armor, mut endurance) = (None, None);
     let mut info = hit.info;
     let keep = info.victim_result;
-    let _ = kh_core::combat::classify::classify(&body, kh_core::combat::classify::MapResponse::Other, &shape, hit.damage_kind, hit.attribute, &mut info, &mut |pw, weak| {
+    let _ = kh_core::combat::classify::classify(&body, kh_core::combat::classify::MapResponse::Other, &shape, kh_core::combat::classify::DamageClass { kind: hit.damage_kind, attribute: hit.attribute }, &mut info, &mut |pw, weak| {
         armor = Some((pw, weak));
         i32::MIN
     }, &mut |pw| {
@@ -845,7 +858,7 @@ fn classify(host: &mut PartyHost, hit: &mut HitRecord) {
         let armor_left = armor.map(|(pw, weak)| host.targets.take_armor(target, pw, weak));
         let endurance_left = endurance.map(|pw| host.targets.take_reaction_power(target, pw));
         info = hit.info;
-        let _ = kh_core::combat::classify::classify(&body, kh_core::combat::classify::MapResponse::Other, &shape, hit.damage_kind, hit.attribute, &mut info, &mut |_, _| armor_left.unwrap_or(0), &mut |_| endurance_left.unwrap_or(0));
+        let _ = kh_core::combat::classify::classify(&body, kh_core::combat::classify::MapResponse::Other, &shape, kh_core::combat::classify::DamageClass { kind: hit.damage_kind, attribute: hit.attribute }, &mut info, &mut |_, _| armor_left.unwrap_or(0), &mut |_| endurance_left.unwrap_or(0));
     }
     if keep == ReactionResult::NoReaction {
         info.victim_result = ReactionResult::NoReaction;
@@ -874,6 +887,22 @@ pub fn within(host: &PartyHost, at: Vec3, r: f32, arc: Option<(f32, f32)>) -> Ve
 }
 
 // ================================================================================================ the actors
+
+/// Who casts what: the pair every look and cue of a spell carries.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Who {
+    pub caster: MemberId,
+    pub spell: SpellRef,
+}
+
+/// Where a cast leaves from at the release: its aim, Donald's feet, his facing (deg), the wand's tip.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CastAt {
+    pub aim: Aim,
+    pub pos: Vec3,
+    pub yaw: f32,
+    pub mz: Vec3,
+}
 
 /// Where an actor is aimed.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -988,7 +1017,7 @@ pub enum ActorKind {
     /// A burst after `delay` at the aim.
     Delayed { aim: Aim, delay: f32, burst: Burst },
     /// A ball that flies to the aim, then (after `shrink`) bursts (Flare's star, Plasma, a hurled orb).
-    Ball { pos: Vec3, aim: Aim, speed: f32, turn: f32, dir: Vec3, life: f32, shrink: f32, arrived: Option<f32>, burst: Burst, after: Option<(f32, Burst)> },
+    Ball { pos: Vec3, aim: Aim, speed: f32, turn: f32, dir: Vec3, life: f32, shrink: f32, arrived: Option<f32>, burst: Burst, after: Option<Box<(f32, Burst)>> },
     /// A lasting area.
     Field { centre: Vec3, follow: Follow, radius: f32, life: f32, tick: f32, next: f32, spec: HitSpec, pull: f32, rule: FieldRule, special: Special },
     /// A front that rolls out from `origin` in an arc (Flood, Tsunami).
@@ -1206,6 +1235,9 @@ pub struct MagicFx {
     pub debug_casts: Vec<SpellRef>,
     /// TEST / DEBUG (`party don-cast ID sora`): the next debug casts' ally spells go on Sora.
     pub debug_on_sora: bool,
+    /// TEST / DEBUG (PARTY-AI 2026-11-03, `party don-cast ID goofy|donald|leader`): the next debug casts' ally spells go on
+    /// this member (a friend who leads included), so a buff can be put on any wearer whoever leads.
+    pub debug_on_member: Option<MemberId>,
     /// (the user, 2026-10-22) GRAVITY'S FLATTEN: the enemies it squashed (never a boss), see [`Squash`].
     pub squash: Vec<Squash>,
     /// (DON-SPELLB) the ultimates' and Releases' timed volleys of effects (spell_payload.rs).
@@ -1378,11 +1410,10 @@ fn burst_now(cx: &mut Ctx, fxw: &mut MagicFx, caster: MemberId, spell: SpellRef,
                 spec.bad = Some(("STUN", *hold));
                 spec.kind = Kind::Blow;
             }
-            Special::Sunburst { bonus } => {
-                if cx.party.don.status.get(e.id.0).is_some_and(|s| s.is_burned() && s.is_revealed()) {
+            Special::Sunburst { bonus }
+                if cx.party.don.status.get(e.id.0).is_some_and(|s| s.is_burned() && s.is_revealed()) => {
                     spec.mult *= *bonus;
                 }
-            }
             _ => {}
         }
         let landed = deliver(cx, caster, &spec, &e, from);
@@ -1499,8 +1530,9 @@ pub fn step_actors(fxw: &mut MagicFx, party: &mut Party, host: &mut PartyHost, d
                                 let b = burst.clone();
                                 let t = aim.target();
                                 burst_now(&mut cx, fxw, caster, spell, at, t, &b);
-                                if let Some((delay, ab)) = after.take() {
+                                if let Some(flare) = after.take() {
                                     // the after-flare (Flare Lv 3)
+                                    let (delay, ab) = *flare;
                                     let id_aim = t.map_or(Aim::Point(at), |t| Aim::Target(t, at));
                                     let next = ActorKind::Delayed { aim: id_aim, delay, burst: ab };
                                     fxw.next += 1;
@@ -1863,7 +1895,7 @@ pub fn burn_ticks(cx: &mut Ctx) {
         hit.damage = dmg * mult;
         hit.damage_kind = Kind::Small;
         hit.attribute = Attr::Fire;
-        hit.flags |= DON_HIT_FLAG;
+        hit.flags |= DON_HIT_FLAG | p.hit_flag(); // (PARTY-AI) the burner's rule for friendly NPCs
         let mut info = HitInfo { power, ..HitInfo::DEFAULT };
         info.flags50 |= HitInfo::FLAG50_MAGIC;
         info.victim_result = ReactionResult::NoReaction;
@@ -1885,7 +1917,9 @@ pub fn burn_ticks(cx: &mut Ctx) {
 pub fn sync_status_fx(fxw: &mut MagicFx, party: &mut Party, host: &mut PartyHost, dt: f32, step_log: &[FxLog]) {
     // (DON-SPELLB status looks, the user 2026-10-23) one look per status SLOT on each enemy; a slot's variant (Chill's stacks,
     // Reveal -> Exposed) swaps the look; each sized to the enemy's capsule; a Wet enemy splashes when it moves or is hit;
-    // the Frozen breaks with a shatter burst when it thaws (the Shatter reaction spawns its own at the hit)
+    // (FREEZE-FX, the user 2026-11-07: "make sure frozen effects are applied to anything that gets frozen by blizzard") the
+    // Frozen slot wears NO look of this list: a frozen enemy wears KH3's own frozen rows (ead_com_abn0 0xC1C / 0xC1F) by the one
+    // shared route of every freeze (kh-core combat::freeze_look; kh-er freezefx.rs), whoever froze it
     let Some(owner) = party.members().find(|id| party.status(*id).is_some_and(|s| s.donald.is_some())) else {
         for s in fxw.status_fx.drain(..) {
             host.effects.stop(s.handle, false);
@@ -1897,7 +1931,7 @@ pub fn sync_status_fx(fxw: &mut MagicFx, party: &mut Party, host: &mut PartyHost
         let on = [
             s.is_wet().then_some(0),
             s.is_chilled().then(|| s.chill.clamp(1, 4) - 1),
-            s.is_frozen().then_some(0),
+            None, // (FREEZE-FX) Frozen: KH3's own rows by the shared route
             s.is_burned().then_some(0),
             s.is_revealed().then_some(u8::from(s.exposed)),
             s.is_blind().then_some(0),
@@ -1909,23 +1943,14 @@ pub fn sync_status_fx(fxw: &mut MagicFx, party: &mut Party, host: &mut PartyHost
             }
         }
     }
-    let thawed = |id: u32| party.don.status_events.iter().any(|(t, e)| *t == id && matches!(e, StatusEvent::Thawed));
-    // stop what ended (a short fade: the looks' particles are short-lived); a thawed Frozen breaks
+    // stop what ended (a short fade: the looks' particles are short-lived)
     let mut keep = Vec::new();
-    let mut breaks: Vec<(u32, f32)> = Vec::new();
     for s in fxw.status_fx.drain(..) {
         let info = host.targets.info(TargetId(s.target));
         if want.contains(&(s.target, s.which)) && info.is_some() {
             keep.push(s);
         } else {
-            // a Frozen's ice goes at once (it breaks: the burst below when it thawed, the Shatter reaction's own at the hit);
-            // any other look fades
-            host.effects.stop(s.handle, s.which / 8 == 2);
-            if s.which / 8 == 2 && thawed(s.target) {
-                if let Some(t) = info {
-                    breaks.push((s.target, status_scale(&t).0));
-                }
-            }
+            host.effects.stop(s.handle, false);
         }
     }
     fxw.status_fx = keep;
@@ -1938,9 +1963,6 @@ pub fn sync_status_fx(fxw: &mut MagicFx, party: &mut Party, host: &mut PartyHost
         }
         h
     };
-    for (id, scale) in breaks {
-        spawn1(m, host, fx::FROZEN_OUT, id, scale);
-    }
     // start what began
     for (id, which) in want {
         if fxw.status_fx.iter().any(|s| s.target == id && s.which == which) {
@@ -1951,9 +1973,6 @@ pub fn sync_status_fx(fxw: &mut MagicFx, party: &mut Party, host: &mut PartyHost
         let at = Attach::Target { target: TargetId(id), offset: Vec3::ZERO };
         // authored round a 180 cm, 80 cm wide body: scaled by the enemy's height, widened / narrowed by its radius
         let (scale, wide) = status_scale(&t);
-        if name == fx::FROZEN {
-            spawn1(m, host, fx::FROZEN_IN, id, scale);
-        }
         let h = m.seam.spawn(host.effects, &EffectSpawn { id: EffectId(kh_core::notify::notify_asset_id(name)), name, at, rotation: Vec3::ZERO, scale, persistent: true });
         if (wide / scale - 1.0).abs() > 0.02 {
             host.effects.transform(h, Vec3::ZERO, Vec3::ZERO, Vec3::new(wide, wide, scale));
@@ -2050,6 +2069,8 @@ pub struct L1Targets<'a> {
     pub rewards: Vec<(u32, Reaction)>,
     pub outcomes: Vec<(TargetInfo, HitOutcome, f32)>,
     pub log: Vec<FxLog>,
+    /// (PARTY-AI) The caster's hit bit (`NpcPawn::hit_flag`): an AI caster's spells pass through friendly NPCs.
+    pub flag: u32,
 }
 
 /// The element and tier of a hit of Sora's actors by its attack row ("MAG_FIRA_FIN" -> Fire 2, "MAG_B_BLIZZAGAN" ->
@@ -2095,12 +2116,15 @@ pub fn l1_scale(e: Element, tier: u8, d: &DonData) -> f32 {
     }
 }
 
+/// What the line-1 hits left for the caster: (target, reaction) rewards, the outcomes (target, outcome, damage), the log.
+pub type L1Parts = (Vec<(u32, Reaction)>, Vec<(TargetInfo, HitOutcome, f32)>, Vec<FxLog>);
+
 impl<'a> L1Targets<'a> {
     pub fn new(inner: &'a mut dyn Targets, book: &'a mut StatusBook, full: FullFlags, abilities: super::abilities::DonAbilities, spell: SpellRef) -> L1Targets<'a> {
-        L1Targets { inner, book, full, abilities, spell, rewards: Vec::new(), outcomes: Vec::new(), log: Vec::new() }
+        L1Targets { inner, book, full, abilities, spell, rewards: Vec::new(), outcomes: Vec::new(), log: Vec::new(), flag: 0 }
     }
 
-    pub fn into_parts(self) -> (Vec<(u32, Reaction)>, Vec<(TargetInfo, HitOutcome, f32)>, Vec<FxLog>) {
+    pub fn into_parts(self) -> L1Parts {
         (self.rewards, self.outcomes, self.log)
     }
 }
@@ -2116,6 +2140,8 @@ impl Targets for L1Targets<'_> {
         self.inner.hurt_shapes(id, out)
     }
     fn apply_hit(&mut self, hit: &HitRecord) -> HitResult {
+        let stamped = HitRecord { flags: hit.flags | self.flag, ..*hit }; // (PARTY-AI) the caster's friendly-NPC rule
+        let hit = &stamped;
         if !hit.takes_hp() || hit.flags & DON_HIT_FLAG != 0 {
             return self.inner.apply_hit(hit);
         }
@@ -2123,7 +2149,7 @@ impl Targets for L1Targets<'_> {
         let size = size_of(&*self.inner, &info);
         let d = data();
         // the hit's own spell: its row name (an earlier cast's actor may still be out), else the cast's
-        let (e, tier) = tier_of_attack(hit.attack_name).or_else(|| match self.spell {
+        let (e, tier) = tier_of_attack(hit.attack_name).or(match self.spell {
             SpellRef::Line1(e, t) => Some((e, t)),
             _ => None,
         }).unwrap_or((Element::Fire, 1));
@@ -2222,6 +2248,9 @@ impl Targets for L1Targets<'_> {
     fn size_class(&self, id: TargetId) -> u8 {
         self.inner.size_class(id)
     }
+    fn stagger_ask(&mut self, id: TargetId, ask: kh_core::host::StaggerAsk) -> bool {
+        self.inner.stagger_ask(id, ask) // (GF-BREAK)
+    }
     fn script_hold(&mut self, id: TargetId, hold: Option<kh_core::host::ScriptHold>) {
         self.inner.script_hold(id, hold) // (ZETTA) Zettaflare's held target
     }
@@ -2233,6 +2262,13 @@ impl Targets for L1Targets<'_> {
     }
     fn drawn_extent(&self, id: TargetId) -> Option<(f32, f32)> {
         self.inner.drawn_extent(id) // (ZETTA 2026-10-23) what the host draws of it (the framing and the beam's cover)
+    }
+    // (AUDIT-B) forwarded: the hit's bone and its pose are the wrapped host's
+    fn hit_bone(&self, id: kh_core::TargetId, at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        self.inner.hit_bone(id, at)
+    }
+    fn bone_pose(&self, id: kh_core::TargetId, bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        self.inner.bone_pose(id, bone)
     }
 }
 
@@ -2345,6 +2381,9 @@ impl Targets for PartyFx<'_> {
     fn size_class(&self, id: TargetId) -> u8 {
         self.inner.size_class(id)
     }
+    fn stagger_ask(&mut self, id: TargetId, ask: kh_core::host::StaggerAsk) -> bool {
+        self.inner.stagger_ask(id, ask) // (GF-BREAK)
+    }
     fn script_hold(&mut self, id: TargetId, hold: Option<kh_core::host::ScriptHold>) {
         self.inner.script_hold(id, hold) // (ZETTA) Zettaflare's held target
     }
@@ -2356,6 +2395,13 @@ impl Targets for PartyFx<'_> {
     }
     fn drawn_extent(&self, id: TargetId) -> Option<(f32, f32)> {
         self.inner.drawn_extent(id) // (ZETTA 2026-10-23) what the host draws of it (the framing and the beam's cover)
+    }
+    // (AUDIT-B) forwarded: the hit's bone and its pose are the wrapped host's
+    fn hit_bone(&self, id: kh_core::TargetId, at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        self.inner.hit_bone(id, at)
+    }
+    fn bone_pose(&self, id: kh_core::TargetId, bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        self.inner.bone_pose(id, bone)
     }
 }
 

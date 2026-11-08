@@ -12,15 +12,30 @@ use kh_core::test_world::TestWorld;
 use kh_core::{Audio, Effects, HitRecord, HitResult, Host, HurtShape, Input, NullHost, Output, PadButton, PadButtons, PadState, Pose, Sora, Status, TargetFlags, TargetId, TargetInfo, Targets, SORA_PARAMS};
 
 /// `kh-app`'s loadout reader (sheet rows -> `kh_core::Loadout`), shared as source.
-#[allow(dead_code)]
 #[path = "loadout_shared.rs"]
 pub mod loadout; // (save) public: save.rs builds the new-game loadout with it, a host parses its sheet with it
 
 pub const STEP: f32 = 1.0 / 60.0;
 
-/// The mesh component in the KH3 world: at the actor origin, turned by the yaw minus 90 degrees.
+/// The mesh component in the KH3 world: at the actor origin, turned by the yaw minus 90 degrees; (F-LOCO, INT-F) tilted by
+/// the actor's pitch about the capsule centre ([`pitch_about`]; 0 = as before).
 pub fn component_to_world(out: &Output) -> Trs {
-    Trs { translation: out.position, rotation: Quat::from_rotation_z((out.yaw - 90.0).to_radians()), scale: Vec3::ONE }
+    let mut t = Trs { translation: out.position, rotation: Quat::from_rotation_z((out.yaw - 90.0).to_radians()), scale: Vec3::ONE };
+    pitch_about(&mut t, out.yaw, out.pitch, out.capsule_center);
+    t
+}
+
+/// (F-LOCO, INT-F) THE ACTOR'S PITCH (kh-core `Output::pitch`: degrees, nose up, UE `FRotator::Pitch`) on a mesh component
+/// of an actor at yaw `yaw`: the actor (pitch, yaw, 0) turned about its location, the CAPSULE CENTRE (UE's actor location;
+/// the mesh hangs under it). World turn W = Rz(yaw) Ry(-pitch) Rz(yaw)^-1 (kh-partyhost `ue_rotator`'s pitch sign).
+pub fn pitch_about(t: &mut Trs, yaw: f32, pitch: f32, centre: Vec3) {
+    if pitch == 0.0 || !pitch.is_finite() {
+        return;
+    }
+    let actor = Quat::from_rotation_z(yaw.to_radians());
+    let w = (actor * Quat::from_rotation_y(-pitch.to_radians()) * actor.inverse()).normalize();
+    t.rotation = (w * t.rotation).normalize();
+    t.translation = centre + w * (t.translation - centre);
 }
 
 /// The body slot of one step's pose (as kh-app's `step_pose` builds it) and its evaluation.
@@ -47,12 +62,15 @@ pub fn step_pose(animator: &mut Animator, out: &Output, dt: f32, world: &dyn kh_
 pub struct Dummy {
     pub info: TargetInfo,
     pub hits: u32,
+    /// (AUDIT-B W-FIN) One bone of its skeleton (world transform), for the hit-bone seam (`Targets::hit_bone` /
+    /// `bone_pose`): every hit touches it. `None` (the default): a host without bones (origin and yaw).
+    pub bone: Option<kh_core::host::BonePose>,
 }
 
 impl Dummy {
     pub fn at(position: Vec3) -> Dummy {
         let flags = TargetFlags(TargetFlags::ALIVE | TargetFlags::HITTABLE | TargetFlags::LOCKABLE | TargetFlags::ENEMY);
-        Dummy { info: TargetInfo { id: TargetId(1), position, center: position + Vec3::Z * 90.0, velocity: Vec3::ZERO, yaw: 180.0, radius: 45.0, half_height: 90.0, flags, hp: 100_000.0, hp_max: 100_000.0 }, hits: 0 }
+        Dummy { info: TargetInfo { id: TargetId(1), position, center: position + Vec3::Z * 90.0, velocity: Vec3::ZERO, yaw: 180.0, radius: 45.0, half_height: 90.0, flags, hp: 100_000.0, hp_max: 100_000.0 }, hits: 0, bone: None /* (AUDIT-B W-FIN) */ }
     }
 }
 
@@ -78,6 +96,15 @@ impl Targets for Dummy {
 
     fn engaged_count(&self) -> u32 {
         1
+    }
+
+    // (AUDIT-B W-FIN) its one bone, when it has one (index 0)
+    fn hit_bone(&self, id: TargetId, _at: Vec3) -> Option<kh_core::host::TargetBone> {
+        (id == self.info.id && self.bone.is_some()).then_some(kh_core::host::TargetBone(0))
+    }
+
+    fn bone_pose(&self, id: TargetId, bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        self.bone.filter(|_| id == self.info.id && bone.0 == 0)
     }
 }
 
@@ -218,15 +245,27 @@ impl Rig {
 
     /// (hud) The second half of [`Rig::step`]: one fixed step with `input`.
     pub fn step_with(&mut self, input: &Input, audio: &mut dyn Audio, effects: &mut dyn Effects) -> &Output {
+        self.step_with_dt(STEP, input, audio, effects)
+    }
+
+    /// (AUDIT-A WORLDTIME) [`Rig::step_with`] with a step of `dt` game seconds (kh-er's `1/60 x` KH3's global game speed:
+    /// the hit-stops and the boss finish slow Sora's step as the world's).
+    pub fn step_with_dt(&mut self, dt: f32, input: &Input, audio: &mut dyn Audio, effects: &mut dyn Effects) -> &Output {
         let out = {
             let targets: &mut dyn Targets = match self.dummy.as_mut() {
                 Some(dummy) => dummy,
                 None => &mut self.null.targets,
             };
             let mut host = Host { world: &self.world, targets, audio, effects, ui: &mut self.ui };
-            self.sora.step_hosted(STEP, input, &mut host)
+            self.sora.step_hosted(dt, input, &mut host)
         };
-        self.pose = step_pose(&mut self.animator, &out, STEP, &kh_anim::NoIkWorld);
+        // (AUDIT-C) the core's face plays (Rage Form's end: EndStyle 0x14141CA20's ANTI_01 / ANTI_02), as kh-er's pose host
+        for e in &out.events {
+            if let kh_core::EventKind::FaceAnim { row } = e.kind {
+                self.animator.play_face_row(Some(row), "NORMAL_AUTO", [true, true], -1.0, false);
+            }
+        }
+        self.pose = step_pose(&mut self.animator, &out, dt, &kh_anim::NoIkWorld); // (AUDIT-A WORLDTIME) dt (STEP via step_with)
         self.out = out;
         &self.out
     }

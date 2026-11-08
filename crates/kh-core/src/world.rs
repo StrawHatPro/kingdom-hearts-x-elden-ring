@@ -179,6 +179,26 @@ pub trait World {
         self.sweep_capsule(start, end, radius, half_height).into_iter().collect()
     }
 
+    /// (AUDIT-C TF) Does a sphere of `radius` at `center` overlap any blocking level geometry? UE's sweeps report a shape the
+    /// swept primitive STARTS inside (bStartPenetrating, time 0): KH3's FUN_141403130 (a sphere swept 0.2 cm, channels 0 / 1 /
+    /// 0x12) is such a test. A host with an overlap query answers it exactly (TestWorld, kh-er's Havok cast). The default is
+    /// the port's stand-in for a sweep that need not report a shape it starts inside: the 0.2 cm sweep, then 32 traces from
+    /// the centre (16 level, 8 up / 8 down at 45 degrees) of the radius; a floor contact (normal up, not penetrating) is no
+    /// obstacle.
+    fn overlap_sphere(&self, center: Vec3, radius: f32) -> bool {
+        let floor = |h: &Hit| !h.start_penetrating && h.normal.z > 0.7;
+        if !self.sweep_capsule(center + Vec3::Z * 0.2, center, radius, radius).is_none_or(|h| floor(&h)) {
+            return true;
+        }
+        let ray = |yaw: f32, pitch: f32| {
+            let (y, p) = (yaw.to_radians(), pitch.to_radians());
+            Vec3::new(p.cos() * y.cos(), p.cos() * y.sin(), p.sin()) * radius
+        };
+        let level = (0..16).map(|k| ray(k as f32 * 22.5, 0.0));
+        let slant = (0..8).flat_map(|k| [ray(k as f32 * 45.0, 45.0), ray(k as f32 * 45.0, -45.0)]);
+        !level.chain(slant).all(|d| self.line_trace(center, center + d).is_none_or(|h| floor(&h)))
+    }
+
     /// The `SurfaceType` of the physical material of what `hit` touched (the game enum
     /// `EPhysicalSurface` as its number: 0 default, 1 mud, 2 soil, 4 sand, 6 grass, 9 snow,
     /// 10 rock, 13 wood, 19 metal ...: docs/sora-audio-spec.md 4.1). THE SIMULATION NEVER CALLS

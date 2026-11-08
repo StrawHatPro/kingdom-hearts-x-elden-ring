@@ -56,7 +56,8 @@ use std::mem::ManuallyDrop;
 
 // (ER party S4) Donald and Goofy DRAWN (posed rows), the camp pictures, the void and the team props (`--friends*`: see that file)
 #[cfg(feature = "party")]
-#[path = "party_draw.rs"]
+// (moved into examples/effects_party/: cargo built it as an example of its own)
+#[path = "effects_party/party_draw.rs"]
 mod party_draw;
 // (ZDRAW) `--zdraw CHR`: Zettaflare's target drawn from its own Elden Ring model (examples/zdraw_harness.rs)
 // (PORT30 housekeeping, RSF) moved into examples/effects_zdraw/: cargo built it as an example of its own (no main)
@@ -83,6 +84,11 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 // (ER party S5) `--party SCRIPT` / `--party-root`: Donald's and Goofy's effects (examples/effects_party/mod.rs)
 mod effects_party;
+// (AUDIT-A) `--game-forms` / `--game-wear` / `--game-camera` / `--form-grow`: a form session drawn as kh-er draws it
+// (examples/effects_forms/; build/sora_tmp/weapons/AUDIT-A/HARNESS.md)
+mod effects_forms;
+// (MIMIC-FX) `--copy-fx X,Y`: a Sora copy whose effects are his own (the effect side's Sora instance; examples/effects_copy/)
+mod effects_copy;
 
 // (ER87) `--size WxH` (default 1280x720): the harness's resolution (the hair close-ups at 2560x1440)
 static SIZE: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
@@ -227,7 +233,6 @@ unsafe fn screen_pipeline(device: &ID3D12Device, root: &ID3D12RootSignature, ver
 /// state of the first (ZETTA's timeline: `--finale STEP`), as kh-er hands them to the renderer. A killed target falls over
 /// (its death) and is hidden once it has crumbled away (kh-er zfinale.rs hides the body then; its last white shape fades: the
 /// state goes on with `hidden_for` for 2 s). The capsules carry their character's index (each is drawn with its own stencil).
-#[allow(clippy::type_complexity)]
 /// (ZFIN round 7) `--finale-ghosts`: characters on the target's very place handed to the renderer as its neighbours.
 static GHOSTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 /// (ZFIN round 8) `--fx-steps`: the effect steps per presented frame, in turn.
@@ -243,7 +248,10 @@ fn halton(mut i: u32, b: u32) -> f32 {
     r
 }
 
-fn erchr_frame(chars: &[(Vec3, f32, f32, u8)], step: u32, finale_at: Option<u32>, survive: bool, push: Vec3, fall_on: bool) -> (Vec<(usize, Vec3, Vec3, f32, f32)>, Option<kh_er_render::finale::FinaleTarget>) {
+/// A character's capsule for the "game": (its index, a, b, radius, tint).
+type ErCapsule = (usize, Vec3, Vec3, f32, f32);
+
+fn erchr_frame(chars: &[(Vec3, f32, f32, u8)], step: u32, finale_at: Option<u32>, survive: bool, push: Vec3, fall_on: bool) -> (Vec<ErCapsule>, Option<kh_er_render::finale::FinaleTarget>) {
     use kh_er_render::finale::{Capsule, FinaleTarget};
     let t = finale_at.map(|s| (step as f32 - s as f32) * STEP);
     let mut caps = Vec::new();
@@ -484,6 +492,14 @@ fn main() {
         eprintln!("effects: {e}");
         std::process::exit(2);
     });
+    // (SHOT-C) `--shotlock-kind N`: SelectKind's debug base kind (ctrl+0xA34, `AimMode::debug_kind`) for pictures of a
+    // shotlock whose Keyblade's base family is still pending (Stellar Inception: 42).
+    rig.sora.magic_mut().aim.debug_kind = value("--shotlock-kind").and_then(|v| v.parse().ok()).unwrap_or(0);
+    // (AUDIT-B W-FIN) `--ceiling Z`: a ceiling slab Z cm over the floor (100 m across, 60 cm thick, not drawn) in the world
+    // the core and the camera stack trace (FINISH_SK's fz_key ATARI, FINISH_WA's cramped finish ...)
+    if let Some(z) = value("--ceiling").and_then(|v| v.parse::<f32>().ok()) {
+        rig.world = std::mem::replace(&mut rig.world, kh_core::test_world::TestWorld::floor()).with_box(Vec3::new(-5000.0, -5000.0, z), Vec3::new(5000.0, 5000.0, z + 60.0));
+    }
     // (ER party S4) the party's figures (`--friends*`)
     #[cfg(feature = "party")]
     let mut party_harness = party_draw::PartyHarness::from_args(&args, &pack, rig.out.position, rig.out.yaw);
@@ -498,17 +514,20 @@ fn main() {
         eprintln!("effects: {e}");
         std::process::exit(2);
     });
+    let mut copy_fx = effects_copy::CopyFx::from_arg(value("--copy-fx"), &pack, &loadout, dummy_cm); // (MIMIC-FX)
     // (IMPL_ER52) `--savepoint X,Y,ROOT_Z[,old]` (cm): KH3's save point with its root there; its effects on the floor (z = 0)
     // as KH3's BeginPlay trace puts them (kh_host::savepoint::ground_offset), or at the root with `old` (before IMPL_ER52)
     // (ORBS) `--orbs X,Y,Z[,SPACING[,GLOW]]` (cm): KH3's prize orbs as kh-er draws them (free effects, the prize's component
     // scale, the `prize.glow` gain kh-er gives them: sheet 3.27 by default), in a row across game Y centred there:
-    // HP, MP, munny, focus (small sizes), then the large HP, MP, munny. Their names / scales: kh_prize::host::effect.
-    let mut orbs: Option<(Vec<(&str, Vec3, f32)>, f32, Vec<u64>)> = value("--orbs").map(|v| {
+    // HP, MP, munny, focus (small sizes), then the large HP, MP, munny (FOCUSORB: and the large focus orb last). Their names /
+    // scales: kh_prize::host::effect.
+    type OrbRow = Vec<(&'static str, Vec3, f32)>;
+    let mut orbs: Option<(OrbRow, f32, Vec<u64>)> = value("--orbs").map(|v| {
         let n: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
         let at = Vec3::new(n.first().copied().unwrap_or(-150.0), n.get(1).copied().unwrap_or(0.0), n.get(2).copied().unwrap_or(60.0));
         let step = n.get(3).copied().unwrap_or(45.0);
         let glow = n.get(4).copied().unwrap_or(3.27);
-        let list = [("vs_plz_hpb0", 0.5), ("vs_plz_mpb0", 0.5), ("VS_PLZ_MNY0", 0.75), ("vs_plz_fop0", 0.5), ("vs_plz_hpb0", 1.0), ("vs_plz_mpb0", 1.0), ("VS_PLZ_MNY0", 1.0)];
+        let list = [("vs_plz_hpb0", 0.5), ("vs_plz_mpb0", 0.5), ("VS_PLZ_MNY0", 0.75), ("vs_plz_fop0", 0.5), ("vs_plz_hpb0", 1.0), ("vs_plz_mpb0", 1.0), ("VS_PLZ_MNY0", 1.0), ("vs_plz_fop0", 1.0) /* (FOCUSORB) */];
         let count = list.len() as f32;
         let row = list.iter().enumerate().map(|(i, (name, scale))| (*name, at + Vec3::new(0.0, (i as f32 - (count - 1.0) * 0.5) * step, 0.0), *scale)).collect();
         println!("effects: (ORBS) prize orbs at {at:?}, {step} cm apart, prize.glow {glow}");
@@ -527,6 +546,8 @@ fn main() {
     });
     // (IMPL_ER75) `--slash-world`: the swing arcs where KH3's rows put them (left in the world)
     effects.slash_follow = !flag("--slash-world");
+    let mut forms_session = effects_forms::FormSession::from_args(&value, &flag, &pack); // (AUDIT-A)
+    let (mut dark_was, mut dark_logged) = (false, 1.0_f32); // (AUDIT-A CAMS) the dark screen's log
     let started = std::time::Instant::now();
     let registered = effects.preload();
     println!("effects: {}; {registered} effects parsed in {:.1} s", effects.describe(), started.elapsed().as_secs_f32());
@@ -561,6 +582,11 @@ fn main() {
             Ok(line) => println!("effects: (XSI) {line}; {} parsed", effects.preload_xsi()),
             Err(e) => println!("effects: (XSI) NO XS ROOT: {e}"),
         }
+    }
+    // (P5) the keyblades' effect root (PACK/keyblades/vfx: their own trails, appear effects, form effects)
+    match effects.load_kb_root(&pack) {
+        Ok(line) => println!("effects: (P5) {line}"),
+        Err(e) => println!("effects: (P5) no keyblade effect root: {e}"),
     }
 
     // SAFETY: plain Win32 / Direct3D 12 object creation and use on one thread.
@@ -639,7 +665,9 @@ fn main() {
                     "rig_own" => s.rig_own = v,
                     "mask" => s.mask = v, // (RSF2 round 5) r.hybrid_mask
                     "fit" => s.fit = v, // (RSF2 round 10) r.hybrid_fit
+                    "normal_probes" => s.normal_probes = v, // (VIEWLIGHT) r.hybrid_normal_probes
                     "gbclear" => s.gbclear = v, // (RSF2 round 11) r.hybrid_gbclear
+                    "native" => s.native = v != 0.0, // (MIMIC-RENDER) r.hybrid_native: the Style "Elden Ring" (1) / "Kingdom Hearts 3" (0)
                     _ => {}
                 }
             }
@@ -761,6 +789,8 @@ fn main() {
         if let Some(form) = value("--wear").and_then(|v| v.parse().ok()) {
             kh_er_render::set_wear_form(form);
         }
+        // (F-RAGE) `--rage V`: Rage Form's AntiVolume fixed at V (with `--wear 7`; without it the fade follows the wear form)
+        kh_er_render::rage::set_test_volume(value("--rage").and_then(|v| v.parse().ok())); // (F-RAGE)
         kh_er_render::set_late_sora_taa(value("--late-taa").as_deref() != Some("0"));
         let glow_scale: f32 = value("--glow-scale").and_then(|v| v.parse().ok()).unwrap_or(1.6);
         let flicker_box: Option<[u32; 4]> = value("--flicker-box").map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect::<Vec<u32>>()).filter(|v| v.len() == 4).map(|v| [v[0], v[1], v[2], v[3]]);
@@ -774,10 +804,14 @@ fn main() {
         // (IMPL_ER80) `--glowtest` (implies the forward stage), `--taa`, `--jitter`
         let glowtest = flag("--glowtest");
         let taa = flag("--taa");
+        // (AUDIT-A CAMS) `--late-pass`: the "game" gets a forward stage with only its velocity pass (no decal / panels, no TAA), so
+        // the renderer's LATE PASS runs as in Elden Ring: the scene darkening (Thunder's, the finishes' dark screen) and the late
+        // effects after it (vfx late stage on)
+        let late_pass = flag("--late-pass");
         // (ER91) `--taa-blend X`: the TAA stand-in's weight of the new frame (default 0.12); 1 = no history: the game's split and
         // passes as with the TAA, the picture as without it (the hair's shimmer measured independently of the TAA)
         let taa_blend: f32 = value("--taa-blend").and_then(|v| v.parse().ok()).unwrap_or(0.12);
-        let fxtest = flag("--fxtest") || hybrid || glowtest || taa;
+        let fxtest = flag("--fxtest") || hybrid || glowtest || taa || late_pass; // (AUDIT-A CAMS) + --late-pass
         let depth_copy = texture(&device, DXGI_FORMAT_R32G8X24_TYPELESS, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, SRV, None);
         {
             let srv_size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) as usize;
@@ -917,6 +951,11 @@ fn main() {
             device.CreateGraphicsPipelineState(&desc).expect("the Elden Ring characters' pipeline state")
         });
         let finale_at: Option<u32> = value("--finale").and_then(|v| v.parse().ok());
+        // (FREEZE-FX) `--freeze-fx FROM,TO`: every `--erchars` character (target 100 + its index) FROZEN from step FROM to step TO:
+        // KH3's frozen look by the shared route (kh-core combat::freeze_look, as kh-er freezefx.rs runs it), on its feet, sized to
+        // it, its smoke and shards on its bones (the `--zdraw` model's own for the first, else its capsule's points)
+        let freeze_fx: Option<(usize, usize)> = value("--freeze-fx").and_then(|v| v.split_once(',').and_then(|(a, b)| Some((a.trim().parse().ok()?, b.trim().parse().ok()?))));
+        let (mut freeze_look, mut freeze_next) = (kh_core::combat::freeze_look::FreezeLook::default(), 0u32);
         let finale_survive = flag("--finale-survive");
         // (round 3) `--finale-push X,Y,Z`: the beam's direction at it (default from Sora to it), `--finale-fall`: its death fall
         let finale_push: Vec3 = value("--finale-push").map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect::<Vec<f32>>()).filter(|v| v.len() == 3).map(|v| Vec3::new(v[0], v[1], v[2])).unwrap_or_else(|| erchars.first().map_or(Vec3::X, |c| c.0.normalize_or_zero()));
@@ -1065,7 +1104,7 @@ fn main() {
         list5.Close().unwrap();
         let velocity_rtv: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 1, ..Default::default() }).unwrap();
         device.CreateRenderTargetView(&velocity_target, None, velocity_rtv.GetCPUDescriptorHandleForHeapStart());
-        if erdtree || taa {
+        if erdtree || taa || late_pass /* (AUDIT-A CAMS) */ {
             kh_er_render::test_velocity_target(velocity_target.as_raw() as usize);
         }
         let allocator3: ID3D12CommandAllocator = device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT).unwrap();
@@ -1099,13 +1138,38 @@ fn main() {
 
         // ---- the renderer, in the scene arrangement, with the stand-in rig (there is no game light here)
         kh_er_render::install(&pack, |text| println!("{text}"));
+        // (P5) `--keyblade ID|KEY[,SLOT2[,SLOT3]]`: that keyblade in his hand (w_so080 or WEP_KEYBLADE_SO_06: its own model,
+        // materials and keychain from PACK/keyblades), the others slotted (their base models loaded too); `--kb-form
+        // FORM[:GROW]`: the hand keyblade's form weapon parts drawn instead of it (keyblade.rs draw_form_weapon_parts, with its
+        // transform units when `--kb-transform`), e.g. `--keyblade w_so080 --kb-form 07` = Crystal Snow's four Blizzard Blades
+        let kb_list: Vec<String> = value("--keyblade").map(|v| v.split(',').map(str::to_string).collect()).unwrap_or_default();
+        if let Some((first, rest)) = kb_list.split_first() {
+            kh_er_render::keyblade::set_equipped(first, &rest.iter().map(String::as_str).collect::<Vec<_>>());
+        }
+        let kb_hand_id: Option<String> = kb_list.first().and_then(|k| kh_er_render::keyblade::table()?.keyblade(k).map(|k| k.id.clone())).filter(|id| id != kh_er_render::keyblade::KINGDOM_KEY);
+        // (P5) the effect side as kh-er sora/kbdraw.rs tells it: the hand keyblade's trail and sockets, its effects let through
+        if let Some(k) = kb_hand_id.as_deref().and_then(|id| kh_er_render::keyblade::table()?.keyblade(id)) {
+            let trail = k.keys.first().and_then(|key| kh_core::status::KeybladeId::from_key(key)).and_then(|id| id.effect_name("fx.trail"));
+            let mut allowed: Vec<String> = std::iter::once(&k.base).chain(&k.models).map(|m| format!("v{m}")).collect();
+            // (P2 hitfx) the core holds the same keyblade (its own hit effects and sound set: kh-core combat/hit.rs), and the effect
+            // names its data spawns pass the filter as in kh-er sora/kbdraw.rs
+            if let Some(id) = k.keys.first().and_then(|key| kh_core::status::KeybladeId::from_key(key)) {
+                let (slots, _) = kh_core::status::Keyblades::from_keys(&[Some(id.key())], 0, &[]);
+                rig.sora.status_mut().set_keyblades(slots);
+                allowed.extend(kh_core::status::keyblade::effect_names(id).into_iter().map(str::to_lowercase));
+                // (AUDIT-B W-FIN) + the other models' effects its forms spawn, as kh-er sora/kbdraw.rs (kh-core
+                // forms::shared_clip_effects: FINISH_SK's ceiling look vw_so073_fin_fsg0 ...)
+                allowed.extend(kh_core::combat::forms::shared_clip_effects(id.key()));
+            }
+            effects.set_keyblade(trail, kh_er_render::keyblade::sockets_json(&k.base).as_ref(), &allowed);
+            println!("effects: (P5) {} in his hand: trail {trail:?}", k.id);
+        }
         kh_er_render::set_options(Options { at: kh_er_render::At::Scene, light: false, jitter: false, velocity: 0, shadow_sun: 0.0, key: sora_dark, ambient: sora_dark, debug: value("--char-debug").and_then(|v| v.parse().ok()).unwrap_or(0.0), ..Options::default() });
         // (IMPL_ER44) `--sora-ambient X`: the ambient share that remains with his own lights (hero and effects)
         let sora_ambient: Option<f32> = value("--sora-ambient").and_then(|v| v.parse().ok());
         // (IMPL_ER44 part 2) `--plain-hero`: hero.keyblade = 0 (the light above him, no Keyblade drawn for it);
         // `--hero-shadow X`, `--blade CM`, `--sparkle S`: the rows hero.shadow, hero.blade_cm, hero.sparkle_s
-        let mut defaults = kh_er_render::pointlight::LightSettings::default();
-        defaults.hero_keyblade = !flag("--plain-hero");
+        let mut defaults = kh_er_render::pointlight::LightSettings { hero_keyblade: !flag("--plain-hero"), ..Default::default() };
         if let Some(v) = value("--sparkle-fx").and_then(|v| v.parse().ok()) {
             kh_er_render::pointlight::choose_sparkle(v);
         }
@@ -1152,7 +1216,7 @@ fn main() {
             defaults.hero_color = Vec3::new(c[0], c[1], c[2]);
         }
         kh_er_render::pointlight::set_settings(kh_er_render::pointlight::LightSettings { fx: !flag("--no-light"), hero: if flag("--no-light") { 0 } else { hero_mode }, hero_sora_ambient: sora_ambient.unwrap_or(defaults.hero_sora_ambient), fx_sora_ambient: sora_ambient.unwrap_or(defaults.fx_sora_ambient), ..defaults });
-        kh_er_render::vfx::set_options(VfxOptions { on: !flag("--no-vfx"), distort: value("--distort").as_deref() != Some("0"), hdr: value("--hdr").and_then(|v| v.parse().ok()).unwrap_or(1.0), solid: flag("--solid"), decals: value("--decals").as_deref() != Some("0"), late: false });
+        kh_er_render::vfx::set_options(VfxOptions { on: !flag("--no-vfx"), distort: value("--distort").as_deref() != Some("0"), hdr: value("--hdr").and_then(|v| v.parse().ok()).unwrap_or(1.0), solid: flag("--solid"), decals: value("--decals").as_deref() != Some("0"), late: late_pass /* (AUDIT-A CAMS) as kh-er with the late pass */ });
         // (VFXR) `--bloom X` (KH3's bloom on the effects, default 1; 0 = the look before VFXR), `--screen-fx 0` (no screen passes)
         kh_er_render::vfx::set_post(value("--bloom").and_then(|v| v.parse().ok()).unwrap_or(1.0), value("--screen-fx").as_deref() != Some("0"));
         // (VFXR) `--eye 0`: the eye-adaptation materials by the lit-surface rule (the look before VFXR)
@@ -1198,13 +1262,43 @@ fn main() {
         let mut weapon_visible = false;
         let mut weapon_since = 10.0f32;
         // (IMPL_ER44) the Keyblade light, as kh-er's host does it: held out while the gate is closed, sparkling
-        let mut sparkle = kh_er_render::pointlight::KeybladeGlow::default();
+        // (HEROLIGHT-KB) the carrier's own glow and sparkles (kh-er-render herolight.rs, the driver kh-er uses): the hand keyblade's
+        // base model, or `--hero-weapon MODEL` (a form weapon of the table, w_so033 ...: its row's effects at its socket)
+        let mut hero_driver = kh_er_render::herolight::Driver::default();
+        let hero_model: String = value("--hero-weapon").unwrap_or_else(|| kb_hand_id.as_deref().and_then(|id| kh_er_render::keyblade::table()?.keyblade(id)).map_or_else(|| kh_er_render::herolight::KINGDOM_KEY.to_string(), |k| k.base.clone()));
+        let hero_row = kh_er_render::herolight::weapon(&hero_model);
+        println!("effects: (HEROLIGHT-KB) the hero light's weapon {hero_model}: {}", hero_row.map_or("NOT IN THE TABLE".to_string(), |w| format!("{} glow {:?} hold {} s, sparkles {:?}, socket {}, tint {:?}", w.effect, w.glow, w.hold, w.spark, w.socket, w.tint)));
         let mut glow_handle: Option<kh_core::EffectHandle> = None;
+        // (HEROLIGHT-KB) `--hero-friend donald|goofy` (with `--party "" --party-draw`): that friend leads and carries the light (the
+        // leader's weapon, as kh-er since the user's "it should just be whoever is party leader"); his glow and sparkles go on the
+        // seam with host handles attached to him (kh-er herolight.rs), Sora does not draw his Keyblade for it
+        let hero_friend: Option<kh_party::Chara> = value("--hero-friend").and_then(|v| match v.as_str() {
+            "donald" => Some(kh_party::Chara::Donald),
+            "goofy" => Some(kh_party::Chara::Goofy),
+            _ => None,
+        });
+        let mut hero_active: Option<&'static kh_er_render::herolight::HeroWeapon> = hero_row;
+        let (mut friend_glow, mut friend_next): (Option<kh_core::EffectHandle>, u32) = (None, 0);
+        // (HEROLIGHT-KB) `--hero-measure`: every 15 steps, the glow copy's mesh instances against the hand weapon's own model frame
+        // (cm at its grip, tip and 10 cm off its axis): the copy must be drawn exactly where the weapon is
+        let hero_copy_meshes: Vec<String> = hero_row.map_or_else(Vec::new, |w| {
+            let file = pack.join(&w.root).join("effects").join(format!("{}.json", w.effect));
+            let json: serde_json::Value = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+            json["emitters"].as_array().into_iter().flatten().filter(|e| e["name"].as_str().is_some_and(|n| w.glow.iter().any(|g| g == n))).filter_map(|e| e["typedata"]["mesh"].as_str()).map(|m| m.rsplit('/').next().unwrap_or(m).split('.').next().unwrap_or(m).to_ascii_lowercase()).collect()
+        });
+        let mut hero_copies: Vec<(String, glam::Affine3A)> = Vec::new();
+        // (HEROLIGHT-KB, DEPLOY4) `--no-depth-pull`: the glow copies without KH3's depth pull (the flickering DEPLOY4 picture, to compare)
+        kh_er_render::herolight::set_depth_pull(!flag("--no-depth-pull"));
         let hand = rig.animator.skeleton().index_of("R_buki");
         let socket = Trs { translation: Vec3::ZERO, rotation: Quat::from_xyzw(std::f32::consts::FRAC_1_SQRT_2, 0.0, 0.0, std::f32::consts::FRAC_1_SQRT_2), scale: Vec3::ONE };
         // (ER79) `--chain`: the Keyblade's keychain simulated (as kh-er sora.rs step_chain); with `--outfit` it hangs from the
         // outfit's hand, where the Keyblade is drawn; `--chain-his`: from his hand (before ER79)
-        let mut keychain = if flag("--chain") { kh_anim::Keychain::load(&pack.join("weapon")).ok() } else { None };
+        // (P5) with `--keyblade` another keyblade's own keychain (its skeleton and Bonamik asset), or none: its reference pose
+        let mut keychain = match (flag("--chain"), kb_hand_id.as_deref()) {
+            (true, Some(id)) => kh_er_render::keyblade::keychain(&kh_er_render::keyblade::table().and_then(|t| t.keyblade(id)).map(|k| k.base.clone()).unwrap_or_default()).and_then(Result::ok),
+            (true, None) => kh_anim::Keychain::load(&pack.join("weapon")).ok(),
+            _ => None,
+        };
         let chain_rig = value("--outfit").and_then(|id| kh_er_render::outfit::retarget_for(&pack, &id, rig.animator.skeleton()).ok().flatten());
         let mut chain_shown = false;
         // (ER79) `--stretch`: the outfit's skin on the CPU each step (as gfx.rs: joint x inverse bind, from the outfit's frame
@@ -1245,26 +1339,78 @@ fn main() {
                 let before = std::time::Instant::now();
                 // (the view of the camera below, for the shotlock's reticle: behind him, looking along his facing)
                 rig.view = Some(kh_core::magic::View::from_camera(Vec3::new(-cam_back, 0.0, cam_up), orbit, -((cam_up - cam_look) / cam_back).atan().to_degrees(), 2.0 * ((0.8378f32 * 0.5).tan() * width() as f32 / height() as f32).atan().to_degrees(), width() as i32, height() as i32));
+                rig.view = forms_session.core_view().or(rig.view); // (AUDIT-A) `--game-camera`: the camera's view, as kh-er
                 {
                     let wanted = kh_er_render::pointlight::keyblade_wanted();
-                    rig.sora.hold_weapon(wanted);
+                    // (HEROLIGHT-KB) the friend who leads, his weapon and its light point (None: Sora carries it)
+                    let friend = hero_friend.and_then(|c| party_rig.as_mut()?.hero_carrier(c));
+                    rig.sora.hold_weapon(wanted && friend.is_none());
                     let drawn = weapon_visible && weapon_since >= 0.28;
-                    // (IMPL_ER53) as kh-er sora.rs: the steady glow + the sparkles
+                    // (IMPL_ER53, HEROLIGHT-KB) as kh-er herolight.rs: the carrier weapon's steady glow + its sparkles
                     let s = kh_er_render::pointlight::settings();
-                    let glow = sparkle.step(STEP, wanted && drawn, s.hero_glow, s.hero_sparkle);
-                    let at_blade = |name: &'static str, socket: &'static str, persistent: bool| kh_core::EffectSpawn { at: kh_core::Attach::Sora { bone: Some(socket), offset: Vec3::ZERO }, persistent, ..kh_core::EffectSpawn::at_sora(kh_core::EffectId(kh_core::notify::notify_asset_id(name)), name) };
-                    if glow.start_glow {
-                        rig.sora.debug_emit(kh_core::DebugEmit::Effect(at_blade(kh_er_render::pointlight::GLOW_EFFECT, kh_er_render::pointlight::GLOW_SOCKET, true)));
+                    let (row, lit, member) = match &friend {
+                        Some((member, model, _, point)) => (kh_er_render::herolight::weapon(model), wanted && point.is_some_and(|p| p.1 >= 1.0), Some(*member)),
+                        None => (hero_row, wanted && drawn, None),
+                    };
+                    #[cfg(feature = "party")]
+                    if let Some((_, _, feet, point)) = &friend {
+                        kh_er_render::party::set_hero_carrier(Some(kh_er_render::party::HeroCarrier { feet: *feet, tip: *point }));
                     }
-                    if glow.stop_glow {
-                        if let Some(handle) = glow_handle.take() {
-                            rig.sora.debug_emit(kh_core::DebugEmit::StopEffect(handle, false));
+                    hero_active = row;
+                    kh_er_render::herolight::set_carrier(row.filter(|_| lit).map(|w| w.model.as_str()));
+                    let at_blade = |name: &'static str, socket: &'static str, persistent: bool| kh_core::EffectSpawn { at: kh_core::Attach::Sora { bone: Some(socket), offset: Vec3::ZERO }, persistent, ..kh_core::EffectSpawn::at_sora(kh_core::EffectId(kh_core::notify::notify_asset_id(name)), name) };
+                    for act in hero_driver.step(STEP, lit, row.map(|w| (member.map_or(0, |m| m + 1), w)), &s) {
+                        match (act, member) {
+                            (kh_er_render::herolight::Act::Start { name, socket, glow }, None) => rig.sora.debug_emit(kh_core::DebugEmit::Effect(at_blade(name, socket, glow))),
+                            (kh_er_render::herolight::Act::Start { name, socket, glow }, Some(m)) => {
+                                friend_next += 1;
+                                let handle = kh_core::EffectHandle(0x7D00_0000 + friend_next);
+                                seam.0.push(kh_host::seam::EffectCommand::Spawn(handle, kh_core::EffectSpawn { at: kh_core::Attach::Party { member: kh_core::PartyMember(m), bone: Some(socket), offset: Vec3::ZERO }, ..at_blade(name, socket, glow) }));
+                                if glow {
+                                    friend_glow = Some(handle);
+                                }
+                            }
+                            (kh_er_render::herolight::Act::Stop { glow: true, immediate }, _) => {
+                                for handle in [glow_handle.take(), friend_glow.take()].into_iter().flatten() {
+                                    if handle.0 >= 0x7D00_0000 {
+                                        seam.0.push(kh_host::seam::EffectCommand::Stop(handle, immediate));
+                                    } else {
+                                        rig.sora.debug_emit(kh_core::DebugEmit::StopEffect(handle, immediate));
+                                    }
+                                }
+                            }
+                            (kh_er_render::herolight::Act::Stop { glow: false, .. }, _) => {}
                         }
                     }
-                    if glow.sparkle {
-                        let (sparkle_fx, sparkle_socket) = if s.hero_glow { (kh_er_render::pointlight::SPARK_EFFECT, kh_er_render::pointlight::GLOW_SOCKET) } else { kh_er_render::pointlight::sparkle_effect() };
-                        rig.sora.debug_emit(kh_core::DebugEmit::Effect(at_blade(sparkle_fx, sparkle_socket, false)));
+                    // (P5) `--trail-at STEP`: the Keyblade trail (KH3's ead_key_trail0, as an attack's notify starts it: the
+                    // hand keyblade's own trail with `--keyblade`) from that step to the end
+                    if value("--trail-at").and_then(|v| v.parse::<usize>().ok()) == Some(step) {
+                        rig.sora.debug_emit(kh_core::DebugEmit::Effect(at_blade("key_trail0", "vfx_top", true)));
                     }
+                    // (F-RAGE) `--fx-at NAME:BONE:STEP`: a named effect on his bone from that step on (Rage Form's aura: vp_ant_bdy_ora00:koshi:1)
+                    // (F-RAGE fix) several, comma-separated: the aura's four rows (vp_ant_bdy_ora00:R_te:1,vp_ant_bdy_ora00:L_te:1,...)
+                    for (name, bone) in value("--fx-at").into_iter().flat_map(|v| v.split(',').filter_map(|spec| { let p: Vec<&str> = spec.split(':').collect(); (p.len() == 3 && p[2].parse::<usize>().ok() == Some(step)).then(|| (p[0].to_string(), p[1].to_string())) }).collect::<Vec<_>>()) { // (F-RAGE)
+                        rig.sora.debug_emit(kh_core::DebugEmit::Effect(at_blade(name.leak(), bone.leak(), true))); // (F-RAGE)
+                    } // (F-RAGE)
+                }
+                // (FREEZE-FX) `--sora-freeze STEP,SECONDS`: a FREEZE row's hit on him at that step (a Mimic copy's Blizzard): his own KH3
+                // freeze state and frozen look (kh-core badstat::set_frozen: the ice row on him, its break when it ends)
+                if let Some((at, seconds)) = value("--sora-freeze").and_then(|v| v.split_once(',').and_then(|(a, b)| Some((a.trim().parse::<usize>().ok()?, b.trim().parse::<f32>().ok()?)))) {
+                    if at == step {
+                        let causer = rig.out.position + Vec3::new(300.0, 0.0, 0.0);
+                        rig.sora.take_hit(kh_core::states::HitOnPlayer { bad_status: "FREEZE", bad_time: seconds, direction: Vec3::new(-1.0, 0.0, 0.0), ..kh_core::states::HitOnPlayer::new(kh_core::enums::ETresDamageKind::Small, 1.0, kh_core::TargetId(1), causer) });
+                        println!("effects: (FREEZE-FX) step {step}: Sora takes a FREEZE hit ({seconds} s)");
+                    }
+                }
+                // (F-SHIP) `--style-at STEP[,STEP..]`: a full form gauge at those steps (a second stage's offer inside the first)
+                if value("--style-at").is_some_and(|v| v.split(',').any(|s| s.trim().parse::<usize>().ok() == Some(step))) {
+                    rig.sora.debug_add_style(100.0);
+                }
+                // (AUDIT-C) `--rage-at STEP`: from that step, HP losses (full -> 1, every other step) until Rage Form (0x8B) is
+                // offered, as kh-host tests/frage_rage_aura.rs; the script then takes it with Triangle.
+                if value("--rage-at").and_then(|v| v.parse::<usize>().ok()).is_some_and(|s| step >= s) && !rig.sora.combat().situation.has(0x8B) && rig.sora.combat().form.cmd != 0x8B {
+                    let max = rig.sora.status().max_hp();
+                    rig.sora.status_mut().hp = if step.is_multiple_of(2) { max } else { 1 };
                 }
                 // (ER90) the XS presets
                 if step == 0 {
@@ -1294,7 +1440,26 @@ fn main() {
                     let lock = &mut rig.sora.combat_mut().lockon;
                     (lock.locked, lock.current) = (true, kh_core::TargetId(1));
                 }
-                rig.step(&script, step, 0.0, &mut audio, &mut seam);
+                forms_session.before_step(&mut rig, step); // (AUDIT-A) `--form-grow`
+                // (AUDIT-A WORLDTIME) the step on KH3's global game speed (the hit-stops), as kh-er sora.rs `wdt`
+                let world_dt = STEP * forms_session.world_rate();
+                let input = rig.input(&script, step, forms_session.input_yaw() /* (AUDIT-A) `--game-camera`: the camera's yaw, else 0 */);
+                rig.step_with_dt(world_dt, &input, &mut audio, &mut seam);
+                // (MIMIC-FX) `--copy-fx`: the copy's step with the same input
+                if let Some(c) = copy_fx.as_mut() {
+                    let style = value("--style-at").is_some_and(|v| v.split(',').any(|s| s.trim().parse::<usize>().ok() == Some(step)));
+                    c.step(world_dt, &input, &rig, style);
+                }
+                forms_session.after_step(&rig, &mut effects); // (AUDIT-A) `--game-wear` / `--game-camera` (effects_forms/)
+                // (AUDIT-A CAMS) KH3's dark screen of the finishes, as kh-er sora.rs (`--no-dark`: off); drawn by the late pass (`--late-pass`)
+                {
+                    let on = rig.sora.combat().form.dark_screen && !flag("--no-dark");
+                    let c = kh_er_render::darkscreen::frame(on, 1.0 / 60.0);
+                    if on != dark_was || (c - dark_logged).abs() >= 0.125 || (c == 1.0 && dark_logged != 1.0) || (c == kh_er_render::darkscreen::RATE && dark_logged != c) {
+                        println!("dark: step {step}: (AUDIT-A CAMS) dark screen {} | master light x {c:.3}", if on { "ON" } else { "off" });
+                        (dark_was, dark_logged) = (on, c);
+                    }
+                }
                 // (ER90) `--list-kinds`: his attack kinds as they begin, and his state changes
                 if flag("--list-kinds") {
                     let h = &rig.sora.combat().history;
@@ -1310,12 +1475,12 @@ fn main() {
                 // (ER party S5) the party's step after Sora's, on the same seams (kh-er's order)
                 if let Some(p) = party_rig.as_mut() {
                     let out = rig.out.clone();
-                    let mut none = kh_core::host::NullTargets::default();
+                    let mut none = kh_core::host::NullTargets;
                     let targets: &mut dyn kh_core::Targets = match rig.dummy.as_mut() {
                         Some(d) => d,
                         None => &mut none,
                     };
-                    p.step(step, STEP, &out, &rig.world, targets, &mut audio, &mut seam);
+                    p.step(step, STEP, &out, &rig.world, targets, effects_party::Queues { audio: &mut audio, effects: &mut seam });
                 }
                 kh_er_render::handik::set_kh3_share(1.0 - rig.animator.own_share());
                 // (ER83) `--clip NAME[@SECONDS]`: his pose is that clip of the pack (looped by the step clock, or held at
@@ -1340,13 +1505,15 @@ fn main() {
                 audio.0.clear();
                 step += 1;
                 sim_micros += before.elapsed().as_micros();
-                if flag("--list") && step % 30 == 0 {
+                if flag("--list") && step.is_multiple_of(30) {
                     let lock = rig.sora.combat().lockon;
                     println!("    step {step}: state {:?} position ({:.0}, {:.0}, {:.0}) yaw {:.0}; lock current {} locked {}; dummy hits {}", rig.out.state, rig.out.position.x, rig.out.position.y, rig.out.position.z, rig.out.yaw, lock.current.0, lock.locked, rig.dummy.map_or(0, |d| d.hits));
                 }
             }
             let out = rig.out.clone();
             let to_world = component_to_world(&out);
+            let forms_feet = to_world.translation; // (AUDIT-A) `--game-forms`: kh-er's `feet`, then his body tilted by the actor's pitch
+            let to_world = forms_session.tilt(&out, to_world); // (AUDIT-A)
             // The camera: behind him (he faces game +X at the start), looking over him at the dummy.
             // (ER87) `--orbit-step`: turned further each frame of the script
             let (sin, cos) = (orbit + if warming { 0.0 } else { orbit_step * step as f32 }).to_radians().sin_cos();
@@ -1381,6 +1548,9 @@ fn main() {
                 }
                 None => (eye_game, focus),
             };
+            // (AUDIT-A) `--game-camera`: the view of the port's camera stack (effects_forms/camera.rs, as kh-er cam.rs)
+            let forms_shown = forms_session.camera.as_mut().and_then(|c| c.shown(step));
+            let (eye_game, focus) = forms_shown.map_or((eye_game, focus), |s| (s.eye, s.look));
             kh_er_render::camfade::set_look(Some(focus));
             kh_er_render::camfade::set_lead(value("--camfade-lead").and_then(|v| v.parse::<u8>().ok()).filter(|v| *v > 0));
             // GAME (cm, X forward, Y right, Z up) -> HOST (m, X right, Y up, Z forward)
@@ -1411,6 +1581,8 @@ fn main() {
                 (forward, right, up)
             };
             let camera = Camera { right, up, forward, position: eye, fov: fov_v, aspect: width() as f32 / height() as f32, near: 0.05, far: 10000.0 };
+            // (AUDIT-A) `--game-camera`: the port camera's axes (its roll) and lens
+            let camera = forms_shown.map_or(camera, |s| Camera { right: Vec3::new(s.right.y, s.right.z, s.right.x), up: Vec3::new(s.up.y, s.up.z, s.up.x), forward: Vec3::new(s.forward.y, s.forward.z, s.forward.x), fov: s.fov_v, ..camera });
             // (ZFIN round 8) `--game-jitter`: the "game's" view turned by this frame's sub-pixel offset (its floor and characters
             // land where a jittered projection puts them), ours not; the renderer is told the jitter (pixels, x right, y up:
             // the view turned right moves the picture left; ER's TempAA does not un-jitter its input: TempAA.vpo)
@@ -1449,7 +1621,44 @@ fn main() {
                 tap.samples.clear();
                 let commands = std::mem::take(&mut seam.0);
                 let dummy = rig.dummy;
-                let target = |_: kh_core::TargetId| dummy.map(|d: Dummy| d.info.center);
+                // (FREEZE-FX) the `--erchars` characters as targets 100.. (centre = feet + half its height)
+                let er_center = |t: kh_core::TargetId| (t.0 >= 100).then(|| erchars.get((t.0 - 100) as usize).map(|c| c.0 + Vec3::Z * 0.5 * c.1)).flatten();
+                let target = |t: kh_core::TargetId| if freeze_fx.is_some() { er_center(t) } else { dummy.map(|d: Dummy| d.info.center) };
+                let commands = match freeze_fx {
+                    Some((from, to)) => {
+                        use kh_core::combat::freeze_look::{capsule_bones, half_height_of, Frozen};
+                        let mut list = Vec::new();
+                        let mut bones = Vec::new();
+                        for (k, c) in erchars.iter().enumerate() {
+                            let id = kh_core::TargetId(100 + k as u32);
+                            let (center, hh) = (c.0 + Vec3::Z * 0.5 * c.1, 0.5 * c.1);
+                            let own = if k == 0 { zh.as_ref().map(|z| z.bones_cm()) } else { None };
+                            let size = own.as_ref().map_or(hh, |b| half_height_of(hh, &b.iter().map(|x| x.1).collect::<Vec<_>>()));
+                            if (from..to).contains(&step) {
+                                list.push(Frozen::target(id, center, c.0, size));
+                            }
+                            let pts = own.unwrap_or_else(|| capsule_bones(center, 0.22 * c.1, hh));
+                            bones.push((id, pts.into_iter().map(|(n, p)| (n, (p, glam::Quat::IDENTITY))).collect()));
+                        }
+                        effects.set_target_bones(bones);
+                        // (FREEZE-FX ice shell) the `--zdraw` model's own encasing (KH3's "Ice" ramp: in over 0.3 s, out 0.1 s after
+                        // the break), as kh-er hands it; a capsule has no model: no shell (kh-er logs the same)
+                        let secs = |n: usize| n as f32 * STEP;
+                        let ice = if step < from { 0.0 } else if step < to { kh_core::combat::freeze_look::shell_ice(secs(step - from), None) } else { kh_core::combat::freeze_look::shell_ice(secs(to - from), Some(secs(step - to))) };
+                        let shells: Vec<kh_er_render::iceshell::ShellBody> = match zh.as_mut() {
+                            Some(z) if ice > 0.0 => vec![(100, ice, z.shell_soup())],
+                            _ => Vec::new(),
+                        };
+                        let fp = kh_core::combat::freeze_look::P;
+                        kh_er_render::iceshell::set_frame(shells, kh_er_render::iceshell::ShellLook { tile_uv: fp.shell_tile_uv, tile_cm: fp.shell_tile_cm, facing_share: fp.shell_facing_share, emissive: fp.shell_emissive, light_wrap: fp.shell_light_wrap, lift_cm: fp.shell_lift_cm, colour_slope: fp.shell_colour_slope, colour_base: fp.shell_colour_base });
+                        let mut q = kh_host::seam::EffectQueue(commands);
+                        for ch in freeze_look.step(&list, STEP, &mut || { freeze_next += 1; kh_core::EffectHandle(0x7C00_0000 + freeze_next) }, &mut q) {
+                            println!("effects: (FREEZE-FX) step {step}: {ch:?}");
+                        }
+                        q.0
+                    }
+                    None => commands,
+                };
                 if let Some(sp) = savepoint.as_mut() {
                     // (SP2) `--savepoint-entry`: the save point acts on him (kh-host `SavePoint::step`, the entry burst on, as the
                     // Elden Ring mod): walking in plays KH3's burst vg_com_svp_in00 (the column, the rings, the sparkles)
@@ -1479,7 +1688,8 @@ fn main() {
                         println!("effects: (ORBS) {} orb effect(s) spawned at step {step}, gain {}", ids.len(), kh_er_render::vfx::prize_gain(*glow));
                     }
                 }
-                for (name, base, keep, hold) in kh_er_render::pointlight::glow_variants() {
+                // (HEROLIGHT-KB) the carrier weapon's two copies of its appear effect
+                for (name, base, keep, hold) in hero_active.map(kh_er_render::herolight::HeroWeapon::variants).unwrap_or_default() {
                     let keep: Vec<&str> = keep.iter().map(String::as_str).collect();
                     effects.define_variant(name, base, &keep, hold);
                 }
@@ -1490,27 +1700,31 @@ fn main() {
                 // (ZFIN round 8) `--fx-steps N,N,..`: the effect steps per presented frame, in turn (Elden Ring's frames below 60 fps
                 // carry 0, 1 or 2 of Sora's fixed steps: kh-er fx.rs steps the effects once per step)
                 let fx_steps: usize = FX_STEPS.get().map_or(1, |v: &Vec<usize>| if v.is_empty() { 1 } else { v[step % v.len()] });
+                // (MIMIC-FX) the copy's effects on HIS scene first (kh-er: the copies step before `Fx::after_step`)
+                if let Some(c) = copy_fx.as_mut() {
+                    c.effect_step(&mut effects, eye_game);
+                }
                 for k in 0..fx_steps {
-                    effects.step(STEP, if k == 0 { &commands } else { &[] }, &Scene { out: &out, sora: &rig.sora, tap: &tap, target: &target, ground: Some(0.0), eye: eye_game });
+                    effects.step(STEP * forms_session.world_rate() /* (AUDIT-A WORLDTIME) */, if k == 0 { &commands } else { &[] }, &Scene { out: &out, sora: &rig.sora, tap: &tap, target: &target, ground: Some(0.0), eye: eye_game });
                 }
                 // (ER party S5) the audio side of the step (kh-er fx.rs after_step), then the party's loops: a line a second, and
                 // when an action ends
                 if let (Some(a), Some(p)) = (party_audio.as_mut(), party_rig.as_mut()) {
                     let listener = kh_audio::Listener { position: eye_game, forward: (focus - eye_game).normalize_or(Vec3::X), right: math::game_dir_of_host(right) };
-                    a.step(&out, rig.animator.skeleton(), &rig.pose, &to_world, &commands, listener, &|at| rig.place(at), p);
+                    a.step(&out, effects_party::PosedBody { skeleton: rig.animator.skeleton(), pose: &rig.pose, to_world: &to_world }, &commands, listener, &|at| rig.place(at), p);
                 }
                 if let Some(p) = party_rig.as_mut() {
                     let ended = std::mem::take(&mut p.said);
                     for line in &ended {
                         println!("{line}");
                     }
-                    if !ended.is_empty() || step % 60 == 0 {
+                    if !ended.is_empty() || step.is_multiple_of(60) {
                         println!("party loops: step {step}: {}", p.loops(&effects));
                     }
                 }
                 for event in &out.events {
                     if let kh_core::EventKind::EffectSpawn { handle, spawn } = &event.kind {
-                        if spawn.name == kh_er_render::pointlight::GLOW_EFFECT {
+                        if hero_active.is_some_and(|w| spawn.name == w.glow_name) {
                             glow_handle = Some(*handle);
                         }
                     }
@@ -1522,15 +1736,30 @@ fn main() {
                 }
                 weapon_since += STEP;
                 let view = kh_vfx::Camera { position: eye_game, forward: math::game_dir_of_host(forward), right: math::game_dir_of_host(right), up: math::game_dir_of_host(up) };
+                // (HEROLIGHT-KB) `--hero-measure`: the glow systems alive (their emitters' time, ended, particles)
+                if flag("--hero-measure") && step.is_multiple_of(15) {
+                    for l in effects.world.live().iter().filter(|l| l.name.contains("#hl_") || l.name.to_ascii_lowercase().contains("_app")) {
+                        println!("hero measure: step {step} live {} {:.2}s ending {} emitters {:?}", l.name, l.seconds, l.ending, l.emitters);
+                    }
+                }
                 let (list, material_names, mesh_names) = effects.draw(1.0, &view);
+                // (HEROLIGHT-KB) `--hero-measure`: the glow copy's instances of this frame
+                if flag("--hero-measure") {
+                    hero_copies = list.meshes.iter().filter(|m| mesh_names.get(m.mesh as usize).is_some_and(|n| { let n = n.to_ascii_lowercase(); hero_copy_meshes.iter().any(|c| n == *c || n.ends_with(&format!(":{c}")) || n.starts_with(&format!("{c}__"))) })).map(|m| (mesh_names.get(m.mesh as usize).cloned().unwrap_or_default(), m.transform)).collect();
+                }
+                // (HEROLIGHT-KB) as kh-er (its frame is submitted before its effects): the hand weapon of THIS frame, for the glow's lock
+                if let Some(hand) = rig.animator.skeleton().index_of("R_buki").and_then(|h| rig.pose.component.get(h)) {
+                    let w = Weapon { to_world: socket.then(hand).then(&to_world), component: Vec::new(), opacity: 1.0 };
+                    kh_er_render::herolight::note_drawn_weapons(kh_er_render::herolight::drawn_weapons(Some(&w), kh_er_render::herolight::hand_model().as_deref(), &[]));
+                }
                 kh_er_render::vfx::submit(list, material_names, mesh_names, &view, step as f32 * STEP);
                 // (VFXR) the character drives, as kh-er fx.rs hands them over (`--char-fx 0`: none)
                 kh_er_render::vfx::CHAR_FX.store(value("--char-fx").as_deref() != Some("0"), std::sync::atomic::Ordering::Relaxed);
-                kh_er_render::vfx::set_char_drives(effects.char_drives().into_iter().map(|d| kh_er_render::vfx::CharDrive { owner: d.owner, name: d.name, value: d.value, vector: d.vector }).collect());
+                kh_er_render::vfx::set_char_drives(effects.char_drives().into_iter().map(|d| kh_er_render::vfx::CharDrive { owner: d.owner, name: d.name, value: d.value, vector: d.vector, mesh: d.mesh /* (AUDIT-B W-VFX) */, equipment: d.equipment /* (FREEZE-FX) */ }).collect());
                 let micros = before.elapsed().as_micros();
                 vfx_micros += micros;
                 vfx_peak = vfx_peak.max(micros);
-                if flag("--list-fx") && step % 6 == 0 {
+                if flag("--list-fx") && step.is_multiple_of(6) {
                     let names: Vec<String> = effects.world.live().iter().map(|l| format!("{} {:.2}s", l.name, l.seconds)).collect();
                     println!("    step {step}: {names:?}");
                 }
@@ -1559,7 +1788,7 @@ fn main() {
             let body = (!rig.pose.component.is_empty()).then(|| Body { component_to_world: to_world, local: rig.pose.local.clone(), component: rig.pose.component.clone() });
             // (ER70) `--poses F1,F2,..`: Sora's local pose read from files (one line a
             // bone: translation, rotation xyzw, scale), pose k from frame k x `--pose-frames` (default 10)
-            let body = match poses.get((step as usize / pose_frames.max(1)).min(poses.len().saturating_sub(1))) {
+            let body = match poses.get((step / pose_frames.max(1)).min(poses.len().saturating_sub(1))) {
                 Some(local) if local.len() == rig.pose.local.len() => {
                     let skeleton = rig.animator.skeleton();
                     let mut component: Vec<Trs> = Vec::with_capacity(local.len());
@@ -1617,6 +1846,33 @@ fn main() {
                 }
             };
             let weapon = hand.and_then(|hand| rig.pose.component.get(hand)).filter(|_| opacity > 0.0).map(|hand| Weapon { to_world: socket.then(hand).then(&to_world), component: chain_pose, opacity });
+            // (HEROLIGHT-KB) `--hero-measure`: the copy against the weapon (its grip 0, its tip, 10 cm along +Y / +Z of its model space)
+            if step.is_multiple_of(15) && !warming {
+                if let (Some(w), Some(row)) = (weapon.as_ref(), hero_row) {
+                    let f = kh_er_render::herolight::hand_frame(w, kh_er_render::herolight::wep_bind(&row.model));
+                    let top = row.line.map_or(80.0, |(_, b)| b.x);
+                    for (k, (name, t)) in hero_copies.iter().enumerate() {
+                        // the copy's mesh space -> the weapon's model space is its turn: a point a of the weapon is turn^-1 a of the copy
+                        let turn = kh_er_render::herolight::copies().iter().find(|c| name.to_ascii_lowercase().contains(c.mesh.as_str())).map_or(glam::Quat::IDENTITY, |c| c.turn);
+                        let worst = |m: &glam::Affine3A| [Vec3::ZERO, Vec3::X * top, Vec3::Y * 10.0, Vec3::Z * 10.0].iter().map(|a| (m.transform_point3(turn.inverse() * *a) - f.transform_point(*a)).length()).fold(0.0f32, f32::max);
+                        let drawn = kh_er_render::herolight::lock_mesh(name, *t, eye_game);
+                        // (DEPLOY4) the drawn copy is KH3's depth pull nearer the eye ON the weapon's eye rays: off the ray (the picture)
+                        // and how much nearer (its depth separation from the weapon)
+                        let (mut off_ray, mut nearer) = (0.0f32, f32::MAX);
+                        for a in [Vec3::ZERO, Vec3::X * top, Vec3::Y * 10.0, Vec3::Z * 10.0] {
+                            let (p, w) = (drawn.transform_point3(turn.inverse() * a), f.transform_point(a));
+                            let ray = (w - eye_game).normalize_or_zero();
+                            let along = (p - eye_game).dot(ray);
+                            off_ray = off_ray.max(((p - eye_game) - ray * along).length());
+                            nearer = nearer.min((w - eye_game).length() - along);
+                        }
+                        println!("hero measure: step {step} {} copy {k} ({name}): the particle system's place {:.2} cm off the weapon, DRAWN {off_ray:.2} cm off the weapon's eye rays and {nearer:.2} cm nearer the eye than it (grip, tip {top:.0} cm, 10 cm along Y and Z)", row.model, worst(t));
+                    }
+                    if hero_copies.is_empty() && flag("--hero-measure") {
+                        println!("hero measure: step {step} {}: no copy instance drawn (meshes {:?})", row.model, hero_copy_meshes);
+                    }
+                }
+            }
             if let (Some(st), Some(r)) = (stretch.as_mut(), stretch_rig.as_ref()) {
                 let posed = r.frame(step as f32 * STEP, &to_world, &rig.pose.local, &rig.pose.component);
                 st.step(step, &posed.1, &format!("{:?}", rig.out.state), r);
@@ -1691,7 +1947,7 @@ fn main() {
                 }
                 _ => Vec::new(),
             };
-            if !forms.is_empty() && flag("--list-fx") && step % 6 == 0 {
+            if !forms.is_empty() && flag("--list-fx") && step.is_multiple_of(6) {
                 println!("    step {step}: form weapons {:?}", forms.iter().map(|f| f.model.as_str()).collect::<Vec<_>>());
             }
             // (XW-b) Chandelier's chandelier pawn, as kh-er sora.rs submits it
@@ -1701,6 +1957,35 @@ fn main() {
                     forms.extend(kh_er_render::xsiweapon::pawn_form("chandelier", p.ground, p.yaw, p.time));
                 }
             }
+            // (P5) `--kb-form FORM[:GROW]`: the hand keyblade's form weapon parts (each on its socket, its own clip of the
+            // sequence Sora plays, else its reference pose)
+            if let (Some(form), Some(id)) = (value("--kb-form"), kb_hand_id.as_deref()) {
+                let (f, grow) = form.split_once(':').unwrap_or((form.as_str(), ""));
+                let sequences = rig.out.anim.name.sequences();
+                let skeleton = rig.animator.skeleton();
+                // (F-CLAWS) with `--clip NAME@SECONDS` the parts play that clip too (their own clip of the same sequence)
+                let clip_pose = value("--clip").and_then(|spec| spec.split_once('@').and_then(|(n, t)| Some((n.to_string(), t.parse::<f32>().ok()?))));
+                let (anim, time) = match &clip_pose {
+                    Some((n, t)) => (Some(n.as_str()), *t),
+                    None => (sequences.first().copied(), rig.out.anim.time),
+                };
+                let pose = kh_er_render::keyblade::FormPose { index_of: &|b| skeleton.index_of(b), component: &rig.pose.component, to_world: &to_world, anim, time, hand_socket: &socket };
+                let parts = kh_er_render::keyblade::draw_form_weapon_parts(id, f, grow, flag("--kb-transform"), &pose);
+                if step.is_multiple_of(60) {
+                    println!("    step {step}: (P5) {id} form {form}: parts {:?}", parts.iter().map(|p| p.model.as_str()).collect::<Vec<_>>());
+                }
+                forms.extend(parts);
+            }
+            // (VFX-XLATE) `--kb-model NAME:X,Y,Z,YAW`: a loaded keyblade-table model standing there (the Rocket Fist w_so173)
+            if let Some((name, at)) = value("--kb-model").as_deref().and_then(|v| v.split_once(':')) {
+                let n: Vec<f32> = at.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                if n.len() == 4 {
+                    forms.extend(kh_er_render::keyblade::model_at(name, Vec3::new(n[0], n[1], n[2]), n[3]));
+                }
+            }
+            // (AUDIT-A) `--game-forms`: the form weapons and every finisher pawn from the core's Form, as kh-er sora.rs submit
+            let (forms_hand_hidden, forms_body_hidden) = forms_session.draw(&rig, step, &effects_forms::Drawn { hand_kb: kb_hand_id.as_deref().unwrap_or(kh_er_render::keyblade::KINGDOM_KEY), to_world: &to_world, feet: forms_feet, socket: &socket, opacity }, &mut forms);
+            let (weapon, body) = (if forms_hand_hidden { None } else { weapon }, if forms_body_hidden { None } else { body }); // (AUDIT-A)
             let weapon = if forms.is_empty() { weapon } else { None };
             // (HY) his feet: the scene of Elden Ring's kind places its casters and lights around them
             // (RSF2) `--level-open 0`: the light level from the shadow at his feet (r.level_open 0)
@@ -1713,6 +1998,14 @@ fn main() {
             #[cfg(feature = "party")]
             if let Some(p) = party_harness.as_mut() {
                 p.frame(step, STEP, camera, rig.out.position);
+            }
+            // (PARTY-WEAPONS) `--party-draw`: the simulated party of `--party` drawn (their weapons as kh-party's rule has them)
+            #[cfg(feature = "party")]
+            if let Some(p) = party_rig.as_ref().filter(|_| flag("--party-draw")) {
+                kh_er_render::party::submit_party(p.draws(true));
+                if step.is_multiple_of(6) {
+                    println!("party weapons: step {step}: {}", p.weapons_line());
+                }
             }
 
             // ---- the "game": its deferred submission (G-buffer, then floor and sky into the scene target with depth)
@@ -1939,7 +2232,7 @@ fn main() {
                     list4.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                     list4.SetPipelineState(fx);
                     // (IMPL_ER80) `--no-layers`: the forward stage without its decal / panels / sky glow layers (the velocity pass stays)
-                    for k in 0..if flag("--no-layers") { 0 } else { layers.len() } {
+                    for k in 0..if flag("--no-layers") || late_pass /* (AUDIT-A CAMS) */ { 0 } else { layers.len() } {
                         if erdtree && k == 0 {
                             list4.SetPipelineState(sky_free);
                         } else if erdtree {
@@ -1977,7 +2270,7 @@ fn main() {
                         }
                     }
                     list4.ResourceBarrier(&[transition(&scene, D3D12_RESOURCE_STATE_RENDER_TARGET, SRV), transition(&depth, D3D12_RESOURCE_STATE_DEPTH_WRITE, SRV)]);
-                    if erdtree || taa {
+                    if erdtree || taa || late_pass /* (AUDIT-A CAMS) */ {
                         // the "velocity pass" (the late pass runs after the submission that holds it)
                         list4.ResourceBarrier(&[transition(&velocity_target, SRV, D3D12_RESOURCE_STATE_RENDER_TARGET)]);
                         list4.OMSetRenderTargets(1, Some(&velocity_rtv.GetCPUDescriptorHandleForHeapStart()), false, None);
@@ -2149,7 +2442,7 @@ fn main() {
             }
             wait(&mut fence_value);
             presented += 1;
-            if presented % 120 == 0 {
+            if presented.is_multiple_of(120) {
                 println!("effects: frame {presented} (step {step}, {:.1} s): {}", run_started.elapsed().as_secs_f32(), kh_er_render::status());
             }
             // (IMPL_ER78) `--hy-dump STEP`: the r.hybrid_dump of the mod at that step (written into the --out folder)
@@ -2378,7 +2671,7 @@ impl Stretch {
             self.guard_before += before;
             self.guard_after += after;
             self.guard_deepest = self.guard_deepest.max(deepest * 100.0);
-            if before > 0 || step % 60 == 0 {
+            if before > 0 || step.is_multiple_of(60) {
                 let wv = worst_vertex.map(|k| {
                     let x = &self.model.vertices[k];
                     (0..4).filter(|c| x.weights[*c] > 0.01).map(|c| format!("{} {:.2}", self.names.get(x.joints[c] as usize).map_or("?", |s| s.as_str()), x.weights[c])).collect::<Vec<_>>().join(", ")
@@ -2399,7 +2692,7 @@ impl Stretch {
             let x = &self.model.vertices[v];
             (0..4).filter(|k| x.weights[*k] > 0.01).map(|k| format!("{} {:.2}", self.names.get(x.joints[k] as usize).map_or("?", |s| s.as_str()), x.weights[k])).collect::<Vec<_>>().join(", ")
         };
-        if worst.0 > 2.0 || step % 60 == 0 || worst.0 > self.worst * 1.2 && worst.0 > 1.0 {
+        if worst.0 > 2.0 || step.is_multiple_of(60) || worst.0 > self.worst * 1.2 && worst.0 > 1.0 {
             println!("stretch: step {step} ({state}): worst edge +{:.1} cm (x{:.2}) between v{} [{}] and v{} [{}]", worst.0, worst.3, worst.1, joints(worst.1), worst.2, joints(worst.2));
         }
         self.worst = self.worst.max(worst.0);

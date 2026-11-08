@@ -36,6 +36,7 @@ const MEMBERS = [
 const args = process.argv.slice(2);
 const only = (() => { const k = args.indexOf('--only'); return k >= 0 ? args[k + 1].split(',') : null; })();
 const NO_MATERIALS = args.includes('--no-materials'), NO_VALIDATE = args.includes('--no-validate');
+const ATTACK_SOCKETS_ONLY = args.includes('--attack-sockets-only');
 const NL = String.fromCharCode(10);
 
 // ------------------------------------------------------------------------------------------------ plain properties
@@ -396,15 +397,22 @@ function attackSockets(anims, bones, id, handSocket, weapon) {
   const wchain = []; for (let k = wepIdx; k >= 0; k = wb[k].parent) wchain.unshift(k);
   const sk = (name) => { const x = weapon.sockets.find((y) => y.name === name); return x && x.bone === 'wep' ? x.relative_location_ue_cm : null; };
   const a0 = sk('ATK_00'), a1 = sk('ATK_01');
+  // (COMBAT-FIX 2026-11-07) the sockets' own rotations too, so a shape's socket-space offset (m_RelativeLocation1, rotated by
+  // the socket: UTresAtkCollPrimitive 0x140647950) can be placed; additive: `rotations` beside `sockets`
+  const skq = (name) => { const x = weapon.sockets.find((y) => y.name === name); return x && x.bone === 'wep' && x.quaternion_ue_xyzw ? x.quaternion_ue_xyzw : [0, 0, 0, 1]; };
+  const q0 = skq('ATK_00'), q1 = skq('ATK_01');
   const yaw = id.mesh_component.relative_rotation_ue_deg.yaw * Math.PI / 180, cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const qYaw = [0, 0, Math.sin(yaw / 2), Math.cos(yaw / 2)];
+  const actorQ = (q) => { const r = qmul(qYaw, q); const n = Math.hypot(...r) || 1; const u = r.map((x) => x / n); return u[3] < 0 ? u.map((x) => -x) : u; };
   const actor = (v) => [v[0] * cy - v[1] * sy, v[0] * sy + v[1] * cy, v[2]];
   const out = { note: `ATK_00 and ATK_01 of the default weapon ${weapon.model} per animation frame (time = frame * SequenceLength / (NumFrames - 1)), ACTOR space, UE cm: [x0, y0, z0, x1, y1, z1]. Clips with a TresAnimNotifyState_Attack or a TresAnimNotify_Shot. Weapon at its reference pose on ${handSocket.name} (bone ${handSocket.bone}).`,
-    weapon: weapon.model, attach_socket: handSocket.name, attach_bone: handSocket.bone, atk_00_on_wep_cm: a0, atk_01_on_wep_cm: a1, clips: {} };
+    weapon: weapon.model, attach_socket: handSocket.name, attach_bone: handSocket.bone, atk_00_on_wep_cm: a0, atk_01_on_wep_cm: a1,
+    rotations_note: "per clip, rotations[i] = [ATK_00 x, y, z, w, ATK_01 x, y, z, w]: each socket's rotation (the weapon's socket rotation on wep included) at frame i, ACTOR space, UE quaternion (w >= 0); a shape's socket-space offset v is at sockets + rotate(rotation, v) (COMBAT-FIX 2026-11-07)", clips: {} };
   if (!a0 || !a1 || wepIdx < 0) { out.note += ' NOT COMPUTED: the weapon lacks ATK_00 / ATK_01 on bone wep.'; return out; }
   for (const a of anims.values()) {
     if (!a.notifies.some((n) => n.class === 'TresAnimNotifyState_Attack' || n.class === 'TresAnimNotify_Shot')) continue;
     const byBone = new Map(); for (const c of a.chans) { if (!byBone.has(c.bone)) byBone.set(c.bone, {}); byBone.get(c.bone)[c.path] = c; }
-    const frames = [];
+    const frames = [], rots = [];
     for (let i = 0; i < a.numFrames; i++) {
       const time = a.numFrames > 1 ? i * a.length / (a.numFrames - 1) : 0;
       let T = null;
@@ -416,8 +424,9 @@ function attackSockets(anims, bones, id, handSocket, weapon) {
       let W = under(socket, T);
       for (const k of wchain) W = under(wbT(wb[k]), W);
       frames.push([...actor(point(W, a0)), ...actor(point(W, a1))].map((x) => +x.toFixed(4)));
+      rots.push([...actorQ(qmul(W.q, q0)), ...actorQ(qmul(W.q, q1))].map((x) => +x.toFixed(6)));
     }
-    out.clips[path.basename(a.content)] = { frames: a.numFrames, duration_s: a.length, sockets: frames };
+    out.clips[path.basename(a.content)] = { frames: a.numFrames, duration_s: a.length, sockets: frames, rotations: rots };
   }
   return out;
 }
@@ -727,7 +736,44 @@ function buildMaterials(m, dir, weapons, bodySlots) {
 }
 
 // ------------------------------------------------------------------------------------------------ main
+// (COMBAT-FIX 2026-11-07) --attack-sockets-only [--only n_ex00x]: recomputes ONLY manifest.attack_sockets of the members
+// from the packed manifests (skeleton, sockets, the default weapon's bones and sockets) and the game's clips, checks that every
+// existing value comes out the same, and rewrites manifest.json with that one block replaced (written to a new file and renamed:
+// the other hard links of the old manifest keep their bytes), then refreshes its row in sheets/port/party-assets.json.
+// Nothing else of the pack is touched.
+function attackSocketsOnly(m) {
+  const dir = P(OUT, m.npc), file = P(dir, 'manifest.json');
+  const man = readJson(file);
+  const fromMan = (b) => ({ name: b.name, parent: b.parent, ue: { translation: b.translation_ue, rotation: b.rotation_ue, scale: b.scale_ue } });
+  const bones = man.skeleton.bones.map(fromMan);
+  const wDir = man.weapons.find((w) => w.model === man.attack_sockets.weapon).dir;
+  const wMan = readJson(P(OUT, wDir, 'manifest.json'));
+  const weapon = { model: wMan.model, bones: wMan.skeleton.bones.map(fromMan), sockets: wMan.sockets };
+  const handSocket = man.sockets.find((s) => s.name === man.attack_sockets.attach_socket);
+  const anims = new Map();
+  for (const it of man.items) {
+    if (it.kind !== 'animation' || !it.source_asset || !(it.notifies || []).some((n) => n.class === 'TresAnimNotifyState_Attack' || n.class === 'TresAnimNotify_Shot')) continue;
+    anims.set(it.source_asset, loadClip(it.source_asset, bones, [...bones, ...(man.skeleton.skeleton_only_bones || []).map((name) => ({ name, parent: -1 }))], { clips: 0, channels: 0 }));
+  }
+  const got = attackSockets(anims, bones, man.identification, handSocket, weapon);
+  const old = man.attack_sockets;
+  for (const [k, v] of Object.entries(old)) if (k !== 'clips' && JSON.stringify(got[k]) !== JSON.stringify(v)) throw new Error(`${m.npc}: attack_sockets.${k} would change`);
+  if (JSON.stringify(Object.keys(got.clips)) !== JSON.stringify(Object.keys(old.clips))) throw new Error(`${m.npc}: the clip list would change`);
+  for (const [c, v] of Object.entries(old.clips)) for (const k of Object.keys(v)) if (JSON.stringify(got.clips[c][k]) !== JSON.stringify(v[k])) throw new Error(`${m.npc}: clip ${c} ${k} would change`);
+  man.attack_sockets = got;
+  const bytes = Buffer.from(JSON.stringify(man, null, 1) + NL);
+  fs.writeFileSync(file + '.new', bytes);
+  fs.renameSync(file + '.new', file);
+  const sheetFile = P(ROOT, 'sheets/port/party-assets.json');
+  const text = fs.readFileSync(sheetFile, 'utf8');
+  const key = `["${m.npc}/manifest.json","manifest",`;
+  const lines = text.split(NL); const i = lines.findIndex((l) => l.startsWith(key));
+  if (i >= 0) { const r = JSON.parse(lines[i].replace(/,$/, '')); r[5] = bytes.length; r[6] = sha256(bytes); lines[i] = JSON.stringify(r) + (lines[i].endsWith(',') ? ',' : ''); fs.writeFileSync(sheetFile, lines.join(NL)); }
+  console.log(`${m.npc}: attack_sockets of ${Object.keys(got.clips).length} clips, rotations added; manifest.json ${bytes.length} bytes sha256 ${sha256(bytes)}`);
+}
+
 async function main() {
+  if (ATTACK_SOCKETS_ONLY) { for (const m of MEMBERS) if (!only || only.includes(m.npc)) attackSocketsOnly(m); return; }
   const inventory = readJson(P(ROOT, 'build/sora_tmp/party/inventory.json'));
   fs.mkdirSync(OUT, { recursive: true });
   const done = [];

@@ -25,7 +25,19 @@ pub struct Rule {
     pub munny_per_rune: f32,
     pub munny_per_max_hp: f32,
     pub spawn_height: f32,
+    /// (FOCUSORB) Percent chance that a kill ALSO drops a focus slot, by the first slot's family (HP, MP, focus):
+    /// KH3's own share of enemy rows whose SECOND prize slot is focus, given that first slot ([`FOCUS_SECOND`]).
+    pub focus_second: [f32; 3],
+    /// (FOCUSORB) Orbs of that focus slot (small in tiers 0 and 1, large in tier 2, as the first slot).
+    pub focus_count: u32,
 }
+
+/// (FOCUSORB) KH3'S SECOND-SLOT FOCUS SHARE, from the 116 enemy base rows that drop prizes
+/// (build/sora_tmp/prize/enemy_drops.tsv): first slot HP (67 rows) -> second slot focus in 11 (16.4 %); MP (36) -> 9
+/// (25 %); focus (10) -> 4 (40 %). Sheet sora-er-host rows `prize.focus.after_hp / _mp / _focus`.
+pub const FOCUS_SECOND: [f32; 3] = [16.4, 25.0, 40.0];
+/// (FOCUSORB) KH3's second-slot focus counts over those 24 rows: x1 4, x2 12, x3 7, x4 1: the mode, 2. Row `prize.focus.count`.
+pub const FOCUS_COUNT: u32 = 2;
 
 impl Default for Rule {
     fn default() -> Rule {
@@ -37,6 +49,8 @@ impl Default for Rule {
             munny_per_rune: P.er_munny_per_rune,
             munny_per_max_hp: P.er_munny_per_max_hp,
             spawn_height: P.er_spawn_height,
+            focus_second: FOCUS_SECOND,
+            focus_count: FOCUS_COUNT,
         }
     }
 }
@@ -57,6 +71,22 @@ pub struct Drop {
     pub munny: i32,
     pub from_runes: bool,
     pub slots: Vec<Slot>,
+    /// (FOCUSORB) The focus slot thrown with the first slot (KH3's second-slot focus), when the roll gave one.
+    pub focus: Option<Slot>,
+}
+
+/// (FOCUSORB, the user 2026-11-03: "when playing as Sora or Sora is in your team, enemies should drop focus orbs like
+/// health and MP") WHETHER A KILL MAY DROP FOCUS ORBS: Sora is in the active party (leading or AI: party membership, no
+/// name of a leader), the kill is not one of the quiet times (a cutscene, after his death), and no load was asked for
+/// since this host's wallet was made (`LOAD_EPOCH`: such a kill belongs to the abandoned session).
+pub fn focus_drops(sora_in_party: bool, quiet: bool, loading: bool) -> bool {
+    sora_in_party && !quiet && !loading
+}
+
+/// (FOCUSORB) Sora is in the active party by the party runtime's own flag (`lead.sora_active`, published in partyui's
+/// feed): `None` = no party (Sora alone), so he is.
+pub fn sora_present(sora_active: Option<bool>) -> bool {
+    sora_active.unwrap_or(true)
 }
 
 impl Rule {
@@ -89,18 +119,31 @@ impl Rule {
     /// the munny is `ceil(max HP x munny_per_max_hp)`. One draw of `rng` picks the first slot's
     /// family by `slot1_weights`.
     pub fn drop_for(&self, max_hp: i32, runes: Option<i32>, rng: &mut Rng) -> Drop {
+        self.drop_with(max_hp, runes, rng, true)
+    }
+
+    /// (FOCUSORB) THE RULE WITH THE FOCUS SIDE. `focus`: focus orbs may drop ([`focus_drops`]). With it, a second draw
+    /// of `rng` gives the kill a focus slot by `focus_second` of the first slot's family (KH3: a row's second slot is
+    /// focus that often, beside its HP / MP slot). Without it the first slot is HP or MP by their own weights (the focus
+    /// weight left out) and there is no focus slot. Both draws are made either way (the sequence does not depend on the
+    /// party).
+    pub fn drop_with(&self, max_hp: i32, runes: Option<i32>, rng: &mut Rng, focus: bool) -> Drop {
         let tier = self.tier(max_hp);
         let large = tier == 2;
-        let total: f32 = self.slot1_weights.iter().sum();
+        let weights = if focus { self.slot1_weights } else { [self.slot1_weights[0], self.slot1_weights[1], 0.0] };
+        let total: f32 = weights.iter().sum();
         let roll = rng.unit() * total;
-        let family = if roll < self.slot1_weights[0] {
-            0
-        } else if roll < self.slot1_weights[0] + self.slot1_weights[1] {
-            1
+        let second = rng.unit() * 100.0;
+        let family = if total <= 0.0 {
+            None
+        } else if roll < weights[0] {
+            Some(0)
+        } else if roll < weights[0] + weights[1] {
+            Some(1)
         } else {
-            2
+            Some(2)
         };
-        let first = match (family, large) {
+        let of = |family: usize| match (family, large) {
             (0, false) => PrizeKind::HpSmall,
             (0, true) => PrizeKind::HpLarge,
             (1, false) => PrizeKind::MpSmall,
@@ -112,9 +155,30 @@ impl Rule {
             Some(runes) => ((runes as f32 * self.munny_per_rune).round() as i32, true),
             None => ((max_hp.max(0) as f32 * self.munny_per_max_hp).ceil() as i32, false),
         };
-        let mut slots = vec![Slot { kind: first, count: self.slot1_count[tier], amounts: Vec::new() }];
+        let mut slots: Vec<Slot> = family.map(|f| Slot { kind: of(f), count: self.slot1_count[tier], amounts: Vec::new() }).into_iter().collect();
         slots.extend(self.munny_slot(tier, munny));
-        Drop { tier, munny, from_runes, slots }
+        let focus_slot = match family {
+            Some(f) if focus && self.focus_count > 0 && second < self.focus_second[f] => Some(Slot { kind: of(2), count: self.focus_count, amounts: Vec::new() }),
+            _ => None,
+        };
+        Drop { tier, munny, from_runes, slots, focus: focus_slot }
+    }
+
+    /// (FOCUSORB) The control keys of the focus side: `prize.focus.after = hp,mp,focus` (percent) and
+    /// `prize.focus.count = n` over the sheet's rows.
+    pub fn with_focus(mut self, after: [f32; 3], count: u32, after_key: Option<&str>, count_key: Option<f32>) -> Rule {
+        self.focus_second = after;
+        self.focus_count = count;
+        if let Some(text) = after_key {
+            let parts: Vec<f32> = text.split(',').filter_map(|p| p.trim().parse().ok()).collect();
+            if parts.len() == 3 && parts.iter().all(|w| (0.0..=100.0).contains(w)) {
+                self.focus_second = [parts[0], parts[1], parts[2]];
+            }
+        }
+        if let Some(n) = count_key.filter(|n| (0.0..=16.0).contains(n)) {
+            self.focus_count = n as u32;
+        }
+        self
     }
 
     /// The munny orbs of a kill of this tier worth `munny` together (none when it is worth nothing).
@@ -767,6 +831,77 @@ mod tests {
         let d = only_hp.drop_for(100, Some(100), &mut rng);
         assert_eq!((d.slots[0].kind, d.munny), (PrizeKind::HpSmall, 50));
         assert_eq!(rule.with_overrides(Some("nonsense"), Some(-1.0), None), rule);
+    }
+
+    /// (FOCUSORB) THE FOCUS SIDE OF THE RULE, KH3's shares: with Sora in the party a kill drops focus about as often as
+    /// a KH3 enemy row does (30 of 116 = 25.9 %: as its first slot 10 / 113, as a second slot beside HP / MP by
+    /// FOCUS_SECOND); 2 orbs, small or large by tier like the HP / MP slot; with Sora out of the party never, and the
+    /// first slot keeps HP : MP = 67 : 36.
+    #[test]
+    fn focusorb_kills_drop_focus_by_kh3s_shares_only_with_sora_in_the_party() {
+        let rule = Rule::default();
+        assert_eq!((rule.focus_second, rule.focus_count), ([16.4, 25.0, 40.0], 2));
+        let mut rng = Rng::new(11);
+        let n = 40_000;
+        let (mut any, mut second, mut first_focus) = (0u32, 0u32, 0u32);
+        for _ in 0..n {
+            let d = rule.drop_with(100, Some(50), &mut rng, true);
+            let f1 = d.slots[0].kind == PrizeKind::FocusSmall;
+            first_focus += f1 as u32;
+            if let Some(s) = &d.focus {
+                assert_eq!((s.kind, s.count), (PrizeKind::FocusSmall, 2), "tier 0: small orbs, two");
+                second += 1;
+            }
+            any += (f1 || d.focus.is_some()) as u32;
+            assert_eq!(d.slots.last().map(|s| s.kind), Some(PrizeKind::Munny1), "the munny slot is untouched");
+        }
+        let share = |c: u32| c as f32 / n as f32;
+        // expected: first 0.0885; second 0.67/1.13 x 0.164 + 0.36/1.13 x 0.25 + 0.10/1.13 x 0.40 = 0.212; any 0.265
+        assert!((0.08..0.098).contains(&share(first_focus)), "first slot focus {}", share(first_focus));
+        assert!((0.20..0.225).contains(&share(second)), "focus slot {}", share(second));
+        assert!((0.25..0.28).contains(&share(any)), "kills with focus {} (KH3 rows: 0.259)", share(any));
+        // a strong enemy: large focus orbs
+        let large = (0..200).find_map(|_| rule.drop_with(2889, Some(3201), &mut rng, true).focus).expect("a focus slot in 200 kills");
+        assert_eq!((large.kind, large.count), (PrizeKind::FocusLarge, 2));
+        // Sora out of the party: no focus anywhere, HP : MP by their own weights
+        let mut seen = [0u32; 2];
+        for _ in 0..11_300 {
+            let d = rule.drop_with(100, None, &mut rng, false);
+            assert!(d.focus.is_none());
+            match d.slots[0].kind {
+                PrizeKind::HpSmall => seen[0] += 1,
+                PrizeKind::MpSmall => seen[1] += 1,
+                other => panic!("no focus without Sora: {other:?}"),
+            }
+        }
+        assert!((7000..7700).contains(&seen[0]) && (3600..4300).contains(&seen[1]), "{seen:?}");
+        // a focus-only weight with Sora out: no stat slot, still the munny
+        let only_focus = rule.with_overrides(Some("0,0,1"), None, None);
+        let d = only_focus.drop_with(100, Some(9), &mut rng, false);
+        assert_eq!((d.slots.len(), d.slots[0].kind, d.focus.is_none()), (1, PrizeKind::Munny1, true));
+        // the keys: off, always, counts
+        let off = rule.with_focus(FOCUS_SECOND, FOCUS_COUNT, Some("0,0,0"), None);
+        assert!((0..2000).all(|_| off.drop_with(100, None, &mut rng, true).focus.is_none()));
+        let always = rule.with_focus(FOCUS_SECOND, FOCUS_COUNT, Some("100,100,100"), Some(3.0));
+        assert!((0..200).all(|_| always.drop_with(100, None, &mut rng, true).focus.is_some_and(|s| s.count == 3)));
+        assert_eq!(rule.with_focus(FOCUS_SECOND, FOCUS_COUNT, Some("1,2"), Some(99.0)), rule, "nonsense is ignored");
+        // drop_for = drop_with(.., true)
+        let (mut a, mut b) = (Rng::new(5), Rng::new(5));
+        assert_eq!(rule.drop_for(700, Some(40), &mut a), rule.drop_with(700, Some(40), &mut b, true));
+    }
+
+    /// (FOCUSORB) WHO MAY GET FOCUS ORBS: Sora leading and Sora as an AI member are the same case (he is in the active
+    /// party: kh-partyhost `lead.sora_active`); Sora out of the party (Donald or Goofy leading without him): none; and
+    /// none in a cutscene, after his death (the respawn), or for a kill reported after a load was asked for (`LOAD_EPOCH`).
+    #[test]
+    fn focusorb_the_gate_is_party_membership_and_the_load_epoch() {
+        assert!(focus_drops(true, false, false), "Sora leads, or is in the party as AI");
+        assert!(!focus_drops(false, false, false), "Sora is out of the party");
+        assert!(!focus_drops(true, true, false), "a cutscene / after his death");
+        assert!(!focus_drops(true, false, true), "a load was asked for (LOAD_EPOCH moved)");
+        assert!(sora_present(None), "no party: Sora alone");
+        assert!(sora_present(Some(true)), "the party's runtime has Sora active");
+        assert!(!sora_present(Some(false)), "the party's runtime has Sora out");
     }
 
     fn wi(runes: u32, munny: i32) -> WalletIn {

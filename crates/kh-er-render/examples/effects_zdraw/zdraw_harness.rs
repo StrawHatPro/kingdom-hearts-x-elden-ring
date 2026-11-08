@@ -165,6 +165,24 @@ impl ZHarness {
         tris
     }
 
+    /// (FREEZE-FX) Its bones as posed (game cm): KH3's frozen look spawns on them (`--freeze-fx`), as kh-er hands the effect
+    /// side a frozen body's own bones read from the game.
+    pub fn bones_cm(&self) -> Vec<(String, Vec3)> {
+        let feet_er = Vec3::new(self.feet.y, self.feet.z, self.feet.x) / 100.0;
+        let place = Mat4::from_translation(feet_er) * Mat4::from_quat(Quat::from_rotation_y(self.yaw.to_radians() + std::f32::consts::PI));
+        self.model.bone_names.iter().zip(&self.posed).map(|(n, p)| (n.clone(), to_game((place * *p).w_axis.truncate()) * 100.0)).collect()
+    }
+
+    /// (FREEZE-FX) Its body as drawn (game cm), for the ice shell (`--freeze-fx`), as kh-er hands a frozen body's own model.
+    pub fn shell_soup(&mut self) -> Vec<[f32; 4]> {
+        if self.body.is_empty() {
+            self.body = self.skin();
+        }
+        let mut soup = Vec::with_capacity(self.body.len() * 3);
+        kh_er_render::zdraw::body_soup(&self.body, &mut soup);
+        soup
+    }
+
     /// One step: the finale's target (id 7, examples/effects.rs `erchr_frame`) drawn from its own model, handed to the renderer.
     pub fn step(&mut self, finale: Option<&FinaleTarget>) {
         if self.body.is_empty() {
@@ -210,7 +228,7 @@ impl ZHarness {
             D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &mut blob, None).expect("zdraw: root signature");
             let blob = blob.unwrap();
             let root: ID3D12RootSignature = device.CreateRootSignature(0, std::slice::from_raw_parts(blob.GetBufferPointer() as *const u8, blob.GetBufferSize())).expect("zdraw: root signature");
-            let element = [D3D12_INPUT_ELEMENT_DESC { SemanticName: PCSTR(b"LOC\0".as_ptr()), SemanticIndex: 0, Format: DXGI_FORMAT_R32G32B32A32_FLOAT, InputSlot: 0, AlignedByteOffset: 0, InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, InstanceDataStepRate: 0 }];
+            let element = [D3D12_INPUT_ELEMENT_DESC { SemanticName: PCSTR(c"LOC".as_ptr().cast()), SemanticIndex: 0, Format: DXGI_FORMAT_R32G32B32A32_FLOAT, InputSlot: 0, AlignedByteOffset: 0, InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, InstanceDataStepRate: 0 }];
             let mut formats = [DXGI_FORMAT_UNKNOWN; 8];
             formats[0] = scene_format;
             let mut blend = D3D12_BLEND_DESC::default();

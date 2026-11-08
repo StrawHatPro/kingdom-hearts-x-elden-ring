@@ -23,6 +23,9 @@ pub struct Fonts {
     pub icons: Option<Arc<IconSet>>,
 }
 
+/// (BUTTON-ICONS) An icon's rectangle: (texture, x, y, w, h) in texture pixels.
+pub type IconRect = (usize, f32, f32, f32, f32);
+
 /// The icon textures of `UI/IconText` (pack file `data/icon_text.json`): the category icons and
 /// the pad-button set of the PC build.
 #[derive(Debug, Default)]
@@ -30,6 +33,27 @@ pub struct IconSet {
     pub textures: Vec<Arc<crate::def::Texture>>,
     /// Lower-case name -> (texture, x, y, w, h) in texture pixels.
     pub icons: HashMap<String, (usize, f32, f32, f32, f32)>,
+    /// (BUTTON-ICONS) each controller set's button rows (lower-case name -> rectangle): `IconText/xboxone`, `IconText/ps4`.
+    pub pad_sets: HashMap<crate::glyphs::Family, HashMap<String, IconRect>>,
+    /// (BUTTON-ICONS) KH3 PC's keyboard and mouse rows (`data/icon_text_km.json`, lower-case row -> rectangle) and each
+    /// row's key (lower-case UE key name -> lower-case row), as FUN_14157ee80 finds a key's row by its BindKey.
+    pub km: HashMap<String, IconRect>,
+    pub km_bind: HashMap<String, String>,
+}
+
+/// (BUTTON-ICONS) One glyph of an icon: its texture and source rectangle, and the size it is drawn at natively.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Glyph {
+    pub tex: usize,
+    pub src: (f32, f32, f32, f32),
+    pub w: f32,
+    pub h: f32,
+}
+
+impl Glyph {
+    fn of(i: (usize, f32, f32, f32, f32)) -> Glyph {
+        Glyph { tex: i.0, src: (i.1, i.2, i.3, i.4), w: i.3, h: i.4 }
+    }
 }
 
 /// (IMPL_ER23B) WHICH PAD SET the button icons of text come from: the folder of `/Game/UI/IconText/%s/IconText_pf`.
@@ -72,7 +96,100 @@ impl IconSet {
             let Some(tex) = icon["tex"].as_str().and_then(|t| index.get(t)) else { continue };
             set.icons.insert(name.to_lowercase(), (*tex, n("x"), n("y"), n("w"), n("h")));
         }
+        // (BUTTON-ICONS) every controller set's button rows (the rows on the "pad" picture, rebased on that set's picture; a
+        // table of its own wins), whatever set the base map above was loaded with
+        for (family, folder) in [(crate::glyphs::Family::Xbox, "xboxone"), (crate::glyphs::Family::PlayStation, "ps4")] {
+            let Some(tex) = j["pad_sets"][folder].as_str().and_then(|k| index.get(k)).copied() else { continue };
+            let rows = set.pad_sets.entry(family).or_default();
+            for (name, icon) in j["icons"].as_object().into_iter().flatten().filter(|(_, i)| i["tex"].as_str() == Some("pad")) {
+                let n = |k: &str| icon[k].as_f64().unwrap_or(0.0) as f32;
+                rows.insert(name.to_lowercase(), (tex, n("x"), n("y"), n("w"), n("h")));
+            }
+            for (name, icon) in j["icons_of_set"][folder].as_object().into_iter().flatten() {
+                let n = |k: &str| icon[k].as_f64().unwrap_or(0.0) as f32;
+                rows.insert(name.to_lowercase(), (tex, n("x"), n("y"), n("w"), n("h")));
+            }
+        }
+        // (BUTTON-ICONS) KH3 PC's keyboard and mouse glyphs, when the pack holds them (tools/button_icons_pack.js)
+        if let Ok(km) = pack.data("icon_text_km") {
+            let lang = crate::glyphs::km_language();
+            let file = km["textures"][lang.as_str()].as_str().or_else(|| km["textures"]["en"].as_str()).map(str::to_string);
+            if let Some(texture) = file.and_then(|f| pack.texture(&f).ok()) {
+                let tex = set.textures.len();
+                set.textures.push(texture);
+                for (name, icon) in km["icons"].as_object().into_iter().flatten() {
+                    let n = |k: &str| icon[k].as_f64().unwrap_or(0.0) as f32;
+                    set.km.insert(name.to_lowercase(), (tex, n("x"), n("y"), n("w"), n("h")));
+                    if let Some(bind) = icon["bind"].as_str() {
+                        set.km_bind.entry(bind.to_lowercase()).or_insert_with(|| name.to_lowercase());
+                    }
+                }
+            }
+        }
         Some(set)
+    }
+
+    /// (BUTTON-ICONS) A row of a part of a resolved icon: its glyph (None: the set has no such row).
+    fn part_glyph(&self, part: &crate::glyphs::Part) -> Option<Glyph> {
+        use crate::glyphs::Part;
+        let sized = |g: Glyph, size_of: Option<(usize, f32, f32, f32, f32)>| match size_of {
+            Some(s) if g.src.3 > 0.0 => Glyph { h: s.4, w: s.4 * g.src.2 / g.src.3, ..g },
+            _ => g,
+        };
+        match part {
+            Part::Pad { family, row, size_of } => {
+                let rows = self.pad_sets.get(family);
+                let get = |n: &str| rows.and_then(|r| r.get(&n.to_lowercase())).or_else(|| self.icons.get(&n.to_lowercase())).copied();
+                Some(sized(Glyph::of(get(row)?), size_of.as_deref().and_then(get)))
+            }
+            Part::Km { row, size_of } => {
+                let size = size_of.as_deref().and_then(|n| self.pad_sets.get(&crate::glyphs::Family::Xbox).and_then(|r| r.get(&n.to_lowercase())).or_else(|| self.icons.get(&n.to_lowercase())).copied());
+                Some(sized(Glyph::of(*self.km.get(&row.to_lowercase())?), size))
+            }
+            Part::KmBind { key, big, size_of } => {
+                let row = self.km_bind.get(&key.to_lowercase()).cloned().unwrap_or_else(|| "blank".to_string());
+                let large = big.then(|| self.km.get(&format!("{row}_2"))).flatten();
+                let size = size_of.as_deref().and_then(|n| self.pad_sets.get(&crate::glyphs::Family::Xbox).and_then(|r| r.get(&n.to_lowercase())).or_else(|| self.icons.get(&n.to_lowercase())).copied());
+                match large {
+                    Some(l) => Some(Glyph::of(*l)),
+                    None => Some(sized(Glyph::of(*self.km.get(&row)?), size)),
+                }
+            }
+            Part::Plain(name) => self.icons.get(&name.to_lowercase()).or_else(|| self.km.get(&name.to_lowercase())).copied().map(Glyph::of),
+        }
+    }
+
+    /// (BUTTON-ICONS) THE GLYPHS AN ICON NAME DRAWS under a given state: the role's input in the state's set ([`crate::glyphs`]);
+    /// a part the pack has no row for gives the name's own row of the base set (the drawing from before), or nothing.
+    pub fn glyphs_with(&self, state: Option<&crate::glyphs::GlyphState>, name: &str) -> Vec<Glyph> {
+        if let Some(got) = state.and_then(|state| self.glyphs_strict(state, name)) {
+            return got;
+        }
+        self.icons.get(&name.to_lowercase()).or_else(|| self.km.get(&name.to_lowercase())).copied().map(Glyph::of).into_iter().collect()
+    }
+
+    /// (BUTTON-ICONS) The glyphs an icon name draws under a state when the pack has a row for every part (None: some part
+    /// has none; the tests hold every icon of the UI to this in every set).
+    pub fn glyphs_strict(&self, state: &crate::glyphs::GlyphState, name: &str) -> Option<Vec<Glyph>> {
+        let parts = crate::glyphs::resolve(state, name);
+        parts.iter().map(|p| self.part_glyph(p)).collect::<Option<Vec<Glyph>>>().filter(|g| !g.is_empty())
+    }
+
+    /// The glyphs of an icon name under the published state ([`crate::glyphs::state`]).
+    pub fn glyphs(&self, name: &str) -> Vec<Glyph> {
+        self.glyphs_with(crate::glyphs::state().as_deref(), name)
+    }
+
+    /// Width over height of an icon's glyphs side by side (None: no glyph).
+    pub fn aspect(&self, name: &str) -> Option<f32> {
+        let g = self.glyphs(name);
+        (!g.is_empty()).then(|| g.iter().map(|g| g.w / g.h.max(1.0)).sum())
+    }
+
+    /// The native size of an icon's glyphs side by side: (total width, tallest height).
+    pub fn native(&self, name: &str) -> Option<(f32, f32)> {
+        let g = self.glyphs(name);
+        (!g.is_empty()).then(|| (g.iter().map(|g| g.w).sum(), g.iter().map(|g| g.h).fold(0.0, f32::max)))
     }
 }
 
@@ -141,7 +258,7 @@ pub fn markup_width(fonts: &Fonts, font: &Font, line: &str, size: f32) -> f32 {
             Run::Text(t, _) => font.text_width(t, size),
             Run::Icon(name) => {
                 let h = icon_height(size);
-                fonts.icons.as_ref().and_then(|set| set.icons.get(&name.to_lowercase())).map_or(h, |i| h * i.3 / i.4.max(1.0))
+                fonts.icons.as_ref().and_then(|set| set.aspect(name)).map_or(h, |a| h * a) // (BUTTON-ICONS) the resolved glyphs
             }
         })
         .sum()
@@ -180,11 +297,101 @@ pub fn wrap_text(fonts: &Fonts, font: &Font, text: &str, size: f32, width: f32) 
     out
 }
 
+/// (THE USER 2026-11-03: "the textbox for item descriptions in our KH camp menu needs to accommodate text so that it is
+/// never cut off") THE SMALLEST SIZE a description is shrunk to: a readable 18 px of the 1920 x 1080 stage (KH3's own
+/// menus go down to 20 px for the cuisine texts and 15 px for small labels), and never below three quarters of the field's
+/// own size. A field authored smaller than this is never shrunk.
+pub const FIT_MIN_PX: f32 = 18.0;
+pub const FIT_MIN_SCALE: f32 = 0.75;
+/// The shrink steps: one pixel of font size at a time.
+pub const FIT_STEP_PX: f32 = 1.0;
+/// (THE USER 2026-11-03: "right stick scroll") The room a scrolling text leaves at the field's right edge for its
+/// more-above / more-below marks (`Movie::scroll_fits`): its lines wrap this much narrower.
+pub const FIT_MARK_W: f32 = 28.0;
+
+/// What [`fit_box`] made of a text for a field: the font size (and line leading) it is drawn at, the text as the field
+/// wraps it at that size, line by line, and how many of those lines the field's height shows at once.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BoxFit {
+    pub size: f32,
+    pub leading: f32,
+    pub lines: Vec<String>,
+    pub rows: usize,
+}
+
+impl BoxFit {
+    /// Every line is in the field at once (no scrolling).
+    pub fn whole(&self) -> bool {
+        self.lines.len() <= self.rows
+    }
+
+    /// The lines past the field's height: how far the text scrolls.
+    pub fn scroll_max(&self) -> usize {
+        self.lines.len().saturating_sub(self.rows)
+    }
+
+    /// The `rows` lines from line `top` on, as one text for the field.
+    pub fn window(&self, top: usize) -> String {
+        let top = top.min(self.scroll_max());
+        self.lines[top..top.saturating_add(self.rows).min(self.lines.len())].join("\n")
+    }
+}
+
+/// How many lines of `size` (with `leading`) a field's height holds: the first baseline at top + 2 + ascent, then one
+/// line height each, the last line's descent inside the bottom (Flash's text field gutter and line rule, as drawn).
+fn rows_at(font: &Font, def: &TextDef, size: f32, leading: f32) -> usize {
+    let sc = size / font.units_per_em;
+    let line_h = (font.ascent + font.descent + font.leading) * sc + leading;
+    let room = def.bounds.y1 - def.bounds.y0 - 2.0 - (font.ascent + font.descent) * sc;
+    if room < 0.0 || line_h <= 0.0 {
+        1
+    } else {
+        (room / line_h).floor() as usize + 1
+    }
+}
+
+/// (THE USER 2026-11-03: "...never cut off") THE SHARED FIT RULE OF EVERY DESCRIPTION / HELP FIELD. KH3 has none for a
+/// help text that is too long: its `TextFieldAlign.updateText` (MainLibrary and the other movies) only puts an overflowing
+/// text (`maxScrollV > 1`) at the field's top and the field clips the rest, and its `TextFieldAdjust.updateText` squeezes
+/// a ONE-line label to at least 0.8 of its width (`controls::text_adjust_set`); KH3's own texts were written to fit. Elden
+/// Ring's captions and the port's composed texts are longer, so: the text is wrapped at the field's width (as the field
+/// wraps it, [`wrap_text`]); when its lines are more than the field's height holds, the font shrinks [`FIT_STEP_PX`] at a
+/// time (the leading with it) down to the readable minimum ([`FIT_MIN_PX`], [`FIT_MIN_SCALE`]); a text still longer at
+/// the minimum keeps that size and scrolls (THE USER 2026-11-03: "right stick scroll": `Movie::scroll_fits`), its lines
+/// wrapped [`FIT_MARK_W`] narrower for the scroll marks. A field without word wrap, an empty text or no font: the field's
+/// own size, the text's own lines.
+pub fn fit_box(fonts: &Fonts, def: &TextDef, text: &str) -> BoxFit {
+    let plain = || BoxFit { size: def.size, leading: def.leading, lines: text.split('\n').map(str::to_string).collect(), rows: usize::MAX };
+    let Some(font) = fonts.get(def.font_class.as_deref()) else { return plain() };
+    if !def.word_wrap || font.units_per_em <= 0.0 || def.size <= 0.0 || text.is_empty() {
+        return plain();
+    }
+    let box_w = def.bounds.x1 - def.bounds.x0 - 4.0;
+    let floor = def.size.min(FIT_MIN_PX.max(def.size * FIT_MIN_SCALE));
+    let mut size = def.size;
+    loop {
+        let leading = def.leading * size / def.size;
+        let lines: Vec<String> = wrap_text(fonts, font, text, size, box_w).split('\n').map(str::to_string).collect();
+        let rows = rows_at(font, def, size, leading);
+        if lines.len() <= rows {
+            return BoxFit { size, leading, lines, rows };
+        }
+        if size <= floor {
+            // scrolls: room for the marks at the right edge
+            let lines = wrap_text(fonts, font, text, size, box_w - FIT_MARK_W).split('\n').map(str::to_string).collect();
+            return BoxFit { size, leading, lines, rows };
+        }
+        size = (size - FIT_STEP_PX).max(floor);
+    }
+}
+
 /// (IMPL_ER42) A Flash text field shows nothing outside its bounds (and the HUD's dirty rectangles cover only the
 /// field's bounds: text drawn below them stays on screen when a shorter text follows, seen in the harness). A text for a
 /// word-wrapped field is wrapped as the field wraps it ([`wrap_text`], box = field width - 4) and cut to the lines that fit the
 /// field's height (first baseline at top + 2 + ascent, then one line height each); when lines were cut, the last kept
 /// line ends in "...". A text that fits, a field without word wrap, or no font: unchanged.
+/// (THE USER 2026-11-03: "...never cut off") NOT FOR DESCRIPTIONS any more: their panes use [`fit_box`] through
+/// `Movie::set_text_fit` (shrink, then scroll), which never cuts a text.
 pub fn fit_text(fonts: &Fonts, def: &TextDef, text: &str) -> String {
     let Some(font) = fonts.get(def.font_class.as_deref()) else { return text.to_string() };
     if !def.word_wrap || font.units_per_em <= 0.0 || def.size <= 0.0 {
@@ -257,6 +464,14 @@ pub struct Stats {
     pub ns_fill: u64,
 }
 
+/// Where a display object draws: its full matrix, its colour transform and the mask clipping it.
+#[derive(Clone, Copy)]
+struct DrawAt<'a> {
+    m: &'a Matrix,
+    cx: &'a Cx,
+    clip: Option<&'a Mask>,
+}
+
 pub struct Renderer {
     pub fonts: Fonts,
     pub stats: Stats,
@@ -267,6 +482,10 @@ pub struct Renderer {
     slice: Option<Rect>,
     /// (HB) A SPRITE used as a mask is being drawn: everything under it gives coverage only (see `set_solid_masks`).
     in_mask: bool,
+    /// (F-HUD) LAYER groups (blend 2) being drawn on their own surfaces: their ERASE / ALPHA children cut them.
+    layer_depth: u32,
+    /// (INTERACT-MARK) Device pixels per stage pixel of the movie being drawn (`draw`'s root): a filter's pixels scale with it.
+    root_scale: f32,
 }
 
 /// (HB) MASKS ARE COVERAGE ONLY: a mask (clip depth) shows what is under its SHAPES, whatever their colour, alpha or
@@ -277,6 +496,14 @@ pub struct Renderer {
 /// lag gauge / the dark track (dull dark green and brown-orange), while the friends' rings (mask fill alpha 255) were
 /// vivid. On by default; off = as before (Elden Ring: `hud.solid_masks = 0`; the test app: KH_UI_SOLID_MASKS=0).
 static SOLID_MASKS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// (F-HUD) Flash's LAYER / ERASE / ALPHA blend modes (see `draw_node`). On by default; off = as before the fix (they drew
+/// as plain objects), for before / after pictures (kh-host test `layerfix_compare`) and as a host switch.
+static LAYER_BLENDS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub fn set_layer_blends(on: bool) {
+    LAYER_BLENDS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
 
 pub fn set_solid_masks(on: bool) {
     SOLID_MASKS.store(on, std::sync::atomic::Ordering::Relaxed);
@@ -328,9 +555,10 @@ pub fn scale9_axis(b0: f32, b1: f32, g0: f32, g1: f32, k: f32, t: f32, p: f32) -
 }
 
 /// A text of the form `<icon(Name)>` (pad button icons; the game substitutes textures of
-/// `UI/IconText`, which the pack does not hold).
+/// `UI/IconText`, which the pack does not hold). (GOOFY 2026-11-02) ONE icon only: a line that starts with an icon and ends
+/// with another ("<icon(LstickUp)> at the shooter + tap <icon(Square)>") is text, not an icon named "LstickUp)> at ...".
 pub fn icon_name(text: &str) -> Option<&str> {
-    text.trim().strip_prefix("<icon(")?.strip_suffix(")>")
+    text.trim().strip_prefix("<icon(")?.strip_suffix(")>").filter(|name| !name.contains(['<', '>', '(', ')']))
 }
 
 fn order(s: &Sprite) -> Vec<&Node> {
@@ -344,7 +572,7 @@ fn order(s: &Sprite) -> Vec<&Node> {
 
 impl Renderer {
     pub fn new(fonts: Fonts) -> Renderer {
-        Renderer { fonts, stats: Stats::default(), cov: Coverage::default(), xs: Vec::new(), edges: Vec::new(), slice: None, in_mask: false }
+        Renderer { fonts, stats: Stats::default(), cov: Coverage::default(), xs: Vec::new(), edges: Vec::new(), slice: None, in_mask: false, layer_depth: 0, root_scale: 1.0 }
     }
 
     /// Where drawing may land: the canvas, the mask's box, and the scale-9 slice being drawn.
@@ -393,9 +621,64 @@ impl Renderer {
         true
     }
 
+    /// (ASH-ROWS) A SPRITE DRAWN WIDER ([`crate::player::Stretch`]): in three slices as a horizontal scaling grid
+    /// ([`scale9_axis`] with the caps at the sprite's own scale): left of `from` as it is, the middle stretched over
+    /// `by` more units, the right moved by `by`, the joints on whole device pixels, each slice held to its device columns.
+    /// A turned or mirrored placement (none of the stretched plates has one): drawn as authored.
+    fn draw_stretched(&mut self, canvas: &mut Canvas, s: &Sprite, m: &Matrix, cx: &Cx, clip: Option<&Mask>) {
+        let Some(st) = s.stretch.filter(|st| st.by > 0.0 && st.to > st.from) else { return self.draw_sprite(canvas, s, m, cx, clip) };
+        if !m.is_axis_aligned() || m.a <= 0.0 {
+            return self.draw_sprite(canvas, s, m, cx, clip);
+        }
+        let (s0, s1) = ((m.a * st.from + m.tx).round(), (m.a * (st.to + st.by) + m.tx).round());
+        let km = (s1 - s0) / (st.to - st.from);
+        let pieces = [
+            (*m, f32::NEG_INFINITY, s0),
+            (Matrix { a: km, tx: s0 - km * st.from, ..*m }, s0, s1),
+            (Matrix { tx: s1 - m.a * st.to, ..*m }, s1, f32::INFINITY),
+        ];
+        let outer = self.slice;
+        for (piece, x0, x1) in pieces {
+            let cols = Rect::new(x0, f32::NEG_INFINITY, x1, f32::INFINITY);
+            self.slice = Some(outer.map_or(cols, |o| o.intersect(&cols)));
+            self.draw_sprite(canvas, s, &piece, cx, clip);
+        }
+        self.slice = outer;
+    }
+
     /// Draws the whole movie; `root` maps stage pixels to device pixels.
     pub fn draw(&mut self, canvas: &mut Canvas, movie: &Movie, root: &Matrix) {
+        self.root_scale = (root.a * root.d - root.b * root.c).abs().sqrt().max(1.0e-3); // (INTERACT-MARK)
         self.draw_sprite(canvas, &movie.root, root, &Cx::IDENTITY, None);
+    }
+
+    /// (INTERACT-MARK) A CHILD WITH FLASH'S BLUR FILTER (the pack's `filters/<movie>.json`, [`crate::def::BlurRun`]): drawn on
+    /// a surface of its own grown by the blur's reach, box-blurred `passes` times with boxes of `x` / `y` stage pixels
+    /// (Flash's BlurFilter: a box of that width per pass, horizontal then vertical), laid over like a layer.
+    fn draw_blurred(&mut self, canvas: &mut Canvas, o: &Node, m: &Matrix, cx: &Cx, clip: Option<&Mask>, blur: crate::def::BlurRun) {
+        let k = self.root_scale;
+        let (wx, wy) = ((blur.x * k).round().max(1.0) as usize, (blur.y * k).round().max(1.0) as usize);
+        let reach = |w: usize| (w * blur.passes as usize) as f32 * 0.5 + 1.0;
+        let (rx, ry) = (reach(wx), reach(wy));
+        let inner = self.node_bounds(o, m, false, cx);
+        if inner.is_empty() {
+            return;
+        }
+        let limit = self.limit_of(canvas, clip);
+        let grown = Rect::new(inner.x0 - rx, inner.y0 - ry, inner.x1 + rx, inner.y1 + ry);
+        // what lies beyond the canvas by up to the reach still blurs into it
+        let b = grown.intersect(&Rect::new(limit.x0 - rx, limit.y0 - ry, limit.x1 + rx, limit.y1 + ry));
+        if b.is_empty() {
+            return;
+        }
+        let (x0, y0) = (b.x0.floor() as i32, b.y0.floor() as i32);
+        let mut layer = Canvas::region(x0, y0, (b.x1.ceil() as i32 - x0) as usize, (b.y1.ceil() as i32 - y0) as usize);
+        self.draw_node(&mut layer, o, m, cx, None, false);
+        for _ in 0..blur.passes {
+            raster::box_blur(&mut layer, wx, wy);
+        }
+        raster::over_layer(canvas, &layer, clip);
+        self.stats.layers += 1;
     }
 
     /// Device-space bounding box of everything the movie would draw.
@@ -456,7 +739,14 @@ impl Renderer {
                 let b = &t.def.bounds;
                 Rect::new(b.x0 - 4.0, b.y0 - 4.0, b.x0 + width.max(b.x1 - b.x0) + 4.0, b.y1 + 8.0).transform(&tm)
             }
-            Kind::Sprite(s) => self.sprite_bounds(s, &mm, false, &cc),
+            Kind::Sprite(s) => {
+                let r = self.sprite_bounds(s, &mm, false, &cc);
+                // (ASH-ROWS) a stretched sprite reaches `by` units further right
+                match s.stretch.filter(|st| st.by > 0.0 && !r.is_empty()) {
+                    Some(st) => Rect { x1: r.x1 + (mm.a * st.by).abs() + 1.0, ..r },
+                    None => r,
+                }
+            }
             Kind::Missing => Rect::EMPTY,
         }
     }
@@ -531,7 +821,7 @@ impl Renderer {
                             self.draw_node(&mut mk, o, m, &Cx::IDENTITY, None, true);
                             self.in_mask = was;
                             mask.alpha.reserve(w * h);
-                            for (k, p) in mk.px.chunks_exact(4).enumerate() {
+                            for (k, p) in mk.px.as_chunks::<4>().0.iter().enumerate() {
                                 let outer = clip.map_or(1.0, |c| c.at(x0 + (k % w) as i32, y0 + (k / w) as i32));
                                 mask.alpha.push(p[3].min(1.0) * outer);
                             }
@@ -548,7 +838,11 @@ impl Renderer {
                 i = j;
                 continue;
             }
-            self.draw_node(canvas, o, m, cx, clip, false);
+            // (INTERACT-MARK) a child with a blur filter in this frame (none unless the movie's pack has its filters file)
+            match s.def.blur_at(s.frame, o.depth).copied().filter(|_| !self.in_mask) {
+                Some(blur) => self.draw_blurred(canvas, o, m, cx, clip, blur),
+                None => self.draw_node(canvas, o, m, cx, clip, false),
+            }
             i += 1;
         }
         for o in &s.extra {
@@ -568,6 +862,31 @@ impl Renderer {
             return;
         }
         let blend = if as_mask { 0 } else { o.blend };
+        // (F-HUD fix, the round's "black box behind the Agile Claws / Twin Yo-Yos logo") Flash's LAYER (2) groups and their
+        // ERASE (12) / ALPHA (11) children: the form logos' light sweeps (`maskMask` LAYER > `Musk_*`: the sweep under a
+        // clip, then the plate shape ERASING it) drew their eraser as a black plate. A LAYER is drawn on its own surface
+        // and laid over; ERASE / ALPHA cut that surface; outside a LAYER they act on the stage, which the port's
+        // transparent HUD canvas cannot show: nothing is drawn.
+        if (blend == 2 || matches!(blend, 11 | 12)) && LAYER_BLENDS.load(std::sync::atomic::Ordering::Relaxed) {
+            let limit = self.limit_of(canvas, clip);
+            let b = self.node_bounds(o, m, false, cx).intersect(&limit);
+            if b.is_empty() || (blend != 2 && self.layer_depth == 0) {
+                return;
+            }
+            let (x0, y0) = (b.x0.floor() as i32, b.y0.floor() as i32);
+            let mut layer = Canvas::region(x0, y0, (b.x1.ceil() as i32 - x0) as usize, (b.y1.ceil() as i32 - y0) as usize);
+            if blend == 2 {
+                self.layer_depth += 1;
+                self.draw_kind(&mut layer, o, DrawAt { m: &mm, cx: &cc, clip: None }, m, false);
+                self.layer_depth -= 1;
+                raster::over_layer(canvas, &layer, clip);
+            } else {
+                self.draw_kind(&mut layer, o, DrawAt { m: &mm, cx: &cc, clip: None }, m, false);
+                raster::erase_layer(canvas, &layer, blend == 11);
+            }
+            self.stats.layers += 1;
+            return;
+        }
         if matches!(blend, 8 | 4 | 3) {
             let limit = self.limit_of(canvas, clip);
             let b = self.node_bounds(o, m, false, cx).intersect(&limit);
@@ -577,7 +896,7 @@ impl Renderer {
             let (x0, y0) = (b.x0.floor() as i32, b.y0.floor() as i32);
             let t0 = std::time::Instant::now();
             let mut layer = Canvas::region(x0, y0, (b.x1.ceil() as i32 - x0) as usize, (b.y1.ceil() as i32 - y0) as usize);
-            self.draw_kind(&mut layer, o, &mm, m, &cc, None, false);
+            self.draw_kind(&mut layer, o, DrawAt { m: &mm, cx: &cc, clip: None }, m, false);
             raster::blend_layer(canvas, &layer, blend, clip);
             self.stats.ns_layer += t0.elapsed().as_nanos() as u64;
             self.stats.layers += 1;
@@ -590,12 +909,13 @@ impl Renderer {
                 }
             }
         }
-        self.draw_kind(canvas, o, &mm, m, &cc, clip, as_mask);
+        self.draw_kind(canvas, o, DrawAt { m: &mm, cx: &cc, clip }, m, as_mask);
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn draw_kind(&mut self, canvas: &mut Canvas, o: &Node, mm: &Matrix, parent: &Matrix, cx: &Cx, clip: Option<&Mask>, as_mask: bool) {
+    fn draw_kind(&mut self, canvas: &mut Canvas, o: &Node, at: DrawAt<'_>, parent: &Matrix, as_mask: bool) {
+        let DrawAt { m: mm, cx, clip } = at;
         match &o.kind {
+            Kind::Sprite(s) if s.stretch.is_some() => self.draw_stretched(canvas, s, mm, cx, clip), // (ASH-ROWS)
             Kind::Sprite(s) => self.draw_sprite(canvas, s, mm, cx, clip),
             Kind::Shape(s) => self.draw_shape(canvas, s, mm, cx, clip, as_mask),
             Kind::Morph(a, b) => {
@@ -784,8 +1104,8 @@ impl Renderer {
                 .iter()
                 .map(|run| match run {
                     Run::Text(t, _) => t.chars().filter_map(|c| font.glyph(c as u32)).map(|g| g.advance * sc).sum(),
-                    Run::Icon(name) if t.icon_native => self.fonts.icons.as_ref().and_then(|set| set.icons.get(&name.to_lowercase())).map_or(ICON_TEXT_NATIVE, |i| i.3), // (BN)
-                    Run::Icon(name) => self.fonts.icons.as_ref().and_then(|set| set.icons.get(&name.to_lowercase())).map_or(icon_h, |i| icon_h * i.3 / i.4.max(1.0)),
+                    Run::Icon(name) if t.icon_native => self.fonts.icons.as_ref().and_then(|set| set.native(name)).map_or(ICON_TEXT_NATIVE, |i| i.0), // (BN) (BUTTON-ICONS) the resolved glyphs
+                    Run::Icon(name) => self.fonts.icons.as_ref().and_then(|set| set.aspect(name)).map_or(icon_h, |a| icon_h * a),
                 })
                 .collect();
             let wd: f32 = widths.iter().sum();
@@ -799,14 +1119,14 @@ impl Renderer {
                 match run {
                     Run::Icon(name) if t.icon_native => {
                         // (BN) the table's size, its cell reaching -VSpace under the baseline
-                        let h = self.fonts.icons.as_ref().and_then(|set| set.icons.get(&name.to_lowercase())).map_or(ICON_TEXT_NATIVE, |i| i.4);
+                        let h = self.fonts.icons.as_ref().and_then(|set| set.native(name)).map_or(ICON_TEXT_NATIVE, |i| i.1);
                         let top = line_y - h - ICON_TEXT_VSPACE;
-                        self.draw_icon_at(canvas, name, def, (x0, top, *width, h), &m, cx, clip);
+                        self.draw_icon_at(canvas, name, def, (x0, top, *width, h), DrawAt { m: &m, cx, clip });
                     }
                     Run::Icon(name) => {
                         // Centred on the line's x-height band.
                         let top = line_y - font.ascent * sc * 0.42 - icon_h / 2.0;
-                        self.draw_icon_at(canvas, name, def, (x0, top, *width, icon_h), &m, cx, clip);
+                        self.draw_icon_at(canvas, name, def, (x0, top, *width, icon_h), DrawAt { m: &m, cx, clip });
                     }
                     Run::Text(t, strong) => {
                         self.edges.clear();
@@ -856,12 +1176,12 @@ impl Renderer {
     /// `UI/IconText` for the platform; the pack does not hold those, so a disc in the Xbox
     /// button's colour with its letter stands in, centred in the field.
     fn draw_icon(&mut self, canvas: &mut Canvas, icon: &str, def: &TextDef, m: &Matrix, cx: &Cx, clip: Option<&Mask>) {
-        if let Some(i) = self.fonts.icons.as_ref().and_then(|set| set.icons.get(&icon.to_lowercase())).copied() {
-            // The whole field is one icon: centred in the field.
+        if let Some(a) = self.fonts.icons.as_ref().and_then(|set| set.aspect(icon)) {
+            // The whole field is one icon: centred in the field. (BUTTON-ICONS) its resolved glyphs side by side
             let b = def.bounds.rect();
             let h = icon_height(def.size);
-            let w = h * i.3 / i.4.max(1.0);
-            self.draw_icon_at(canvas, icon, def, ((b.x0 + b.x1 - w) / 2.0, (b.y0 + b.y1 - h) / 2.0, w, h), m, cx, clip);
+            let w = h * a;
+            self.draw_icon_at(canvas, icon, def, ((b.x0 + b.x1 - w) / 2.0, (b.y0 + b.y1 - h) / 2.0, w, h), DrawAt { m, cx, clip });
             return;
         }
         self.draw_icon_disc(canvas, icon, def, m, cx, clip);
@@ -869,18 +1189,27 @@ impl Renderer {
 
     /// An icon of `UI/IconText` in the rectangle (x, y, w, h) of the field's space; the
     /// placeholder disc for a name the pack does not hold.
-    #[allow(clippy::too_many_arguments)]
-    fn draw_icon_at(&mut self, canvas: &mut Canvas, icon: &str, def: &TextDef, at: (f32, f32, f32, f32), m: &Matrix, cx: &Cx, clip: Option<&Mask>) {
-        let Some((set, i)) = self.fonts.icons.clone().and_then(|set| set.icons.get(&icon.to_lowercase()).copied().map(|i| (set, i))) else {
+    fn draw_icon_at(&mut self, canvas: &mut Canvas, icon: &str, def: &TextDef, at: (f32, f32, f32, f32), draw: DrawAt<'_>) {
+        let DrawAt { m, cx, clip } = draw;
+        // (BUTTON-ICONS) the glyphs the icon resolves to (the role's input in the chosen set), side by side in the rectangle
+        let Some((set, glyphs)) = self.fonts.icons.clone().map(|set| { let g = set.glyphs(icon); (set, g) }).filter(|(_, g)| !g.is_empty()) else {
             // Shift the placeholder to the rectangle's centre.
             let b = def.bounds.rect();
             let shift = Matrix::translate(at.0 + at.2 / 2.0 - (b.x0 + b.x1) / 2.0, at.1 + at.3 / 2.0 - (b.y0 + b.y1) / 2.0);
             self.draw_icon_disc(canvas, icon, def, &m.mul(&shift), cx, clip);
             return;
         };
-        let k = at.3 / i.4.max(1.0);
-        let fill = crate::def::BitmapFill { texture: set.textures[i.0].clone(), matrix: Matrix::new(k, 0.0, 0.0, k, at.0 - k * i.1, at.1 - k * i.2), scale: (1.0, 1.0), repeat: false, smooth: true };
-        self.draw_gfx(canvas, &GfxRect { x: at.0, y: at.1, w: at.2, h: at.3, fill }, m, cx, clip);
+        let total: f32 = glyphs.iter().map(|g| g.w / g.h.max(1.0)).sum();
+        let mut x = at.0;
+        for g in &glyphs {
+            // each glyph's share of the rectangle's width, its source rectangle filling it
+            let w = at.2 * (g.w / g.h.max(1.0)) / total.max(1e-6);
+            let (kx, ky) = (w / g.src.2.max(1.0), at.3 / g.src.3.max(1.0));
+            let Some(texture) = set.textures.get(g.tex).cloned() else { continue };
+            let fill = crate::def::BitmapFill { texture, matrix: Matrix::new(kx, 0.0, 0.0, ky, x - kx * g.src.0, at.1 - ky * g.src.1), scale: (1.0, 1.0), repeat: false, smooth: true };
+            self.draw_gfx(canvas, &GfxRect { x, y: at.1, w, h: at.3, fill }, m, cx, clip);
+            x += w;
+        }
     }
 
     fn draw_icon_disc(&mut self, canvas: &mut Canvas, icon: &str, def: &TextDef, m: &Matrix, cx: &Cx, clip: Option<&Mask>) {
@@ -1011,12 +1340,21 @@ fn morph(a: &Shape, b: &Shape, t: f32) -> Shape {
     out
 }
 
+/// (FORGE-PREVIEW, the user: "upgrade menu needs to be fixed so it shows the keyblade that is selected instead of the
+/// Kingdom Key") A script-drawn bitmap rectangle's hash: its place AND ITS PICTURE. An `Icon` loaded with another picture
+/// of the same size (every Keyblade's 256 x 256 icon in the Forge's 512 x 512 `CoImgKeyb`) keeps its rectangle and
+/// matrix; without the picture in the hash the host's dirty rectangles never redrew it and the first one stayed.
+fn hash_gfx(g: &GfxRect, h: &mut std::collections::hash_map::DefaultHasher) {
+    (g.x.to_bits(), g.y.to_bits(), g.w.to_bits(), g.h.to_bits(), g.fill.matrix.bits()).hash(h);
+    (Arc::as_ptr(&g.fill.texture) as usize, &g.fill.texture.file, g.fill.texture.width, g.fill.texture.height).hash(h);
+}
+
 /// A hash of everything that decides the picture: equal hashes = nothing to redraw.
 pub fn state_hash(movie: &Movie) -> u64 {
     fn walk(s: &Sprite, h: &mut std::collections::hash_map::DefaultHasher) {
         s.def.id.hash(h);
         for g in &s.gfx {
-            (g.x.to_bits(), g.y.to_bits(), g.w.to_bits(), g.h.to_bits(), g.fill.matrix.bits()).hash(h);
+            hash_gfx(g, h); // (FORGE-PREVIEW)
         }
         for o in s.children.iter().chain(&s.extra) {
             if o.clip == 0 && (!o.is_visible() || o.cx.is_invisible()) {
@@ -1032,6 +1370,7 @@ pub fn state_hash(movie: &Movie) -> u64 {
                 Kind::Text(t) => {
                     t.shown().hash(h);
                     t.adjust.map(|(a, b, c)| (a.to_bits(), b.to_bits(), c.to_bits())).hash(h);
+                    t.def.size.to_bits().hash(h); // (fit) a shrunk description is another picture
                 }
                 _ => {}
             }
@@ -1039,6 +1378,7 @@ pub fn state_hash(movie: &Movie) -> u64 {
         0xFFu8.hash(h);
     }
     let mut h = std::collections::hash_map::DefaultHasher::new();
+    crate::glyphs::generation().hash(&mut h); // (BUTTON-ICONS) another button-icon state is another picture
     walk(&movie.root, &mut h);
     h.finish()
 }
@@ -1054,8 +1394,9 @@ fn hash_node(o: &Node, h: &mut std::collections::hash_map::DefaultHasher) {
     match &o.kind {
         Kind::Sprite(s) => {
             s.def.id.hash(h);
+            s.stretch.map(|st| (st.from.to_bits(), st.to.to_bits(), st.by.to_bits())).hash(h); // (ASH-ROWS)
             for g in &s.gfx {
-                (g.x.to_bits(), g.y.to_bits(), g.w.to_bits(), g.h.to_bits(), g.fill.matrix.bits()).hash(h);
+                hash_gfx(g, h); // (FORGE-PREVIEW)
             }
             for c in s.children.iter().chain(&s.extra) {
                 hash_node(c, h);
@@ -1063,8 +1404,10 @@ fn hash_node(o: &Node, h: &mut std::collections::hash_map::DefaultHasher) {
             0xFFu8.hash(h);
         }
         Kind::Text(t) => {
+            crate::glyphs::generation().hash(h); // (BUTTON-ICONS) its icons may draw other glyphs now
             t.shown().hash(h);
             t.adjust.map(|(a, b, c)| (a.to_bits(), b.to_bits(), c.to_bits())).hash(h);
+            t.def.size.to_bits().hash(h); // (fit) a shrunk description is another picture
         }
         _ => {}
     }
@@ -1084,13 +1427,14 @@ impl Renderer {
         let start = |tag: u32, index: usize| {
             let mut h = DefaultHasher::new();
             (path, tag, index, m.bits()).hash(&mut h);
+            crate::glyphs::generation().hash(&mut h); // (BUTTON-ICONS) a button-icon change redraws every piece
             cx.mul.map(f32::to_bits).hash(&mut h);
             cx.add.map(f32::to_bits).hash(&mut h);
             h
         };
         for (index, g) in s.gfx.iter().enumerate() {
             let mut h = start(1, index);
-            (g.x.to_bits(), g.y.to_bits(), g.w.to_bits(), g.h.to_bits(), g.fill.matrix.bits()).hash(&mut h);
+            hash_gfx(g, &mut h); // (FORGE-PREVIEW)
             out.push((h.finish(), Rect::new(g.x, g.y, g.x + g.w, g.y + g.h).transform(m)));
         }
         for (index, o) in s.children.iter().chain(&s.extra).enumerate() {
@@ -1106,7 +1450,8 @@ impl Renderer {
                 continue;
             }
             match &o.kind {
-                Kind::Sprite(c) if o.blend <= 1 => {
+                // (ASH-ROWS) a stretched sprite is one piece (its children's own rects do not say where it draws)
+                Kind::Sprite(c) if o.blend <= 1 && c.stretch.is_none() => {
                     let mut h = DefaultHasher::new();
                     (path, 3u32, index, o.depth, o.ch, o.z).hash(&mut h);
                     self.sprite_parts(c, &m.mul(&o.matrix), &cc, h.finish(), out);
@@ -1188,6 +1533,38 @@ eeee...");
         assert_eq!(fit_text(&fonts, &field(62.0, true), text), text);
         assert_eq!(fit_text(&fonts, &field(22.0, false), text), text, "no word wrap: unchanged");
         assert_eq!(fit_text(&fonts, &field(22.0, true), "short"), "short");
+    }
+
+    /// A field of the menus' kind: 24 px, 244 wide (a box of 240 px = 10 characters a line at 24 px, 13 at 18 px).
+    fn menu_field(height: f32) -> TextDef {
+        TextDef { size: 24.0, bounds: Rect0 { x0: 0.0, y0: 0.0, x1: 244.0, y1: height }, ..field(height, true) }
+    }
+
+    /// (THE USER 2026-11-03: "...never cut off") THE SHARED FIT RULE: a text that fits stays at the field's size; a
+    /// longer one shrinks a pixel at a time until its lines fit; one too long at the minimum keeps the minimum and
+    /// scrolls (its windows show every line); no word wrap and a field authored under the minimum are left alone.
+    #[test]
+    fn a_long_text_wraps_then_shrinks_then_scrolls() {
+        let fonts = fonts();
+        // wraps at the box: two lines of 24 px in a field of two (2 + 24 + 24)
+        let fit = fit_box(&fonts, &menu_field(50.0), "aaaa bbbb cccc dddd");
+        assert_eq!((fit.size, fit.lines.clone(), fit.rows), (24.0, vec!["aaaa bbbb".to_string(), "cccc dddd".to_string()], 2));
+        assert!(fit.whole() && fit.scroll_max() == 0);
+        // shrinks: three lines in 60 px fit from 19 px on (2 + 19 + 19 + 19 + 1 of the last line's room)
+        let fit = fit_box(&fonts, &menu_field(60.0), "aaaa bbbb cccc dddd eeee");
+        assert_eq!((fit.size, fit.lines.len(), fit.rows), (19.0, 3, 3));
+        assert!(fit.whole());
+        assert!((fit.leading - 0.0).abs() < 1e-6, "the leading scales with the size");
+        // scrolls: one line at a time in a field of one line, at the minimum 18 px (13 characters a line)
+        let fit = fit_box(&fonts, &menu_field(26.0), "aaaa bbbb cccc dddd eeee");
+        assert_eq!((fit.size, fit.rows), (FIT_MIN_PX, 1));
+        assert_eq!(fit.lines, ["aaaa bbbb", "cccc dddd", "eeee"]);
+        assert_eq!(fit.scroll_max(), 2);
+        assert_eq!((0..=fit.scroll_max()).map(|top| fit.window(top)).collect::<Vec<_>>(), fit.lines, "every line in a window");
+        assert_eq!(fit.window(99), "eeee", "a window past the end stays on the last lines");
+        // no word wrap, and a field authored under the minimum: the field's own size
+        assert_eq!(fit_box(&fonts, &TextDef { word_wrap: false, ..menu_field(26.0) }, "aaaa bbbb cccc dddd eeee").size, 24.0);
+        assert_eq!(fit_box(&fonts, &field(12.0, true), "aaaa bbbb cccc dddd eeee").size, 10.0);
     }
 }
 

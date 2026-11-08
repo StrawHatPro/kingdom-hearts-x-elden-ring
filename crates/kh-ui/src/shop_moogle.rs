@@ -15,10 +15,10 @@
 //!   states normal / select / disable / disableSelect), `listLines` (`empty` with its text), the tab bar
 //!   `ListTabShop` (LT / RT), the item status pane `ItemStatusA1`, the help line;
 //! - KH3's texts (`kh3_menu.shop.*`) and the menu sounds.
-//! COMPOSED [L]: the entry goes STRAIGHT to the BUY or the SELL list the merchant's talk asked for (the user: no hub;
-//! KH3's own top menu `menuTop` and its `chara` stay off); the tab bar holds BUY / SELL (KH3's holds the item
-//! categories); the Moogle himself is a live 3D render in KH3 (`CoImgChara` is fed by the game's capture, no picture of
-//! it is in the files): not shown: the merchant is Elden Ring's own character in the world.
+//!   COMPOSED [L]: the entry goes STRAIGHT to the BUY or the SELL list the merchant's talk asked for (the user: no hub;
+//!   KH3's own top menu `menuTop` and its `chara` stay off); the tab bar holds BUY / SELL (KH3's holds the item
+//!   categories); the Moogle himself is a live 3D render in KH3 (`CoImgChara` is fed by the game's capture, no picture of
+//!   it is in the files): not shown: the merchant is Elden Ring's own character in the world.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -168,12 +168,8 @@ impl MoogleShopView {
         if self.movie.exists(&spinner) {
             self.movie.set_visible(&spinner, false);
         }
-        let field = format!("{PANE}.txHelp.textField");
-        let help = match self.movie.node(&field).map(|n| &n.kind) {
-            Some(crate::player::Kind::Text(t)) => crate::render::fit_text(&self.fonts, &t.def, help),
-            _ => help.to_string(),
-        };
-        self.text(&field, &help);
+        // (THE USER 2026-11-03: "...never cut off") the whole text: shrunk, then scrolled (`Movie::set_text_fit`)
+        self.movie.set_text_fit(&format!("{PANE}.txHelp.textField"), help, &self.fonts);
         let shown = texture.as_ref().and(item).map(str::to_string);
         if self.pane_item.as_ref() != Some(&shown) {
             let image = format!("{PANE}.itemImage");
@@ -200,7 +196,7 @@ impl MoogleShopView {
         }
         let sell = menu.tab == ShopTab::Sell;
         if self.movie.exists(&format!("{FRAME}.munny.munnyNum.textField")) {
-            let munny = menu.data.munny.max(0).min(999_999).to_string();
+            let munny = menu.data.munny.clamp(0, 999_999).to_string();
             self.text(&format!("{FRAME}.munny.munnyNum.textField"), &munny);
             let word = self.string("kh3_menu.shop.munny_0010", "MUNNY");
             self.text(&format!("{FRAME}.munny.txMunny.coText.textField"), &word);
@@ -239,7 +235,7 @@ impl MoogleShopView {
             let fonts = self.fonts.clone();
             self.tabs.select(&mut self.movie, if sell { 1 } else { 0 }, &word, menu.tab_flash.take(), &fonts);
             let help = menu.notice.clone().unwrap_or_else(|| if sell { self.string("kh3_menu.shop.detail_0120", "") } else { self.string("kh3_menu.shop.detail_0110", "") });
-            self.text(HELP, &help);
+            self.movie.set_text_fit(HELP, &help, &self.fonts); // (THE USER 2026-11-03) never cut
             let rows: Vec<ShopRow> = menu.rows().to_vec();
             let lines = format!("{ITEM_LIST}.listLines");
             let want = if rows.is_empty() { "empty" } else { "loop" };

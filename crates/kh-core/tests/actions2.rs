@@ -97,6 +97,13 @@ impl Targets for Foe {
     fn push_body(&self, _id: TargetId) -> Option<PushBody> {
         self.push.map(|level| PushBody { center: self.info.center, radius: self.info.radius, half_height: self.info.half_height, level })
     }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
+    }
 }
 
 struct Bench {
@@ -394,8 +401,6 @@ fn an_attack_out_of_an_aerial_recovery_is_the_blow_counter() {
 
 
 // ============================================================================ tier 2: II.4 Wall Run
-
-const RIGHT: Vec2 = Vec2::new(1.0, 0.0);
 
 /// The stick pushed fully in the world direction `yaw` (degrees; the camera yaw is 0).
 fn toward(yaw: f32) -> Vec2 {
@@ -854,11 +859,6 @@ fn a_hop_point_in_reach_pulls_him_on_and_the_stick_hops_to_the_next_or_off() {
     bench.until(idle(), 120, |o, _| o.anim.name == AnimId::BalanceL);
     bench.step(press(PadButton::JUMP, Vec2::ZERO));
     bench.until(idle(), 3, |o, _| o.state == StateId::Jump);
-}
-
-#[allow(dead_code)]
-fn unused_helpers() {
-    let _ = (RIGHT, RailNode { position: Vec3::ZERO, speed: None, detect_range_plus: 0.0 });
 }
 
 // ============================================================================ tier 3: II.2 Floating

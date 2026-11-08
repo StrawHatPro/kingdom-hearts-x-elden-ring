@@ -198,6 +198,15 @@ waits, whether a vanished munny orb still pays (KH3: no).
 KH3 itself has no rule that favours HP orbs when Sora is hurt or MP orbs when he is low, so the host
 has none either.
 
+Changed 2026-11-03 (FOCUSORB, the user: "when playing as Sora or Sora is in your team, enemies should drop focus orbs like
+health and MP"): KH3's SECOND-slot focus is ported too. Beside the first slot a kill draws a focus slot with KH3's share of
+rows whose second slot is focus given the first slot's family (HP 11 / 67 = 16.4 %, MP 9 / 36 = 25 %, focus 4 / 10 = 40 %;
+sora-er-host rows `prize.focus.*`), 2 orbs sized by tier: about 26 % of kills drop focus, as KH3's 30 of 116 prize rows.
+Focus orbs (first slot or focus slot) drop only while Sora is in the active party (leading or AI), never after a load was
+asked for. No KH3 rule withholds focus prizes from a full gauge (0x141480420, 0x141489120, 0x141472DC0, 0x14142C600,
+0x1405AB950). Whoever collects one, it fills Sora's gauge (0x14147A070 gives focus to the player pawn). Details and the
+whole focus refill trace (no focus per hit or over time for Sora in KH3): build/sora_tmp/weapons/FOCUSORB/STATE.md.
+
 ## 10. What only the running game can settle
 
 1. The point of the getter the orb flies to (virtual +0x6E0), and the per-pawn spawn offset

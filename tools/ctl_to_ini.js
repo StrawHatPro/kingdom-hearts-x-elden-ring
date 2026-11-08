@@ -121,7 +121,7 @@ const COMMENTS = {
   'loot.kh': '1 = KH3 items drop from killed enemies',
   'loot.gate': '1 = the gate: every other way an item reaches the player is turned into KH3\'s',
   'loot.log': '1 = the gate writes what it sees to the log',
-  'boc.gate': '0 = Boc\'s outfits without having talked to Boc (testing); 1 = only after talking to him',
+  'boc.gate': 'not read any more (2026-11-02): the Outfits screen opens only from Boc\'s "Alter garments"',
   'r.world_lights': '0 = no light of the world\'s on Sora',
   'r.hybrid': '1 = the hybrid: KH3\'s toon shading lit by Elden Ring\'s world light',
   'test.zetta_aid': 'instant Zettaflare: F7, or L3 + R3 on the pad',

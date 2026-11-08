@@ -60,6 +60,8 @@ struct Particle {
     base_size: Vec3,
     color: [f32; 4],
     base_color: [f32; 4],
+    /// (VFX-RING) SQEX_ParticleColor's payload: StartParticleColor rgb, StartParticleAlpha (0x1442F27F0).
+    pcol: [f32; 4],
     /// Radians.
     rot: f32,
     rot_rate: f32,
@@ -113,6 +115,8 @@ struct Particle {
     dead: bool,
     hit_scaled: bool,
     ploc_offset: Vec3,
+    /// (AUDIT-B W-VFX2) a beam particle's noise points (`ParticleModuleBeamNoise`), None without one.
+    beam_noise: Option<Box<BeamNoise>>,
 }
 
 /// What a child node reads from its parent (the block at emitter instance+0x1E0 [C]).
@@ -157,6 +161,9 @@ struct Emitter {
     ended: bool,
     done: bool,
     loop_end: bool,
+    /// (VFX-RING) created while its parent was already ending (an end child): the loop end it inherits does not kill it before
+    /// its own start time (0x14437A3B0 tells only the children that exist when the parent ends).
+    end_born: bool,
     spawn_fraction: f32,
     bursts_fired: Vec<bool>,
     children: Vec<ChildState>,
@@ -177,9 +184,15 @@ struct Emitter {
     gravity_offset: f32,
     /// The child offset given by the parent (`ChildrenData` + its spawn shape).
     offset_pos: Vec3,
+    /// (VFX-RING) a MY_MODULE thunder emitter's own beam ends (world) and its per-beam recompute entries (instance +0x9C8:
+    /// done, timer).
+    my_ends: Option<BeamEnds>,
+    beam_timers: Vec<(bool, f32)>,
     offset_rot: Vec3,
     offset_scale: Vec3,
-    offset_velocity: Vec3,
+    /// (VFX-RING) the spawn rotation its parent's shape gave it (instance +0x290, 0x14435BE00): its local rotation is this x
+    /// its own (0x144290A60).
+    spawn_rot: Mat3,
     /// The component (rotation + translation, and its scale) and the parent's block on the first tick.
     comp_snapshot: (Rigid, Vec3),
     parent_snapshot: Option<NodeData>,
@@ -197,6 +210,8 @@ struct Emitter {
     /// The particle size multiplier (instance+0x4B8).
     psize_final: Vec3,
     noise_offset: Vec3,
+    /// (VFX-RING) a TailDecal's CustomParam0..2 latched at its first tick (0x14427CF10)
+    decal_latch: [Option<f32>; 3],
     ring: RingState,
     /// A child its parent generates anew in every loop: it plays its timeline once.
     one_shot: bool,
@@ -206,10 +221,17 @@ struct Emitter {
     /// `SQEX_CameraShake`: played (once per instance), and what is waiting for the host.
     shake_fired: bool,
     shake_pending: Option<ShakeRequest>,
-    /// `SQEX_Raycast`: where the ray put the node, relative to where it was (None = not cast yet).
-    ray_shift: Option<Vec3>,
     /// A tail's recorded node positions (world), oldest first.
     path: Vec<Vec3>,
+    /// (VFX-RING M) the node's rotation at every recorded point, aligned with `path` from its newest end (TailModelMarch: the
+    /// track entries' matrices, +0x130).
+    path_rot: Vec<glam::Quat>,
+    /// (VFX-2) per recorded point its wave displacement per tick (SQEX_TailShapeExData_Wave), aligned with `path`.
+    path_vel: Vec<Vec3>,
+    /// (VFX-2) the wave: the velocity now and the one blended from, the target, the elapsed time and the period.
+    wave_prev: Vec3,
+    wave_target: Vec3,
+    wave_period: f32,
     path_prev_head: Vec3,
     pivot: Vec2,
     mesh_pivot: Vec3,
@@ -222,6 +244,11 @@ struct Emitter {
     unit_fraction: f32,
     wave_vec: Vec3,
     wave_clock: f32,
+    /// (VFX-2) a skeletal mesh emitter's component: the AnimationData entry playing and the instance time it started at.
+    skel_anim: usize,
+    skel_since: f32,
+    /// (VFX-RING) SQEX_TailNoise's bumps (the tail helper +0x158), made at the start and, with bLoopResetNoiseData, every loop.
+    noise: Vec<crate::tailnoise::NoiseSeg>,
 }
 
 impl Emitter {
@@ -246,6 +273,7 @@ impl Emitter {
             ended: false,
             done: false,
             loop_end: false,
+            end_born: false, // (VFX-RING)
             spawn_fraction: 0.0,
             bursts_fired: vec![false; d.bursts.len()],
             children: d.children.iter().map(|c| ChildState { fired: vec![false; c.times.len()], count: 0 }).collect(),
@@ -264,9 +292,11 @@ impl Emitter {
             gravity_velocity: 0.0,
             gravity_offset: 0.0,
             offset_pos: Vec3::ZERO,
+            my_ends: None,           // (VFX-RING)
+            beam_timers: Vec::new(), // (VFX-RING)
             offset_rot: Vec3::ZERO,
             offset_scale: Vec3::ONE,
-            offset_velocity: Vec3::ZERO,
+            spawn_rot: Mat3::IDENTITY, // (VFX-RING)
             comp_snapshot: (Rigid::IDENTITY, Vec3::ONE),
             parent_snapshot: None,
             data: NodeData::default(),
@@ -278,14 +308,19 @@ impl Emitter {
             comp_scale: Vec3::ONE,
             psize_final: Vec3::ONE,
             noise_offset: Vec3::ZERO,
+            decal_latch: [None; 3], // (VFX-RING)
             ring: RingState::default(),
             one_shot: false,
             nested_wanted: false,
             nested_spawned: false,
             shake_fired: false,
             shake_pending: None,
-            ray_shift: None,
             path: Vec::new(),
+            path_rot: Vec::new(), // (VFX-RING M)
+            path_vel: Vec::new(), // (VFX-2)
+            wave_prev: Vec3::ZERO,
+            wave_target: Vec3::ZERO,
+            wave_period: 0.0,
             path_prev_head: Vec3::ZERO,
             pivot,
             mesh_pivot,
@@ -295,6 +330,9 @@ impl Emitter {
             unit_fraction: 0.0,
             wave_vec: Vec3::ZERO,
             wave_clock: 0.0,
+            skel_anim: 0, // (VFX-2)
+            noise: Vec::new(), // (VFX-RING)
+            skel_since: 0.0,
         }
     }
 }
@@ -327,6 +365,9 @@ struct System {
     recolor: Option<[f32; 4]>,
     /// (ZETTA) the bones (world place and rotation, by name) of what it hangs on: `SQEX_BoneAttach` emitters (World::set_bones)
     bones: Option<Arc<HashMap<String, (Vec3, glam::Quat)>>>,
+    /// (AUDIT-B W-VFX) the beam ends of its `TypeDataSQEX_Thunder` emitters (World::set_beam_ends): (emitter, this step's
+    /// (source, target) per beam index, the step before's)
+    beam_ends: Vec<BeamEnds>,
     /// (IMPL_ER56) Its particle lights light characters too (`Light::characters`; a host's choice, default true).
     char_lights: bool,
     /// (INT) Where the host says its component was at the step BEFORE it was spawned (an attached effect born on a moving
@@ -378,6 +419,8 @@ pub struct World {
     ids: HashMap<String, Vec<(u32, u32, u32)>>,
     /// The level's ground height (cm) for `SQEX_Raycast`; None = no ground known.
     ground: Option<f32>,
+    /// (AUDIT-B W-HANDOVER) the host's line trace for `SQEX_Raycast` (None: the flat ground above is the level)
+    rays: Option<Arc<dyn crate::def::RayWorld>>,
     /// Mesh ids of each emitter's sub meshes, per effect.
     sub_ids: HashMap<String, Vec<Vec<u32>>>,
     shakes: Vec<ShakeRequest>,
@@ -401,7 +444,7 @@ const NO_ID: u32 = u32::MAX;
 
 impl World {
     pub fn new() -> World {
-        World { defs: HashMap::new(), systems: Vec::new(), next_id: 1, materials: Vec::new(), material_ids: HashMap::new(), meshes: Vec::new(), mesh_ids: HashMap::new(), log: Vec::new(), logged: HashSet::new(), ids: HashMap::new(), ground: None, sub_ids: HashMap::new(), shakes: Vec::new(), draw_snap: false /* (INT) */ }
+        World { defs: HashMap::new(), systems: Vec::new(), next_id: 1, materials: Vec::new(), material_ids: HashMap::new(), meshes: Vec::new(), mesh_ids: HashMap::new(), log: Vec::new(), logged: HashSet::new(), ids: HashMap::new(), ground: None, rays: None /* (AUDIT-B W-HANDOVER) */, sub_ids: HashMap::new(), shakes: Vec::new(), draw_snap: false /* (INT) */ }
     }
 
     fn material_id(&mut self, name: &str) -> u32 {
@@ -524,6 +567,7 @@ impl World {
             released: false,
             recolor: None, // (DON-MAGIC tint)
             bones: None, // (ZETTA)
+            beam_ends: Vec::new(), // (AUDIT-B W-VFX)
             char_lights: true,
             first_prev: None,
             draw_from: None,
@@ -546,9 +590,35 @@ impl World {
         }
     }
 
-    /// True when the effect has an emitter whose particles sit on bones (`SQEX_BoneAttach`): its host feeds `set_bones`.
+    /// (AUDIT-B W-VFX) What the effect's `TypeDataSQEX_Thunder` emitters ask of the host every step (empty: none): the
+    /// beam ends KH3's tick 0x144250690 reads from the mesh the component is attached to (`def::BeamDef`). The host answers
+    /// with `set_beam_ends`.
+    pub fn beam_asks(&self, id: EffectId) -> Vec<BeamAsk> {
+        let Some(s) = self.systems.iter().find(|s| s.id == id) else { return Vec::new() };
+        s.def.emitters.iter().enumerate().filter(|(_, e)| e.enabled).filter_map(|(k, e)| e.beam.as_ref().filter(|b| b.start == BeamPoint::AttachBone && b.end == BeamPoint::AttachBone).map(|b| BeamAsk { emitter: k, bones: b.bones.clone() })).collect()
+    }
+
+    /// (AUDIT-B W-VFX) The world places (cm) of the beam ends of emitter `emitter` (its index in the effect) this step, beam
+    /// index by index: `SetThunderAttachBones`' two sockets (one beam), or the bone list's links (beam i = bones i -> i + 1).
+    /// A beam index past the list takes entry 0 (the stock UserSet rule); an empty list = nothing to draw.
+    pub fn set_beam_ends(&mut self, id: EffectId, emitter: usize, ends: Vec<(Vec3, Vec3)>) {
+        let Some(s) = self.system(id) else { return };
+        match s.beam_ends.iter_mut().find(|b| b.emitter == emitter) {
+            Some(b) => {
+                b.before = std::mem::replace(&mut b.now, ends);
+                if b.before.len() != b.now.len() {
+                    b.before.clone_from(&b.now);
+                }
+            }
+            None => s.beam_ends.push(BeamEnds { emitter, before: ends.clone(), now: ends }),
+        }
+    }
+
+    /// True when the effect has an emitter whose particles sit on bones (`SQEX_BoneAttach`), or (FREEZE-FX) start on the
+    /// attached mesh's vertices (`SQEX_VertexSpawn` bUseAttachMeshVertex: KH3's frozen look, whose host's bones stand in for
+    /// the victim's vertices): its host feeds `set_bones`.
     pub fn wants_bones(&self, id: EffectId) -> bool {
-        self.systems.iter().find(|s| s.id == id).is_some_and(|s| s.def.emitters.iter().any(|e| e.bone_attach.is_some()))
+        self.systems.iter().find(|s| s.id == id).is_some_and(|s| s.def.emitters.iter().any(|e| e.bone_attach.is_some() || e.modules.iter().any(|m| matches!(m, Module::Shape(Shape { kind: ShapeKind::Points { attach_mesh: true, .. }, .. })))))
     }
 
     pub fn set_transform(&mut self, id: EffectId, xform: Xform) {
@@ -563,6 +633,11 @@ impl World {
         if let Some(s) = self.system(id) {
             s.color = color;
         }
+    }
+
+    /// (AUDIT-C) The colour multiplier of a live system (see [`World::set_color`]); `None` for an unknown or dead one.
+    pub fn color(&self, id: EffectId) -> Option<[f32; 4]> {
+        self.systems.iter().find(|s| s.id == id && !s.dead).map(|s| s.color)
     }
 
     /// (DON-MAGIC tint) A per-spawn RECOLOUR (kh_core::Tint; the plan's [R] marks): everything the effect and the nested
@@ -603,7 +678,7 @@ impl World {
     /// Its camera shakes are dropped; a nested system it asks for is made at the next `step` as usual. At most 10 s.
     pub fn prewarm(&mut self, id: EffectId, seconds: f32) {
         const DT: f32 = 1.0 / 60.0;
-        let ground = self.ground;
+        let ground = Level { ground: self.ground, rays: self.rays.as_deref() }; // (AUDIT-B W-HANDOVER)
         let Some(s) = self.systems.iter_mut().find(|s| s.id == id && !s.dead) else { return };
         let steps = (seconds.clamp(0.0, 10.0) / DT).round() as usize;
         for _ in 0..steps {
@@ -733,6 +808,14 @@ impl World {
         self.ground = z;
     }
 
+    /// (AUDIT-B W-HANDOVER) THE HOST'S LINE TRACE for `SQEX_Raycast` (def.rs `RayWorld`): every particle / child of a
+    /// raycasting emitter asks it once, at its birth, as KH3 does (0x144375FC0 / 0x14434E070). None: the flat ground of
+    /// [`World::set_ground`]. A host whose trace may only run on its own thread gets the steps of the systems that cast on
+    /// the calling thread (`step`).
+    pub fn set_rays(&mut self, rays: Option<Arc<dyn crate::def::RayWorld>>) {
+        self.rays = rays;
+    }
+
     /// One fixed step of every effect.
     pub fn step(&mut self, dt: f32) {
         self.draw_snap = false; // (INT) the step after a discontinuity: drawn between the steps again
@@ -771,13 +854,15 @@ impl World {
                 None => child.loop_end = true,
             }
         }
-        let ground = self.ground;
+        let ground = Level { ground: self.ground, rays: self.rays.as_deref() }; // (AUDIT-B W-HANDOVER)
         let mut requests: Vec<(EffectId, usize, NestedDef, Xform, [f32; 4])> = Vec::new();
         // The systems do not touch one another while they step (each has its own random stream, so
         // the result is the same whatever runs them): with many particles alive they are stepped
         // on scoped threads, in even shares of the particles.
         let load: usize = self.systems.iter().map(|s| s.emitters.iter().map(|e| e.particles.len()).sum::<usize>()).sum();
-        let threads = if load < 4000 || self.systems.len() < 2 { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).min(8) };
+        // (AUDIT-B W-HANDOVER) a host trace (kh-er's Havok casts: its game thread only) with a raycasting system alive: one thread
+        let casting = self.rays.is_some() && self.systems.iter().any(|s| !s.dead && s.def.emitters.iter().any(|e| e.raycast.is_some()));
+        let threads = if casting || load < 4000 || self.systems.len() < 2 { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).min(8) };
         if threads <= 1 {
             self.systems.iter_mut().filter(|s| !s.dead).for_each(|s| step_system(s, dt, ground));
         } else {
@@ -906,7 +991,8 @@ fn recolor_from(out: &mut DrawList, marks: (usize, usize, usize, usize, usize), 
 
 // ------------------------------------------------------------------------------------- stepping
 
-fn step_system(s: &mut System, dt: f32, ground: Option<f32>) {
+fn step_system(s: &mut System, dt: f32, level: Level<'_>) {
+    let ground = level.ground; // (AUDIT-B W-HANDOVER)
     // (IMPL_ER53) a held system's clock stops at its hold time: it is still stepped (its node follows its component) with
     // no time passing
     let dt = match s.def.hold.filter(|_| !s.released) {
@@ -952,7 +1038,7 @@ fn step_system(s: &mut System, dt: f32, ground: Option<f32>) {
         let di = s.emitters[i].def;
         let mut emitter = std::mem::replace(&mut s.emitters[i], Emitter::new(0, &def.emitters[di], None));
         let mut born = Vec::new();
-        let ctx = Tick { dt, def: &def, d: &def.emitters[emitter.def], component: s.xform, system_loop_end: s.loop_end, parent, trail: if s.trail_on { s.trail } else { None }, index: i, children_alive, ground, component_delta, bones: s.bones.clone() /* (ZETTA) */ };
+        let ctx = Tick { dt, def: &def, d: &def.emitters[emitter.def], component: s.xform, system_loop_end: s.loop_end, parent, trail: if s.trail_on { s.trail } else { None }, index: i, children_alive, ground, rays: level.rays /* (AUDIT-B W-HANDOVER) */, component_delta, bones: s.bones.clone() /* (ZETTA) */ };
         tick_emitter(&mut emitter, &ctx, &mut s.rng, &mut born);
         s.emitters[i] = emitter;
         if s.emitters.len() + born.len() <= MAX_EMITTERS_PER_SYSTEM {
@@ -1007,6 +1093,38 @@ fn step_system(s: &mut System, dt: f32, ground: Option<f32>) {
     }
 }
 
+/// (AUDIT-B W-HANDOVER) What a step knows of the level: the flat ground height and the host's line trace.
+#[derive(Clone, Copy)]
+struct Level<'a> {
+    ground: Option<f32>,
+    rays: Option<&'a dyn crate::def::RayWorld>,
+}
+
+/// (AUDIT-B W-HANDOVER) THE LEVEL'S ANSWER TO ONE RAY (KH3's 0x14435FCB0 trace): the host's trace, else the flat ground at
+/// `ground` (normal +Z, the default material). A ray that STARTS at or under the flat ground starts inside the solid floor:
+/// UE's line trace answers that with a blocking hit at the start (bStartPenetrating, time 0) (AUDIT-C TF: Double Form's
+/// N411 vw_so220_dcl_lgt00 casts from the floor itself).
+fn trace_level(rays: Option<&dyn crate::def::RayWorld>, ground: Option<f32>, start: Vec3, end: Vec3) -> Option<crate::def::RayHit> {
+    if let Some(r) = rays {
+        return r.trace(start, end);
+    }
+    let z = ground?;
+    let dir = end - start;
+    let (a, b) = (start.z - z, end.z - z);
+    if a <= 0.0 {
+        return Some(crate::def::RayHit { point: start, normal: Vec3::Z, surface: 0 });
+    }
+    (dir.z.abs() > 1.0e-6 && a * b <= 0.0).then(|| crate::def::RayHit { point: start + dir * ((z - start.z) / dir.z), normal: Vec3::Z, surface: 0 })
+}
+
+/// (AUDIT-B W-HANDOVER) One cast of an emitter's `SQEX_Raycast` from `start` (world): whether it plays and how far it moves
+/// (world). `turn` is the emitter's matrix (its ray and SpawnLocationOffset unless `bInWorldSpace`).
+fn ray_spawn(rc: &crate::def::RaycastDef, cx: &Tick, turn: Mat3, start: Vec3) -> Option<Vec3> {
+    let dir = if rc.world { rc.end_offset } else { turn * rc.end_offset };
+    let hit = trace_level(cx.rays, cx.ground, start, start + dir);
+    rc.plays(hit.as_ref()).then(|| rc.place(start, dir, turn, hit.as_ref()).0 - start)
+}
+
 struct Tick<'a> {
     dt: f32,
     def: &'a EffectDef,
@@ -1021,6 +1139,8 @@ struct Tick<'a> {
     index: usize,
     children_alive: bool,
     ground: Option<f32>,
+    /// (AUDIT-B W-HANDOVER) the host's line trace (SQEX_Raycast); None: `ground` is the level
+    rays: Option<&'a dyn crate::def::RayWorld>,
     /// (ZETTA) the system's bones (SQEX_BoneAttach)
     bones: Option<Arc<HashMap<String, (Vec3, glam::Quat)>>>,
 }
@@ -1049,16 +1169,31 @@ fn tick_emitter(e: &mut Emitter, cx: &Tick, rng: &mut Rng, born: &mut Vec<Emitte
         e.loop_end = true;
     }
     if e.time < d.start_time {
-        if e.loop_end {
-            // Asked to end before it began.
+        if e.loop_end && !e.end_born {
+            // Asked to end before it began. (VFX-RING) not an end child: it was made after the end and waits for its start.
             e.done = true;
         }
         return;
     }
     // ---- 1. emitter time (getter 0x144284A30 [C]: raw time - EmitterStartTime, not below 0)
+    // (VFX-RING) the time the previous tick ended on: the timeline end is judged on it (below)
+    let rel_was = if e.started { e.rel } else { 0.0 };
     if !e.started {
         e.started = true;
-        e.rel = 0.0;
+        // (VFX-RING) the emitter time at the first tick is the raw time less the start time, not 0: FParticleEmitterInstance::
+        // Tick 0x14429B6F0 takes Tick_EmitterTimeSetup (vt+0x48: EmitterTime += dt) BEFORE the spawn (vt+0x50) and adds the
+        // delay back at the end (+0x12C += vt+0x48's result); the getter 0x144284A30 = +0x12C - EmitterStartTime. A start-time
+        // curve keyed 0 at 0 (vw_so022_smk0's StartAlpha) was 0 for every burst at time 0.
+        e.rel = (e.time - d.start_time).max(0.0);
+        // (VFX-RING) SQEX_TailNoise's bumps over max(TailNumber)
+        if let (Some(tn), Some(tail)) = (&d.tail_noise, &d.tail) {
+            e.noise = tn.generate(tail.number.max_abs(), rng);
+        }
+        e.skel_since = e.time; // (VFX-2) the skeletal component is made now (0x14428AEB0)
+        // (VFX-RING) a TailDecal latches its spawn-time CustomParams at its first tick (0x14427CF10)
+        if let (Kind::TailSprites, Some(decal)) = (d.kind, d.decal.as_ref()) {
+            e.decal_latch = crate::taildecal::latch(decal, e.rel);
+        }
     } else {
         e.rel += dt;
     }
@@ -1068,6 +1203,17 @@ fn tick_emitter(e: &mut Emitter, cx: &Tick, rng: &mut Rng, born: &mut Vec<Emitte
         if length > 1.0e-4 {
             e.rel = d.loop_time + (e.rel - d.loop_duration) % length;
             e.loop_count += 1;
+            // (VFX-RING) SQEX_TailNoise bLoopResetNoiseData: new bumps every loop (0x144383E50 -> vt+0x2B0)
+            if let (Some(tn), Some(tail)) = (d.tail_noise.as_ref().filter(|tn| tn.loop_reset), &d.tail) {
+                e.noise = tn.generate(tail.number.max_abs(), rng);
+            }
+            // (VFX-2) a LOOP_END entry hands over to the next at the emitter's loop end (0x1442A43D0 / 0x144295980)
+            if let Some(sk) = d.skeletal.as_ref().filter(|sk| !sk.anims.is_empty()) {
+                if sk.anims[e.skel_anim % sk.anims.len()].change == crate::def::AnimChange::LoopEnd {
+                    e.skel_anim = (e.skel_anim + 1) % sk.anims.len();
+                    e.skel_since = e.time;
+                }
+            }
             e.bursts_fired.iter_mut().zip(&d.bursts).for_each(|(fired, b)| {
                 if b.time * d.duration >= d.loop_time {
                     *fired = false;
@@ -1088,7 +1234,10 @@ fn tick_emitter(e: &mut Emitter, cx: &Tick, rng: &mut Rng, born: &mut Vec<Emitte
     let end_time = d.duration_time.max(d.loop_duration);
     // An AnimTrail runs for as long as the host feeds its sockets (the notify window).
     let fed = d.kind == Kind::AnimTrail && cx.trail.is_some();
-    if !e.ended && !fed && e.rel > end_time && !(may_loop && d.loop_duration - d.loop_time <= 1.0e-4) {
+    // (VFX-RING) on the time the previous tick ended on: the stock tick spawns first and checks the end after
+    // (CheckEmitterFinished, vt+0x68 after vt+0x50 in 0x14429B6F0; and always spawns on its first tick), so the step that
+    // crosses the end still spawns (an emitter of no duration, vm_fns_star OneMesh_lp0, bursts once)
+    if !e.ended && !fed && rel_was > end_time && !(may_loop && d.loop_duration - d.loop_time <= 1.0e-4) {
         // `bKillOnCompleted` is not applied here: in stock Cascade it takes effect when the whole
         // system completes [U], and 3,231 of 3,241 emitters set it while their particles outlive
         // the emitter's own timeline (a 0.1 s burst emitter with 0.5 s particles).
@@ -1150,7 +1299,6 @@ fn tick_emitter(e: &mut Emitter, cx: &Tick, rng: &mut Rng, born: &mut Vec<Emitte
             e.gravity_offset += e.gravity_velocity * dt;
         }
     }
-    e.travel += e.offset_velocity * dt;
     let inh = &d.inherit;
     let parent_live = cx.parent.map(|(p, _)| p);
     // -- the component part (0x1442A0CA0 [C]): rotation and translation only, scale kept apart.
@@ -1202,7 +1350,22 @@ fn tick_emitter(e: &mut Emitter, cx: &Tick, rng: &mut Rng, born: &mut Vec<Emitte
     let travel_scale = if d.local_space && !d.emitter_local { Vec3::ONE } else { comp_scale };
     let travel_parent = if inh.takeover && inh.parent_scale != Takeover::None { parent_live.map_or(Vec3::ONE, |p| p.chain_scale) } else { Vec3::ONE };
     own_pos += travel_scale * e.travel * travel_parent;
-    let mut local = Rigid { rot: d.priority.matrix(e.acc_rot + e.init_rot + d.rotation + e.offset_rot), pos: own_pos };
+    // (AUDIT-B W-FIN) a TypeDataSQEX_FragmentMesh emitter's node takes no Required EmitterRotation (the class's reader is not in
+    // the decomp: the rule is measured): the Chandelier's shatter vw_so088_fin_hahen00 .. 03 (EmitterRotation roll 90, origin 0,
+    // no location / velocity of their own) then lie exactly on w_so088's own mesh in its component frame, where SQEX attaches
+    // their socket None (0x141765EC0 -> 0x14411B7A0): the pieces' vertices + Offsets vs the chandelier's own vertices, mean
+    // nearest distance 5 .. 9 cm unturned, 10 .. 24 cm turned roll +-90 (AUDIT-B W-FIN SECTION.md). Was: XW-d's roll -90 at
+    // the attach (kh-core claws.rs) cancelling it.
+    // (VFX-RING) That measured rule is dropped: a fragment emitter takes its EmitterRotation as every node does. The pieces'
+    // node is placed by its parent Control_lp's SQEX_Ring (ALL, 8 corners, radius 0.1, EMITTER_NORMAL, TANGENT), and KH3 gives
+    // every child so placed a spawn rotation (slot 0x370 = 0x14435BE00 -> 0x144356E70: look along the corner, up = Direction's
+    // Z; the node transform 0x144290A60 multiplies it after the node's own rotation, instance +0x290). With it, roll 90 then
+    // the look-along is a pure yaw of the Offsets (90 + 45 k degrees for corner k): the 8 copies of the arm's 7 pieces land on
+    // the 8 arms of the 8-armed chandelier at the Offsets' own heights (hahen00: z 249 .. 345 - 300; kh-host
+    // tests/audit_b_fin.rs), where the old rule stacked all 8 copies on one arm. AUDIT-B's match (5 .. 9 cm unturned) measured
+    // one copy against the mesh, which every arm's copy still meets (the model is 8-fold symmetric).
+    let own_rot = d.rotation;
+    let mut local = Rigid { rot: e.spawn_rot * d.priority.matrix(e.acc_rot + e.init_rot + own_rot + e.offset_rot), pos: own_pos }; // (VFX-RING) x +0x290
     if parent_live.is_some() {
         // The parent's matrix is its own local one (instance+0x2D0): no scale, no component.
         let (position, rotation) = if inh.takeover { (pick_parent(inh.parent_position), pick_parent(inh.parent_rotation)) } else { (parent_live, parent_live) };
@@ -1247,33 +1410,7 @@ fn tick_emitter(e: &mut Emitter, cx: &Tick, rng: &mut Rng, born: &mut Vec<Emitte
     e.node = Affine3A::from_mat3_translation(node_world.rot * Mat3::from_diagonal(node_world_scale), node_world.pos);
     e.comp_scale = comp_scale;
     e.data = NodeData { comp, comp_scale, local, chain_scale, psize, leave };
-    // SQEX_Raycast [?]: once, the node is moved to where its ray meets the ground.
-    if let Some(rc) = &d.raycast {
-        if e.ray_shift.is_none() {
-            let start = Vec3::from(e.node.translation);
-            let dir = if rc.world { rc.end_offset } else { node_world.rot * rc.end_offset };
-            let hit = cx.ground.and_then(|z| {
-                let (a, b) = (start.z - z, start.z + dir.z - z);
-                (dir.z.abs() > 1.0e-6 && a * b <= 0.0).then(|| start + dir * ((z - start.z) / dir.z))
-            });
-            match hit {
-                Some(point) => e.ray_shift = Some(point + rc.offset - start),
-                None if rc.force => e.ray_shift = Some(Vec3::ZERO),
-                None => {
-                    // ESQEX_RAYCAST_SPAWN_THEME_ONHIT and nothing hit: the emitter does not play.
-                    e.done = true;
-                    e.first_tick = false;
-                    return;
-                }
-            }
-        }
-        if let Some(shift) = e.ray_shift {
-            e.node.translation += glam::Vec3A::from(shift);
-            if !d.local_space {
-                node_sim.pos += shift;
-            }
-        }
-    }
+    // (AUDIT-B W-HANDOVER) SQEX_Raycast no longer moves the NODE once: KH3 casts per child (step 3) and per particle (step 5).
     if let Some(n) = &d.nested {
         if !e.nested_spawned && e.rel > n.spawn_time {
             e.nested_wanted = true;
@@ -1319,6 +1456,10 @@ fn tick_emitter(e: &mut Emitter, cx: &Tick, rng: &mut Rng, born: &mut Vec<Emitte
     };
     e.node_sim_prev = node_sim;
 
+    // (VFX-RING) TypeDataSQEX_Thunder MY_MODULE: its ring rule (tick 0x1442533A0 -> slot 0x368 = 0x14424FAF0)
+    if d.beam.as_ref().is_some_and(|b| b.start == BeamPoint::MyModule || b.end == BeamPoint::MyModule) {
+        my_module_ends(e, d, t, dt, rng);
+    }
     // ---- 3. children (SQEX_Parent::Update 0x14437A3B0 [C])
     if !e.ended {
         for (k, child) in d.children.iter().enumerate() {
@@ -1339,7 +1480,8 @@ fn tick_emitter(e: &mut Emitter, cx: &Tick, rng: &mut Rng, born: &mut Vec<Emitte
                 // as it does particles (Water's cast ring: three ribbons 120 degrees apart; with
                 // one the ring was a single short arc). [D] by the data and the capture.
                 let per = match (child.use_spawn_module, d.shape().map(|s| &s.kind)) {
-                    (true, Some(ShapeKind::Ring { vertices, order: RingOrder::All, .. })) => (vertices.float(t, rng).round().max(1.0)) as u32,
+                    // (VFX-RING) 0x14434E8B0: VertexNumber x Interval, rounded up, none at 0
+                    (true, Some(ShapeKind::Ring { vertices, order: RingOrder::All, geometry, .. })) => crate::ring::all_children(vertices, &geometry.interval, t, rng),
                     _ => 1,
                 };
                 for _ in 0..*number * per {
@@ -1353,6 +1495,7 @@ fn tick_emitter(e: &mut Emitter, cx: &Tick, rng: &mut Rng, born: &mut Vec<Emitte
                         break;
                     }
                     let mut c = Emitter::new(child.emitter, cd, Some(cx.index));
+                    c.end_born = e.loop_end; // (VFX-RING)
                     c.offset_pos = child.offset_position;
                     c.offset_rot = child.offset_rotation;
                     c.offset_scale = child.offset_scale;
@@ -1360,17 +1503,28 @@ fn tick_emitter(e: &mut Emitter, cx: &Tick, rng: &mut Rng, born: &mut Vec<Emitte
                     // every loop of its parent (LoopNumber 0) plays once and is replaced by the next
                     // generation; one generated once loops with its own EmitterLoops.
                     c.one_shot = child.loop_number == 0;
-                    if child.use_spawn_module {
+                    // (AUDIT-B W-HANDOVER) SQEX_Parent::Update 0x14437A3B0: a child with bUseSpawnModule is created by the
+                    // emitter's location module's slot 114; SQEX_Raycast's (0x14434E070) casts from this emitter's place and
+                    // creates it only when the cast plays (no hit on a crack's generator over water: none; the water pillar only
+                    // over water), moved to the cast's place unless bIsNoHitSetLocation. A child not created is not counted.
+                    if let (true, Some(rc)) = (child.use_spawn_module, d.raycast.as_ref()) {
+                        let turn = Mat3::from(e.node.matrix3);
+                        match ray_spawn(rc, cx, turn, Vec3::from(e.node.translation)) {
+                            None => {
+                                state.count -= 1;
+                                continue;
+                            }
+                            Some(shift) => c.offset_pos += turn.inverse() * shift,
+                        }
+                    } else if child.use_spawn_module {
                         if let Some(shape) = d.shape() {
                             // Slot 114 of the shape module [C]: its point, scaled, in the node's frame
                             // (the child's own chain applies the parent's rotation).
                             let s = sample_shape(shape, t, 0.0, rng, &mut e.ring, Vec3::ONE, None);
                             c.offset_pos += s.point;
-                            // The shape's Speed moves the nodes that are generated again and again
-                            // (radiating streaks); a node that stays would drift away for ever [?].
-                            if c.one_shot {
-                                c.offset_velocity = s.direction * s.speed;
-                            }
+                            // (VFX-RING) slot 0x370 = 0x14435BE00: the child's spawn rotation; no velocity (0x14434A3C0 sets the
+                            // place only: the guessed `s.direction x s.speed` drift of one-shot children was not KH3's)
+                            c.spawn_rot = crate::ring::child_rotation(shape, &shape.spawn_rot, s.point);
                         }
                     }
                     born.push(c);
@@ -1423,7 +1577,7 @@ fn tick_emitter(e: &mut Emitter, cx: &Tick, rng: &mut Rng, born: &mut Vec<Emitte
     // ---- 5. spawning
     let first_new = e.particles.len(); // (INT)
     // (VFXR) EventReceiverSpawn: the places other emitters' events asked for (handed over by step_system)
-    if !e.pending.is_empty() && d.kind != Kind::Control && d.kind != Kind::Unsupported {
+    if !e.pending.is_empty() && d.kind != Kind::Control && d.kind != Kind::Unsupported && d.kind != Kind::Skeletal /* (VFX-2) no particles */ {
         let to_sim = e.sim.inverse();
         for (at, vel) in std::mem::take(&mut e.pending) {
             if e.particles.len() >= d.max_particles {
@@ -1461,7 +1615,20 @@ fn tick_emitter(e: &mut Emitter, cx: &Tick, rng: &mut Rng, born: &mut Vec<Emitte
                 p.just_spawned = false;
                 e.particles.push(p);
             }
-        } else if d.kind != Kind::Control && d.kind != Kind::Unsupported {
+        } else if let (Some(tm), Some(tl)) = (d.tail_models.as_ref(), d.tail.as_ref()) {
+            // (VFX-RING M) TypeDataSQEX_TailModelMarch: the helper's spawn (slot 0x260 -> 0x14439DC10) in place of the rate and
+            // the bursts: one point's W x H particles at a time while the track is long enough, their velocity and time zeroed
+            let number = tl.number.float(t, rng) as i32;
+            let interval = tl.interval.float(t, rng) * cx.component.scale.x.abs();
+            let add = crate::tailmodel::to_spawn(tm, number, interval, e.particles.len(), crate::tailmodel::track_length(&e.path)).min(4096usize.saturating_sub(e.particles.len()));
+            for _ in 0..add {
+                let mut p = new_particle(d, &space, t, 0.0, rng, &mut e.ring);
+                p.vel = Vec3::ZERO;
+                p.base_vel = Vec3::ZERO;
+                p.rel = 0.0;
+                e.particles.push(p);
+            }
+        } else if d.kind != Kind::Control && d.kind != Kind::Unsupported && d.kind != Kind::Skeletal /* (VFX-2) no particles */ {
             let rate = d.rate.float(t, rng) * d.rate_scale.float(t, rng);
             if rate > 0.0 {
                 e.spawn_fraction += rate * dt;
@@ -1498,17 +1665,34 @@ fn tick_emitter(e: &mut Emitter, cx: &Tick, rng: &mut Rng, born: &mut Vec<Emitte
                     burst_count += (n.max(0) as f32 * d.burst_scale.float(t, rng)).round().max(0.0) as usize;
                 }
             }
-            // `EVARTEX_ODER_TYPE_ALL`: one particle on every ring vertex per spawn [?] (the spawn
-            // count's multiplication was not traced).
-            let per = match d.shape().map(|s| &s.kind) {
-                Some(ShapeKind::Ring { vertices, order: RingOrder::All, .. }) => (vertices.float(t, rng).round().max(1.0)) as usize,
-                _ => 1,
+            // (VFX-RING) `EVARTEX_ODER_TYPE_ALL` does not multiply the particles: the particle spawn (slot 0x3A8 =
+            // 0x144376860) places each one once (slot 0x3A0), corner after corner as ORDER does; only the child generation
+            // (slot 0x390 = 0x14434E8B0) loops over the corners. Was: x VertexNumber (vw_so022_smk0 196 for its 14).
+            let total = (rate_count + burst_count).min(MAX_SPAWN_PER_STEP.max(d.max_particles / 4)).min(d.max_particles - e.particles.len());
+            // (AUDIT-B W-VFX2) A BEAM EMITTER (the Beam2 tick 0x144252AC0) while it has fewer beams than MaxBeamCount: a spawn
+            // rate of 0 (no rate, no burst this step) becomes 1 / dt (one beam per step), `bAlwaysOn` spawns every missing
+            // beam at once (its burst = MaxBeamCount), and an empty emitter spawns at least one.
+            let total = match d.beam.as_ref() {
+                Some(b) => {
+                    let missing = d.max_particles - e.particles.len();
+                    let mut n = rate_count + burst_count;
+                    if rate <= 0.0 && burst_count == 0 {
+                        n = n.max(1);
+                    }
+                    if b.always_on {
+                        n = missing;
+                    }
+                    if e.particles.is_empty() && n == 0 {
+                        n = 1;
+                    }
+                    n.min(missing)
+                }
+                None => total,
             };
-            let total = ((rate_count + burst_count) * per).min(MAX_SPAWN_PER_STEP.max(d.max_particles / 4)).min(d.max_particles - e.particles.len());
             for k in 0..total {
                 // Rate particles are spread over the step; burst particles are born at its start.
-                let fraction = if k < rate_count * per && rate_count > 0 { (k / per) as f32 / rate_count as f32 } else { 0.0 };
-                let p = new_particle(d, &space, t, dt * (1.0 - fraction).clamp(0.0, 1.0) * if k < rate_count * per { 1.0 } else { 0.0 }, rng, &mut e.ring);
+                let fraction = if k < rate_count && rate_count > 0 { k as f32 / rate_count as f32 } else { 0.0 }; // (VFX-RING) one per particle
+                let p = new_particle(d, &space, t, dt * (1.0 - fraction).clamp(0.0, 1.0) * if k < rate_count { 1.0 } else { 0.0 }, rng, &mut e.ring);
                 e.particles.push(p);
             }
             // (VFXR) the spawn-per-unit particles, spread along the node's travel of the step
@@ -1525,6 +1709,30 @@ fn tick_emitter(e: &mut Emitter, cx: &Tick, rng: &mut Rng, born: &mut Vec<Emitte
         }
     }
 
+    // (AUDIT-B W-HANDOVER) SQEX_Raycast's particle Spawn (slot 117 0x144375FC0): EVERY NEW PARTICLE casts from its own birth
+    // place (the world: through the simulation space); one that does not play gets RelativeTime 1.1 and is killed before it is
+    // drawn, one that plays moves to the cast's place unless bIsNoHitSetLocation (its BaseVelocity is turned by the hit's normal
+    // only with bIsHitNormalInfluenced: otherwise the normal is +Z and the frame 0x144375FC0 builds is degenerate: no turn).
+    if let Some(rc) = d.raycast.as_ref().filter(|_| e.particles.len() > first_new) {
+        let turn = Mat3::from(e.node.matrix3);
+        let to_sim = e.sim.inverse();
+        let mut k = first_new;
+        while k < e.particles.len() {
+            let at = e.sim.transform_point3(e.particles[k].loc);
+            match ray_spawn(rc, cx, turn, at) {
+                None => {
+                    e.particles.remove(k);
+                }
+                Some(shift) => {
+                    let local = to_sim.transform_vector3(shift);
+                    let p = &mut e.particles[k];
+                    p.loc += local;
+                    p.prev_loc += local;
+                    k += 1;
+                }
+            }
+        }
+    }
     // (VFXR) birth events
     if send_birth {
         for p in &e.particles[first_new..] {
@@ -1545,9 +1753,21 @@ fn tick_emitter(e: &mut Emitter, cx: &Tick, rng: &mut Rng, born: &mut Vec<Emitte
         }
     }
 
+    // (AUDIT-B W-VFX2) the beam noise module's update 0x144253960 (every particle, every tick, after the spawn), with the
+    // replay data's NoiseRangeScale / NoiseTangentStrength / NoiseSpeed at the emitter time (FillReplayData 0x14423C100)
+    if let Some(nd) = d.beam.as_ref().and_then(|b| b.noise.as_ref()) {
+        let sheets = d.beam.as_ref().map_or(1, |b| b.sheets);
+        for p in &mut e.particles {
+            if let Some(n) = p.beam_noise.as_mut() {
+                n.update(nd, t, dt, sheets, rng);
+            }
+        }
+    }
+
     // ---- 6. integration
     let tail = d.kind == Kind::Tail || d.kind == Kind::TailSprites;
-    if tail {
+    let tail_models = d.tail_models.is_some() && d.tail.is_some(); // (VFX-RING M) its track is recorded as a tail's
+    if tail || tail_models {
         // The tail helper records the node's transform every tick [C]; the points are set along
         // this path when drawing.
         let offset = d.tail.as_ref().map_or(Vec3::ZERO, |tl| tl.offset);
@@ -1557,26 +1777,46 @@ fn tick_emitter(e: &mut Emitter, cx: &Tick, rng: &mut Rng, born: &mut Vec<Emitte
             let k = inertia.float(t, rng).clamp(0.0, 0.99).powf(dt * 60.0);
             world = world.lerp(last, k);
         }
-        // (VFXR) SQEX_TailShapeExData_Wave: every recorded point drifts by MoveVector + a random vector redrawn every
-        // RandomInterval seconds (cm / s, in the node's axes with bUseEmitterMat; world axes otherwise) [A]
+        // (VFX-2) SQEX_TailShapeExData_Wave as the helper runs it (TailWaveDef: 0x1442A6EB0 / 0x14429B260): the new point's
+        // displacement this tick (MoveVector cm per frame x dt x 60.024, plus the random range's draw blended in over its
+        // period), then every older point moves by its own displacement and takes the next newer one's
+        let mut new_vel = Vec3::ZERO;
         if let Some(wave) = &d.tail_wave {
-            e.wave_clock -= dt;
-            if e.wave_clock <= 0.0 {
-                e.wave_vec = wave.random.as_ref().map_or(Vec3::ZERO, |r| r.vec3(t, rng));
-                e.wave_clock = wave.interval.max(dt);
+            let axes = unit_axes(&e.node);
+            e.wave_clock += dt;
+            if e.wave_period <= e.wave_clock {
+                e.wave_clock = dt;
+                e.wave_period = rng.f32() * wave.interval;
+                let (mv, (lo, hi)) = (wave.move_vector, wave.random_range.unwrap_or((Vec3::ZERO, Vec3::ZERO)));
+                let (mv, lo, hi) = if wave.emitter_mat { (axes * mv, axes * lo, axes * hi) } else { (mv, lo, hi) };
+                let pick = Vec3::new(rng.f32(), rng.f32(), rng.f32());
+                e.wave_target = mv + lo + (hi - lo) * pick;
+                e.wave_prev = e.wave_vec;
             }
-            let drift = unit_axes(&e.node) * (wave.move_vector + e.wave_vec) * dt;
-            for q in &mut e.path {
-                *q += drift;
-            }
+            let k = if e.wave_clock == 0.0 || e.wave_period == 0.0 || e.wave_period < e.wave_clock { 1.0 } else { (e.wave_clock / e.wave_period).clamp(-1.0, 1.0) };
+            e.wave_vec = e.wave_prev + (e.wave_target - e.wave_prev) * k;
+            let step = e.wave_vec * (dt * 60.024);
+            new_vel = if d.tail.as_ref().is_some_and(|tl| tl.owner_matrix) { axes * step } else { step };
         }
         e.path_prev_head = e.path.last().copied().unwrap_or(world);
         e.path.push(world);
+        e.path_rot.push(glam::Quat::from_mat3(&unit_axes(&e.node))); // (VFX-RING M)
+        e.path_vel.resize(e.path.len() - 1, Vec3::ZERO);
+        e.path_vel.push(new_vel);
+        if d.tail_wave.is_some() {
+            let n = e.path.len();
+            for i in 0..n.saturating_sub(1) {
+                e.path[i] += e.path_vel[i];
+                e.path_vel[i] = e.path_vel[i + 1];
+            }
+        }
         // HistoryMaxDataNumber, or enough for the longest tail of the pack at any speed.
         let cap = d.tail.as_ref().map_or(0, |tl| tl.history_max).max(600);
         if e.path.len() > cap {
             let extra = e.path.len() - cap;
             e.path.drain(0..extra);
+            e.path_rot.drain(0..extra.min(e.path_rot.len())); // (VFX-RING M)
+            e.path_vel.drain(0..extra.min(e.path_vel.len()));
         }
         if e.ended {
             e.particles.clear();
@@ -1602,6 +1842,30 @@ fn tick_emitter(e: &mut Emitter, cx: &Tick, rng: &mut Rng, born: &mut Vec<Emitte
         }
         if tail {
             p.loc = space.origin;
+        }
+    }
+    // (VFX-RING M) TypeDataSQEX_TailModelMarch: the march (helper tick 0x1443A1530 -> 0x14438B2D0 -> 0x144399A80) places W x H
+    // particles on every point of the track, turned by the point's rotation, their size and colour times the tail's curves;
+    // the particles past the placed points are killed (RelativeTime 1.1). A particle placed for the first time has no place
+    // before (it is born on its spot).
+    if let (Some(tm), Some(tl)) = (d.tail_models.as_ref(), d.tail.as_ref()) {
+        let scroll = tl.scroll.as_ref().map_or(0.0, |sc| e.time * sc.time_scale);
+        let spots = crate::tailmodel::placements(tm, tl, crate::tailmodel::Track { path: &e.path, rots: &e.path_rot }, t, scroll, cx.component.scale.x.abs(), rng);
+        e.particles.truncate(spots.len());
+        let (to_sim, turn) = if d.local_space { (e.sim.inverse(), unit_axes(&e.sim).transpose()) } else { (Affine3A::IDENTITY, Mat3::IDENTITY) };
+        for (p, s) in e.particles.iter_mut().zip(&spots) {
+            let at = to_sim.transform_point3(s.position);
+            if p.age == 0.0 {
+                p.prev_loc = at;
+            }
+            p.loc = at;
+            p.is_local = false;
+            p.spawn_rot = turn * s.rotation;
+            p.shape_rot = false;
+            p.size *= s.scale;
+            for (c, m) in p.color.iter_mut().zip(s.color) {
+                *c *= m;
+            }
         }
     }
     // A value that ran away (a curve authored for other conditions) must not reach the host.
@@ -1686,7 +1950,7 @@ impl Space {
     fn vector(&self, v: Vec3) -> Vec3 {
         self.rot * v
     }
-    fn from_world(&self, v: Vec3) -> Vec3 {
+    fn world_vector(&self, v: Vec3) -> Vec3 {
         self.world_to_sim * v
     }
 }
@@ -1756,7 +2020,8 @@ fn ring_point(v: &RingValues, direction: &Mat3, scale: Vec3, k: u32, fraction: f
 }
 
 fn ring_values(shape: &Shape, t: f32, rng: &mut Rng) -> Option<RingValues> {
-    let ShapeKind::Ring { vertices, radius, radius_two, interval, angle, offset_position, offset_position_two, offset_rotation, offset_scale, .. } = &shape.kind else { return None };
+    let ShapeKind::Ring { vertices, geometry, .. } = &shape.kind else { return None };
+    let RingGeometry { radius, radius_two, interval, angle, offset_position, offset_position_two, offset_rotation, offset_scale } = &**geometry;
     let zero_is = |v: f32, d: f32| if v == 0.0 { d } else { v };
     Some(RingValues {
         n: zero_is(vertices.float(t, rng), 1.0),
@@ -1878,6 +2143,10 @@ fn new_particle(d: &EmitterDef, space: &Space, t: f32, lead: f32, rng: &mut Rng,
     }
     for m in &d.modules {
         spawn_module(m, &mut p, t, space, rng, ring);
+    }
+    // (AUDIT-B W-VFX2) the beam noise module's spawn 0x144251710 (with bLowFreq_Enabled and a Frequency)
+    if let Some(nd) = d.beam.as_ref().and_then(|b| b.noise.as_ref()).filter(|nd| nd.frequency != 0) {
+        p.beam_noise = Some(Box::new(BeamNoise::spawn(nd, rng)));
     }
     // Post-spawn (0x14428DA00 [C]): the part of the step the particle has already lived.
     if p.is_local {
@@ -2002,7 +2271,7 @@ fn spawn_module(m: &Module, p: &mut Particle, t: f32, space: &Space, rng: &mut R
             // 0x144335AD0 [C]: turned by the node unless given in world space; with
             // `bApplyOwnerScale` multiplied by the node's world scale, the radial part too.
             let mut v = start.vec3(t, rng);
-            v = if *world { space.from_world(v) } else { space.vector(v) };
+            v = if *world { space.world_vector(v) } else { space.vector(v) };
             let s = if *owner_scale { space.velocity_scale } else { Vec3::ONE };
             v *= s;
             if let Some(radial) = radial {
@@ -2114,6 +2383,13 @@ fn spawn_module(m: &Module, p: &mut Particle, t: f32, space: &Space, rng: &mut R
                 p.loc = space.origin + if p.local_rot { space.rot * p.local } else { p.local };
             }
         }
+        // (VFX-RING) vfxring_more.rs: LocationWorldOffset 0x1442F5180, SQEX_ParticleColor 0x1442F27F0
+        Module::More(crate::vfxring_more::More::WorldOffset(d)) => p.loc += crate::vfxring_more::world_offset(d, t, rng, &space.to_world),
+        Module::More(crate::vfxring_more::More::ParticleColor(c)) => {
+            p.pcol = c.start(t, p.rel, rng);
+            p.color = c.apply(p.pcol, p.base_color, p.color, t, p.rel, rng);
+        }
+        Module::More(crate::vfxring_more::More::DragScale(_) | crate::vfxring_more::More::ScaledDrag { .. }) => {}
         Module::AccelConst(_) | Module::Accel(_) | Module::Drag(_) | Module::PivotOffset(_) | Module::MeshPivotOffset(_) | Module::CurlNoise { .. } => {}
         // (VFXR)
         Module::Collision { max, .. } => p.max_hits = max.float(t, rng),
@@ -2181,7 +2457,7 @@ fn update_module(m: &Module, p: &mut Particle, t: f32, dt: f32, space: &Space, r
         }
         Module::AccelConst(a) => {
             // 0x1442CFD10 [C]: world acceleration (every emitter of the pack sets bAlwaysInWorldSpace).
-            let a = space.from_world(*a) * dt;
+            let a = space.world_vector(*a) * dt;
             p.vel += a;
             p.base_vel += a;
         }
@@ -2195,6 +2471,15 @@ fn update_module(m: &Module, p: &mut Particle, t: f32, dt: f32, space: &Space, r
             p.vel -= p.vel * c;
             p.base_vel -= p.base_vel * c;
         }
+        // (VFX-RING) vfxring_more.rs: a GPU emitter's drag x AccelerationDragScaleOverLife (0x1442B56A0), SQEX_ParticleColor's
+        // update 0x1442FD120 (after the stock colour reset, in module order)
+        Module::More(crate::vfxring_more::More::ScaledDrag { coefficient, scale }) => {
+            let c = crate::vfxring_more::scaled_drag(coefficient, scale, p.rel, dt, rng);
+            p.vel -= p.vel * c;
+            p.base_vel -= p.base_vel * c;
+        }
+        Module::More(crate::vfxring_more::More::ParticleColor(c)) => p.color = c.apply(p.pcol, p.base_color, p.color, t, p.rel, rng),
+        Module::More(crate::vfxring_more::More::WorldOffset(_) | crate::vfxring_more::More::DragScale(_)) => {}
         Module::SubUv(d) => p.sub = d.float(p.rel, rng),
         // (ZA) UE 4.17 UParticleModuleSubUVMovie: the image runs at FrameRate from the start image and wraps round the grid
         Module::SubUvMovie { fps, frames, .. } => {
@@ -2331,7 +2616,7 @@ fn update_module(m: &Module, p: &mut Particle, t: f32, dt: f32, space: &Space, r
         Module::Collision { damping, completion, .. } => {
             if let (Some(ground), false) = (space.ground, p.frozen) {
                 let world = space.to_world.transform_point3(p.loc);
-                let n = space.from_world(Vec3::Z).normalize_or(Vec3::Z);
+                let n = space.world_vector(Vec3::Z).normalize_or(Vec3::Z);
                 let h = world.z - ground;
                 if h < 0.0 && p.vel.dot(n) < 0.0 && !(p.hits as f32 >= p.max_hits && *completion == 2) {
                     p.collided = true;
@@ -2361,7 +2646,7 @@ fn update_module(m: &Module, p: &mut Particle, t: f32, dt: f32, space: &Space, r
             if let Some(ground) = space.ground {
                 let radius = p.size.x.abs() * 0.5 * radius_scale + radius_bias;
                 let world = space.to_world.transform_point3(p.loc);
-                let n = space.from_world(Vec3::Z).normalize_or(Vec3::Z);
+                let n = space.world_vector(Vec3::Z).normalize_or(Vec3::Z);
                 let h = world.z - (ground + radius);
                 let vn = p.vel.dot(n);
                 if h < 0.0 && vn < 0.0 {
@@ -2390,7 +2675,7 @@ fn update_module(m: &Module, p: &mut Particle, t: f32, dt: f32, space: &Space, r
         }
         Module::AccelOverLife { accel, world } => {
             let a = accel.vec3(p.rel, rng);
-            let a = if *world { space.from_world(a) } else { space.vector(a) } * dt;
+            let a = if *world { space.world_vector(a) } else { space.vector(a) } * dt;
             p.vel += a;
             p.base_vel += a;
         }
@@ -2401,7 +2686,7 @@ fn update_module(m: &Module, p: &mut Particle, t: f32, dt: f32, space: &Space, r
                     o[a] = 0.0;
                 }
             }
-            let o = if *world { space.from_world(o) } else { space.vector(o * space.world_scale) };
+            let o = if *world { space.world_vector(o) } else { space.vector(o * space.world_scale) };
             if p.is_local {
                 p.local += o - p.ploc_offset;
             } else {
@@ -2532,6 +2817,21 @@ fn depth_sign() -> f32 {
     if PLACEMENT_SWITCHES.load(std::sync::atomic::Ordering::Relaxed) & 1 == 0 { 1.0 } else { -1.0 }
 }
 
+/// (AUDIT-B W-VFX) `SQEX_DepthOffset` as KH3's vertex stages apply it: the sprite factory's view depth z - offset, only
+/// when offset < z, its screen position kept (def.rs `Module::DepthOffset`); the mesh factory's fork block does the same
+/// through clip -> world (MeshParticleVF[5].x, tools/sora_vfx_shaders.js). In world terms: the place slides along its eye
+/// ray to the depth z - offset and everything about it shrinks by the same factor, so its picture stays where and as big
+/// as it was; only what it hides and what hides it changes. The factor (1: no change). Before, the place was MOVED offset
+/// cm toward the eye at full size: a big black star of Boom Hammer's StyleChange20 (vw_so112_chg_smk00 `str2_blk0`,
+/// DepthOffset 80, 1 m from the eye) came within 20 cm of the lens and filled the view.
+fn depth_pull(at: Vec3, offset: f32, camera: &Camera) -> f32 {
+    let z = (at - camera.position).dot(camera.forward);
+    if offset == 0.0 || z <= 1.0e-3 || offset >= z {
+        return 1.0;
+    }
+    (z - offset) / z
+}
+
 /// (IMPL_ER20) Whether the lens rule turns this particle: see `def::EmitterDef::lens_rule`.
 pub fn lens_turns(rule: bool, size: Vec3) -> bool {
     rule && PLACEMENT_SWITCHES.load(std::sync::atomic::Ordering::Relaxed) & 2 == 0 && size.x > 0.0 && (size.x - size.z).abs() <= 1.0e-3 * size.x && size.y.abs() < 0.35 * size.x
@@ -2597,6 +2897,429 @@ fn trail_head(s: &System, particles: &[Particle], alpha: f32) -> Option<(Vec3, V
     }
 }
 
+/// (VFX-RING) The MY_MODULE ends of a `TypeDataSQEX_Thunder` emitter with an `SQEX_Ring` (0x14424FAF0, run by the thunder tick
+/// 0x1442533A0 after it lowered every beam's timer by the step). For each live beam i (ActiveParticles, before this step's
+/// spawn) whose entry is due (timer < 0, not done): ALL puts the vertex on i, RANDOM draws step and vertex anew (as the
+/// spawn); the two corners of the vertex on RangeRadius (0x144355000), turned by RingOffsetRotation x Direction and scaled by
+/// RingOffsetScale, to the world through the node (slot 0x2D8, then 0x2E0 at the read 0x14423FEA0 / 0x1442400B0).
+/// - bConnectingVertexAndNextVertex: SOURCE = the corner (list +0x9B8 -> vt+0x1C0 SetBeamSourcePoint), TARGET = the next
+///   corner (list +0x9C8 -> vt+0x1D8 SetBeamTargetPoint).
+/// - otherwise TARGET = the point step / Interval between them on ring one; with RangeRadiusTwo the SOURCE is the same on
+///   ring two, without it the source is the stock BeamSource's (PEB2STM_Default: the emitter's own place, every step).
+///
+/// The entry's timer is then UpdateTime, or (UpdateTime -1 or less) it is done: the ends stay as set. The counters then
+/// move as the spawn's do: step + 1, at Interval step 0 and the vertex = i + 1, at VertexNumber the vertex 0.
+fn my_module_ends(e: &mut Emitter, d: &EmitterDef, t: f32, dt: f32, rng: &mut Rng) {
+    let (Some(b), Some(shape)) = (d.beam.as_ref(), d.shape()) else { return };
+    let ShapeKind::Ring { order, .. } = &shape.kind else { return };
+    let Some(v) = ring_values(shape, t, rng) else { return };
+    let beams = e.particles.len();
+    e.beam_timers.resize(beams, (false, -1.0));
+    for timer in &mut e.beam_timers {
+        timer.1 -= dt;
+    }
+    let node = e.node;
+    let origin = Vec3::from(node.translation);
+    let turn = rotator(shape.direction.y, shape.direction.z, shape.direction.x) * v.rotation;
+    let corners = |k: u32, radius: f32, second: bool| {
+        let (a, c) = ring_corners(&v, k, radius, second);
+        (node.transform_point3(turn * (a * v.scale)), node.transform_point3(turn * (c * v.scale)))
+    };
+    let mut ends = e.my_ends.as_ref().map(|x| x.now.clone()).unwrap_or_default();
+    ends.resize(beams, (origin, origin));
+    let mut step = 0u32;
+    for (i, end) in ends.iter_mut().enumerate() {
+        let (done, time) = e.beam_timers[i];
+        if time < 0.0 && !done {
+            match order {
+                RingOrder::All => e.ring.vertex = i as u32,
+                RingOrder::Random => {
+                    step = (rng.f32() * (v.interval as i32 + 1) as f32) as u32;
+                    e.ring.vertex = (rng.f32() * (v.n as i32 + 1) as f32) as u32;
+                }
+                RingOrder::Order => {}
+            }
+            let (a, c) = corners(e.ring.vertex, v.radius, false);
+            let f = step as f32 / v.interval;
+            *end = if b.connect {
+                (a, c)
+            } else if v.radius_two != 0.0 {
+                let (a2, c2) = corners(e.ring.vertex, v.radius_two, true);
+                (a2.lerp(c2, f), a.lerp(c, f))
+            } else {
+                (origin, a.lerp(c, f))
+            };
+            e.beam_timers[i] = if b.update_time > -1.0 { (false, b.update_time) } else { (true, time) };
+        } else if !b.connect && v.radius_two == 0.0 {
+            end.0 = origin;
+        }
+        step += 1;
+        if step as f32 >= v.interval {
+            step = 0;
+            e.ring.vertex = i as u32 + 1;
+        }
+        if e.ring.vertex as f32 >= v.n {
+            e.ring.vertex = 0;
+        }
+    }
+    match e.my_ends.as_mut() {
+        Some(x) => {
+            x.before = std::mem::replace(&mut x.now, ends);
+            if x.before.len() != x.now.len() {
+                x.before.clone_from(&x.now);
+            }
+        }
+        None => e.my_ends = Some(BeamEnds { emitter: e.def, before: ends.clone(), now: ends }),
+    }
+}
+
+/// (AUDIT-B W-VFX) What a beam emitter asks of the host (`World::beam_asks`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BeamAsk {
+    /// The emitter's index in its effect.
+    pub emitter: usize,
+    /// `bUseBoneList`: the chain's bone names (beam i from bones[i] to bones[i + 1]); None: one beam between the attach
+    /// row's `SocketName` and `EndSocketName`.
+    pub bones: Option<Vec<String>>,
+}
+
+/// (AUDIT-B W-VFX) A beam emitter's ends, this step and the step before (per beam index).
+#[derive(Clone, Debug, Default)]
+struct BeamEnds {
+    emitter: usize,
+    before: Vec<(Vec3, Vec3)>,
+    now: Vec<(Vec3, Vec3)>,
+}
+
+/// (AUDIT-B W-VFX) How a beam emitter is drawn this frame: its material, the emitter time, the blend, the tint, the
+/// component scale and X axis, the draw alpha.
+#[derive(Clone, Copy)]
+struct BeamLook {
+    material: u32,
+    time: f32,
+    blend: Blend,
+    tint: [f32; 4],
+    scale: f32,
+    x_axis: Vec3,
+    alpha: f32,
+    /// (AUDIT-B W-VFX2) the component's LocalToWorld without its place (the noise offsets are in its space).
+    comp: Mat3,
+}
+
+/// (AUDIT-B W-VFX) One `TypeDataSQEX_Thunder` emitter's beams as camera-facing strips (`def::BeamDef`, the no-noise fill
+/// 0x144321EA0): one ribbon per beam and sheet through its points, half width = Size.X x the component scale x the taper.
+fn draw_beams(b: &BeamDef, ends: &BeamEnds, particles: &[Particle], look: &BeamLook, camera: &Camera, out: &mut DrawList) {
+    let BeamLook { material, time, blend, tint, scale, x_axis, alpha, .. } = *look;
+    let mut rng = Rng::new(1);
+    let mut up = camera.up;
+    for (k, p) in particles.iter().enumerate() {
+        let Some(&(s1, t1)) = ends.now.get(k).or(ends.now.first()) else { break };
+        let (s0, t0) = ends.before.get(k).or(ends.before.first()).copied().unwrap_or((s1, t1));
+        let (source, target) = (s0.lerp(s1, alpha), t0.lerp(t1, alpha));
+        let color = mul_color(p.color, tint);
+        let half = p.size.x * scale;
+        if source.distance_squared(target) < 1.0e-8 || color[3] <= 0.0 || half <= 0.0 {
+            continue;
+        }
+        // InterpolationPoints < 2: the direct strip source -> target (0x144321EA0's first branch)
+        let points = if b.interpolation < 2 { vec![source, target] } else { b.points(source, target, x_axis, p.rel, &mut rng) };
+        let steps = points.len() - 1;
+        let tile = if b.tile_distance > 1.0e-4 { source.distance(target) / b.tile_distance } else { 1.0 };
+        let right = (source - points[1]).normalize_or_zero();
+        let up_at = |at: Vec3, before: Vec3| right.cross(at - camera.position).try_normalize().unwrap_or(before);
+        if b.up_step == 0 || k == 0 {
+            up = up_at(source, up);
+        }
+        let tapers: Vec<f32> = (0..=steps).map(|i| b.taper_at(i, b.interpolation.max(1) as usize + 1, &mut rng)).collect();
+        for sheet in 0..b.sheets {
+            let turn = if sheet == 0 || right == Vec3::ZERO { glam::Quat::IDENTITY } else { glam::Quat::from_axis_angle(right, std::f32::consts::PI * sheet as f32 / b.sheets as f32) };
+            let mut here_up = up;
+            let mut ribbon = Vec::with_capacity(points.len());
+            for (i, &at) in points.iter().enumerate() {
+                if i > 0 && b.up_step == 0 {
+                    // the point before's place (0x144321EA0 turns the next pair by the Up of the location it leaves)
+                    here_up = up_at(points[i - 1], here_up);
+                }
+                let w = turn * here_up * (half * tapers[i.min(tapers.len() - 1)]);
+                ribbon.push(RibbonPoint { a: at + w, b: at - w, u: i as f32 / steps as f32 * tile, color });
+            }
+            out.ribbons.push(Ribbon { points: ribbon, material, dynamic: p.dynamic, time, blend, tiles: 1.0, v_scale: 1.0, uv_turned: false });
+        }
+    }
+}
+
+/// (AUDIT-B W-VFX2) A beam particle's noise: the payload's TargetNoisePoints (`points`, Frequency + 1 slots as the payload
+/// holds, 0..=freq drawn), NextNoisePoints (`next`, bSmooth), NoiseRate and its Freq (`def::BeamNoiseDef`), with the
+/// replay data's NoiseRangeScale, NoiseTangentStrength and NoiseSpeed of the latest step.
+#[derive(Clone, Debug, Default)]
+struct BeamNoise {
+    freq: u32,
+    points: Vec<Vec3>,
+    next: Vec<Vec3>,
+    rate: f32,
+    range_scale: f32,
+    tangent_strength: f32,
+    speed: Vec3,
+}
+
+impl BeamNoise {
+    /// 0x144251710: Freq, then the Freq + 1 points NoiseRange(i / (Freq + 1)); with bOscillate (a two-set table) the
+    /// extreme flips per point (and once more for bSmooth's Next point).
+    fn spawn(nd: &BeamNoiseDef, rng: &mut Rng) -> BeamNoise {
+        let freq = nd.spawn_frequency(rng);
+        let count = freq as usize + 1;
+        let slots = count.max(nd.replay_frequency() as usize + 1);
+        let mut n = BeamNoise { freq, points: vec![Vec3::ZERO; slots], next: vec![Vec3::ZERO; if nd.smooth { slots } else { 0 }], range_scale: 1.0, ..BeamNoise::default() };
+        let flips = nd.oscillate && nd.range.is_random();
+        let mut extreme = -1i32;
+        for i in 0..count {
+            extreme = if flips { -extreme } else { 0 };
+            let f = i as f32 / count as f32;
+            n.points[i] = nd.range.vec3_extreme(f, rng, extreme);
+            if nd.smooth {
+                extreme = -extreme;
+                n.next[i] = nd.range.vec3_extreme(f, rng, extreme);
+            }
+        }
+        n
+    }
+
+    /// 0x144253960 for one particle (`t` the emitter time, `dt` the step), then the bSmooth glide the fills do (Target
+    /// toward Next by NoiseSpeed x NoiseRate, snapped within NoiseLockRadius), once per sheet as each sheet's fill does.
+    fn update(&mut self, nd: &BeamNoiseDef, t: f32, dt: f32, sheets: u32, rng: &mut Rng) {
+        self.range_scale = nd.range_scale.float(t, rng);
+        self.tangent_strength = nd.tangent_strength.float(t, rng);
+        self.speed = nd.speed.vec3(t, rng);
+        if nd.lock_time < 0.0 {
+            return;
+        }
+        let count = (self.freq as usize + 1).min(self.points.len());
+        let extreme = if nd.oscillate && nd.range.is_random() { 1 } else { 0 };
+        let redraw = |points: &mut Vec<Vec3>, rng: &mut Rng| {
+            for (i, p) in points.iter_mut().enumerate().take(count) {
+                *p = nd.range.vec3_extreme(i as f32 / count as f32, rng, extreme);
+            }
+        };
+        if nd.lock_time <= 0.0001 {
+            redraw(&mut self.points, rng);
+            return;
+        }
+        self.rate += dt;
+        if self.rate > nd.lock_time {
+            if nd.smooth {
+                redraw(&mut self.next, rng);
+            } else {
+                redraw(&mut self.points, rng);
+            }
+            self.rate = 0.0;
+        }
+        if nd.smooth {
+            for _ in 0..sheets {
+                for (p, n) in self.points.iter_mut().zip(&self.next) {
+                    let check = *p + ue_normalize(*n - *p) * self.speed * self.rate;
+                    let far = (check - *n).abs().cmpge(Vec3::splat(nd.lock_radius)).any();
+                    *p = if far { check } else { *n };
+                }
+            }
+        }
+    }
+}
+
+/// (AUDIT-B W-VFX2) FVector::Normalize as the fills inline it: a vector of squared length <= 1e-8 is kept as it is.
+fn ue_normalize(v: Vec3) -> Vec3 {
+    if v.length_squared() > 1.0e-8 {
+        v.normalize()
+    } else {
+        v
+    }
+}
+
+/// (AUDIT-B W-VFX2) The fills' cubic Hermite: h00 a + h10 ta + h01 b + h11 tb.
+fn hermite(a: Vec3, ta: Vec3, b: Vec3, tb: Vec3, t: f32) -> Vec3 {
+    let (t2, t3) = (t * t, t * t * t);
+    a * (2.0 * t3 - 3.0 * t2 + 1.0) + ta * (t3 - 2.0 * t2 + t) + b * (3.0 * t2 - 2.0 * t3) + tb * (t3 - t2)
+}
+
+/// (AUDIT-B W-VFX2) The emitter a noise strip belongs to (`noise_strip`).
+#[derive(Clone, Copy)]
+struct NoiseCx<'a> {
+    b: &'a BeamDef,
+    nd: &'a BeamNoiseDef,
+    look: &'a BeamLook,
+    camera: &'a Camera,
+}
+
+/// (AUDIT-B W-VFX2) What the noise fill draws of one beam (`noise_beams`): its ends, colour, half width and index.
+#[derive(Clone, Copy)]
+struct NoiseBeamAt {
+    source: Vec3,
+    target: Vec3,
+    color: [f32; 4],
+    half: f32,
+    index: usize,
+}
+
+/// (AUDIT-B W-VFX2) A `TypeDataSQEX_Thunder` emitter WITH NOISE as KH3's noise fills draw it: 0x144315F40 when
+/// InterpolationPoints > 0 (every noise beam of the pack), else 0x144318D30's own loop; one strip per beam and sheet
+/// (`noise_strip`).
+fn noise_beams(b: &BeamDef, nd: &BeamNoiseDef, ends: &BeamEnds, particles: &[Particle], look: &BeamLook, camera: &Camera, out: &mut DrawList) {
+    let mut rng = Rng::new(1);
+    let mut up = Vec3::ZERO;
+    let cx = NoiseCx { b, nd, look, camera };
+    for (k, p) in particles.iter().enumerate() {
+        let Some(st) = p.beam_noise.as_deref() else { continue };
+        let Some(&(s1, t1)) = ends.now.get(k).or(ends.now.first()) else { break };
+        let (s0, t0) = ends.before.get(k).or(ends.before.first()).copied().unwrap_or((s1, t1));
+        let at = NoiseBeamAt { source: s0.lerp(s1, look.alpha), target: t0.lerp(t1, look.alpha), color: mul_color(p.color, look.tint), half: p.size.x * look.scale, index: k };
+        if at.color[3] <= 0.0 || at.half <= 0.0 {
+            continue;
+        }
+        for points in noise_strip(&cx, st, p.rel, &at, &mut up, &mut rng) {
+            out.ribbons.push(Ribbon { points, material: look.material, dynamic: p.dynamic, time: look.time, blend: look.blend, tiles: 1.0, v_scale: 1.0, uv_turned: false });
+        }
+    }
+}
+
+/// (AUDIT-B W-VFX2) One noise beam's strips, one per sheet (0x144315F40 / 0x144318D30, read in full):
+/// - Steps (the payload: Freq, or FrequencyDistance's count) 0: nothing.
+/// - The first pair at the source: Right = normalize(source - P0), Up = normalize(Right x (source - eye)) (UpVectorStepSize
+///   0, or 1 on the first beam; degenerate: the view's Y axis; otherwise the Up before), turned about Right by
+///   pi x sheet / Sheets; half width = Size.X x the component scale x Taper[0]; U 0.
+/// - Noise point k (0 .. Steps - 1): P_k = B_k + LocalToWorld(NoiseDistanceScale x TargetNoisePoints[k]) x NoiseRangeScale.
+///   B_k with interpolation (r = InterpolationPoints / Steps = n + f, I the interpolation points, T the target): k < Steps -
+///   1: f I[kn + 1] + (1 - f) I[kn]; the last: (1 - f) I[kn] + f T (the first pair's Right takes f I[n] + (1 - f) I[n + 1]
+///   + the noise of point 0); without interpolation: source + direction x StepSize x (k + 1).
+/// - Segment k runs from the place before (the source, then P_{k-1}) to P_k on the Hermite with the start tangent (the
+///   source's: BeamSource's tangent, or WorldToLocal's X axis, x NoiseTangentStrength; without interpolation normalized and
+///   x SourceStrength / NoiseTangentStrength) and the end tangent normalize((N_k - before) x (1 - NoiseTension) / 2) x
+///   NoiseTangentStrength, N_k the next place (P_{k+1}'s base + its noise; for the last point the target, + the noise of
+///   point Frequency with bTargetNoise; without interpolation BeamTarget's tangent x TargetStrength); NoiseTessellation
+///   points per segment, each with Right = normalize(previous - point), Up again from the previous point (UpVectorStepSize
+///   0), Taper[k x Tess + j - 1], U += 1 / (Frequency x Tess).
+/// - The beam at its target (Speed 0, the payload locked): the last segment to the target (+ its noise with bTargetNoise),
+///   end tangent BeamTarget's tangent (bUseTarget) or normalize((T - before) x (1 - NoiseTension) / 2), x the strength,
+///   Taper[Steps x Tess + j].
+/// - V 0 on the + side, 1 on the - side; every vertex carries the particle's colour. A beam travelling to its target
+///   (Speed > 0) has no user in the pack (every beam has Speed 0): it is drawn at its target.
+fn noise_strip(cx: &NoiseCx, st: &BeamNoise, rel: f32, at: &NoiseBeamAt, up: &mut Vec3, rng: &mut Rng) -> Vec<Vec<RibbonPoint>> {
+    let NoiseCx { b, nd, look, camera } = *cx;
+    let NoiseBeamAt { source, target, color, half, index } = *at;
+    let freq_src = nd.replay_frequency() as usize;
+    let tess = nd.replay_tessellation() as usize;
+    let tex_inc = 1.0 / (freq_src * tess) as f32;
+    let comp = look.comp;
+    let w2l_x = if comp.determinant().abs() > 1.0e-12 { comp.inverse() * Vec3::X } else { Vec3::X };
+    let sheets = b.sheets.max(1);
+    let tension = (1.0 - nd.tension) * 0.5;
+    let length = source.distance(target);
+    let (steps, nds) = nd.steps(st.freq, length, rng);
+    let steps = steps as usize;
+    if steps == 0 {
+        return Vec::new();
+    }
+    let (nrs, nts) = (st.range_scale, st.tangent_strength);
+    let noise = |i: usize| comp * (st.points.get(i).copied().unwrap_or(Vec3::ZERO) * nds) * nrs;
+    let target_noise = if nd.target_noise { noise(freq_src) } else { Vec3::ZERO };
+    let tapers: Vec<f32> = if b.taper.is_some() {
+        let n = (st.freq as usize + 1) * tess;
+        (0..n).map(|i| b.taper_at(i, n, rng)).collect()
+    } else {
+        Vec::new()
+    };
+    let taper = |i: usize| tapers.get(i).or(tapers.last()).copied().unwrap_or(1.0);
+    // the beam's places B_k and the next ones, and the start tangent
+    let n_ip = b.interpolation as usize;
+    let ip: Vec<Vec3> = if n_ip > 0 { b.points(source, target, look.x_axis, rel, rng).split_off(1) } else { Vec::new() };
+    let ipt = |j: usize| ip.get(j).copied().unwrap_or(target);
+    let ratio = n_ip as f32 / steps as f32;
+    let (n, f) = (ratio as usize, ratio.fract());
+    let dir = ue_normalize(target - source);
+    let step_size = length / (steps + 1) as f32;
+    let base = |k: usize| {
+        if n_ip == 0 {
+            source + dir * step_size * (k + 1) as f32
+        } else if k + 1 == steps {
+            ipt(k * n) * (1.0 - f) + target * f
+        } else {
+            ipt(k * n + 1) * f + ipt(k * n) * (1.0 - f)
+        }
+    };
+    let next_base = |k: usize| {
+        let m = (k + 1) * n;
+        if n_ip == 0 {
+            source + dir * step_size * (k + 2) as f32
+        } else if k + 1 == steps {
+            ipt(m) * f + target * (1.0 - f)
+        } else {
+            ipt(m + 1) * (1.0 - f) + ipt(m) * f
+        }
+    };
+    let first = if n_ip == 0 { base(0) } else { ipt(n) * f + ipt(n + 1) * (1.0 - f) } + noise(0);
+    let source_dir = if b.use_source { b.source_tangent } else { w2l_x };
+    let start_tangent = if n_ip > 0 { source_dir * nts } else { ue_normalize(source_dir) * if b.use_source { b.source_strength.float(rel, rng) } else { nts } };
+    let last_strength = if n_ip == 0 { b.target_strength.float(rel, rng) } else { nts };
+    let up_rule = if b.up_step == 1 { index as i32 } else { b.up_step };
+    let mut strips = Vec::with_capacity(sheets as usize);
+    for sheet in 0..sheets {
+        let turn = |axis: Vec3, v: Vec3| {
+            if sheet == 0 || axis.length_squared() <= 1.0e-8 {
+                v
+            } else {
+                glam::Quat::from_axis_angle(axis.normalize(), std::f32::consts::PI * sheet as f32 / sheets as f32) * v
+            }
+        };
+        let right = ue_normalize(source - first);
+        if up_rule == 0 {
+            *up = right.cross(source - camera.position).try_normalize().unwrap_or(camera.up);
+        }
+        let mut ribbon = Vec::with_capacity(2 + (steps + 1) * tess);
+        let w = turn(right, *up) * (half * taper(0));
+        ribbon.push(RibbonPoint { a: source + w, b: source - w, u: 0.0, color });
+        let mut u = tex_inc;
+        let mut last_p = source;
+        let mut push = |p: Vec3, ti: usize, up: &mut Vec3| {
+            let r = ue_normalize(last_p - p);
+            if b.up_step == 0 {
+                *up = r.cross(last_p - camera.position).try_normalize().unwrap_or(camera.up);
+            }
+            let w = turn(r, *up) * (half * taper(ti));
+            ribbon.push(RibbonPoint { a: p + w, b: p - w, u, color });
+            u += tex_inc;
+            last_p = p;
+        };
+        let mut before = source;
+        let mut tangent = start_tangent;
+        let mut strength = nts;
+        for k in 0..steps {
+            let cur = base(k) + noise(k);
+            let end = if k + 1 == steps {
+                if n_ip == 0 {
+                    // 0x144318D30: the last noise point of a beam at its target ends on BeamTarget's tangent and strength
+                    strength = last_strength;
+                    ue_normalize(b.target_tangent) * strength
+                } else {
+                    ue_normalize((target + target_noise - before) * tension) * strength
+                }
+            } else {
+                ue_normalize((next_base(k) + noise(k + 1) - before) * tension) * strength
+            };
+            for j in 1..=tess {
+                push(hermite(before, tangent, cur, end, j as f32 / tess as f32), k * tess + j - 1, up);
+            }
+            before = cur;
+            tangent = end;
+        }
+        // the beam at its target: the last segment
+        let goal = target + target_noise;
+        let end = if b.use_target { b.target_tangent * strength } else { ue_normalize((target - before) * tension) * strength };
+        for j in 0..tess {
+            push(hermite(before, tangent, goal, end, (j + 1) as f32 / tess as f32), steps * tess + j, up);
+        }
+        strips.push(ribbon);
+    }
+    strips
+}
+
 fn draw_system(s: &System, ids: &[(u32, u32, u32)], sub_ids: &[Vec<u32>], alpha: f32, camera: &Camera, out: &mut DrawList) {
     let fade = s.fade.clamp(0.0, 1.0);
     // (INT) the component between the steps and the two steps' inverses (None: it stood still, or the latest step is drawn)
@@ -2605,7 +3328,9 @@ fn draw_system(s: &System, ids: &[(u32, u32, u32)], sub_ids: &[Vec<u32>], alpha:
     // (VFXR sort) each emitter's draws become one group per kind (`DrawGroup`), its particles ordered by its SortMode;
     // a group is closed when the next emitter starts and after the last
     let mut pending: Option<GroupOpen> = None;
-    for e in &s.emitters {
+    // (VFX-2) each emitter instance's skeletal component in `out.skeletal` (its children attach to it / drive it)
+    let mut skel_of: Vec<Option<u32>> = vec![None; s.emitters.len()];
+    for (ei, e) in s.emitters.iter().enumerate() {
         if let Some(p) = pending.take() {
             close_group(out, s, camera, p);
         }
@@ -2657,12 +3382,71 @@ fn draw_system(s: &System, ids: &[(u32, u32, u32)], sub_ids: &[Vec<u32>], alpha:
                 }
             }
         }
+        // (VFX-2) THE SKELETAL MESH COMPONENT (0x14428AEB0 / 0x1442A43D0): one per emitter instance, on the node turned by
+        // RotaionOffset with the node's scale (attached: in its parent's socket), its material modules at the emitter time
+        if let Some(sk) = &d.skeletal {
+            let parent = if sk.attach_parent { e.parent.and_then(|p| skel_of.get(p).copied().flatten()).map(|k| (k, sk.attach_bone.clone().unwrap_or_default())) } else { None };
+            let transform = if parent.is_some() {
+                Affine3A::IDENTITY
+            } else {
+                let r = sk.rotation_offset;
+                Affine3A::from_mat3_translation(node_rot * crate::math::rotator(r.x, r.y, r.z) * Mat3::from_diagonal(scale_of(&node)), Vec3::from(node.translation))
+            };
+            let mut params = Vec::new();
+            for m in &d.mat_params {
+                m.values_at(e.rel, &mut params);
+            }
+            skel_of[ei] = Some(out.skeletal.len() as u32);
+            out.skeletal.push(crate::draw::SkelInstance {
+                mesh: if sk.external_mesh && sk.mesh.is_none() { String::new() } else { sk.mesh.clone().unwrap_or_default() },
+                material: if sk.override_material { material } else { NO_ID },
+                transform,
+                parent,
+                anims: sk.anims.clone().into(),
+                anim: e.skel_anim,
+                anim_time: e.time - e.skel_since,
+                owner_pose: sk.external_mesh && sk.external_anim,
+                params,
+                blend: d.blend,
+                time: e.time,
+            });
+        } else if !d.mat_params.is_empty() {
+            // (VFX-2) a child of a skeletal mesh emitter: its material modules drive the parent's component (0x1442871A0)
+            if let Some(k) = e.parent.and_then(|p| skel_of.get(p).copied().flatten()) {
+                for m in &d.mat_params {
+                    m.values_at(e.rel, &mut out.skeletal[k as usize].params);
+                }
+            }
+        }
         // EmitterRenderMode ERM_LightsOnly / ERM_None: nothing of the emitter itself is drawn.
         if !d.render {
             continue;
         }
         match d.kind {
-            Kind::Control | Kind::Unsupported => {}
+            Kind::Control | Kind::Unsupported | Kind::Skeletal /* (VFX-2) above */ => {}
+            // (VFX-RING S) the spring on the node, coloured by particle 0 (white without one: FillReplayData 0x144384290 draws
+            // it while the instance has its entries) x the tint
+            Kind::DynamicShape => {
+                let Some(shape) = d.dynshape.as_ref().filter(|_| material != NO_ID) else { continue };
+                let first = e.particles.first();
+                let look = crate::dynshape::Look { particle: mul_color(first.map_or([1.0; 4], |p| p.color), tint), dynamic: first.map_or([0.0; 4], |p| p.dynamic), material, time: e.time, blend: d.blend };
+                shape.draw(&node, &look, out);
+            }
+            // (AUDIT-B W-VFX) TypeDataSQEX_Thunder: the beams between the host's ends (none fed, or with noise: nothing)
+            Kind::Beam => {
+                // (VFX-RING) a MY_MODULE emitter's own ends first, else the host's
+                let (Some(b), Some(ends)) = (&d.beam, e.my_ends.as_ref().or_else(|| s.beam_ends.iter().find(|x| x.emitter == e.def))) else { continue };
+                if material == NO_ID {
+                    continue;
+                }
+                let comp = s.xform.rotation * Mat3::from_diagonal(s.xform.scale); // (AUDIT-B W-VFX2)
+                let look = BeamLook { material, time: e.time, blend: d.blend, tint, scale: node_scale.x, x_axis: node_rot.x_axis, alpha, comp };
+                // (AUDIT-B W-VFX2) with bLowFreqNoise_Enabled DoBufferFill 0x144315570 takes the noise fill (`noise_beams`)
+                match &b.noise {
+                    Some(nd) => noise_beams(b, nd, ends, &e.particles, &look, camera, out),
+                    None => draw_beams(b, ends, &e.particles, &look, camera, out),
+                }
+            }
             Kind::Sprite => {
                 if material == NO_ID {
                     continue;
@@ -2675,11 +3459,14 @@ fn draw_system(s: &System, ids: &[(u32, u32, u32)], sub_ids: &[Vec<u32>], alpha:
                     }
                     let mut c = world_of(p);
                     let to_camera = (camera.position - c).normalize_or_zero();
-                    c += to_camera * (p.cam_offset + depth_sign() * p.depth_offset);
-                    let hx = p.size.x * 0.5 * node_scale.x;
+                    // CameraOffset moves it; (AUDIT-B W-VFX) the depth offset only changes its depth (`depth_pull`)
+                    c += to_camera * p.cam_offset;
+                    let pull = depth_pull(c, depth_sign() * p.depth_offset, camera);
+                    c = camera.position + (c - camera.position) * pull;
+                    let hx = p.size.x * 0.5 * node_scale.x * pull;
                     // Stock sprite size [U]: only PSA_Square and PSA_FacingCameraPosition copy X into Y; every
                     // other alignment (also PSA_TypeSpecific: the fire ball's flare is 8000 x 60) is X by Y.
-                    let hy = if !matches!(d.alignment, Alignment::Square | Alignment::FacingCameraPosition) && p.size.y != 0.0 { p.size.y * 0.5 * node_scale.x } else { hx };
+                    let hy = if !matches!(d.alignment, Alignment::Square | Alignment::FacingCameraPosition) && p.size.y != 0.0 { p.size.y * 0.5 * node_scale.x * pull } else { hx };
                     let (mut right, mut up) = (camera.right, camera.up);
                     match d.alignment {
                         Alignment::Velocity | Alignment::AwayFromCenter => {
@@ -2746,11 +3533,11 @@ fn draw_system(s: &System, ids: &[(u32, u32, u32)], sub_ids: &[Vec<u32>], alpha:
                     let axis_base = if matches!(d.mesh_billboard, Billboard::AxisX | Billboard::AxisY | Billboard::AxisZ) && !d.billboard_node_axis { s.xform.rotation } else { base };
                     let mut base = facing(d.mesh_billboard, &axis_base, position, camera);
                     if sqex_billboard && d.billboard_offset != Vec3::ZERO {
-                        base = base * crate::math::rotator(d.billboard_offset.x, d.billboard_offset.y, d.billboard_offset.z);
+                        base *= crate::math::rotator(d.billboard_offset.x, d.billboard_offset.y, d.billboard_offset.z);
                     }
                     // (IMPL_ER20) The lens rule: the flat axis of a camera-facing ball looks at the viewer.
                     if lens_turns(d.lens_rule, p.size) {
-                        base = base * crate::math::rotator(0.0, 90.0, 0.0);
+                        base *= crate::math::rotator(0.0, 90.0, 0.0);
                     }
                     let mut rotation = base * euler(p.mesh_rot);
                     if p.has_prot {
@@ -2760,7 +3547,12 @@ fn draw_system(s: &System, ids: &[(u32, u32, u32)], sub_ids: &[Vec<u32>], alpha:
                     let scale = p.size * mesh_scale;
                     let m = rotation * Mat3::from_diagonal(scale);
                     let to_camera = (camera.position - position).normalize_or_zero();
-                    let position = position + to_camera * (p.cam_offset + depth_sign() * p.depth_offset) + m * e.mesh_pivot;
+                    // CameraOffset moves it; (AUDIT-B W-VFX) the depth offset only changes its depth (`depth_pull`): the mesh
+                    // slides along its eye ray and shrinks by the same factor
+                    let position = position + to_camera * p.cam_offset;
+                    let pull = depth_pull(position, depth_sign() * p.depth_offset, camera);
+                    let m = m * pull;
+                    let position = camera.position + (position - camera.position) * pull + m * e.mesh_pivot;
                     // (XW-d) TypeDataSQEX_FragmentMesh [?]: every piece at its offset, flying apart from ImpactTime on (def::FragmentDef)
                     if let (Kind::Fragment, Some(f)) = (d.kind, d.fragments.as_ref()) {
                         let list = sub_ids.get(e.def).map(Vec::as_slice).unwrap_or(&[]);
@@ -2823,13 +3615,17 @@ fn draw_system(s: &System, ids: &[(u32, u32, u32)], sub_ids: &[Vec<u32>], alpha:
                         Some(h) if k == n - 1 => h,
                         _ => (p.loc, p.edge),
                     };
-                    let offset = (camera.position - loc).normalize_or_zero() * (p.cam_offset + depth_sign() * p.depth_offset);
-                    points.push(RibbonPoint { a: loc + offset, b: edge + offset, u: if k == n - 1 { 0.0 } else { p.rel.clamp(0.0, 1.0) }, color: mul_color(p.color, tint) });
+                    let offset = (camera.position - loc).normalize_or_zero() * p.cam_offset;
+                    // (AUDIT-B W-VFX) the depth offset only changes the depth (`depth_pull`)
+                    let pull = depth_pull((loc + edge) * 0.5 + offset, depth_sign() * p.depth_offset, camera);
+                    let at = |x: Vec3| camera.position + (x + offset - camera.position) * pull;
+                    points.push(RibbonPoint { a: at(loc), b: at(edge), u: if k == n - 1 { 0.0 } else { p.rel.clamp(0.0, 1.0) }, color: mul_color(p.color, tint) });
                 }
                 out.ribbons.push(Ribbon { points, material, dynamic: e.particles[0].dynamic, time: e.time, blend: d.blend, tiles: 1.0, v_scale: 1.0, uv_turned: false });
             }
             Kind::Tail | Kind::TailSprites => {
-                if material == NO_ID {
+                // (VFX-RING) a TailDecal has no particle material: its decals carry theirs
+                if material == NO_ID && d.decal.is_none() {
                     continue;
                 }
                 let Some(tail) = &d.tail else { continue };
@@ -2861,6 +3657,16 @@ fn draw_system(s: &System, ids: &[(u32, u32, u32)], sub_ids: &[Vec<u32>], alpha:
                     from = to;
                 }
                 let base = mul_color(p.color, tint);
+                // (VFX-RING) SQEX_TailNoise (0x14428D380 for every point, the cursor reset first): with ShareNoiseDataEmitterName the
+                // bumps and NoiseIntensity of that emitter of the component (0x14428A380), at this emitter's time
+                let noise: Vec<(f32, f32)> = d.tail_noise.as_ref().map_or(Vec::new(), |tn| {
+                    let shared = tn.share.as_deref().and_then(|name| s.emitters.iter().find(|o| s.def.emitters[o.def].name == name && !o.noise.is_empty()));
+                    let (segs, dist) = match shared {
+                        Some(o) => (&o.noise, s.def.emitters[o.def].tail_noise.as_ref().map_or(&tn.intensity, |x| &x.intensity)),
+                        None => (&e.noise, &tn.intensity),
+                    };
+                    crate::tailnoise::factors(segs, dist.float(e.rel, &mut rng), spots.len())
+                });
                 let scroll_at = tail.scroll.as_ref().map(|sc| e.time * sc.time_scale);
                 let along = |k: usize, rng: &mut Rng| -> (f32, f32, [f32; 4]) {
                     let f = k as f32 / (n - 1) as f32;
@@ -2879,17 +3685,30 @@ fn draw_system(s: &System, ids: &[(u32, u32, u32)], sub_ids: &[Vec<u32>], alpha:
                     }
                     (f, scale, mul_color(base, [c.x, c.y, c.z, a]))
                 };
+                // (VFX-RING) TypeDataSQEX_TailDecal: one deferred decal on every point (crate::taildecal, 0x144297AA0)
+                if let Some(decal) = d.decal.as_ref().filter(|_| d.kind == Kind::TailSprites) {
+                    if decal_material != NO_ID {
+                        let points: Vec<(Vec3, f32, f32, [f32; 4])> = spots.iter().enumerate().map(|(k, &spot)| { let (f, scale, color) = along(k, &mut rng); (spot, f, scale, color) }).collect();
+                        let frame = crate::taildecal::Frame { rel: e.rel, time: e.time, size: p.size, node_scale: scale_of(&node), latch: e.decal_latch };
+                        crate::taildecal::push(out, decal, decal_material, &points, &frame);
+                    }
+                    continue;
+                }
                 if d.kind == Kind::TailSprites {
                     // One sprite on every point (the tail's particles are ordinary sprites).
                     for (k, &spot) in spots.iter().enumerate() {
-                        let (f, scale, color) = along(k, &mut rng);
+                        let (f, scale, color) = crate::tailnoise::apply(along(k, &mut rng), noise.get(k)); // (VFX-RING)
                         let hx = 0.5 * p.size.x * node_scale.x * scale;
                         let hy = if !matches!(d.alignment, Alignment::Square | Alignment::FacingCameraPosition) && p.size.y != 0.0 { 0.5 * p.size.y * node_scale.x * scale } else { hx };
                         if hx <= 0.0 || color[3] <= 0.0 {
                             continue;
                         }
                         let to_camera = (camera.position - spot).normalize_or_zero();
-                        let c = spot + to_camera * (p.cam_offset + depth_sign() * p.depth_offset);
+                        // (AUDIT-B W-VFX) the depth offset only changes the depth (`depth_pull`)
+                        let c = spot + to_camera * p.cam_offset;
+                        let pull = depth_pull(c, depth_sign() * p.depth_offset, camera);
+                        let c = camera.position + (c - camera.position) * pull;
+                        let (hx, hy) = (hx * pull, hy * pull);
                         let (r, u) = (camera.right * hx, camera.up * hy);
                         out.quads.push(Quad { corners: [c - r + u, c + r + u, c + r - u, c - r - u], uv: [0.0, 0.0, 1.0, 1.0], uv2: [0.0, 0.0, 1.0, 1.0], blend: 0.0, color, material, dynamic: p.dynamic, time: e.time, rel: f, center: c, size: 2.0 * hx, mode: d.blend });
                     }
@@ -2900,15 +3719,18 @@ fn draw_system(s: &System, ids: &[(u32, u32, u32)], sub_ids: &[Vec<u32>], alpha:
                 }
                 let mut points = Vec::with_capacity(spots.len());
                 for (k, &here) in spots.iter().enumerate() {
-                    let (f, scale, color) = along(k, &mut rng);
+                    let (f, scale, color) = crate::tailnoise::apply(along(k, &mut rng), noise.get(k)); // (VFX-RING)
                     let half = 0.5 * p.size.x.max(0.0) * node_scale.x * scale;
                     let dir = if k + 1 < spots.len() { here - spots[k + 1] } else { spots[k - 1] - here };
                     // RenderAxis: the sheet faces the camera (Trails_CameraUp) or stands on world up.
                     let side = if tail.world_up { dir.cross(Vec3::Z).cross(dir).normalize_or(Vec3::Z) } else { dir.cross(camera.position - here).normalize_or_zero() } * half;
-                    let offset = (camera.position - here).normalize_or_zero() * (p.cam_offset + depth_sign() * p.depth_offset);
+                    let offset = (camera.position - here).normalize_or_zero() * p.cam_offset;
+                    // (AUDIT-B W-VFX) the depth offset only changes the depth (`depth_pull`)
+                    let pull = depth_pull(here + offset, depth_sign() * p.depth_offset, camera);
+                    let at = |x: Vec3| camera.position + (x + offset - camera.position) * pull;
                     let u = if tail.u_reverse { 1.0 - f } else { f } * tail.u_scale;
                     let (a, b) = if tail.v_reverse { (here - side, here + side) } else { (here + side, here - side) };
-                    points.push(RibbonPoint { a: a + offset, b: b + offset, u, color });
+                    points.push(RibbonPoint { a: at(a), b: at(b), u, color });
                 }
                 out.ribbons.push(Ribbon { points, material, dynamic: p.dynamic, time: e.time, blend: d.blend, tiles: 1.0, v_scale: tail.v_scale, uv_turned: tail.uv_turned });
             }
@@ -3031,6 +3853,38 @@ impl World {
     }
 }
 
+// ---------------------------------------------------------------------------------------------- (VFXR sort) draw groups
+/// One emitter's draws begun: where each kind's list stood, the emitter and its SortMode.
+struct GroupOpen {
+    marks: [usize; 4],
+    emitter: u32,
+    sort: crate::def::SortMode,
+}
+
+/// The emitter's draws since `p.marks` become its groups (one per kind with draws), its quads and meshes ordered by its
+/// SortMode first (`FarFirst`: by distance to the camera, far first; `NewestFirst`: reversed; the others as they are).
+fn close_group(out: &mut DrawList, s: &System, camera: &Camera, p: GroupOpen) {
+    use crate::def::SortMode;
+    let [q0, r0, m0, d0] = p.marks;
+    match p.sort {
+        SortMode::FarFirst => {
+            out.quads[q0..].sort_by(|a, b| b.center.distance_squared(camera.position).total_cmp(&a.center.distance_squared(camera.position)));
+            out.meshes[m0..].sort_by(|a, b| Vec3::from(b.transform.translation).distance_squared(camera.position).total_cmp(&Vec3::from(a.transform.translation).distance_squared(camera.position)));
+        }
+        SortMode::NewestFirst => {
+            out.quads[q0..].reverse();
+            out.meshes[m0..].reverse();
+        }
+        SortMode::None | SortMode::OldestFirst => {}
+    }
+    let origin = s.xform.position;
+    for (kind, from, to) in [(0u8, q0, out.quads.len()), (1, r0, out.ribbons.len()), (2, m0, out.meshes.len()), (3, d0, out.decals.len())] {
+        if to > from {
+            out.groups.push(crate::draw::DrawGroup { kind, from: from as u32, to: to as u32, system: s.id.0, emitter: p.emitter, priority: s.def.sort_priority, origin, offset: s.def.sort_offset });
+        }
+    }
+}
+
 #[cfg(test)]
 mod zetta_primitive_tests {
     //! (ZETTA) the stock location primitives (Zettaflare's circle: sparks on a 280 cm ring at his feet, dust thrown outward)
@@ -3073,38 +3927,6 @@ mod zetta_primitive_tests {
         for _ in 0..500 {
             let (o, _) = primitive(&pr, 0.0, &mut rng);
             assert!((o.length() - 25.0).abs() < 0.01 && o.z >= 0.0, "{o}");
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------------------------- (VFXR sort) draw groups
-/// One emitter's draws begun: where each kind's list stood, the emitter and its SortMode.
-struct GroupOpen {
-    marks: [usize; 4],
-    emitter: u32,
-    sort: crate::def::SortMode,
-}
-
-/// The emitter's draws since `p.marks` become its groups (one per kind with draws), its quads and meshes ordered by its
-/// SortMode first (`FarFirst`: by distance to the camera, far first; `NewestFirst`: reversed; the others as they are).
-fn close_group(out: &mut DrawList, s: &System, camera: &Camera, p: GroupOpen) {
-    use crate::def::SortMode;
-    let [q0, r0, m0, d0] = p.marks;
-    match p.sort {
-        SortMode::FarFirst => {
-            out.quads[q0..].sort_by(|a, b| b.center.distance_squared(camera.position).total_cmp(&a.center.distance_squared(camera.position)));
-            out.meshes[m0..].sort_by(|a, b| Vec3::from(b.transform.translation).distance_squared(camera.position).total_cmp(&Vec3::from(a.transform.translation).distance_squared(camera.position)));
-        }
-        SortMode::NewestFirst => {
-            out.quads[q0..].reverse();
-            out.meshes[m0..].reverse();
-        }
-        SortMode::None | SortMode::OldestFirst => {}
-    }
-    let origin = s.xform.position;
-    for (kind, from, to) in [(0u8, q0, out.quads.len()), (1, r0, out.ribbons.len()), (2, m0, out.meshes.len()), (3, d0, out.decals.len())] {
-        if to > from {
-            out.groups.push(crate::draw::DrawGroup { kind, from: from as u32, to: to as u32, system: s.id.0, emitter: p.emitter, priority: s.def.sort_priority, origin, offset: s.def.sort_offset });
         }
     }
 }

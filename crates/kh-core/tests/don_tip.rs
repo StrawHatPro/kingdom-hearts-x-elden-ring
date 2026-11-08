@@ -47,7 +47,7 @@ fn shot_and_tip(kind: u8) -> (Vec3, Vec3) {
     let mut host = RecordingHost::new();
     host.targets.push(dummy(1, 800.0, 0.0));
     let world = TestWorld::floor();
-    let mut step = |sora: &mut Sora, host: &mut RecordingHost| {
+    let step = |sora: &mut Sora, host: &mut RecordingHost| {
         let input = Input::default();
         host.step(&world, |h| sora.step_hosted(DT, &input, h));
     };

@@ -20,6 +20,13 @@ impl kh_core::Targets for NoEnemies {
     fn apply_hit(&mut self, _hit: &kh_core::HitRecord) -> kh_core::host::HitResult {
         kh_core::host::HitResult::default()
     }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
+    }
 }
 impl PartyTargets for NoEnemies {
     fn ai_actors(&self, _out: &mut Vec<kh_ai::ActorView>) {}
@@ -129,7 +136,7 @@ fn item_slots_follow_soras_pouch_rules_for_each_friend() {
         assert_eq!((m.items[0], m.item_spent[0], m.item_reload[0]), (Some(ItemKind::Potion), None, true));
         // a NEW item into a slot takes the setting of the other slots holding it (Ether: none = off)
         rt.apply_edit(&PartyMenuEdit::ItemSlot { chara: c, slot: 1, item: Some(ItemKind::Ether) });
-        assert_eq!(member(&rt, c).item_reload[1], false);
+        assert!(!member(&rt, c).item_reload[1]);
         // off while one waits: that slot is emptied (Sora's toggle)
         assert!(rt.party.status_mut(id).unwrap().take_item(ItemKind::Potion));
         rt.apply_edit(&PartyMenuEdit::AutoReload { chara: c, item: ItemKind::Potion, on: false });
@@ -153,8 +160,10 @@ fn a_leaders_shortcuts_take_the_stocks_items_and_stay_his() {
         step(&mut rt, &mut sora, &world);
         step(&mut rt, &mut sora, &world);
         assert_eq!(rt.leader_chara(), c);
-        assert!(rt.apply_custom_edit(c, CustomEdit::SetShortcut { page: 2, slot: 3, kind: hi_potion }), "{c:?}: the stock's Hi-Potion");
-        assert_eq!(member(&rt, c).custom.unwrap().shortcuts[2][3], hi_potion);
+        // (GF-ARTS) Goofy's item slot is LB + Y: his A and B are Arts, X is Taunt
+        let slot = if c == PartyChara::Goofy { kh_core::command::leader::goofy::SLOT_ITEM } else { 3 };
+        assert!(rt.apply_custom_edit(c, CustomEdit::SetShortcut { page: 2, slot, kind: hi_potion }), "{c:?}: the stock's Hi-Potion");
+        assert_eq!(member(&rt, c).custom.unwrap().shortcuts[2][slot], hi_potion);
         // Goofy has no magic: a spell is refused on his set; Donald's takes Sora's learned Fire
         let fire = kh_core::magic::spells::cmd::FIRE;
         // (DON-UI) the overhaul: Donald's block holds his own ids (his Fire 0x80), Sora's Fire is not his
@@ -191,7 +200,8 @@ fn every_friend_edit_survives_a_save_and_a_load() {
         assert!(rt.party.status_mut(id).unwrap().take_item(ItemKind::HiPotion), "a used auto-reload slot");
         rt.apply_edit(&PartyMenuEdit::Armour { chara: c, slot: 0, id: Some("PRT_ITEM01".into()) });
     }
-    rt.apply_edit(&PartyMenuEdit::Custom { chara: PartyChara::Goofy, edit: CustomEdit::SetShortcut { page: 1, slot: 0, kind: hi_potion } });
+    let item_slot = kh_core::command::leader::goofy::SLOT_ITEM; // (GF-ARTS) LB + Y
+    rt.apply_edit(&PartyMenuEdit::Custom { chara: PartyChara::Goofy, edit: CustomEdit::SetShortcut { page: 1, slot: item_slot, kind: hi_potion } });
     let before: Vec<_> = rt.menu_members();
     let record = rt.party_record();
     // a new runtime (a reload): the record onto KH3's init data
@@ -210,5 +220,5 @@ fn every_friend_edit_survives_a_save_and_a_load() {
         assert_eq!(b.armour, a.armour, "{c:?}: armour");
         assert_eq!(b.custom.map(|x| x.shortcuts), a.custom.map(|x| x.shortcuts), "{c:?}: the shortcut sets");
     }
-    assert_eq!(member(&rt2, PartyChara::Goofy).custom.unwrap().shortcuts[1][0], hi_potion);
+    assert_eq!(member(&rt2, PartyChara::Goofy).custom.unwrap().shortcuts[1][item_slot], hi_potion);
 }

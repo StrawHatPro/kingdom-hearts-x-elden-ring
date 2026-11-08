@@ -72,13 +72,17 @@ const EXCLUDE = [
   /^tools\/packgen\/notes\/\.capture\.json$/, /^tools\/bin(\/|$)/,
   // (recipes v2) the file recipes are the release's own: compiled with this repository's tools/packgen_recipe.js (v2:
   // every part the same as a file made from the player's KH3 install is a reference) against a clean-room build:
-  //   node tools/packgen_recipe.js compile --sandbox <clean-room> --dev <dev tree>   (and again with --overlays)
+  //   node tools/packgen_recipe.js compile --sandbox <clean-room> --dev <dev tree>   (and again with --overlays, after the
+  //   clean room's replay ran to vfx-overlays; and with --late, after its replay ran through replay-bake WITHOUT late
+  //   recipes: the keyblades' effect root, whose baked files the bake makes itself). The clean room must be fresh: a pack
+  //   built from empty and no replay run before the first compile: packgen.js pack + replay --only replay-scratch,zetta-audio,
+  //   zetta-clips; compile; replay to vfx-overlays; compile --overlays; replay-overlays, er-title, replay-bake; compile --late.
   // The development tree's own recipes (v1) are not copied; the repository's are kept (RELEASE_OWNED).
-  /^tools\/packgen\/replay\/(files|overlays)_[^/]*\.json$/, /^tools\/packgen\/replay\/report(_overlays)?\.json$/,
+  /^tools\/packgen\/replay\/(files|overlays|late)_[^/]*\.json$/, /^tools\/packgen\/replay\/report(_overlays|_late)?\.json$/,
 ];
 // Paths under MANAGED that this repository owns (kept as they are when the managed paths are copied again)
 // (also the release's own documents in docs/: the build guide and the mod's logo)
-const RELEASE_OWNED = /^tools\/packgen\/replay\/((files|overlays)_[^/]*|report(_overlays)?)\.json$|^docs\/(BUILDING\.md|images\/[^/]+)$/;
+const RELEASE_OWNED = /^tools\/packgen\/replay\/((files|overlays|late)_[^/]*|report(_overlays|_late)?)\.json$|^docs\/(BUILDING\.md|images\/[^/]+)$/;
 
 // Extensions that must never be copied, whatever folder they are in (game binaries, archives, assets, saves).
 const BANNED_EXT = /\.(exe|dll|pdb|pak|sig|uasset|uexp|ubulk|umap|bnk|wem|awb|acb|usm|bk2|glb|gltf|dds|tga|png|jpg|jpeg|wav|ogg|mp3|mp4|bhd|bdt|dcx|bnd|sl2|co2|khsave|bin|fmg|emevd|flver|tpf|hks)$/i;
@@ -119,8 +123,9 @@ const LOADOUT_PATH = '#[path = "../../kh-app/src/loadout.rs"]';
 
 const TRANSFORMS = {
   'crates/kh-host/src/rig.rs': (text) => replaceAll(text, LOADOUT_PATH, '#[path = "loadout_shared.rs"]'),
-  'crates/kh-er/src/sora.rs': (text) => replaceAll(text, LOADOUT_PATH, '#[path = "../../kh-host/src/loadout_shared.rs"]'),
-  'crates/kh-er-render/examples/hud.rs': (text) => replaceAll(text, LOADOUT_PATH, '#[path = "../../kh-host/src/loadout_shared.rs"]'),
+  'crates/kh-er/src/sora.rs': (text) => replaceAll(text, LOADOUT_PATH, '#[path = "../../kh-host/src/loadout_shared.rs"]', true),
+  'crates/kh-er-render/examples/hud.rs': (text) => replaceAll(text, LOADOUT_PATH, '#[path = "../../kh-host/src/loadout_shared.rs"]', true),
+  // (the two files above no longer include the loadout reader by path since 2026-11: optional)
   // The help lines KH3 shows for its abilities are the game's text: only the lines we wrote ourselves (our own
   // abilities, port = "ours") are kept; the menu takes the game's lines from the UI pack the setup builds.
   'sheets/port/sora-abilities.json': (text) => {
@@ -181,7 +186,14 @@ function scrubJapanese(r, text) {
   // what is left must be only the kept name column, else the sheet's layout was not one row per line
   const left = result.split('\n').filter((l) => JP.test(l) && (JP.lastIndex = 0, true));
   JP.lastIndex = 0;
-  if (left.length && nameCol < 0) throw new Error(`${r}: Japanese text left on ${left.length} line(s) (layout not one row per line?)`);
+  // (a sheet laid out over many lines, e.g. sora-shotlocks.json, and with no kept name column: every run is replaced in the
+  // text itself; the runs are only ever inside JSON strings, so the file stays the same JSON with "…" in their place)
+  if (left.length && nameCol < 0) {
+    const whole = text.replace(JP, "…"); JP.lastIndex = 0;
+    JSON.parse(whole);
+    console.log(`  ${r}: Japanese game text removed (multi-line layout)`);
+    return whole;
+  }
   if (n) console.log(`  ${r}: Japanese game text removed from ${n} row(s)`);
   return result;
 }
@@ -258,7 +270,7 @@ for (const t of Object.keys(TRANSFORMS)) if (!files.includes(t)) { console.error
 // development / cheat key unless it is built with the cargo feature `dev-aids` (off by default, never used by the setup).
 if (!fs.existsSync(path.join(PATCHES, 'no-dev-aids.patch'))) { console.error(`the release patches are missing: ${PATCHES} (give --patches DIR)`); process.exit(1); }
 for (const p of fs.readdirSync(PATCHES).filter((f) => f.endsWith('.patch')).sort()) {
-  execFileSync('git', ['apply', '--whitespace=nowarn', path.join(PATCHES, p)], { cwd: REPO, stdio: 'inherit' });
+  execFileSync('git', ['-c', 'core.autocrlf=false', 'apply', '--whitespace=nowarn', path.join(PATCHES, p)], { cwd: REPO, stdio: 'inherit' });
   console.log(`  patch applied: ${p}`);
 }
 

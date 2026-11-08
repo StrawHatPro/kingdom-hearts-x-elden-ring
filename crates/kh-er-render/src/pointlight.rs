@@ -41,7 +41,6 @@
 //! of ambient remains (`hero_sora_ambient`, `fx_sora_ambient`) for the side turned away.
 //! WITHOUT those shaders (an older pack) his rig's ambient (non-directional) is lifted by a share
 //! of what the lights give a white surface at his chest (`fx_on_sora`, `hero_on_sora`), as before.
-#![allow(clippy::too_many_arguments)]
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -183,6 +182,24 @@ static SETTINGS: Mutex<Option<LightSettings>> = Mutex::new(None);
 static FX_LIGHTS: Mutex<Option<(Vec<kh_vfx::Light>, Instant)>> = Mutex::new(None);
 /// The darkness gate and when it was stepped last.
 static GATE: Mutex<Option<(DarkGate, Instant)>> = Mutex::new(None);
+
+/// (the user, 2026-11-03: "keyblade-hero light should never activate in round table hold") THE HERO LIGHT IS BANNED HERE: set by
+/// the host from the player's map (kh-er moogle.rs `in_roundtable_hold`: m11_10_00_00). While set, whatever `r.hero_light` says
+/// (2 = forced included): the gate is held open with its weight at 0 (off at once, no fade-out), no hero light is planned for
+/// the pass or for anyone's materials, and nobody draws the Keyblade for it (`keyblade_wanted` false: Sora and the party
+/// leader's weapon tip alike). Every route to the hero light goes through the gate of `frame` (its strength: the pass's and the materials' lights)
+/// or `keyblade_wanted` (the Keyblade drawn, its glow and sparkles).
+static HERO_BANNED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_hero_banned(banned: bool) {
+    if HERO_BANNED.swap(banned, Ordering::Relaxed) != banned {
+        crate::rlog!("render: hero light {}", if banned { "BANNED here (Roundtable Hold): off at once" } else { "allowed again (left Roundtable Hold)" });
+    }
+}
+
+pub fn hero_banned() -> bool {
+    HERO_BANNED.load(Ordering::Relaxed)
+}
 
 pub fn set_settings(settings: LightSettings) {
     if let Ok(mut guard) = SETTINGS.lock() {
@@ -327,6 +344,16 @@ pub fn force_fx_exponent(exponent: f32) {
     FX_EXPONENT_FORCED.store(exponent.max(0.0).to_bits(), Ordering::Relaxed);
 }
 
+/// (HEROLIGHT-KB) The hero light's colour turned by a weapon's tint, its luma kept (a tint of 1: unchanged).
+pub fn tinted(color: Vec3, tint: Vec3) -> Vec3 {
+    let t = color * tint.max(Vec3::ZERO);
+    let (before, after) = (luma(color), luma(t));
+    if !t.is_finite() || after <= 1.0e-6 {
+        return color;
+    }
+    t * (before / after)
+}
+
 /// The frame's lights. `fx_scale`: KH3 scene-linear -> the target (`vfx::effect_scale` x the
 /// effects' `hdr`); `display_to_target`: display linear -> the target (1 / the game's exposure);
 /// `feet`: his feet (game space), `hero`: the gate's strength; `blade`: the Keyblade light's place on the blade and
@@ -367,7 +394,7 @@ pub fn world_light(ring: &[Vec4], ring_at: &[Vec4], feet: Vec3, gain: f32, min_c
     let base = taps.iter().map(|(l, _)| luma(*l)).fold(f32::MAX, f32::min);
     let (top_light, top_at) = taps.iter().copied().max_by(|a, b| luma(a.0).total_cmp(&luma(b.0)))?;
     let top = luma(top_light);
-    if !(top > 1.0e-5) || (top - base) / top < min_contrast {
+    if top.partial_cmp(&1.0e-5).is_none_or(std::cmp::Ordering::is_le) || (top - base) / top < min_contrast {
         return None;
     }
     let mut toward = Vec3::ZERO;
@@ -394,7 +421,9 @@ pub fn world_light(ring: &[Vec4], ring_at: &[Vec4], feet: Vec3, gain: f32, min_c
 /// the game's light as read back; `level`: what a white surface at his feet shows (display).
 pub(crate) fn world_light_now(game: Option<&crate::light::GameLight>, feet: Option<Vec3>, level: Option<f32>) -> Option<PassLight> {
     let s = settings();
-    let raw = match (s.world, game, feet) {
+    // (ER-NATIVE) not in the native mode: this point light is FITTED to the ground's light around his feet (an estimate), and the
+    // game's light per texel already holds every light of the place: added, it would count them twice
+    let raw = match (s.world && !crate::hybrid::native_now(), game, feet) {
         (true, Some(g), Some(f)) if level.is_none_or(|l| l <= s.world_max_level) => world_light(&g.ring, &g.ring_at, f, s.world_gain, s.world_min_contrast),
         _ => None,
     };
@@ -538,6 +567,12 @@ pub fn own_shaders() -> bool {
     OWN_SHADERS.load(Ordering::Relaxed)
 }
 
+/// (HAIR-BLEED) The pass's lights as an Elden Ring surface gets them: unplaced (from their own place) and without an ambient share.
+/// Pure.
+pub(crate) fn native_pass_lights(lights: &[PassLight]) -> Vec<PassLight> {
+    lights.iter().map(|l| PassLight { placed: false, sora_ambient: 0.0, on_sora: 0.0, ..*l }).collect()
+}
+
 /// (gfx.rs) The lights on him of this frame: the block of the frame constants, and his ambient lift (target units).
 pub(crate) fn for_sora(lights: &[PassLight], feet: Option<Vec3>, camera: Vec3, out_scale: f32) -> (Vec<f32>, Vec3) {
     for_sora_toward(lights, feet, camera, settings().hero_sora_toward, out_scale)
@@ -551,6 +586,17 @@ pub(crate) fn for_sora_toward(lights: &[PassLight], feet: Option<Vec3>, camera: 
         return (vec![0.0; SORA_BLOCK_FLOATS], Vec3::ZERO);
     };
     let own = own_shaders();
+    // (HAIR-BLEED, the user 2026-11-06: "make the lighting react to the KH models the same way it reacts to Elden Ring characters")
+    // in the Elden Ring style our lights reach him as they reach the world (the pass): from where they are (the hero light on the
+    // blade, not placed above him toward the camera), with no ambient share of their own (a flat fill no surface of the world
+    // gets); the KH3 style keeps its character light as before
+    let native_lights: Vec<PassLight>;
+    let lights = if crate::hybrid::native_now() {
+        native_lights = native_pass_lights(lights);
+        native_lights.as_slice()
+    } else {
+        lights
+    };
     let lift = on_sora(lights, feet + Vec3::Z * CHEST, own);
     let s = settings();
     let on_him = if own { sora_lights(lights, feet, camera, s.hero_sora_height, toward_cm) } else { Vec::new() };
@@ -612,12 +658,20 @@ pub struct Frame {
 /// Steps the gate on the frame's reading and plans the lights.
 pub(crate) fn frame(level: Option<f32>, fx_scale: f32, display_to_target: f32, feet: Option<Vec3>, blade: Option<(Vec3, f32)>) -> Frame {
     let s = settings();
+    // (HEROLIGHT-KB) the hero light takes the colour of the carrier's weapon glow (its tint relative to the Kingdom Key's, at the
+    // same brightness: herolight.rs); the Kingdom Key and no carrier: as before
+    let s = LightSettings { hero_color: tinted(s.hero_color, crate::herolight::tint_now()), ..s };
     let hero = {
         let mut guard = GATE.lock().unwrap_or_else(|e| e.into_inner());
         let (gate, at) = guard.get_or_insert_with(|| (DarkGate::default(), Instant::now()));
         let dt = at.elapsed().as_secs_f32();
         *at = Instant::now();
-        gate.step(level, dt, s.hero_dark_on, s.hero_dark_off, s.hero_fade, s.hero);
+        if hero_banned() {
+            // (Roundtable Hold) open, weight 0: off at once; outside again it comes up through its fade as anywhere
+            *gate = DarkGate::default();
+        } else {
+            gate.step(level, dt, s.hero_dark_on, s.hero_dark_off, s.hero_fade, s.hero);
+        }
         gate.strength()
     };
     let fx = if s.fx { fx_lights_now() } else { Vec::new() };
@@ -649,7 +703,7 @@ pub(crate) fn frame(level: Option<f32>, fx_scale: f32, display_to_target: f32, f
 /// the Keyblade (`hero.keyblade`) and the darkness gate is closed (or forced).
 pub fn keyblade_wanted() -> bool {
     let s = settings();
-    if s.hero == 0 || !s.hero_keyblade {
+    if s.hero == 0 || !s.hero_keyblade || hero_banned() {
         return false;
     }
     s.hero == 2 || GATE.lock().map(|g| g.as_ref().is_some_and(|(gate, _)| gate.dark)).unwrap_or(false)
@@ -912,7 +966,7 @@ pub fn status() -> String {
         if frames > 0 { pixels as f64 / frames as f64 / 1.0e6 } else { 0.0 },
         if s.fx { "on" } else { "OFF (fx.light = 0)" },
         FX_SEEN_MAX.swap(0, Ordering::Relaxed),
-        match s.hero { 0 => "OFF (r.hero_light = 0)", 2 => "FORCED (r.hero_light = 2)", _ => "auto" },
+        if hero_banned() { "BANNED (Roundtable Hold)" } else { match s.hero { 0 => "OFF (r.hero_light = 0)", 2 => "FORCED (r.hero_light = 2)", _ => "auto" } },
         f32::from_bits(HERO_BITS.load(Ordering::Relaxed)),
         if level.is_finite() { format!("{level:.3}") } else { "-".to_string() },
         s.hero_dark_on,
@@ -924,6 +978,20 @@ pub fn status() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // (HAIR-BLEED) in the Elden Ring style the KH characters take our lights as the world does: from their own place (the
+    // Keyblade's hero light on the blade, never placed above him toward the camera), with no ambient share of their own
+    #[test]
+    fn in_the_elden_ring_style_our_lights_reach_him_as_they_reach_the_world() {
+        let blade = Vec3::new(30.0, 0.0, 110.0);
+        let hero = PassLight { position: blade, radius: 750.0, color: Vec3::ONE, exponent: 2.0, wrap: 0.3, on_sora: 0.35, sora: 1.0, sora_ambient: 0.3, placed: true, body_shadow: 0.5 };
+        let native = native_pass_lights(&[hero]);
+        assert_eq!(native, vec![PassLight { placed: false, sora_ambient: 0.0, on_sora: 0.0, ..hero }]);
+        assert_eq!(on_sora(&native, Vec3::Z * CHEST, true), Vec3::ZERO, "no ambient fill of its own");
+        let on_him = sora_lights(&native, Vec3::ZERO, Vec3::new(-500.0, 0.0, 160.0), 200.0, 120.0);
+        assert_eq!(on_him.len(), 1);
+        assert_eq!((on_him[0].position, on_him[0].color), (blade, Vec3::ONE), "from the blade, at the world's strength");
+    }
 
     #[test]
     fn the_falloff_is_one_at_the_centre_zero_at_the_radius_and_falls_monotonically() {
@@ -1042,7 +1110,8 @@ mod tests {
         assert!(placed[0].placed && placed[0].position == Vec3::new(60.0, 30.0, 110.0) && placed[0].body_shadow > 0.0);
         let s = LightSettings { fx: false, hero: 1, hero_sora_placed: false, ..LightSettings::default() };
         assert!(s.hero_keyblade);
-        let feet = Some(Vec3::new(10.0, 20.0, 0.0));
+        let at_feet = Vec3::new(10.0, 20.0, 0.0);
+        let feet = Some(at_feet);
         let blade = Vec3::new(60.0, 30.0, 110.0);
         // no blade drawn yet: no light (it appears with the Keyblade)
         assert!(plan(&s, &[], 1.0, 0.05, feet, 1.0, None).is_empty());
@@ -1057,7 +1126,7 @@ mod tests {
         let gate = plan(&s, &[], 1.0, 0.05, feet, 0.25, Some((blade, 1.0)));
         assert!((gate[0].color - full[0].color * 0.25).length() < 1.0e-7);
         // on him it stays where the blade is (direction from the blade)
-        let on = sora_lights(&full, feet.unwrap(), Vec3::new(-400.0, 0.0, 200.0), s.hero_sora_height, s.hero_sora_toward);
+        let on = sora_lights(&full, at_feet, Vec3::new(-400.0, 0.0, 200.0), s.hero_sora_height, s.hero_sora_toward);
         assert_eq!(on[0].position, blade);
         // the pass's block carries his shadow in opt.y
         let b = block(&full, true, 0.18, 6);

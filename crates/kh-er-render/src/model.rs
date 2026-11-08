@@ -234,7 +234,7 @@ mod tests {
         let mut push = |bytes: Vec<u8>, bin: &mut Vec<u8>| {
             views.push((bin.len(), bytes.len()));
             bin.extend(bytes);
-            while bin.len() % 4 != 0 {
+            while !bin.len().is_multiple_of(4) {
                 bin.push(0);
             }
         };

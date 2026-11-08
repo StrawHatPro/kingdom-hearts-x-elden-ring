@@ -73,7 +73,7 @@ mod tests {
         let mut g = HopGuard::default();
         let id = MemberId(2);
         let mut t = 0.0;
-        let mut hop = |g: &mut HopGuard, t: &mut f64| {
+        let hop = |g: &mut HopGuard, t: &mut f64| {
             let a = g.observe(id, true, *t);
             *t += 0.4;
             let b = g.observe(id, false, *t);

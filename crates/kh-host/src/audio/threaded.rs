@@ -5,6 +5,9 @@
 //!   Engine::update -> voice commands  --q1-->  reads the material of a Start  --q2-->  Mixer::apply + Mixer::render
 //!   Output::send: a queue push, nothing else   (a WAV file, on first use), owns        256 frames a pull
 //!                                              the device, reopens it
+//!                                                 |  ^ (ER-HITSFX-AUDIT) the read itself is
+//!                                                 v  | done on "kh-audio-read": only that
+//!                                              "kh-audio-read" thread   voice waits (`Router`)
 //! ```
 //!
 //! - `send` is one push on a lock-free queue (std's mpsc: a linked list of blocks): no file is
@@ -39,6 +42,118 @@ enum Feed {
     Quit,
     /// (DON-KIT) Read these materials ahead (the item effects' sounds).
     Preload(Vec<(u32, u32)>),
+    /// (ER-HITSFX-AUDIT) The "kh-audio-read" thread read a material (`None`: it could not; its errors for the log).
+    Loaded { bank: u32, material: u32, buffer: Option<Arc<Buffer>>, errors: Vec<String> },
+}
+
+/// (ER-HITSFX-AUDIT) A voice whose Start waits for its material, with the commands for it that came after it (in order).
+struct Waiting {
+    voice: VoiceId,
+    material: (u32, u32),
+    start: (f64, bool, VoiceParams),
+    held: Vec<VoiceCommand>,
+}
+
+/// (ER-HITSFX-AUDIT) THE ORDER OF THE HOST'S COMMANDS WITHOUT A FILE READ IN ITS WAY. A Start whose material is not read
+/// yet used to be read right there, on the "kh-audio" thread, before anything after it went on: a cold WAV read (15-19 ms
+/// measured for 55-240 KB files on first open, on this machine) held every later command of every voice (other hits'
+/// starts, stops, the fades' updates) for as long, and a fight's first hits came late together. Now the read goes to the
+/// "kh-audio-read" thread and only THAT voice waits for it: its Start, then its own later commands, in their order, as
+/// soon as the material is in. Every other voice's commands go on at once. A Stop-all drops the waiting voices (they
+/// would be stopped at their start).
+#[derive(Default)]
+struct Router {
+    materials: Materials,
+    /// Materials asked of the reader and not back yet.
+    reading: std::collections::HashSet<(u32, u32)>,
+    waiting: Vec<Waiting>,
+}
+
+impl Router {
+    /// One command of the host: what goes to the mixer now (`out`), the materials to read (`urgent`: a voice waits for it;
+    /// `background`: read ahead), and whether a material is known to be missing.
+    fn feed(&mut self, feed: Feed, out: &mut Vec<Mix>, urgent: &mut Vec<(u32, u32)>, background: &mut Vec<(u32, u32)>) -> u32 {
+        let mut missing = 0;
+        match feed {
+            Feed::Voice(VoiceCommand::Start { voice, bank, material, offset, looped, params, .. }) => match self.materials.cached(bank, material) {
+                Some(Some(buffer)) => out.push(Mix::Start { voice, buffer, offset, looped, params, bank, material }),
+                Some(None) => missing += 1,
+                None => {
+                    if self.reading.insert((bank, material)) {
+                        urgent.push((bank, material));
+                    } else if let Some(i) = background.iter().position(|m| *m == (bank, material)) {
+                        // asked ahead in this very batch: a voice waits for it now
+                        background.remove(i);
+                        urgent.push((bank, material));
+                    }
+                    self.waiting.push(Waiting { voice, material: (bank, material), start: (offset, looped, params), held: Vec::new() });
+                }
+            },
+            Feed::Voice(command) => {
+                let voice = match command {
+                    VoiceCommand::Update { voice, .. } | VoiceCommand::Pause { voice, .. } | VoiceCommand::Stop { voice } | VoiceCommand::Start { voice, .. } => voice,
+                };
+                match self.waiting.iter_mut().rev().find(|w| w.voice == voice) {
+                    Some(w) => w.held.push(command),
+                    None => out.push(Mix::Command(command)),
+                }
+            }
+            Feed::Master(gain) => out.push(Mix::Master(gain)),
+            Feed::StopAll => {
+                self.waiting.clear();
+                out.push(Mix::StopAll);
+            }
+            Feed::Preload(list) => {
+                for m in list {
+                    if self.materials.cached(m.0, m.1).is_none() && self.reading.insert(m) {
+                        background.push(m);
+                    }
+                }
+            }
+            Feed::Loaded { bank, material, buffer, .. } => {
+                self.reading.remove(&(bank, material));
+                self.materials.insert(bank, material, buffer.clone());
+                let (ready, rest): (Vec<Waiting>, Vec<Waiting>) = std::mem::take(&mut self.waiting).into_iter().partition(|w| w.material == (bank, material));
+                self.waiting = rest;
+                for w in ready {
+                    match &buffer {
+                        Some(buffer) => {
+                            let (offset, looped, params) = w.start;
+                            out.push(Mix::Start { voice: w.voice, buffer: buffer.clone(), offset, looped, params, bank, material });
+                            out.extend(w.held.into_iter().map(Mix::Command));
+                        }
+                        None => missing += 1,
+                    }
+                }
+            }
+            Feed::Quit => {}
+        }
+        missing
+    }
+}
+
+/// (ER-HITSFX-AUDIT) The "kh-audio-read" thread: reads the materials asked for (a waiting voice's first, then those read
+/// ahead) and hands each back to the "kh-audio" thread.
+fn reader(pack: Arc<Pack>, urgent: Receiver<(u32, u32)>, background: Receiver<(u32, u32)>, back: Sender<Feed>) {
+    loop {
+        let next = match urgent.try_recv() {
+            Ok(m) => m,
+            Err(TryRecvError::Disconnected) => return,
+            Err(TryRecvError::Empty) => match background.try_recv() {
+                Ok(m) => m,
+                Err(_) => match urgent.recv_timeout(Duration::from_millis(50)) {
+                    Ok(m) => m,
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                },
+            },
+        };
+        let mut materials = Materials::default();
+        let buffer = materials.get(&pack, next.0, next.1);
+        if back.send(Feed::Loaded { bank: next.0, material: next.1, buffer, errors: materials.errors }).is_err() {
+            return;
+        }
+    }
 }
 
 /// What reaches the mixer (a Start with its material already read).
@@ -59,6 +174,12 @@ pub struct Stats {
     /// Largest absolute output sample (f32 bits) and how many samples had to be clipped.
     peak: AtomicU32,
     pub clipped: AtomicU64,
+    /// (THE USER 2026-11-02: "sometimes Audio from specifically our mod will become very loud") Frames the mixer's
+    /// limiter turned down since the start; the output's peak before the limiter and the limiter's deepest cut (1 - its
+    /// gain), both as f32 bits since the last `take_window`.
+    pub limited: AtomicU64,
+    window_peak: AtomicU32,
+    window_cut: AtomicU32,
     /// Frames the device pulled / frames rendered without a device.
     pub frames: AtomicU64,
     pub frames_blind: AtomicU64,
@@ -93,6 +214,33 @@ const WATCH_FRAMES: u64 = 14_400;
 impl Stats {
     pub fn peak(&self) -> f32 {
         f32::from_bits(self.peak.load(Ordering::Relaxed))
+    }
+
+    /// (THE USER 2026-11-02) After a block of the mixer: its numbers into the counters (the f32 bits of values >= 0
+    /// order as the values do, so `fetch_max` keeps the largest).
+    fn after_block(&self, mixer: &Mixer) {
+        self.voices.store(mixer.voices() as u32, Ordering::Relaxed);
+        self.peak.store(mixer.peak.to_bits(), Ordering::Relaxed);
+        self.clipped.store(mixer.clipped, Ordering::Relaxed);
+        self.limited.store(mixer.limited, Ordering::Relaxed);
+        self.window_peak.fetch_max(mixer.block_peak.max(0.0).to_bits(), Ordering::Relaxed);
+        self.window_cut.fetch_max((1.0 - mixer.block_gain).max(0.0).to_bits(), Ordering::Relaxed);
+    }
+}
+
+/// (THE USER 2026-11-02: "sometimes Audio from specifically our mod will become very loud") The mix since the last look:
+/// the output's peak after the master gain and before the limiter (over `kh_audio::mixer::LIMIT` = the limiter worked),
+/// and the limiter's smallest gain (1 = it never cut).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MixWindow {
+    pub peak: f32,
+    pub gain: f32,
+}
+
+impl MixWindow {
+    /// The limiter's deepest cut in dB (0 = none).
+    pub fn cut_db(&self) -> f32 {
+        20.0 * self.gain.max(1.0e-6).log10()
     }
 }
 
@@ -155,9 +303,7 @@ impl MixState {
                 }
             }
         }
-        stats.voices.store(self.mixer.voices() as u32, Ordering::Relaxed);
-        stats.peak.store(self.mixer.peak.to_bits(), Ordering::Relaxed);
-        stats.clipped.store(self.mixer.clipped, Ordering::Relaxed);
+        stats.after_block(&self.mixer);
     }
 }
 
@@ -210,19 +356,28 @@ impl rodio::Source for Source {
 fn default_device_name() -> Option<String> {
     use rodio::cpal::traits::{DeviceTrait, HostTrait};
     let device = rodio::cpal::default_host().default_output_device()?;
-    #[allow(deprecated)]
-    let name = device.name().ok();
-    name
+    let description = device.description().ok()?;
+    Some(description.name().to_string())
 }
 
 /// The "kh-audio" thread: materials, the device and its reopening.
-fn feeder(rx: Receiver<Feed>, pack: Arc<Pack>, stats: Arc<Stats>, log: fn(&str), lowpass: bool) {
+fn feeder(rx: Receiver<Feed>, back: Sender<Feed>, pack: Arc<Pack>, stats: Arc<Stats>, log: fn(&str), lowpass: bool) {
     let (mix_tx, mix_rx) = mpsc::channel::<Mix>();
     let mut mixer = Mixer::new();
     mixer.set_lowpass(lowpass);
     let state = Arc::new(Mutex::new(MixState { rx: mix_rx, mixer, rendered: 0, last_peak: 0.0, watched: Vec::new() }));
     let failed = Arc::new(AtomicBool::new(false));
-    let mut materials = Materials::default();
+    // (ER-HITSFX-AUDIT) the commands' router and the reader thread of the materials (it ends when this thread does)
+    let mut router = Router::default();
+    let (read_urgent, urgent_rx) = mpsc::channel::<(u32, u32)>();
+    let (read_background, background_rx) = mpsc::channel::<(u32, u32)>();
+    if let Err(error) = std::thread::Builder::new().name("kh-audio-read".to_string()).spawn(move || {
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| reader(pack, urgent_rx, background_rx, back))).is_err() {
+            log("audio: PANIC in the audio read thread: sounds not read yet stay silent");
+        }
+    }) {
+        log(&format!("audio: the audio read thread could not be started ({error}): sounds not read yet stay silent"));
+    }
     let mut device: Option<(rodio::MixerDeviceSink, Option<String>)> = None;
     let mut next_open = Instant::now();
     let mut checked = Instant::now();
@@ -301,37 +456,34 @@ fn feeder(rx: Receiver<Feed>, pack: Arc<Pack>, stats: Arc<Stats>, log: fn(&str),
                 blind = now;
             }
         }
-        // ---- the host's commands
+        // ---- the host's commands (ER-HITSFX-AUDIT: through the router; a material is read on "kh-audio-read", never here)
         match rx.recv_timeout(Duration::from_millis(if device.is_some() { 250 } else { 20 })) {
             Ok(first) => {
                 let mut next = Some(first);
+                let (mut out, mut urgent, mut background) = (Vec::new(), Vec::new(), Vec::new());
                 while let Some(feed) = next {
-                    let mix = match feed {
-                        Feed::Voice(VoiceCommand::Start { voice, bank, material, offset, looped, params, .. }) => match materials.get(&pack, bank, material) {
-                            Some(buffer) => Some(Mix::Start { voice, buffer, offset, looped, params, bank, material }),
-                            None => {
-                                stats.missing.fetch_add(1, Ordering::Relaxed);
-                                None
-                            }
-                        },
-                        Feed::Voice(command) => Some(Mix::Command(command)),
-                        Feed::Master(gain) => Some(Mix::Master(gain)),
-                        Feed::StopAll => Some(Mix::StopAll),
-                        Feed::Quit => return,
-                        Feed::Preload(list) => {
-                            materials.preload(&pack, &list);
-                            None
+                    if let Feed::Loaded { errors, .. } = &feed {
+                        for error in errors {
+                            log(&format!("audio: {error}"));
                         }
-                    };
-                    if let Some(mix) = mix {
+                    }
+                    if matches!(feed, Feed::Quit) {
+                        return;
+                    }
+                    let missing = router.feed(feed, &mut out, &mut urgent, &mut background);
+                    stats.missing.fetch_add(missing, Ordering::Relaxed);
+                    for mix in out.drain(..) {
                         if mix_tx.send(mix).is_err() {
                             return;
                         }
                     }
+                    for m in urgent.drain(..) {
+                        read_urgent.send(m).ok();
+                    }
+                    for m in background.drain(..) {
+                        read_background.send(m).ok();
+                    }
                     next = rx.try_recv().ok();
-                }
-                for error in materials.errors.drain(..) {
-                    log(&format!("audio: {error}"));
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -344,7 +496,8 @@ enum Kind {
     /// Nothing is heard and nothing is kept.
     Null,
     Device { tx: Sender<Feed>, thread: Option<std::thread::JoinHandle<()>> },
-    Render { mixer: Mixer, materials: Materials, pack: Arc<Pack>, wav: WavOut, block: Vec<f32> },
+    // (the mixer boxed: it is large next to the other variants)
+    Render { mixer: Box<Mixer>, materials: Materials, pack: Arc<Pack>, wav: WavOut, block: Vec<f32> },
 }
 
 /// Where the voice commands of a host go.
@@ -366,9 +519,10 @@ impl Output {
         let stats = Arc::new(Stats::default());
         let (tx, rx) = mpsc::channel::<Feed>();
         let thread_stats = stats.clone();
+        let back = tx.clone(); // (ER-HITSFX-AUDIT) the reader thread's way back
         let thread = std::thread::Builder::new().name("kh-audio".to_string()).spawn(move || {
             // (nothing of ours may unwind into a host: a panic ends this thread and the sound, no more)
-            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| feeder(rx, pack, thread_stats, log, lowpass))).is_err() {
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| feeder(rx, back, pack, thread_stats, log, lowpass))).is_err() {
                 log("audio: PANIC in the audio thread: Sora is silent from now on");
             }
         });
@@ -385,7 +539,7 @@ impl Output {
     pub fn render(pack: Arc<Pack>, lowpass: bool, path: &str) -> std::io::Result<Output> {
         let mut mixer = Mixer::new();
         mixer.set_lowpass(lowpass);
-        Ok(Output { kind: Kind::Render { mixer, materials: Materials::default(), pack, wav: WavOut::create(path)?, block: Vec::new() }, stats: Arc::new(Stats::default()), master: 1.0 })
+        Ok(Output { kind: Kind::Render { mixer: Box::new(mixer), materials: Materials::default(), pack, wav: WavOut::create(path)?, block: Vec::new() }, stats: Arc::new(Stats::default()), master: 1.0 })
     }
 
     pub fn is_device(&self) -> bool {
@@ -464,9 +618,7 @@ impl Output {
             block.resize(frames * 2, 0.0);
             mixer.render(block);
             wav.append(block);
-            self.stats.voices.store(mixer.voices() as u32, Ordering::Relaxed);
-            self.stats.peak.store(mixer.peak.to_bits(), Ordering::Relaxed);
-            self.stats.clipped.store(mixer.clipped, Ordering::Relaxed);
+            self.stats.after_block(mixer);
             self.stats.frames.fetch_add(frames as u64, Ordering::Relaxed);
         }
     }
@@ -500,14 +652,21 @@ impl Output {
         Some((samples.len() as u64 / 2, samples.iter().fold(0.0f32, |m, s| m.max(s.abs()))))
     }
 
+    /// (THE USER 2026-11-02) The mix since the last call (the counters start over): see [`MixWindow`].
+    pub fn take_window(&self) -> MixWindow {
+        let peak = f32::from_bits(self.stats.window_peak.swap(0, Ordering::Relaxed));
+        let cut = f32::from_bits(self.stats.window_cut.swap(0, Ordering::Relaxed));
+        MixWindow { peak, gain: 1.0 - cut }
+    }
+
     /// One line for a host's log.
     pub fn describe(&self) -> String {
         let s = &self.stats;
         match &self.kind {
             Kind::Null => "no output".to_string(),
-            Kind::Render { wav, .. } => format!("rendering to {} ({} voices started, peak {:.3}, clipped {})", wav.path, s.started.load(Ordering::Relaxed), s.peak(), s.clipped.load(Ordering::Relaxed)),
+            Kind::Render { wav, .. } => format!("rendering to {} ({} voices started, peak {:.3}, clipped {}, limited {})", wav.path, s.started.load(Ordering::Relaxed), s.peak(), s.clipped.load(Ordering::Relaxed), s.limited.load(Ordering::Relaxed)),
             Kind::Device { .. } => format!(
-                "device {} (opened {} time(s), {} failure(s)), {} voice(s) now, {} started, peak {:.3}, clipped {}, {} material(s) missing",
+                "device {} (opened {} time(s), {} failure(s)), {} voice(s) now, {} started, peak {:.3} (before the limiter), clipped {}, limited {} frame(s), {} material(s) missing",
                 if s.device.load(Ordering::Relaxed) { "OPEN" } else { "NONE" },
                 s.opens.load(Ordering::Relaxed),
                 s.open_failures.load(Ordering::Relaxed),
@@ -515,6 +674,7 @@ impl Output {
                 s.started.load(Ordering::Relaxed),
                 s.peak(),
                 s.clipped.load(Ordering::Relaxed),
+                s.limited.load(Ordering::Relaxed),
                 s.missing.load(Ordering::Relaxed),
             ),
         }
@@ -578,5 +738,114 @@ mod tests {
         state.render(&mut block, &stats);
         assert_eq!(stats.voices.load(Ordering::Relaxed), 0);
         assert!(block[400].abs() < 1.0e-6 && stats.clipped.load(Ordering::Relaxed) == 0);
+    }
+
+    const FLAT: VoiceParams = VoiceParams { volume: 1.0, pitch: 1.0, pan: 0.0, pan_depth: 1.0, lowpass: 1.0, reverb_send: 0.0 };
+
+    fn start(voice: VoiceId, material: u32) -> Feed {
+        Feed::Voice(VoiceCommand::Start { voice, sound: voice, bank: 0, material, offset: 0.0, looped: false, params: FLAT })
+    }
+
+    fn tone() -> Arc<Buffer> {
+        Arc::new(Buffer { channels: 1, sample_rate: kh_audio::mixer::RATE, data: vec![8_000; 48_000], loop_points: None })
+    }
+
+    /// What the router handed on, in words: "start 1", "update 1", "stop 2", "stop-all".
+    fn words(out: &[Mix]) -> Vec<String> {
+        out.iter()
+            .map(|m| match m {
+                Mix::Start { voice, .. } => format!("start {voice}"),
+                Mix::Command(VoiceCommand::Update { voice, .. }) => format!("update {voice}"),
+                Mix::Command(VoiceCommand::Pause { voice, .. }) => format!("pause {voice}"),
+                Mix::Command(VoiceCommand::Stop { voice }) => format!("stop {voice}"),
+                Mix::Command(VoiceCommand::Start { voice, .. }) => format!("raw start {voice}"),
+                Mix::Master(_) => "master".to_string(),
+                Mix::StopAll => "stop-all".to_string(),
+            })
+            .collect()
+    }
+
+    /// (ER-HITSFX-AUDIT) A COLD READ HOLDS ONLY ITS OWN VOICE: voice 2's material is not read yet, voice 1's is. Voice 1's
+    /// start and update go to the mixer at once; voice 2's start waits for the reader, and its own update and stop that
+    /// came after it follow it, in their order, when the material is in. A material asked ahead (preload) and then wanted by
+    /// a voice in the same batch is asked as urgent.
+    #[test]
+    fn a_cold_read_holds_only_its_own_voice() {
+        let mut router = Router::default();
+        router.materials.insert(0, 1, Some(tone()));
+        let (mut out, mut urgent, mut background) = (Vec::new(), Vec::new(), Vec::new());
+        for feed in [start(2, 2), Feed::Voice(VoiceCommand::Update { voice: 2, params: FLAT }), start(1, 1), Feed::Voice(VoiceCommand::Update { voice: 1, params: FLAT }), Feed::Voice(VoiceCommand::Stop { voice: 2 }), Feed::Preload(vec![(0, 3)]), start(3, 3)] {
+            assert_eq!(router.feed(feed, &mut out, &mut urgent, &mut background), 0);
+        }
+        assert_eq!(words(&out), ["start 1", "update 1"], "voice 1 never waits for voice 2's read");
+        assert_eq!((urgent.clone(), background.clone()), (vec![(0, 2), (0, 3)], vec![]), "both reads urgent (3 was wanted by a voice in the batch)");
+        out.clear();
+        router.feed(Feed::Loaded { bank: 0, material: 2, buffer: Some(tone()), errors: Vec::new() }, &mut out, &mut urgent, &mut background);
+        assert_eq!(words(&out), ["start 2", "update 2", "stop 2"], "voice 2 with its own later commands, in order");
+        out.clear();
+        // a material that cannot be read: its voice is missing, its commands go nowhere
+        assert_eq!(router.feed(Feed::Loaded { bank: 0, material: 3, buffer: None, errors: vec!["no file".to_string()] }, &mut out, &mut urgent, &mut background), 1);
+        assert!(out.is_empty() && router.waiting.is_empty());
+        // read now: a further start of it goes on at once
+        router.feed(start(4, 2), &mut out, &mut urgent, &mut background);
+        assert_eq!(words(&out), ["start 4"]);
+    }
+
+    /// (ER-HITSFX-AUDIT) A Stop-all (a respawn, the sound switched off) drops the voices still waiting for their material:
+    /// no voice of before it starts after it.
+    #[test]
+    fn a_stop_all_drops_the_waiting_voices() {
+        let mut router = Router::default();
+        let (mut out, mut urgent, mut background) = (Vec::new(), Vec::new(), Vec::new());
+        router.feed(start(1, 5), &mut out, &mut urgent, &mut background);
+        router.feed(Feed::StopAll, &mut out, &mut urgent, &mut background);
+        router.feed(Feed::Loaded { bank: 0, material: 5, buffer: Some(tone()), errors: Vec::new() }, &mut out, &mut urgent, &mut background);
+        assert_eq!(words(&out), ["stop-all"]);
+    }
+
+    /// (ER-HITSFX-AUDIT) THE DEVICE CALLBACK NEVER WAITS: with the mix state's lock held elsewhere (the "kh-audio" thread
+    /// advancing it while no device pulls), a pull returns at once (silence), it does not wait for the lock.
+    #[test]
+    fn the_callback_never_waits_for_the_lock() {
+        let (_tx, rx) = mpsc::channel::<Mix>();
+        let state = Arc::new(Mutex::new(MixState { rx, mixer: Mixer::new(), rendered: 0, last_peak: 0.0, watched: Vec::new() }));
+        let mut source = Source { state: state.clone(), stats: Arc::new(Stats::default()), block: vec![0.0; 512], at: 512 };
+        let held = state.lock().expect("the lock");
+        let t = Instant::now();
+        let pulled: Vec<rodio::Sample> = (0..4 * 512).filter_map(|_| source.next()).collect();
+        let took = t.elapsed();
+        drop(held);
+        assert_eq!(pulled.len(), 4 * 512);
+        assert!(pulled.iter().all(|s| *s == 0.0));
+        assert!(took < Duration::from_millis(20), "four blocks pulled without waiting: {took:?}");
+    }
+
+    /// (ER-HITSFX-AUDIT) THE CALLBACK'S WORK UNDER A BURST: 300 starts and 300 updates arriving at once (every hit of a
+    /// frame and more) are taken and the block rendered inside its real-time budget (256 frames = 5.3 ms), with the voices
+    /// all sounding; no block of the burst takes longer than the budget. (The shipped mod is the optimised build; an
+    /// unoptimised test build of kh-audio is about ten times slower and takes 64 of them: still more than a dense fight of
+    /// the whole party and two copies holds at once, 32: kh-audio tests/no_cut_offs.rs.)
+    #[test]
+    fn a_burst_of_commands_fits_the_block_budget() {
+        let (tx, rx) = mpsc::channel::<Mix>();
+        let stats = Stats::default();
+        let mut state = MixState { rx, mixer: Mixer::new(), rendered: 0, last_peak: 0.0, watched: Vec::new() };
+        let buffer = tone();
+        let voices: u32 = if cfg!(debug_assertions) { 64 } else { 300 };
+        for voice in 1..=voices {
+            tx.send(Mix::Start { voice, buffer: buffer.clone(), offset: 0.0, looped: false, params: VoiceParams { volume: 0.002, ..FLAT }, bank: 0, material: 0 }).expect("queued");
+            tx.send(Mix::Command(VoiceCommand::Update { voice, params: VoiceParams { volume: 0.002, lowpass: 0.5, ..FLAT } })).expect("queued");
+        }
+        let budget = Duration::from_micros(256 * 1_000_000 / u64::from(kh_audio::mixer::RATE));
+        let mut block = vec![0.0f32; 512];
+        let mut worst = Duration::ZERO;
+        for _ in 0..8 {
+            let t = Instant::now();
+            state.render(&mut block, &stats);
+            worst = worst.max(t.elapsed());
+        }
+        eprintln!("{voices} voices: worst block {worst:?} (budget {budget:?})");
+        assert_eq!(stats.voices.load(Ordering::Relaxed), voices);
+        assert!(worst < budget, "{worst:?} of {budget:?}");
     }
 }

@@ -57,6 +57,26 @@ pub fn y_forward(snap: &CommandSnapshot, team: &[SituationRow]) -> Option<u32> {
     team.iter().any(|t| t.serial == row.serial && t.enabled).then_some(row.serial)
 }
 
+/// (PROMPT-UI) A PARTY MEMBER'S OWN Y PROMPTS for the HUD while he leads (`kh_core::ui_model::YPrompts`, the one gate:
+/// kh-partyhost `hud_snapshot` applies it): KH3's button notice ("ATTACK!") and the style-point gauge row (">>").
+/// In KH3 both are sent only by player controllers and player states: the notice by 0x14158B120 / 0x14158C180 /
+/// 0x14158C260 / 0x14158B260's callers (the airstep, the reaction prompt 0x141414350, the counter window 0x1414145C0, a
+/// finish's extra, the risk dodge; attraction, link and world-specific states), the gauge by `TresPlayerControllerBase`
+/// slots 829 / 836 (controller+0xB40, the formchange's style points) through 0x14158C410. No friend pawn calls either,
+/// and Donald's and Goofy's kits have none of those sources (Goofy's counter window was removed by the user,
+/// 2026-11-02), so theirs are empty. A later character with such a source sets it here (its kit's state), and the HUD
+/// shows it with no code of its own.
+///
+/// THE ARROWS ARE SORA'S ALONE (only his formchange progress fills them, as in KH3); every friend's stay off:
+/// - Goofy: never (THE USER 2026-11-05: "Goofy should not use the arrows");
+/// - Donald: never (THE USER 2026-11-05: "Donald shouldn't use them either");
+/// - any later friend: empty unless the user decides otherwise.
+pub fn y_prompts(party: &crate::party::Party, id: MemberId) -> kh_core::ui_model::YPrompts {
+    // (PROMPT-UI) no gauge and no notice of a friend's, whatever his kit holds (an id that is gone: none either)
+    let _ = party.member(id);
+    kh_core::ui_model::YPrompts::default()
+}
+
 impl crate::party::Party {
     /// (YHUD) The leader's team rows, after `set_leader_magic` each step: his menu stacks them on Y (first, as KH3's
     /// situation commands) and, while one stands, Y and the slot are the team attack's (`MenuFeed::sora_busy`).
@@ -93,6 +113,26 @@ mod tests {
         assert_eq!(serials(Chara::Goofy), vec![3, 4]);
         assert!(team_is_leaders(199, None) && team_is_leaders(30, None), "Sora leads: every row of his queue is his");
         assert!(!team_is_leaders(199, Some(Chara::Donald)) && !team_is_leaders(199, Some(Chara::Goofy)));
+    }
+
+    /// (PROMPT-UI, THE USER 2026-11-05: "Goofy should not use the arrows") a Goofy or Donald leader publishes no gauge
+    /// and no notice: the gate then takes Sora's off the snapshot the HUD draws
+    #[test]
+    fn prompt_ui_goofy_and_donald_publish_no_arrows() {
+        use kh_core::ui_model::{ButtonPrompt, PromptKind, YPrompts};
+        let mut party = crate::Party::new(crate::PartyConfig::test_level99());
+        let goofy = party.spawn(Chara::Goofy, glam::Vec3::ZERO, 0.0);
+        let donald = party.spawn(Chara::Donald, glam::Vec3::new(200.0, 0.0, 0.0), 0.0);
+        for id in [goofy, donald] {
+            let p = y_prompts(&party, id);
+            assert_eq!(p, YPrompts::default(), "{id:?}: no gauge, no notice");
+            // Sora's full gauge and a notice on the base snapshot: gone through the gate
+            let mut s = kh_core::UiSnapshot { prompt: Some(ButtonPrompt { kind: PromptKind::Counter(3), target: kh_core::TargetId::NONE }), ..Default::default() };
+            s.situation.gauge_ratio = 0.6;
+            p.apply(&mut s);
+            assert_eq!((s.prompt, s.situation.gauge_ratio), (None, 0.0), "{id:?}");
+        }
+        assert_eq!(y_prompts(&party, MemberId(99)), YPrompts::default(), "an id that is gone");
     }
 
     /// (YHUD) the leader's Y reaches Sora's queue only on his selected, ready team row

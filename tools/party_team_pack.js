@@ -1,6 +1,7 @@
 // party_team_pack.js (party stream D): the team-attack camera data, read from the decoded packages.
 //
-//   node tools/party_team_pack.js
+//   node tools/party_team_pack.js            (everything below)
+//   node tools/party_team_pack.js --cameras  (only the CameraAnim / CameraShake tables)
 //
 // Reads the seven CameraAnim assets the three state-event camera blueprints start
 // (Camera/sora/Skill/{donald,goofy_shoot,shield}) and the two camera shakes of the goofy_shoot
@@ -21,6 +22,8 @@ const OUT_PACK = path.join(ROOT, 'build/sora_pack/party/team');
 const OUT_RS = path.join(ROOT, 'build/gen/rust/party_team_cameras.rs');
 // (party D5) `--gshoot`: only the Goofy Bombardier link-pawn socket tables (build/gen/rust/party_team_gshoot.rs).
 if (process.argv.includes('--gshoot')) { writeGShootSockets(); process.exit(0); }
+// (SUMMON) `--cameras`: only the camera tables (writeCameras, below; run at the end of the file's definitions).
+const CAMERAS_ONLY = process.argv.includes('--cameras');
 
 const ANIMS = [
   'Camera/sora/Skill/donald/CallMeteo_Finish',
@@ -30,8 +33,131 @@ const ANIMS = [
   'Camera/sora/Skill/goofy_shoot/goofy_shoot_05',
   'Camera/sora/Skill/goofy_shoot/goofy_shoot_tarl',
   'Camera/sora/Skill/shield/shield_start',
+  // (SUMMON 2026-11-02) KH3's Link chant camera (THE USER 2026-11-02: "Use the summon animations for Sora and camera work
+  // from KH3 when initiating the summon."): started by BP_TresPlayerStateEventCamera_Attraction_Chant as "Link_Chant_cam"
+  // at the ctor of a Link state (DmSimba 28, DmWandanyan 117, DmRalph 126, DmAriel 127, DmStitch 128). Only this shared
+  // Link chant camera is used; that blueprint's Attraction Flow branch (Chant_cam_loop / Chant_cam_NG) is not ported (the
+  // user excluded Attraction Flow).
+  'Camera/sora/Skill/link/LINK_START',
+  // (AUDIT-B F-SHIP) Wheel of Fate's camera blueprint BP_TresPlayerStateEventCamera_ca_key (kh-camera forms_ship.rs): the
+  // transformations (Cakey_Start = Highwind, Flag_Start = Storm Flag), Highwind's E416 finisher, Storm Flag's F418 finisher,
+  // FINISH_FL (Ca_Flag_finish) and the Storm Flag shotlock's F481 (Ca_Flag_ranbu).
+  'Camera/sora/Skill/Ca_Key/Cakey_Start',
+  'Camera/sora/Skill/Ca_Key/Flag_Start',
+  'Camera/sora/Skill/Ca_Key/Halberd_combo_finish',
+  'Camera/sora/Skill/Ca_Key/Ca_Flag_combo_finish',
+  'Camera/sora/Skill/Ca_Key/Ca_Flag_finish',
+  'Camera/sora/Skill/Ca_Key/Ca_Flag_ranbu',
+  // (AUDIT-C) the formchange / finisher cameras of BP_TresPlayerStateEvent_form_change (Second Form's finishers, Rage Form),
+  // BP_TresPlayerStateEventCamera_AltemaWep (Ultimate Form) and BP_TresPlayerStateEventCamera_Oath_keeper (Double Form's
+  // Ultimate Finish): kh-camera form_bp.rs.
+  'Camera/sora/Skill/form_change/change_limit_form',
+  'Camera/sora/Skill/form_change/anti_change',
+  'Camera/sora/Skill/form_change/anti_brust',
+  'Camera/sora/Skill/form_change/anti_bomb',
+  'Camera/sora/Skill/form_change/stan_impact01',
+  'Camera/sora/Skill/form_change/stan_impact02',
+  'Camera/sora/Skill/form_change/sonic_rave_01',
+  'Camera/sora/Skill/form_change/magne_splash',
+  'Camera/sora/Skill/form_change/LastAlcanam_End',
+  'Camera/sora/Skill/altema_wep/Altema_Change_Cut01',
+  'Camera/sora/Skill/altema_wep/altema_yoko_finish',
+  'Camera/sora/Skill/altema_wep/altema_buki_finish',
+  'Camera/sora/Skill/DLC/BlueHour_Cut01',
+  'Camera/sora/Skill/DLC/BlueHour_Cut02B',
+  // (AUDIT-C) BP_TresPlayerStateEvent_motion_notify: 1050 (DiveFallAttack_camera) and 1176 (specialRail) (kh-camera form_bp.rs).
+  'Camera/sora/Skill/combo/DiveFallAttack_camera',
+  'Camera/sora/hanyo/SpecialRail_Camera',
+  // (AUDIT-A SECOND) BP_TresPlayerStateEventCamera_UnionDiscode (change_key): Ancient Light's camera (M_1435's BpEvent,
+  // "Limit_UnionDiscode_Camera"); decode in build/sora_tmp/weapons/AUDIT-A/SECOND.md.
+  'Camera/sora/Skill/Limit_UnionDiscode',
+  // (AUDIT-B F-NANO) Nano Gear's camera blueprint BP_TresPlayerStateEvent_camera_bx_key (kh-camera forms_nano.rs): FINISH_GM's
+  // camera (8416), the transformation's (8401), the combo finish's (8415) and the Zone Connector's (8481 .. 8483).
+  'Camera/sora/Skill/Baymax/Gimmick-key_Finish_cam',
+  'Camera/sora/Skill/Baymax/Gimmick-key_Change',
+  'Camera/sora/Skill/Baymax/Gimmick-key_ComboFinish_cut01',
+  'Camera/sora/Skill/Mi_key/YoYO_Gate',
+  // (AUDIT-B F-CLAWS) Happy Gear's BP_TresPlayerStateEventCamera_mi_key and Crystal Snow's ..._fz_key (kh-camera
+  // forms_claws.rs): the transformations (Yo-Yo_Start 4401, Tsume_Start C401, fz-key_change 7401, fz-key_crow-chage I401),
+  // the combo finishers (mi_Wscissors C415, walk_the_dog 4418, skert_ground_finish 7416, skert_sky_finish 7418), FINISH_YO
+  // (YoYO_spiral_shredder / _ver2, 4420) and FINISH_SK (Fz_FInish_Cam01 / Fz_FInish_Cam02, 7419 / 7423). (YoYO_Gate and
+  // Ca_Flag_ranbu, also started by these two, are listed above.)
+  'Camera/sora/Skill/Mi_key/Yo-Yo_Start',
+  'Camera/sora/Skill/Mi_key/Tsume_Start',
+  'Camera/sora/Skill/Mi_key/mi_Wscissors',
+  'Camera/sora/Skill/Mi_key/walk_the_dog',
+  'Camera/sora/Skill/Mi_key/YoYO_spiral_shredder',
+  'Camera/sora/Skill/Mi_key/YoYO_spiral_shredder_ver2',
+  'Camera/sora/Skill/fz_key/fz-key_change',
+  'Camera/sora/Skill/fz_key/fz-key_crow-chage',
+  'Camera/sora/Skill/fz_key/Fz_FInish_Cam01',
+  'Camera/sora/Skill/fz_key/Fz_FInish_Cam02',
+  'Camera/sora/Skill/fz_key/skert_ground_finish',
+  'Camera/sora/Skill/fz_key/skert_sky_finish',
+  // (AUDIT-B F-HAMMER) Favorite Deputy's BP_TresPlayerStateEvent_camera_toy_key and Classic Tone's
+  // BP_TresPlayerStateEventCamera_Timlesskey (kh-camera forms_hammer.rs): Hyper Hammer's transformation 3401
+  // (toy_key_hammer_start / 03 / 04), Giant Stamp 3416 / 3417 (big_stump / 02 / _sky), Drill Punch's transformation 6401
+  // (drill_start01 / 02 / 03), its combo finish 6419, Drill Dash 6483 (drill_tosshin_finish01), FINISH_DR 6421 / 6423
+  // (drill_finish01 / 01_NG / 02); Boom Hammer K401, Clock Drill L401 and FINISH_DR's Clock L421 (Timeless/*).
+  'Camera/sora/Skill/TOy_key/toy_key_drill_combo_finish',
+  'Camera/sora/Skill/TOy_key/toy_key_drill_finish01',
+  'Camera/sora/Skill/TOy_key/toy_key_drill_finish01_NG',
+  'Camera/sora/Skill/TOy_key/toy_key_drill_finish02',
+  'Camera/sora/Skill/TOy_key/toy_key_drill_start01',
+  'Camera/sora/Skill/TOy_key/toy_key_drill_start02',
+  'Camera/sora/Skill/TOy_key/toy_key_drill_start03',
+  'Camera/sora/Skill/TOy_key/toy_key_drill_tosshin_finish01',
+  'Camera/sora/Skill/TOy_key/toy_key_hammer_big_stump',
+  'Camera/sora/Skill/TOy_key/toy_key_hammer_big_stump02',
+  'Camera/sora/Skill/TOy_key/toy_key_hammer_big_stump_sky',
+  'Camera/sora/Skill/TOy_key/toy_key_hammer_start',
+  'Camera/sora/Skill/TOy_key/toy_key_hammer_start03',
+  'Camera/sora/Skill/TOy_key/toy_key_hammer_start04',
+  'Camera/sora/Skill/Timeless/Timeless_Drill_Change_Cam',
+  'Camera/sora/Skill/Timeless/Timeless_Drill_Finish_Cam',
+  'Camera/sora/Skill/Timeless/Timeless_Hunmer_Change_Cam',
+  // (AUDIT-A STAFF) Mirage Staff's BP_TresPlayerStateEventCamera_Rapunzel_key (kh-camera forms_staff.rs): the transformation
+  // A401 (Rapunzel_Start / Rapunzel_Start02) and FINISH_WA's A417 (Rap_Tower_Cut000 / 00 / 01, then Rap_Tower_Cut02).
+  'Camera/sora/Skill/Rapunzel/Rapunzel_Start',
+  'Camera/sora/Skill/Rapunzel/Rapunzel_Start02',
+  'Camera/sora/Skill/Rapunzel/Rap_Tower_Cut000',
+  'Camera/sora/Skill/Rapunzel/Rap_Tower_Cut00',
+  'Camera/sora/Skill/Rapunzel/Rap_Tower_Cut01',
+  'Camera/sora/Skill/Rapunzel/Rap_Tower_Cut02',
+  // (AUDIT-A CAMS) the gun forms' blueprints (kh-camera forms_guns.rs): Shooting Star's BP_TresPlayerStateEventCamera_2shotguns
+  // (StyleChange2 = 2401), ..._Bazooka (CHANGE_BZ's transformation, Rising Blast 5413, FINISH_BZ) and Hunny Spout's ..._po_key
+  // (StyleChange16 = G401, StyleChange17 = H401); decode in build/sora_tmp/weapons/AUDIT-A/CAMS.md.
+  'Camera/sora/Skill/2ShotGuns/2shotguns_start1',
+  'Camera/sora/Skill/2ShotGuns/2ShotGuns_start_02',
+  'Camera/sora/Skill/Bazooka/bazooka_start',
+  'Camera/sora/Skill/Bazooka/cam_bazooka_02',
+  'Camera/sora/Skill/Bazooka/Bazooka_Rush',
+  'Camera/sora/Skill/Bazooka/Bazooka_end01',
+  'Camera/sora/Skill/Bazooka/Bazooka_end02',
+  'Camera/sora/Skill/Bazooka/Bazooka_end03',
+  'Camera/sora/Skill/Po_key/Po_2ShitGuns',
+  'Camera/sora/Skill/Po_key/Po_bazooka',
+  'Camera/sora/Skill/Po_key/Bazooka_cannon_po02',
+  // (AUDIT-A CAMS SHIELD) Hero's Origin's BP_TresPlayerStateEventCamera_tate_finish (CHANGE_SH's transformation SH_tate_start /
+  // 02, the combo finishers B418 BIG_PUNCH / _NG / 02 and B426 100_PUNCH01 / 02, FINISH_SH's B424 SH_tate_cut02) and Grand
+  // Chef's ..._Lemylkey (StyleChange19 = J401 LemyKey_Change_Cam, FINISH_SH's J423 LemyKey_Finish_Cam / _Atari): kh-camera
+  // forms_shield.rs.
+  'Camera/sora/Skill/tate_finish/SH_tate_start',
+  'Camera/sora/Skill/tate_finish/SH_tate_start02',
+  'Camera/sora/Skill/tate_finish/SH_tate_cut02',
+  'Camera/sora/Skill/tate_finish/BIG_PUNCH',
+  'Camera/sora/Skill/tate_finish/BIG_PUNCH_NG',
+  'Camera/sora/Skill/tate_finish/BIG_PUNCH02',
+  'Camera/sora/Skill/tate_finish/100_PUNCH01',
+  'Camera/sora/Skill/tate_finish/100_PUNCH02',
+  'Camera/sora/Skill/Lemy_Key/LemyKey_Change_Cam',
+  'Camera/sora/Skill/Lemy_Key/LemyKey_Finish_Cam',
+  'Camera/sora/Skill/Lemy_Key/LemyKey_Finish_cam_Atari',
 ];
-const SHAKES = ['Camera/shake/shake_kokizami_8sec', 'Camera/shake/tebure_shake01_10sec'];
+// (AUDIT-C) + form_change's shake_super_kokizami_1sec (1401 / 1403: the change_limit_form camera's shake).
+// (AUDIT-A STAFF) + Rapunzel_key's Shake_Rap_key_finish01 (FINISH_WA's beam camera, @201).
+// (AUDIT-A CAMS SHIELD) + tate_finish's shake_bibibi_8sec (B426 100_PUNCH, @2536 / @4232, scale 3).
+const SHAKES = ['Camera/shake/shake_kokizami_8sec', 'Camera/shake/tebure_shake01_10sec', 'Camera/shake/shake_super_kokizami_1sec', 'Camera/shake/Shake_Rap_key_finish01', 'Camera/shake/shake_bibibi_8sec'];
 
 const MODES = { CIM_Linear: 'Linear', CIM_CurveAuto: 'CurveAuto', CIM_Constant: 'Constant', CIM_CurveUser: 'CurveUser', CIM_CurveBreak: 'CurveBreak', CIM_CurveAutoClamped: 'CurveAutoClamped' };
 
@@ -51,13 +177,19 @@ function curve(value, vector) {
     points = p && p.value && p.value.items ? p.value.items.map((item) => Object.fromEntries(item.map((q) => [q.name, q.value]))) : [];
   }
   return (points || []).map((p) => {
-    const vec = (x) => (vector ? [x ? x.x || 0 : 0, x ? x.y || 0 : 0, x ? x.z || 0 : 0] : (x || 0));
+    // (AUDIT-B F-HAMMER) the decoder writes a float it cannot print as a JSON number (-0.0) as {f32bits: n}
+    // (toy_key_hammer_start's euler key 3): read its bits, as party_pack.js `kdNum` does.
+    const bits = (n) => { const b = Buffer.alloc(4); b.writeUInt32LE(n >>> 0, 0); return b.readFloatLE(0); };
+    const num = (n) => (n && typeof n === 'object' && 'f32bits' in n ? bits(n.f32bits) : n || 0);
+    const vec = (x) => (vector ? [x ? num(x.x) : 0, x ? num(x.y) : 0, x ? num(x.z) : 0] : num(x));
     const mode = MODES[p.InterpMode || 'CIM_Linear'];
     if (!mode) throw new Error('unknown interp mode ' + p.InterpMode);
     return { t: p.InVal || 0, v: vec(p.OutVal), a: vec(p.ArriveTangent), l: vec(p.LeaveTangent), m: mode };
   });
 }
 
+// (AUDIT-A CAMS) an asset that leaves AnimLength unset (Bazooka_end01 / 02 / 03) has UCameraAnim's default: the ctor sets
+// AnimLength = 3.0 (Engine/Source/Runtime/Engine/Private/Camera/CameraAnim.cpp, UE 4.17 .. 4.27).
 function anim(rel) {
   const j = load(rel);
   const root = j.exports.find((e) => e.class === 'CameraAnim');
@@ -93,7 +225,7 @@ function anim(rel) {
   const lookAtInterest = rotMode === 'IMR_LookAtGroup' && lookAt != null && lookAt === interestName;
   if (rotMode === 'IMR_LookAtGroup' && !lookAtInterest) throw new Error(name + ': looks at group ' + lookAt + ' which is not the interest group');
   return {
-    name, asset: '/Game/' + rel, length: rp.AnimLength, base_fov: rp.BaseFOV != null ? rp.BaseFOV : 90,
+    name, asset: '/Game/' + rel, length: rp.AnimLength != null ? rp.AnimLength : 3, base_fov: rp.BaseFOV != null ? rp.BaseFOV : 90,
     base_fov_from_asset: rp.BaseFOV != null, rot_mode: rotMode, look_at_group: lookAt, interest_group: interestName,
     look_at_interest: lookAtInterest, fov_property: fovProperty, pos, euler, fov, interest,
   };
@@ -117,10 +249,12 @@ function shake(rel) {
   };
 }
 
+// (SUMMON 2026-11-02) the literals through tools/lib/f32lit.js, as gen_party.js / gen_port.js (Clippy is law: the shortest
+// text of the same f32, no excessive_precision; the earlier output of this tool had been Clippy-fixed after the fact).
+const { f32: f32lit } = require('./lib/f32lit');
 const f = (x) => {
   if (!Number.isFinite(x)) throw new Error('not a number: ' + x);
-  const s = String(x);
-  return /[.eE]/.test(s) ? s : s + '.0';
+  return f32lit(x);
 };
 const v3 = (a) => '[' + a.map(f).join(', ') + ']';
 function keysRs(keys, vector) {
@@ -147,6 +281,12 @@ function writeSheet() {
 
 function main() {
   writeSheet();
+  writeCameras();
+}
+
+// The CameraAnim / CameraShake tables alone (`node tools/party_team_pack.js --cameras`: build/gen/rust/party_team_cameras.rs and
+// build/sora_pack/party/team/camera_anims + camera_shakes.json, without the props' materials of the full run).
+function writeCameras() {
   const anims = ANIMS.map(anim);
   const shakes = SHAKES.map(shake);
   fs.mkdirSync(path.join(OUT_PACK, 'camera_anims'), { recursive: true });
@@ -202,6 +342,7 @@ function writeTeamHost() {
   console.log('team_host.json', JSON.stringify(out));
 }
 
+if (CAMERAS_ONLY) { writeCameras(); process.exit(0); }
 main();
 writeTeamHost();
 

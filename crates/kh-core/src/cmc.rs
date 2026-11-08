@@ -44,6 +44,15 @@ pub enum MovementMode {
     Custom,
 }
 
+/// One floor probe of `compute_floor_dist`: from where, how far the line and the sweep go, and the sweep's radius.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct FloorProbe {
+    location: Vec3,
+    line_distance: f32,
+    sweep_distance: f32,
+    sweep_radius: f32,
+}
+
 /// `FFindFloorResult` (spec 5; change B8).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FloorResult {
@@ -239,6 +248,12 @@ impl Cmc {
     /// `SetMovementMode(Falling)` (3) from Flying or Walking.
     pub fn set_falling(&mut self) {
         self.set_mode_raw(MovementMode::Falling);
+    }
+
+    /// (AUDIT-B F-CLAWS) `SetMovementMode(Walking)` (pawn slot 756 with 1): FINISH_SK's sub 0 after putting him on
+    /// the floor (the floor found, the height adjusted).
+    pub fn walk_on_floor(&mut self, w: &dyn World, p: &SoraParams) {
+        self.set_walking(w, p);
     }
 
     /// (actions implementer) `SetMovementMode(Custom 6)`: see `MovementMode::Custom`.
@@ -564,7 +579,7 @@ impl Cmc {
     fn step_up(&mut self, w: &dyn World, p: &SoraParams, delta: Vec3, in_hit: &Move, step_down_floor: &mut Option<FloorResult>) -> bool {
         let Some(in_h) = in_hit.hit else { return false };
         let origin = self.location;
-        if !(in_h.position.z > origin.z) {
+        if in_h.position.z.partial_cmp(&origin.z).is_none_or(std::cmp::Ordering::is_le) {
             return false;
         }
         let max_step = p.floor_max_step_height;
@@ -632,7 +647,7 @@ impl Cmc {
         let walking = self.on_ground();
         let adj = if walking { p.floor_dist_max + KINDA_SMALL_NUMBER } else { -p.floor_dist_max };
         let distance = p.floor_dist_max.max(p.floor_max_step_height + adj); // 49.4001 walking, 44.6 falling
-        let mut out = self.compute_floor_dist(w, p, self.location, distance, distance, 0.0, downward);
+        let mut out = self.compute_floor_dist(w, p, FloorProbe { location: self.location, line_distance: distance, sweep_distance: distance, sweep_radius: 0.0 }, downward);
         let Some(hit) = out.hit else { return out };
         // ShouldComputePerchResult (0x140596260): the contact is more than 1.0 cm (2D) from the axis.
         if out.blocking_hit && !out.line_trace && (hit.position - out.hit_location).truncate().length() > p.floor_perch_radius {
@@ -672,15 +687,15 @@ impl Cmc {
         let hit = floor.hit?;
         let above_base = (hit.position.z - floor.hit_location.z).max(0.0);
         let line = (max_perch - above_base).max(0.0);
-        let perch = self.compute_floor_dist(w, p, floor.hit_location, line, max_perch.max(0.0), p.floor_perch_radius, None);
+        let perch = self.compute_floor_dist(w, p, FloorProbe { location: floor.hit_location, line_distance: line, sweep_distance: max_perch.max(0.0), sweep_radius: p.floor_perch_radius }, None);
         (perch.walkable && above_base + perch.floor_dist <= max_perch).then_some(perch)
     }
 
     /// `ComputeFloorDist` (slot 264 0x14057D100), spec 5.2. `sweep_radius` 0: the main path (the
     /// real body, unshrunk, no pull-back; the line from the actor origin). `sweep_radius` > 0:
     /// the perch probe (change B2).
-    #[allow(clippy::too_many_arguments)]
-    fn compute_floor_dist(&self, w: &dyn World, p: &SoraParams, location: Vec3, line_distance: f32, sweep_distance: f32, sweep_radius: f32, downward: Option<&Move>) -> FloorResult {
+    fn compute_floor_dist(&self, w: &dyn World, p: &SoraParams, probe: FloorProbe, downward: Option<&Move>) -> FloorResult {
+        let FloorProbe { location, line_distance, sweep_distance, sweep_radius } = probe;
         let mut out = FloorResult::NONE;
         // A vertical downward sweep that was just made: use it.
         if let Some(down) = downward {
@@ -872,12 +887,38 @@ impl Cmc {
         self.move_updated(w, p, Vec3::Z * (z - self.location.z));
     }
 
+    /// (F-SECOND) A swept `SetActorLocation(to, bSweep)` (0x143EAC3D0): StyleFinish slot 165's rise of Ancient Light.
+    pub fn sweep_to(&mut self, w: &dyn World, p: &SoraParams, to: Vec3) {
+        self.move_updated(w, p, to - self.location);
+    }
+
     // ------------------------------------------------------------------ falling
 
     /// Magnitude of the gravity of the rising phase of a jump as the falling code applies it:
     /// |GetGravityZ| x m_JumpUpGravityScale (4116 cm/s^2 with the default GravityScale).
     pub fn rise_gravity(&self, p: &SoraParams) -> f32 {
         (self.gravity_z(p) * p.gravity_jump_up_scale).abs()
+    }
+
+    /// (SPIRITSPRING) PORT ADDITION, never called by KH3's own code: the upward speed that makes the rise of this
+    /// movement's falling top out at `peak_z` (cm, its location's space) under the gravity the next falling step applies
+    /// while rising (`jump_phase_gravity` with `Velocity.Z > 0`: the up scale while the jump curve is open, else the
+    /// plain gravity), with half a tick of bias so that the highest sampled height is not under it (the release cut's
+    /// rule in sora.rs). Only ever raises `Velocity.Z`; `false` (nothing written): on the ground, gravity off, at or past
+    /// the peak.
+    pub fn lift_to(&mut self, p: &SoraParams, peak_z: f32, dt: f32) -> bool {
+        let up_scale = if self.jump_duration_finished { 1.0 } else { p.gravity_jump_up_scale };
+        let gravity = (self.gravity_z(p) * up_scale).abs();
+        let missing = peak_z - self.location.z;
+        let can = gravity > 0.0 && missing > 0.0;
+        if self.on_ground() || self.gravity_off || !can {
+            return false;
+        }
+        let needed = (2.0 * gravity * (missing + gravity * dt * dt / 8.0)).sqrt();
+        if needed > self.velocity.z {
+            self.velocity.z = needed;
+        }
+        true
     }
 
     /// `GetGravityZ` (0x140582270, `same`). (`pub` for kh-party's NPC jump, movement vt+0x3B8.)

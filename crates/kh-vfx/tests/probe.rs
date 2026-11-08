@@ -186,7 +186,9 @@ fn the_prize_orbs_stand_in_their_layers() {
     assert!((depth(disc.center) - at - 10.0).abs() < 0.05, "the outline disc is 10 cm behind the ball: {}", depth(disc.center) - at);
     assert!((depth(glint.center) - at + 30.0).abs() < 0.5, "the glint is 30 cm in front: {}", depth(glint.center) - at);
     // The disc is 65 cm across (its texture's solid part about 35), the ball 36 x 36 on screen and 10 deep.
-    assert!((disc.size - 65.0).abs() < 0.01);
+    // (AUDIT-B W-VFX) the depth offset changes the depth only (sim.rs depth_pull): the disc keeps its picture, 65 cm across at
+    // the ball's depth (in the world: 65 x (z + 10) / z, 10 cm further away)
+    assert!((disc.size * at / depth(disc.center) - 65.0).abs() < 0.01, "{}", disc.size * at / depth(disc.center));
     let m = ball.transform.matrix3;
     let extent = |axis: Vec3| (Vec3::from(m.x_axis).dot(axis).abs() + Vec3::from(m.y_axis).dot(axis).abs() + Vec3::from(m.z_axis).dot(axis).abs()) * 100.0;
     assert!((extent(camera.right) - 36.0).abs() < 0.1 && (extent(camera.up) - 36.0).abs() < 0.1 && (extent(camera.forward) - 10.0).abs() < 0.1, "{} x {} x {}", extent(camera.right), extent(camera.up), extent(camera.forward));
@@ -204,7 +206,8 @@ fn the_prize_orbs_stand_in_their_layers() {
     // MP: a 36 cm ball, its 25 cm rim shell 10 cm nearer (stock CameraOffset), the glow 10 cm behind, the glint in front.
     let mp = run("vs_plz_mpb0");
     assert_eq!((mp.meshes.len(), mp.quads.len()), (2, 2));
-    let glow = mp.quads.iter().find(|q| (q.size - 65.0).abs() < 0.01).expect("glw_bg0");
+    // (AUDIT-B W-VFX) its picture 65 cm across at the prize's depth (the depth offset changes the depth only)
+    let glow = mp.quads.iter().find(|q| (q.size * depth(Vec3::ZERO) / depth(q.center) - 65.0).abs() < 0.01).expect("glw_bg0");
     assert!(depth(glow.center) > 9.9 + depth(Vec3::ZERO) && mp.quads.iter().any(|q| depth(q.center) < depth(Vec3::ZERO) - 29.0));
     // Munny: one gem, 0.35 of its mesh (183.6 cm tip to tip: 64 cm at the large prize's scale 1).
     let munny = run("VS_PLZ_MNY0");

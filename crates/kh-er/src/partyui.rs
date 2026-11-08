@@ -37,8 +37,13 @@ pub struct Feed {
     pub slots: Vec<PartyHudSlot>,
     /// (GOOFY-GG) Goofy's GUARD bar while he leads (kh-partyhost `leader_guard_hud`).
     pub guard: Option<(kh_host::party::GuardValues, kh_host::party::GuardLook)>,
+    /// (GOOFY) Goofy's HUD while he leads (kh-partyhost `gof_hud_view`): Resolve, the Stagger gauge, the red "!".
+    pub goofy: Option<kh_host::party::GoofyHudView>,
     /// (DON-UI) Donald's HUD while he leads (kh-partyhost `don_hud_view`): ring, pips, stars, tracker, statuses, menu extras.
     pub don: Option<kh_host::party::DonHudView>,
+    /// (ALLY-BUFF, THE USER 2026-11-03: "Donald's helpful spells like Aero shield should appear on whoever has it in the HUD
+    /// regardless of who is party leader") every member's helpful statuses, whoever leads (kh-partyhost `ally_buffs_view`).
+    pub buffs: kh_host::party::AllyBuffsView,
     /// The leader (the HUD's main slot) and whether Sora is in the active party.
     pub leader: PartyChara,
     pub sora_in: bool,
@@ -89,6 +94,8 @@ struct Asks {
     exp: Vec<(i32, f32, Option<Vec3>)>,
     recover: i32,
     cure_bodies: bool,
+    /// (HUD-REVIVE) the leader rests in a save point's recovery area: every downed member up at full HP.
+    revive_down: bool,
     rewards: Vec<(PartyChara, FriendReward, String)>,
     /// (IT) permanent stat boosts received (for the whole roster, unlocked or not), with why.
     boosts: Vec<(kh_party::boosts::Boost, String)>,
@@ -256,6 +263,11 @@ pub fn sync(rt: &mut PartyRuntime, sora: &mut Sora, unlocked: Option<&[PartyChar
         }
     }
     out.cure_bodies = asked.cure_bodies;
+    if asked.revive_down {
+        for c in rt.savepoint_revive(sora) {
+            erlog!("savepoint: t={now:.3}s {} was down (KO): the save point revives him at full HP (HUD-REVIVE; far from the leader, the living members' warp brings him)", c.name());
+        }
+    }
     // (IT) an older save (no roster total in its party record): seeded once from what Sora received
     if rt.roster_unrecorded {
         let ap = small_ap_boosts(&crate::hud::records());
@@ -346,7 +358,9 @@ fn publish(rt: &mut PartyRuntime, sora: &Sora, unlocked: Option<&[PartyChara]>) 
     let feed = Feed {
         slots: rt.hud_slots(),
         guard: rt.leader_guard_hud(), // (GOOFY-GG)
+        goofy: rt.gof_hud_view(), // (GOOFY)
         don: rt.don_hud_view(sora), // (DON-UI)
+        buffs: rt.ally_buffs_view(), // (ALLY-BUFF)
         leader,
         sora_in: rt.lead.sora_in,
         formation: rt.lead.current_formation(),
@@ -414,7 +428,9 @@ pub fn hud_frame(hud: &mut kh_host::hud::Hud, base: &UiSnapshot, control: &Contr
     }
     hud.set_party(&f.slots);
     hud.set_guard(f.guard.clone()); // (GOOFY-GG) Goofy's GUARD bar above MP
+    hud.set_goofy(f.goofy.clone()); // (GOOFY) Resolve, the Stagger gauge, the red "!"
     hud.set_don(f.don.clone()); // (DON-UI) Donald's ring, stars, statuses, menu extras
+    hud.set_ally_buffs(f.buffs.clone()); // (ALLY-BUFF) the helpful statuses by each wearer's portrait, whoever leads
     // (EQ) THE CAMP MENU'S PAGES ONLY FROM A FEED THAT HAS THE MENU'S OWN EDITS: an older one (made before the runtime
     // took them; the world is paused under the menu, so before the fix it stayed old until the menu closed) put the old
     // values back every frame: a toggled ability lit off again, a weapon swap or a shortcut showed the old one, the
@@ -434,14 +450,13 @@ pub fn hud_frame(hud: &mut kh_host::hud::Hud, base: &UiSnapshot, control: &Contr
         s.command = l.command.clone();
         s.lock_on = l.lock_on;
         s.soft_target = l.soft_target;
-        s.prompt = None;
+        kh_core::ui_model::YPrompts::of(l).apply(&mut s); // (PROMPT-UI) the leader's own notice and gauge (the gate's)
         s.aim = Default::default();
         s.sneeze = false;
         s
     });
     drop(guard);
     for (chara, level, d) in LEVEL_UPS.lock().map(|mut l| std::mem::take(&mut *l)).unwrap_or_default() {
-        #[allow(unused_mut)]
         let mut lines = hud.level_up_lines(d[0], d[1], d[2], d[3], None);
         // (GOOFY-GG) the level raised GUARD's max: its line
         if let Ok(mut g) = GUARD_UPS.lock() {
@@ -472,7 +487,9 @@ pub fn hud_frame(hud: &mut kh_host::hud::Hud, base: &UiSnapshot, control: &Contr
 fn hud_alone(hud: &mut kh_host::hud::Hud) {
     hud.set_party(&[]);
     hud.set_guard(None);
+    hud.set_goofy(None); // (GOOFY)
     hud.set_don(None); // (DON-UI)
+    hud.set_ally_buffs(Default::default()); // (ALLY-BUFF)
     hud.set_party_menu(Vec::new());
     hud.set_formation(&kh_host::formation::Formation::default());
     hud.set_leader(PartyChara::Sora, true);
@@ -629,6 +646,12 @@ pub fn load_record(record: &Value) {
     asks(|a| a.load = Some(record.clone()));
 }
 
+/// (GF-INGAME) A loaded record waits for the next party step. Whatever is claimed for the friends meanwhile is wiped by it, and
+/// its `records` stay: an older save's whole catch-up was lost that way, on the player's first save.
+pub fn load_waiting() -> bool {
+    asks(|a| a.load.is_some())
+}
+
 /// The leader a save's party record names (the save-slot picture: kh_host `slot_summary_of` reads the same field).
 pub fn record_leader(record: &Value) -> PartyChara {
     record.get("leader").and_then(|l| l.as_str()).and_then(kh_host::formation::chara_of).unwrap_or(PartyChara::Sora)
@@ -700,9 +723,12 @@ pub fn prize_to(name: &str, kind: PrizeKind) {
 
 // ------------------------------------------------------------------------------------------ the save point (savepoint.rs)
 
+/// A friend leader's capsule as the save point tests it.
+type PawnCapsule = (Vec3, f32, f32);
+
 /// (savepoint.rs) THE SAVE POINT WITH THE PARTY (P2): the pawn its capsules test (the leader: a friend leader's
 /// capsule) and his "needs recovery" with the party. `None` = no party: Sora alone as before.
-pub fn savepoint_pawn(control: &Control) -> Option<(Option<(Vec3, f32, f32)>, bool)> {
+pub fn savepoint_pawn(control: &Control) -> Option<(Option<PawnCapsule>, bool)> {
     if !live(control) {
         return None;
     }
@@ -728,6 +754,11 @@ pub fn savepoint_cure_all() {
 /// (status.rs's cadence for the leader's body, `cure.er_status`).
 pub fn savepoint_rest(control: &Control, in_recover: bool, dt: f32) {
     static STATE: Mutex<(bool, f32)> = Mutex::new((false, 0.0));
+    // (HUD-REVIVE, THE USER 2026-11-07: "healing at a save point should be able to revive downed party members") whatever the
+    // cure rows say: in the recovery area of a save point that may heal (the Roundtable Hold's too), the downed members stand up
+    if in_recover && live(control) {
+        asks(|a| a.revive_down = true);
+    }
     if !live(control) || control.flag("cure.er_status") == Some(false) || control.flag("party.cure") == Some(false) {
         return;
     }
@@ -813,6 +844,13 @@ mod tests {
         fn apply_hit(&mut self, _hit: &kh_core::HitRecord) -> kh_core::host::HitResult {
             kh_core::host::HitResult::default()
         }
+        // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+        fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+            None
+        }
+        fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+            None
+        }
     }
     impl kh_partyhost::PartyTargets for NoEnemies {
         fn ai_actors(&self, _out: &mut Vec<kh_ai::ActorView>) {}
@@ -883,6 +921,49 @@ mod tests {
     /// THE MAILBOX END TO END (one test: the mailbox is process-wide): the Party Formation's change, the leader's
     /// HUD feed, the camp menu's edit, the EXP with a friend as player 0, the save point's party Recover and cure, the
     /// save's record and its load into a new runtime, the reset.
+    /// (HUD-REVIVE, THE USER 2026-11-07: "healing at a save point should be able to revive downed party members") THE SAVE POINT'S
+    /// REST (savepoint.rs `savepoint_rest`: the leader in a recovery area that may heal, the Roundtable Hold's as any other)
+    /// stands a downed member up at FULL HP; without it (out of combat) he gets up with KH3's revive amount only.
+    #[test]
+    fn hr_the_save_point_rest_revives_a_downed_member_at_full_hp() {
+        let _serial = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let world = kh_core::test_world::TestWorld::floor();
+        let control = Control::new(std::env::temp_dir().join("kh-er-partyui-test-no-such.ctl"));
+        reset();
+        let mut rt = runtime();
+        let mut sora = new_game_sora();
+        for k in 0..2 {
+            step(&mut rt, &mut sora, &world, k as f64 / 60.0);
+        }
+        let goofy = rt.id(PartyChara::Goofy).unwrap();
+        let down = |rt: &mut PartyRuntime| {
+            let m = rt.party.member_mut(goofy).unwrap();
+            m.status.hp = 0;
+            m.start_die();
+        };
+        // no save point: out of combat, KH3's revive amount
+        down(&mut rt);
+        step(&mut rt, &mut sora, &world, 0.05);
+        let quarter = rt.party.status(goofy).unwrap().revive_hp();
+        assert_eq!(rt.party.status(goofy).unwrap().hp, quarter);
+        for k in 0..240 {
+            step(&mut rt, &mut sora, &world, 0.1 + k as f64 / 60.0);
+        }
+        assert!(!rt.view(PartyChara::Goofy).unwrap().ko);
+        // the save point's rest: full HP, up
+        down(&mut rt);
+        savepoint_rest(&control, true, 1.0 / 60.0);
+        step(&mut rt, &mut sora, &world, 5.0);
+        let v = rt.view(PartyChara::Goofy).unwrap();
+        assert_eq!(v.hp, v.hp_max, "FULL HP at the save point");
+        for k in 0..240 {
+            step(&mut rt, &mut sora, &world, 5.1 + k as f64 / 60.0);
+        }
+        let v = rt.view(PartyChara::Goofy).unwrap();
+        assert!(!v.ko && v.state != kh_party::NpcStateId::Die, "up: {:?}", v.state);
+        savepoint_rest(&control, false, 1.0 / 60.0);
+    }
+
     #[test]
     fn the_screens_reach_the_party_through_the_mailbox() {
         let _serial = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner()); // (PFY)
@@ -941,9 +1022,11 @@ mod tests {
         let mut sora2 = new_game_sora();
         load_record(&record);
         assert_eq!(party_record_now().map(|r| r["leader"].clone()), Some(json!("donald")), "a pending load is the truth until it is taken");
+        assert!(load_waiting(), "the friends' boss steps wait for it");
         for k in 0..4 {
             step(&mut rt2, &mut sora2, &world, k as f64 / 60.0);
         }
+        assert!(!load_waiting());
         assert_eq!(rt2.leader_chara(), PartyChara::Donald);
         assert_eq!(rt2.ai_settings(PartyChara::Goofy), mine);
         reset();

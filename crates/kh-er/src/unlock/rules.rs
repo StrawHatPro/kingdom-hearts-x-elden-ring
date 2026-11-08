@@ -971,7 +971,7 @@ mod tests {
         assert!(!er_prompt_wins(false, true, false) && !er_prompt_wins(false, false, false));
         // whoever leads: the geometry of the prompt is the leader's own place and yaw
         assert_eq!(talk_geometry(Vec3::ZERO, 0.0, Some(Vec3::new(150.0, 0.0, 0.0))), (1.5, true));
-        assert_eq!(talk_geometry(Vec3::ZERO, 180.0, Some(Vec3::new(150.0, 0.0, 0.0))).1, false, "his back to Donald");
+        assert!(!talk_geometry(Vec3::ZERO, 180.0, Some(Vec3::new(150.0, 0.0, 0.0))).1, "his back to Donald");
         assert_eq!(talk_geometry(Vec3::ZERO, 0.0, None).0, f32::INFINITY);
     }
 

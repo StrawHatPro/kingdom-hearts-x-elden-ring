@@ -4,9 +4,9 @@
 //! ladder and safely land on top of it".
 //!
 //! 1. WAIT `delay` s; 2. START: on the floor for `START_S` s (KH3's JumpNormalStart), turning toward the heading; 3. RISE /
-//! FALL: a parabola under `GRAVITY` whose top is `CLEAR` cm above the higher end; the horizontal move to the landing starts
-//! only once he is `FOOT` cm above the landing floor (the arc never cuts through the ledge the ladder leans on); 4. LAND on
-//! the landing facing the heading for `LAND_S` s; then Done.
+//!    FALL: a parabola under `GRAVITY` whose top is `CLEAR` cm above the higher end; the horizontal move to the landing starts
+//!    only once he is `FOOT` cm above the landing floor (the arc never cuts through the ledge the ladder leans on); 4. LAND on
+//!    the landing facing the heading for `LAND_S` s; then Done.
 
 use glam::Vec3;
 

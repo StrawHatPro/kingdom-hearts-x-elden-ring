@@ -34,6 +34,7 @@ use kh_react::{Body, BodyClass, Contact, EnemyReaction, HitOutcome, Phase, Pose,
 use crate::coords::{self, Frame, CM_PER_M};
 use crate::chranim::{self, AnimNow};
 use crate::bossguard::{Guard, GuardRules, Verdict};
+use crate::bossrevenge::{AttackWatch, BossRules, Contrib, StunGate};
 use crate::poise::{Gate, Meter, PoiseClass, PoiseRules, Tick};
 use crate::ermap::{AnimRules, Params, Weight};
 use crate::erlog;
@@ -73,6 +74,9 @@ struct Held {
     free_y: bool,
     /// (ZETTA 2026-10-23) its AI switch as it was before Zettaflare switched it off (None: not touched); put back with it
     ai_was: Option<bool>,
+    /// (THE USER 2026-11-02) the place last written: the game moving the body by more than 4 m since (its physics origin
+    /// shifting) moves `at` by as much, never a write of the stale place (groundclamp.rs `game_moved`)
+    wrote: Option<Vec3>,
 }
 
 /// (ZETTA 2026-10-23) A body whose AI Zettaflare holds off (SetCharacterAIState off + no actions, written every frame) until
@@ -254,6 +258,28 @@ struct Entry {
     air_hits: u32,
     /// Degrees the body is turned by the spin of SpunAway.
     spin: f32,
+    /// (THE USER 2026-11-02: "an enemy clipped into the ground fully") THE GROUND RULE (groundclamp.rs): the Elden Ring
+    /// place last written to the game (a step's or the interpolated one after the physics), what the down-cast saw above
+    /// the game's own feet at the take, seconds in a row without ground, and for the log: lifts, the deepest one, the
+    /// refused drops, the KH3 frame's moves under the body and the game's own moves of it.
+    wrote: Vec3,
+    ground_bias: f32,
+    no_ground: f32,
+    lifts: u32,
+    lift_max: f32,
+    held_drops: u32,
+    reframed: u32,
+    game_moves: u32,
+    /// (REVENGE) It is on Elden Ring's boss bar (this step), when it was last seen attacking, the revenge limit of its
+    /// class (bossguard.rs's rows, used when it is not a boss), and its revenges' AI asks (bossrevenge.rs, aireplan.rs).
+    boss: bool,
+    attacks: AttackWatch,
+    class_limit: f32,
+    replans: u32,
+    /// (REVENGE) Who added its revenge points lately (its revenge goes for the top one), and when its delayed AI ask is due
+    /// (after the hate hit of that pin).
+    contrib: Vec<Contrib>,
+    replan_at: Option<f32>,
 }
 
 #[derive(Default)]
@@ -289,6 +315,13 @@ pub struct Puppets {
     pub guard: Option<GuardRules>,
     /// (IMPL_ER45) The rules of poise.rs (the sheet's rows; `poise.kh = 0`: `PoiseRules::OFF`), set every frame.
     pub poise: Option<PoiseRules>,
+    /// (REVENGE) The rules of bossrevenge.rs (the sheet's rows; `react.guard = 0`: `BossRules::OFF`) and the bodies on
+    /// Elden Ring's boss bar, both set every frame by the host.
+    pub boss: Option<BossRules>,
+    pub bosses: Vec<FieldInsHandle>,
+    /// (THE USER 2026-11-02) the writes after the physics without a step of the reactions: the steps stopped, every body
+    /// we hold is given back (groundclamp.rs `Watchdog`)
+    watchdog: crate::groundclamp::Watchdog,
 }
 
 /// The map of Elden Ring as kh-react's world: the body as a sphere of its capsule's radius.
@@ -344,6 +377,89 @@ pub fn body_of(params: &Params, e: &Enemy) -> Body {
     body
 }
 
+/// (REVENGE) The body attacks now: an attack animation of its set (x3000..x3999) or the game's own super armour (TAE
+/// SUPER_ARMOR), the two signs poise.rs reads (bossrevenge.rs rule 4).
+fn attacking(e: &Enemy) -> bool {
+    e.in_attack || e.hyper == Some(true)
+}
+
+/// (REVENGE) The body's revenge limit and cool-down by bossrevenge.rs: a boss its own (from its stance and HP), another
+/// body its class's row, or none (`react.revenge.bosses_only`).
+fn sync_boss(entry: &mut Entry, brules: &BossRules, rules: &GuardRules, boss: bool, e: &Enemy) {
+    entry.boss = boss;
+    entry.reaction.body.revenge_limit = brules.limit_for(boss, e.poise_max, e.hp_max as f32, entry.class_limit);
+    if (boss && brules.on) || entry.reaction.body.strong_max > 0 {
+        entry.reaction.body.revenge_cooldown = rules.revenge_armour;
+    }
+}
+
+/// (REVENGE) Who made a party hit (the aggro director's rule: Donald's magic flag, the member nearest the attacker point, else
+/// the leader): aggro.rs `Who::code`; 0 = not known.
+#[cfg(feature = "party")]
+fn hitter_code(hit: &HitRecord) -> u8 {
+    crate::party::aggro::attribute(hit.attacker.valid.then_some(hit.attacker.position), hit.flags).map_or(0, |w| w.code())
+}
+
+#[cfg(not(feature = "party"))]
+fn hitter_code(_hit: &HitRecord) -> u8 {
+    0
+}
+
+/// (REVENGE) The leader's code (aggro.rs `Who::code`; Sora when the director has not run).
+#[cfg(feature = "party")]
+fn leader_code() -> u8 {
+    crate::party::aggro::leader().map_or(1, |w| w.code())
+}
+
+#[cfg(not(feature = "party"))]
+fn leader_code() -> u8 {
+    1
+}
+
+/// (REVENGE) The boss `foe` pinned on member `code` for `hold` seconds through the aggro director (its hate hit from that body:
+/// Elden Ring's own target choice). The member's name, or None (no party: the leader is its only target anyway).
+#[cfg(feature = "party")]
+fn pin_revenge(foe: TargetId, code: u8, hold: f32) -> Option<&'static str> {
+    let who = crate::party::aggro::Who::from_code(code)?;
+    crate::party::aggro::pin(foe, who, hold);
+    Some(who.name())
+}
+
+#[cfg(not(feature = "party"))]
+fn pin_revenge(_foe: TargetId, _code: u8, _hold: f32) -> Option<&'static str> {
+    None
+}
+
+/// (REVENGE) ITS REVENGE GOES FOR WHOEVER TRIGGERED IT: the top contributor of the last `retarget_window` s pinned for the
+/// armour's `hold`. True: pinned (the AI ask waits `retarget_wait` for its hate hit).
+fn retarget(p: &mut Entry, id: u32, clock: f32, rules: &BossRules, hold: f32) -> bool {
+    let top = crate::bossrevenge::top_contributor(&p.contrib, clock, rules.retarget_window, leader_code());
+    p.contrib.clear();
+    match top.and_then(|t| pin_revenge(TargetId(id), t, hold)) {
+        Some(name) => {
+            erlog!("revenge: target {id} (c{:04}): its revenge goes for {name} (the most revenge points in the last {:.0} s): pinned {hold:.1} s, its AI asked {:.2} s later", p.npc_id, rules.retarget_window, rules.retarget_wait);
+            true
+        }
+        None => false,
+    }
+}
+
+/// (REVENGE) ON FULL: the boss's AI asked to plan its next action now (aireplan.rs; its own battle goal chooses).
+fn ask_replan(p: &mut Entry, id: u32) {
+    let Some(chr) = crate::targets::find_chr(&p.handle) else {
+        erlog!("revenge: target {id} (c{:04}): its AI was not asked to replan: the character is not found", p.npc_id);
+        return;
+    };
+    let paused = if crate::aipause::holds(&p.handle) { " (its AI is paused by Pin Down: the ask is acted on when it comes back)" } else { "" };
+    match crate::aireplan::request(chr) {
+        Ok(asked) => {
+            p.replans += 1;
+            erlog!("revenge: target {id} (c{:04}): its AI is asked to plan its next action NOW ({asked:?}; ask no. {}): its own battle goal picks from its own moveset{paused}", p.npc_id, p.replans);
+        }
+        Err(why) => erlog!("revenge: target {id} (c{:04}): its AI was NOT asked to replan: {why} (the armour alone)", p.npc_id),
+    }
+}
+
 /// The body's feet are high above the ground (a flyer: bats, birds).
 fn hovers(e: &Enemy, filter: u32, height_cm: f32) -> bool {
     let mut hits = Vec::new();
@@ -367,7 +483,7 @@ impl Puppets {
             if body.flying {
                 erlog!("puppet: c{:04} (target {}) is a FLYER: its feet are more than {:.1} m above the ground", e.npc_id, e.id.0, params.anim.flying_height / CM_PER_M);
             }
-            Entry { want: Want::Free, asked: None, bare: 0.0, extra_ask: -10.0, extra_n: 0, movable: body.class != BodyClass::Giant, broken: false, reaction: EnemyReaction::new(body), guard: Guard::new(), was_empty: false, meter: Meter::new(), handle: e.handle, npc_id: e.npc_id, class: body.class, saved: None, suspended_for: 0.0, seen_step: steps, phase: Phase::None, start: e.er_pos, written: e.er_pos, yaw: e.yaw, int_before: (e.er_pos, e.yaw), peak: 0.0, air_hits: 0, spin: 0.0 }
+            Entry { want: Want::Free, asked: None, bare: 0.0, extra_ask: -10.0, extra_n: 0, movable: body.class != BodyClass::Giant, broken: false, reaction: EnemyReaction::new(body), guard: Guard::new(), was_empty: false, meter: Meter::new(), handle: e.handle, npc_id: e.npc_id, class: body.class, saved: None, suspended_for: 0.0, seen_step: steps, phase: Phase::None, start: e.er_pos, written: e.er_pos, yaw: e.yaw, int_before: (e.er_pos, e.yaw), peak: 0.0, air_hits: 0, spin: 0.0, wrote: e.er_pos, ground_bias: 0.0, no_ground: 0.0, lifts: 0, lift_max: 0.0, held_drops: 0, reframed: 0, game_moves: 0, boss: false, attacks: AttackWatch::default(), class_limit: body.revenge_limit, replans: 0, contrib: Vec::new(), replan_at: None }
         });
         entry.seen_step = steps;
         entry
@@ -423,6 +539,12 @@ impl Puppets {
         self.map.get(&id.0).is_some_and(|p| p.saved.is_some() && matches!(p.phase, Phase::FlinchAir | Phase::Falling | Phase::BlownFlying | Phase::BlownFalling | Phase::SpunAway | Phase::LaunchedRising | Phase::LaunchedHover | Phase::LaunchedFalling | Phase::SlammedDown | Phase::WallHit))
     }
 
+    /// (FREEZE-FX) The bodies KH3's FREEZE bad status holds now (kh-react's Hold in its Frozen phase: the hit row's time, ended
+    /// early by a breaking hit, a death, a release): the frozen look's list (freezefx.rs).
+    pub fn frozen(&self) -> Vec<TargetId> {
+        self.map.iter().filter(|(_, p)| p.reaction.is_active() && p.reaction.phase() == Phase::Frozen).map(|(id, _)| TargetId(*id)).collect()
+    }
+
     /// The `dmgLevel` that plays `role` on this kind of character: the one seen to work, else the
     /// next of the sheet's order.
     pub fn level_for(&self, npc_id: i32, role: Role) -> u8 {
@@ -473,29 +595,87 @@ impl Puppets {
         self.body(params, e).reaction == kh_core::host::BodyReaction::Strong
     }
 
+    /// (GF-BREAK, R6) GOOFY'S FULL STAGGER ON THIS BODY, the one explicit event: a body we throw about through its poise meter
+    /// (`Meter::force_break`), an armoured one through bossguard's rules. Err: why it does not break.
+    pub fn stagger_break(&mut self, params: &Params, e: &Enemy, window: f32) -> Result<(), &'static str> {
+        let rules = self.guard.unwrap_or(params.guard);
+        let prules = self.poise.unwrap_or(params.poise);
+        let entry = self.entry(params, e);
+        if entry.reaction.body.strong_max == 0 {
+            return entry.meter.force_break(&prules, &rules, window);
+        }
+        match entry.guard.reaction(&rules) {
+            Verdict::Allow => Ok(()),
+            Verdict::Armoured => Err("its revenge: unflinchable"),
+            Verdict::Chain => Err("the chain cap"),
+        }
+    }
+
+    /// (GF-BREAK) A Breaker holds the body's break.
+    pub fn stagger_hold(&mut self, id: TargetId, seconds: f32) {
+        if let Some(p) = self.map.get_mut(&id.0) {
+            p.meter.hold_break(seconds);
+        }
+    }
+
+    /// (GF-BREAK) The break is over (`Meter::release_break`).
+    pub fn stagger_release(&mut self, params: &Params, id: TargetId, juggle: f32) {
+        let prules = self.poise.unwrap_or(params.poise);
+        if let Some(p) = self.map.get_mut(&id.0) {
+            p.meter.release_break(&prules, juggle);
+        }
+    }
+
+    /// (GF-BREAK) A reaction of ours on a body that is about to kneel ends: the kneel is the game's, on the ground.
+    pub fn let_go(&mut self, id: TargetId) {
+        if let Some(p) = self.map.get_mut(&id.0) {
+            p.reaction.release();
+        }
+    }
+
     /// A hit record of the core on this enemy: KH3's reaction rules decide what it does to the body.
     pub fn hit(&mut self, params: &Params, e: &Enemy, hit: &HitRecord, hp_lost: bool, lethal: bool) -> HitOutcome {
         let off = self.off;
         let rules = self.guard.unwrap_or(params.guard);
         let prules = self.poise.unwrap_or(params.poise);
+        // (REVENGE) bossrevenge.rs: the boss bar's bodies, the puppets' clock
+        let brules = self.boss.unwrap_or(params.boss);
+        let boss = self.bosses.contains(&e.handle);
+        let clock = self.clock;
         let entry = self.entry(params, e);
-        if off || !e.hostile || !e.alive || !e.active || e.summon {
+        // (MIMIC-BOSS) a Mimic Tear boss's body is its copy's: the copy's own KH3 reactions launch and juggle it
+        if off || !e.hostile || !e.alive || !e.active || e.summon || crate::mimic_boss::is_held(&e.handle) {
             return HitOutcome::NoReaction;
         }
         let was_active = entry.reaction.is_active();
         let mut request = ReactionRequest::from_hit(hit, hp_lost, lethal);
         // (ZETTA) a forced hit (Zettaflare): past the poise meter, the revenge armour and the chain cap
         let force = hit.flags & kh_core::host::HIT_FLAG_FORCE != 0;
+        // (GF-POLISH) a knockdown (Pratfall Toss): a body we throw about goes down, whatever its meter says
+        let knockdown = hit.flags & kh_core::host::HIT_FLAG_KNOCKDOWN != 0;
+        // (REVENGE) a boss's own revenge limit before the hit adds its points (rule 2); rule 4's gate for this hit
+        sync_boss(entry, &brules, &rules, boss, e);
+        entry.attacks.seen(clock, attacking(e));
+        let strong = entry.reaction.body.strong_max > 0;
+        let boss_gate = if lethal || force || knockdown { StunGate::Default } else { crate::bossrevenge::stun_gate(&brules, boss, strong, attacking(e), entry.attacks.since(clock), entry.reaction.endurance() <= 0) };
+        if boss_gate == StunGate::Stun {
+            crate::bossrevenge::stun_request(&mut request);
+        }
+        // (REVENGE) who adds these revenge points (KH3's own rule: a hit that took HP and carries no bad status; none in the armour)
+        if boss && brules.on && brules.retarget && hp_lost && request.bad_status == kh_react::BadStatus::None && request.revenge_point > 0.0 && !entry.guard.armoured() {
+            entry.contrib.retain(|c| clock - c.at <= brules.retarget_window);
+            entry.contrib.push(Contrib { at: clock, who: hitter_code(hit), points: request.revenge_point });
+        }
         // (IMPL_ER45) THE POISE METER of a body we throw about (poise.rs): until it breaks a knight takes no reaction
         // from light hits (a MID one a flinch from the big kinds); armoured bodies keep bossguard.rs, a lethal hit dies
         let mut gate = Gate::Full;
         let mut meter_note = String::new();
-        if entry.reaction.body.strong_max == 0 && !lethal && !force {
+        if entry.reaction.body.strong_max == 0 && !lethal && !force && !knockdown {
             let kind = request.kind.value() as u8;
             let row = params.reaction(kind as i32).poise * params.poise_scale;
             let hyper = e.hyper.unwrap_or(prules.hyper_by_anim && e.in_attack);
             let recover = if e.poise_recover > 0.0 { e.poise_recover } else { prules.recover };
-            let o = entry.meter.hit(&prules, &rules, e.poise_max, recover, row, crate::poise::big_kind(kind), hyper, was_active);
+            let o = entry.meter.hit(&prules, &rules, crate::poise::PoiseHit { poise_max: e.poise_max, recover, row_poise: row, big: crate::poise::big_kind(kind), hyper, in_reaction: was_active });
             gate = o.gate;
             if prules.on && o.class != PoiseClass::Low {
                 let what = match (o.broke, o.in_window, o.recovering, o.chain_refused, o.gate) {
@@ -515,6 +695,10 @@ impl Puppets {
                 erlog!("poise: target {} (c{:04}): its poise reached 0 but the chain cap (at most {} breaks in {:.0} s) refuses the break: no reaction, its poise is full again", e.id.0, e.npc_id, rules.chain_max, rules.chain_window);
             }
         }
+        // (GF-BREAK) a kneel Goofy's Stagger forced stands until his Breaker ends it: hits take HP and start nothing over it
+        if !lethal && !force && crate::stance::kneeling(e.id) {
+            gate = Gate::None;
+        }
         // (while a reaction runs the pose is ignored: the reaction's own position is the truth)
         let pose = Pose { position: e.pos, yaw: e.yaw, grounded: true };
         let mut outcome = match gate {
@@ -527,6 +711,22 @@ impl Puppets {
         };
         // (IMPL_ER21) an armoured body: no reaction during its revenge, and not more than the chain cap lets through
         let mut refused = "";
+        // (REVENGE) rule 4: a boss in its attack or its combo keeps KH3's super armour (its revenge points are added)
+        if boss_gate == StunGate::Armour && matches!(outcome, HitOutcome::Started { .. }) {
+            if !was_active {
+                entry.reaction.release();
+            }
+            outcome = HitOutcome::NoReaction;
+            refused = " (REFUSED: the boss is attacking or in its combo: KH3's super armour)";
+        }
+        // (REVENGE) a boss of any class is unflinchable during its revenge
+        if !force && boss && brules.on && !strong && entry.guard.armoured() && matches!(outcome, HitOutcome::Started { .. }) {
+            if !was_active {
+                entry.reaction.release();
+            }
+            outcome = HitOutcome::NoReaction;
+            refused = " (REFUSED: it is in its revenge, unflinchable)";
+        }
         if force && !matches!(outcome, HitOutcome::Started { .. }) {
             // (ZETTA) a forced hit the body's own endurance refused: its revenge cleared and asked again with no endurance
             entry.reaction.clear_revenge();
@@ -539,7 +739,9 @@ impl Puppets {
             }
         }
         if !force && entry.reaction.body.strong_max > 0 && matches!(outcome, HitOutcome::Started { .. }) {
-            let verdict = entry.guard.reaction(&rules);
+            // (REVENGE) a stun counts against its own chain cap (bossrevenge.rs rule 4)
+            let chain = if boss_gate == StunGate::Stun { GuardRules { chain_max: crate::bossrevenge::stun_chain_max(&brules, rules.chain_max), ..rules } } else { rules };
+            let verdict = entry.guard.reaction(&chain);
             if verdict != Verdict::Allow {
                 if !was_active {
                     entry.reaction.release();
@@ -553,8 +755,10 @@ impl Puppets {
         if was_active && entry.saved.is_some() {
             entry.air_hits += 1;
         }
+        // (REVENGE) a boss's limit and what rule 4 made of the hit
+        let boss_note = if boss && brules.on { format!(" | BOSS: revenge limit {:.2} (stance {:.0}, HP {}), {}", entry.reaction.body.revenge_limit, e.poise_max, e.hp_max, match boss_gate { StunGate::Stun => "not attacking: KH3's hit-stun", StunGate::Armour => "attacking or in its combo: KH3's super armour", StunGate::Open => "its endurance is empty: open", StunGate::Default => "as before" }) } else { String::new() };
         erlog!(
-            "puppet: target {} (c{:04}, {:?} = {:?}, endurance {}, revenge {:.1}) hit '{}' kind {:?}{} -> {:?}{meter_note}",
+            "puppet: target {} (c{:04}, {:?} = {:?}, endurance {}, revenge {:.1}) hit '{}' kind {:?}{} -> {:?}{meter_note}{boss_note}",
             e.id.0, e.npc_id, e.weight, entry.class, entry.reaction.endurance(), entry.reaction.revenge_value(), hit.attack_name, hit.damage_kind, if was_active { " while in a reaction" } else { "" }, outcome
         );
         if !refused.is_empty() {
@@ -577,9 +781,13 @@ impl Puppets {
         self.steps += 1;
         self.clock += kh_react::STEP;
         self.filter = filter;
+        self.watchdog.stepped(); // (THE USER 2026-11-02) the reactions are stepped: the restore watchdog starts again
         let time_scale = (1.0 - self.time_slow).clamp(0.0, 1.0);
         let (steps, ai_bits, off, clock, rules, no_anim) = (self.steps, self.ai_bits, self.off, self.clock, self.rules, self.no_anim);
         let guard_rules = self.guard.unwrap_or(GuardRules::DEFAULT);
+        // (REVENGE) bossrevenge.rs: its rules and the boss bar's bodies
+        let boss_rules = self.boss.unwrap_or(BossRules::DEFAULT);
+        let bosses = &self.bosses;
         let memo = &mut self.memo;
         let frozen = self.zetta_frozen.clone(); // (ZETTA 2026-10-23)
         let mut taken = 0;
@@ -597,6 +805,9 @@ impl Puppets {
                 Some(e) if !e.alive => Some("it died"),
                 Some(e) if !e.active => Some("it became inactive"),
                 _ if p.suspended_for > SUSPEND_MAX => Some("timeout"),
+                // (THE USER 2026-11-02: "an enemy clipped into the ground fully") no ground under it for a second: it is
+                // the game's again where it is (never dropped by us through the world)
+                _ if crate::groundclamp::no_ground_too_long(p.no_ground) => Some("NO GROUND under it for a second (none within the down-cast from its head): given back to the game where it is"),
                 _ => None,
             };
             if let Some(why) = why {
@@ -604,10 +815,37 @@ impl Puppets {
                 release(p, *id, why);
                 return present;
             }
+            // (THE USER 2026-11-02) WHERE THE BODY REALLY IS, before the reaction moves it on: the game moved a body we hold
+            // by more than 4 m since our last write (its physics origin shifting: every Elden Ring place changed by as much;
+            // its own placement) and every Elden Ring place we keep for it follows; and the reaction goes on from the place
+            // we last wrote, re-read in this step's KH3 frame (a KH3 frame moved under the body, a seat or a ride, is not a
+            // move of the body: one log had a body written 58 m up and 87 m away 0.07 s after it was taken)
+            if p.saved.is_some() {
+                // (the body's own physics position: the row's may be lifted to a hovering model, targets.rs `hover_lift`)
+                if let Some(now) = crate::targets::find_chr(&p.handle).map(|c| game::v3(&c.modules.physics.position)) {
+                    if let Some(d) = crate::groundclamp::game_moved(now, p.wrote) {
+                        p.start += d;
+                        p.written += d;
+                        p.int_before.0 += d;
+                        p.wrote += d;
+                        p.game_moves += 1;
+                        erlog!("puppet: target {id} (c{:04}): the game moved the body by ({:.2}, {:.2}, {:.2}) since our last write (its physics origin shifted, or its own placement): our places follow it", p.npc_id, d.x, d.y, d.z);
+                    }
+                }
+                let kh = frame.pos_er_to_kh(p.written);
+                let off_by = (kh - p.reaction.position()).length();
+                if off_by > 50.0 {
+                    p.reframed += 1;
+                    if p.reframed == 1 {
+                        erlog!("puppet: target {id} (c{:04}): the KH3 frame moved {:.2} m under the body since the last step (its reaction would have put it there): it goes on from where it really is", p.npc_id, off_by / CM_PER_M);
+                    }
+                }
+                p.reaction.set_position(kh);
+            }
             // ELDEN RING'S OWN STANCE BREAK on an armoured body empties KH3's reaction endurance: the
             // broken window of the two games is one (kh-react keeps it open for its own 10 s).
             if let Some(e) = row.as_deref() {
-                let kneels = crate::targets::find_chr(&p.handle).and_then(|c| damage_anim(c)).is_some_and(|a| a.id.rem_euclid(1_000_000) == 8700);
+                let kneels = crate::targets::find_chr(&p.handle).and_then(|c| damage_anim(c)).is_some_and(|a| crate::stance::is_kneel(a.id)); // (GF-BREAK) 8702 too (MEASURED, c4311, c4351)
                 let broken = e.alive && (kneels || (e.poise_max > 0.0 && e.poise <= 0.0));
                 if broken && !p.broken && p.reaction.body.strong_max > 0 {
                     // (IMPL_ER21) not while the endurance is locked after a refill, not during a revenge; and from now
@@ -617,6 +855,9 @@ impl Puppets {
                     erlog!("puppet: target {id} (c{:04}, {:?}): ELDEN RING'S STANCE BREAK no. {} (poise {:.0}/{:.0}{}): {}; no poise damage of ours for {:.0} s", p.npc_id, p.class, p.guard.stance_breaks, e.poise, e.poise_max, if kneels { ", it kneels" } else { "" }, if empties { format!("KH3's reaction endurance emptied (left {left}): hits with reaction power now land in full, at most {} reactions in {:.0} s", guard_rules.chain_max, guard_rules.chain_window) } else { format!("KH3's endurance HOLDS ({left}: locked after its refill, or in its revenge)") }, guard_rules.poise_lockout);
                 }
                 p.broken = broken;
+                // (REVENGE) its attacks watched (rule 4's combo grace); a boss's own limit (rule 2)
+                p.attacks.seen(clock, attacking(e));
+                sync_boss(p, &boss_rules, &guard_rules, bosses.contains(&e.handle), e);
             }
             let world = ErReactWorld { frame, filter, radius: (p.reaction.body.radius / CM_PER_M).clamp(0.2, 0.5) };
             let out = p.reaction.step_dt(&world, kh_react::STEP * time_scale);
@@ -640,7 +881,7 @@ impl Puppets {
             if let (Some((role, level, at)), Some(chr)) = (p.asked, crate::targets::find_chr(&p.handle)) {
                 let since = clock - at;
                 // (IMPL_ER21) the stance break (8700) is the game's own answer to poise, not to the level we asked
-                let seen = damage_anim(chr).filter(|a| a.time < since + 0.1 && a.id.rem_euclid(1_000_000) != 8700);
+                let seen = damage_anim(chr).filter(|a| a.time < since + 0.1 && !crate::stance::is_kneel(a.id));
                 let m = memo.entry(p.npc_id).or_default();
                 match (seen, role) {
                     (Some(a), _) if since > 0.03 => {
@@ -662,14 +903,29 @@ impl Puppets {
                     _ => {}
                 }
             }
+            // (REVENGE) the delayed AI ask of a pinned revenge
+            if p.replan_at.is_some_and(|t| clock >= t) {
+                p.replan_at = None;
+                ask_replan(p, *id);
+            }
             // KH3's revenge: the enemy breaks out of the combo.
             if p.reaction.take_revenge() {
                 p.reaction.clear_revenge();
                 // (IMPL_ER21) an armoured body is never ours to release: its revenge makes it UNFLINCHABLE for a while
                 // (no reaction, no damage level, no poise damage: its own attack cannot be interrupted)
-                if p.reaction.body.strong_max > 0 && guard_rules.revenge_armour > 0.0 {
+                // (REVENGE) a boss of any class too, and then its AI plans its own next action at once (bossrevenge.rs rule 3)
+                let boss_now = p.boss && boss_rules.on;
+                if (p.reaction.body.strong_max > 0 || boss_now) && guard_rules.revenge_armour > 0.0 {
                     p.guard.revenge(&guard_rules);
-                    erlog!("puppet: target {id} (c{:04}, {:?}): REVENGE no. {} (KH3's revenge value crossed its limit {:.1}): UNFLINCHABLE for {:.1} s (no reaction, no damage level, no poise damage; its endurance holds)", p.npc_id, p.class, p.guard.revenges, p.reaction.body.revenge_limit, guard_rules.revenge_armour);
+                    erlog!("puppet: target {id} (c{:04}, {:?}{}): REVENGE no. {} (KH3's revenge value crossed its limit {:.2}): UNFLINCHABLE for {:.1} s (no reaction, no damage level, no poise damage; its endurance holds)", p.npc_id, p.class, if boss_now { ", BOSS" } else { "" }, p.guard.revenges, p.reaction.body.revenge_limit, guard_rules.revenge_armour);
+                }
+                if boss_now && boss_rules.replan {
+                    // (REVENGE) aimed at whoever triggered it: pinned through the director, the AI asked after its hate hit
+                    if boss_rules.retarget && retarget(p, *id, clock, &boss_rules, guard_rules.revenge_armour) {
+                        p.replan_at = Some(clock + boss_rules.retarget_wait);
+                    } else {
+                        ask_replan(p, *id);
+                    }
                 }
                 if p.saved.is_some() {
                     release(p, *id, "REVENGE: KH3 lets this enemy break out of the combo");
@@ -683,15 +939,48 @@ impl Puppets {
             }
             if out.suspended {
                 let Some(row) = row else { return true };
-                let er = frame.pos_kh_to_er(out.position);
+                let want = frame.pos_kh_to_er(out.position);
                 let fresh = p.saved.is_none(); // (INT)
+                // (THE USER 2026-11-02: "an enemy clipped into the ground fully after party member Sora attacked him") THE
+                // GROUND UNDER IT, from above its head (groundclamp.rs): every attacker's reaction on every body ends here
+                let height = row.half_height * 2.0 / CM_PER_M;
+                let ground = ground_under(want, height, filter);
                 if p.saved.is_none() {
                     // SAFETY: the row was read from the game's character sets in this frame phase.
                     let Some(chr) = crate::targets::find_chr(&p.handle) else { return true };
                     p.saved = Some(save(chr));
                     (p.start, p.peak, p.air_hits, p.suspended_for) = (row.er_pos, 0.0, 0, 0.0);
+                    (p.no_ground, p.lifts, p.lift_max, p.held_drops, p.reframed, p.game_moves) = (0.0, 0, 0.0, 0, 0, 0);
+                    p.ground_bias = crate::groundclamp::take_bias(row.er_pos.y, ground);
                     taken += 1;
-                    erlog!("puppet: target {id} (c{:04}, {:?}) TAKEN for {:?} ({:?}); its animation was {}", p.npc_id, p.class, out.kind, out.phase, row.anim);
+                    erlog!("puppet: target {id} (c{:04}, {:?}) TAKEN for {:?} ({:?}); its animation was {}; the ground under it {}", p.npc_id, p.class, out.kind, out.phase, row.anim, match ground {
+                        Some(g) if p.ground_bias > crate::groundclamp::SINK_TOLERANCE => format!("{:+.2} m from its feet: ABOVE the game's own feet (water, foliage, a thin prop?): that much is allowed", g - row.er_pos.y),
+                        Some(g) => format!("{:+.2} m from its feet", g - row.er_pos.y),
+                        None => format!("NOT FOUND within {:.0} m (it is not moved down while none is found)", crate::groundclamp::CAST_DEPTH),
+                    });
+                }
+                let last = if fresh { row.er_pos } else { p.written };
+                let (er, verdict) = crate::groundclamp::clamp(want, last, ground, p.ground_bias);
+                p.no_ground = if ground.is_some() { 0.0 } else { p.no_ground + kh_react::STEP };
+                match verdict {
+                    crate::groundclamp::Verdict::Free => {}
+                    crate::groundclamp::Verdict::Lifted { by } => {
+                        p.lifts += 1;
+                        if p.lifts == 1 || by > p.lift_max + 0.5 {
+                            erlog!("puppet: target {id} (c{:04}): GROUND CLAMP: its reaction ({:?}) wanted its feet {by:.2} m UNDER THE GROUND at ({:.2}, {:.2}, {:.2}): put on the ground ({} lift(s) since it was taken)", p.npc_id, out.phase, want.x, want.y, want.z, p.lifts);
+                        }
+                        p.lift_max = p.lift_max.max(by);
+                    }
+                    crate::groundclamp::Verdict::Held { by } => {
+                        p.held_drops += 1;
+                        if p.held_drops == 1 {
+                            erlog!("puppet: target {id} (c{:04}): NO GROUND under it within {:.0} m of the down-cast from its head ({:?}): not moved down ({by:.2} m refused); given back after {:.1} s of that", p.npc_id, crate::groundclamp::CAST_DEPTH, out.phase, crate::groundclamp::NO_GROUND_RELEASE);
+                        }
+                    }
+                }
+                if er != want {
+                    // the reaction goes on from the place written, as the game has it
+                    p.reaction.set_position(frame.pos_er_to_kh(er));
                 }
                 if out.phase != p.phase {
                     erlog!("puppet: target {id}: {:?} -> {:?} at height {:+.2} m, {:.2} m from where it was taken; its animation is {}", p.phase, out.phase, er.y - p.start.y, ((er - p.start) * Vec3::new(1.0, 0.0, 1.0)).length(), row.anim);
@@ -753,12 +1042,13 @@ impl Puppets {
                 (p.written, p.yaw) = (er, out.yaw + p.spin);
                 if let Some(chr) = crate::targets::find_chr(&p.handle) {
                     write(chr, p.written, p.yaw, ai_bits);
+                    p.wrote = p.written;
                     if !no_anim && !frozen.contains(&p.handle) {
                         animate(chr, p, &rules);
                     }
                 }
                 row.er_pos = er;
-                row.pos = out.position;
+                row.pos = frame.pos_er_to_kh(er);
                 row.velocity = out.velocity;
                 row.yaw = out.yaw;
                 row.airborne = !out.grounded;
@@ -775,30 +1065,50 @@ impl Puppets {
     }
 
     /// The positions again after the game's own physics (`ChrIns_PostPhysics`).
-    pub fn reassert(&self) {
+    pub fn reassert(&mut self) {
         self.reassert_at(1.0);
     }
 
     /// (INT) As `reassert`, the bodies we carry `alpha` of the way from the step before to the latest one: the game draws
     /// them where they are written last in the frame, between the steps as Sora and his effects are (a jump of more than
     /// 3 m between the steps is not blended). 1 = the latest step (as before).
-    pub fn reassert_at(&self, alpha: f32) {
-        for p in self.map.values().filter(|p| p.saved.is_some()) {
+    pub fn reassert_at(&mut self, alpha: f32) {
+        // (THE USER 2026-11-02) THE RESTORE WATCHDOG: written after the physics frame after frame without a step of the
+        // reactions (Sora's steps stopped: a cutscene, a load, a menu holding the world), every body we hold goes back to the
+        // game, its gravity, movement and actions as they were (never left hanging with them off)
+        if self.watchdog.wrote() && self.count() > 0 {
+            let n = self.watchdog.unstepped();
+            for (id, p) in self.map.iter_mut().filter(|(_, p)| p.saved.is_some()) {
+                p.reaction.release();
+                release(p, *id, &format!("NOT STEPPED for {n} frame(s): Sora's steps stopped (a cutscene, a load, a menu)"));
+            }
+        }
+        for p in self.map.values_mut().filter(|p| p.saved.is_some()) {
             if let Some(chr) = crate::targets::find_chr(&p.handle) {
+                // (THE USER 2026-11-02) the game moved the body in its physics step (its origin shifted there): our places
+                // follow it, never a write of the stale place (groundclamp.rs `game_moved`)
+                if let Some(d) = crate::groundclamp::game_moved(game::v3(&chr.modules.physics.position), p.wrote) {
+                    p.start += d;
+                    p.written += d;
+                    p.int_before.0 += d;
+                    p.game_moves += 1;
+                    erlog!("puppet: c{:04}: the game moved the body by ({:.2}, {:.2}, {:.2}) in its physics step (its origin shifted, or its own placement): our places follow it", p.npc_id, d.x, d.y, d.z);
+                }
                 let (at, yaw) = if alpha < 1.0 && p.int_before.0.distance(p.written) < 3.0 {
                     (p.int_before.0.lerp(p.written, alpha), p.int_before.1 + ((p.yaw - p.int_before.1 + 540.0).rem_euclid(360.0) - 180.0) * alpha)
                 } else {
                     (p.written, p.yaw)
                 };
                 write(chr, at, yaw, self.ai_bits);
+                p.wrote = at;
                 if !self.no_anim && !self.zetta_frozen.contains(&p.handle) {
                     animate(chr, p, &self.rules);
                 }
             }
         }
-        for h in &self.held {
+        for h in &mut self.held {
             if let Some(chr) = crate::targets::find_chr(&h.handle) {
-                write(chr, h.at, h.yaw, h.ai_bits);
+                write_held(chr, h, false);
             }
         }
         if self.draw {
@@ -819,7 +1129,7 @@ impl Puppets {
             return false;
         }
         let Some(chr) = crate::targets::find_chr(&e.handle) else { return false };
-        self.held.push(Held { handle: e.handle, npc_id: e.npc_id, at: e.er_pos + Vec3::Y * height, yaw: e.yaw, left: seconds, ai_bits, saved: save(chr), free_y: false, ai_was: None });
+        self.held.push(Held { handle: e.handle, npc_id: e.npc_id, at: e.er_pos + Vec3::Y * height, yaw: e.yaw, left: seconds, ai_bits, saved: save(chr), free_y: false, ai_was: None, wrote: None });
         true
     }
 
@@ -864,6 +1174,15 @@ impl Puppets {
         true
     }
 
+    /// (F-POLISH) A held body CARRIED (kh_core `ScriptHold::carry`: FINISH_DR's drill X_link_skt, KH3's link of the caught
+    /// pawn): its place `at` (ER m) this step, its height too (no longer the game's). False: not held.
+    pub fn carry(&mut self, handle: &FieldInsHandle, at: Vec3) -> bool {
+        let Some(h) = self.held.iter_mut().find(|h| h.handle == *handle) else { return false };
+        h.at = at;
+        h.free_y = false;
+        true
+    }
+
     /// (ZETTA 2026-10-23, the user: "Melania was also attacking during Zettaflare!") A BODY ZETTAFLARE KILLED, KEPT UNTIL THE
     /// HAND-BACK: held where it stands (across the ground), no movement, no actions, its AI off (`zetta_hold`'s hold), whatever
     /// KH3's side says of it (dead) and whether the game draws it (hidden by the crumble: then frozen outright, `hidden`: the
@@ -887,7 +1206,7 @@ impl Puppets {
         }
         let ai_was = ai_switch::ai_on(chr);
         let _ = ai_switch::set_ai_on(chr, false);
-        self.held.push(Held { handle: e.handle, npc_id: e.npc_id, at: e.er_pos, yaw: e.yaw, left: ZETTA_HOLD_LEASE, ai_bits: bits, saved: save(chr), free_y: true, ai_was });
+        self.held.push(Held { handle: e.handle, npc_id: e.npc_id, at: e.er_pos, yaw: e.yaw, left: ZETTA_HOLD_LEASE, ai_bits: bits, saved: save(chr), free_y: true, ai_was, wrote: None });
         erlog!("puppet: Zettaflare KEEPS the body it killed, c{:04} (target {}), until the hand-back: held, no movement, no actions, AI off{}", e.npc_id, e.id.0, if hidden { ", frozen (hidden)" } else { "" });
         true
     }
@@ -1016,13 +1335,11 @@ impl Puppets {
             let chr = crate::targets::find_chr(&h.handle);
             match chr {
                 Some(chr) if h.left > 0.0 && chr.modules.data.hp > 0 => {
-                    if h.free_y {
-                        // (ZETTA 2026-10-23) its height the game's (on the ground, falling onto it), gravity on
-                        let now = game::v3(&chr.modules.physics.position);
-                        write(chr, Vec3::new(h.at.x, now.y, h.at.z), h.yaw, h.ai_bits);
+                    // (ZETTA 2026-10-23) free_y: its height the game's (on the ground, falling onto it), gravity on
+                    let free_y = h.free_y;
+                    write_held(chr, h, free_y);
+                    if free_y {
                         chr.modules.physics.as_mut().gravity_disabled = false;
-                    } else {
-                        write(chr, h.at, h.yaw, h.ai_bits);
                     }
                     // (ZETTA 2026-10-23) its AI kept off every frame (the game's events may switch it back on)
                     if h.ai_was.is_some() {
@@ -1089,7 +1406,8 @@ fn release(p: &mut Entry, id: u32, why: &str) {
         }
         None => "gone from the game (despawned / unloaded): nothing to give back",
     };
-    erlog!("puppet: target {id} (c{:04}) RELEASED after {:.2} s ({why}): {found}; {} hit(s) while ours, peak {:+.2} m, {:.2} m from where it was taken, last phase {:?}", p.npc_id, p.suspended_for, p.air_hits, p.peak, ((p.written - p.start) * Vec3::new(1.0, 0.0, 1.0)).length(), p.phase);
+    // (THE USER 2026-11-02) and what the ground rule did while it was ours (groundclamp.rs)
+    erlog!("puppet: target {id} (c{:04}) RELEASED after {:.2} s ({why}): {found}; {} hit(s) while ours, peak {:+.2} m, {:.2} m from where it was taken, last phase {:?} | ground clamp: {} lift(s) (deepest {:.2} m), {} drop(s) refused without ground, the KH3 frame moved under it {} time(s), the game moved it {} time(s)", p.npc_id, p.suspended_for, p.air_hits, p.peak, ((p.written - p.start) * Vec3::new(1.0, 0.0, 1.0)).length(), p.phase, p.lifts, p.lift_max, p.held_drops, p.reframed, p.game_moves);
     p.suspended_for = 0.0;
     p.phase = Phase::None;
 }
@@ -1109,6 +1427,30 @@ fn animate(chr: &mut ChrIns, p: &Entry, rules: &AnimRules) {
         (Want::Feet, Some(_)) => 6.0,
     };
     chranim::set_speed(chr, speed);
+}
+
+/// (THE USER 2026-11-02: "an enemy clipped into the ground fully") THE GROUND UNDER A BODY whose feet are (to be) at
+/// `feet`, `height` m tall: the first floor of a down-cast from above its head through the world's collision (`filter`:
+/// what the reactions' own sweeps see), down to `CAST_DEPTH` under the feet (groundclamp.rs `ground_of`). None: no floor.
+fn ground_under(feet: Vec3, height: f32, filter: u32) -> Option<f32> {
+    use crate::groundclamp as gc;
+    let start = gc::cast_start(feet, height);
+    let mut hits = Vec::new();
+    crate::havok::cast_sphere(start, Vec3::NEG_Y * (start.y - feet.y + gc::CAST_DEPTH), 0.1, filter, false, &mut hits);
+    gc::ground_of(hits.iter().map(|h| gc::Seen { fraction: h.fraction, y: h.position.y, normal_y: h.normal.y }), start.y)
+}
+
+/// A held body written (the testing aid's hold, Zettaflare's): `game_y`, its height the game's; (THE USER 2026-11-02) the
+/// game moving it by more than 4 m since our last write (its physics origin shifting) moves its place with it.
+fn write_held(chr: &mut ChrIns, h: &mut Held, game_y: bool) {
+    let now = game::v3(&chr.modules.physics.position);
+    if let Some(d) = h.wrote.and_then(|w| crate::groundclamp::game_moved(now, w)) {
+        h.at += d;
+        erlog!("puppet: the held c{:04}: the game moved the body by ({:.2}, {:.2}, {:.2}) since our last write: its place follows it", h.npc_id, d.x, d.y, d.z);
+    }
+    let at = if game_y { Vec3::new(h.at.x, now.y, h.at.z) } else { h.at };
+    write(chr, at, h.yaw, h.ai_bits);
+    h.wrote = Some(at);
 }
 
 fn write(chr: &mut ChrIns, at: Vec3, yaw: f32, ai_bits: u32) {
@@ -1147,10 +1489,18 @@ pub fn zetta_keep_bits(hidden: bool) -> u32 {
 }
 
 /// (ZETTA 2026-10-23) The AI switch (sdkx.rs, built with `party`); without it the switch is never touched.
-mod ai_switch {
+pub(crate) mod ai_switch {
     use eldenring::cs::ChrIns;
-    #[cfg(all(windows, feature = "party"))]
+    /// The AI switch as it would stand without Pin Down's pause (aipause.rs): what a save-and-give-back must read.
     pub fn ai_on(chr: &ChrIns) -> Option<bool> {
+        if crate::aipause::holds(&chr.field_ins_handle) {
+            return Some(true);
+        }
+        ai_bit(chr)
+    }
+    /// The bit itself.
+    #[cfg(all(windows, feature = "party"))]
+    pub fn ai_bit(chr: &ChrIns) -> Option<bool> {
         crate::sdkx::ai_on(chr)
     }
     #[cfg(all(windows, feature = "party"))]
@@ -1158,7 +1508,7 @@ mod ai_switch {
         crate::sdkx::set_ai_on(chr, on)
     }
     #[cfg(not(all(windows, feature = "party")))]
-    pub fn ai_on(_chr: &ChrIns) -> Option<bool> {
+    pub fn ai_bit(_chr: &ChrIns) -> Option<bool> {
         None
     }
     #[cfg(not(all(windows, feature = "party")))]

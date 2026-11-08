@@ -13,7 +13,6 @@ use kh_core::status::LoadoutValue;
 use kh_core::test_world::TestWorld;
 use kh_core::{Input, Loadout, Sora, StateId, Status, Vec3};
 use kh_host::party::PartyChara;
-use kh_party::NpcStateId;
 
 use crate::*;
 
@@ -42,6 +41,13 @@ impl kh_core::Targets for Dummy {
     }
     fn apply_hit(&mut self, hit: &HitRecord) -> HitResult {
         HitResult { accepted: true, damage_dealt: hit.damage, hp_after: 1.0e6, killed: false, guarded: false }
+    }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
     }
 }
 
@@ -120,11 +126,6 @@ impl Rig {
             let id = rig.rt.id(c).unwrap();
             let s = rig.rt.party.status_mut(id).unwrap();
             s.kit = kh_party::pad::donald_kit::KitAbilities::test_all();
-            s.goofy_kit = kh_party::pad::goofy_kit::GoofyKit::test_all();
-            // (GOOFY-GK) Goofy's base string (2 steps + the finisher): the six taps reach his finisher press
-            for k in [kh_party::pad::goofy_kit::GoofyAbility::ComboPlus, kh_party::pad::goofy_kit::GoofyAbility::ComboPlus2] {
-                s.goofy_kit.set_equipped(k, false);
-            }
         }
         rig.rt.lead_word(&["leader", if lead == PartyChara::Donald { "donald" } else { "goofy" }]);
         rig.step(false, None, false);
@@ -172,8 +173,8 @@ impl Rig {
         match p.chara {
             // (DON-KIT) his string's own finisher: the slam (pad/donald_combo.rs; no Unison / Meteor Drop finisher, doc 13)
             kh_party::Chara::Donald => kh_party::pad::donald::kit_state(p) == Some(kh_party::pad::donald::STEP) && p.pad.as_ref().is_some_and(|d| d.donald.combo.step == kh_party::pad::donald_combo::Step::Slam),
-            // (GOOFY-GK) + his own string's finishers (pad/goofy_combo.rs: fin_big_bash / fin_shield_quake / fin_shield_upper)
-            _ => matches!(p.state, NpcStateId::Pad(kh_party::pad::goofy::FINISH)) || p.pad.as_ref().is_some_and(|d| d.goofy.log.iter().any(|w| *w == "fusion_spin" || *w == "fusion_rocket" || *w == "late_no_finisher" || w.starts_with("fin_"))),
+            // (GOOFY) his third shove is the finisher
+            _ => p.status.goofy.as_ref().is_some_and(|g| g.run.log.iter().any(|w| *w == "shove3" || *w == "late_no_finisher")),
         }
     }
 

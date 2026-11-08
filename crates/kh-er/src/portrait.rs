@@ -30,10 +30,11 @@ use kh_ui::{Matrix, Movie};
 use crate::control::Control;
 use crate::erlog;
 
-/// The overlay layer the picture lies under: `LAYERS[7]` ("GameHelp"), right after the camp menu's own picture.
-const BEFORE_LAYER: usize = 7;
-/// (IMPL_ER34) The camp menu's own layer (`LAYERS[6]`): the picture goes with ITS pictures.
-pub const CAMP_LAYER: usize = BEFORE_LAYER - 1;
+/// The overlay layer the picture lies under: "GameHelp" of `LAYERS` (by name since INT-F), right after the camp menu's own
+/// picture.
+const BEFORE_LAYER: usize = kh_host::hud_layers::layer_index("GameHelp");
+/// (IMPL_ER34) The camp menu's own layer ("CampMenu"): the picture goes with ITS pictures.
+pub const CAMP_LAYER: usize = kh_host::hud_layers::layer_index("CampMenu");
 
 struct State {
     copy: MenuPortrait,
@@ -110,14 +111,24 @@ pub fn frame_of(data: &PortraitData, out: PortraitOut, exposure: f32, env_level:
     }
 }
 
-/// ONCE A HUD FRAME (hud.rs): `movie` = the CampMenu movie while a camp menu is up (else `None`: nothing is done),
-/// `root` = stage -> back buffer pixels, `output` = the back buffer's size, `dt` = the frame's real time.
-/// (IMPL_ER34) Called AFTER the layers' update; `camp` = the camp layer's (states sent to the raster worker, results
-/// taken back, busy): he is placed by the state whose picture is on screen (`menu.portrait.sync = 0`: by this frame's).
+/// What a HUD frame gives the camp menu's pictures (Sora's here, the friends' in partydraw.rs): `movie` = the CampMenu movie
+/// while a camp menu is up (else `None`: nothing is done), `root` = stage -> back buffer pixels, `output` = the back buffer's
+/// size, `dt` = the frame's real time, `camp` = the camp layer's (states sent to the raster worker, results taken back, busy).
+#[derive(Clone, Copy)]
+pub struct CampPicture<'a> {
+    pub movie: Option<&'a Movie>,
+    pub root: &'a Matrix,
+    pub output: (u32, u32),
+    pub dt: f32,
+    pub pack: Option<&'a Path>,
+    pub camp: (u64, u64, bool),
+}
+
+/// ONCE A HUD FRAME (hud.rs). (IMPL_ER34) Called AFTER the layers' update: he is placed by the state whose picture is on
+/// screen (`menu.portrait.sync = 0`: by this frame's).
 /// (ER party I) `party` = the camp menu's panel order and the member its sub screens show (`Hud::camp_panels`,
 /// `Hud::camp_member`): Sora is placed on HIS panel (`sora_placement`); `None` = the old placement.
-#[allow(clippy::too_many_arguments)]
-pub fn frame(control: &Control, movie: Option<&Movie>, root: &Matrix, output: (u32, u32), dt: f32, pack: Option<&Path>, camp: (u64, u64, bool), party: Option<(&[kh_host::party::PartyChara], usize)>) {
+pub fn frame(control: &Control, CampPicture { movie, root, output, dt, pack, camp }: CampPicture<'_>, party: Option<(&[kh_host::party::PartyChara], usize)>) {
     let Some(movie) = movie.filter(|_| control.flag("menu.portrait") != Some(false)) else {
         // (cheap: one lock, only while a picture was up)
         if let Ok(mut guard) = STATE.try_lock() {
@@ -233,6 +244,17 @@ impl MenuTrace {
     }
 }
 
+/// The payload goes away.
+pub fn shutdown() {
+    kh_er_render::set_portrait(None);
+    if let Some(handle) = LOADING.lock().ok().and_then(|mut l| l.take()) {
+        let _ = handle.join();
+    }
+    if let Ok(mut guard) = STATE.lock() {
+        *guard = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::MenuTrace;
@@ -262,16 +284,5 @@ mod tests {
         let closed = trace.step(None, 0.016);
         assert!(closed[0].starts_with("menu: Top -> closed"), "{closed:?}");
         assert!(trace.step(None, 0.1).is_empty());
-    }
-}
-
-/// The payload goes away.
-pub fn shutdown() {
-    kh_er_render::set_portrait(None);
-    if let Some(handle) = LOADING.lock().ok().and_then(|mut l| l.take()) {
-        let _ = handle.join();
-    }
-    if let Ok(mut guard) = STATE.lock() {
-        *guard = None;
     }
 }

@@ -123,6 +123,21 @@ pub struct Material {
     pub samples: u32,
     /// `[start, end)` in samples.
     pub loop_points: Option<(u32, u32)>,
+    /// (THE USER 2026-11-02: "...shotlock's startup sfx is way too loud") The largest absolute sample of the file, 0 ..
+    /// 1 (the manifest's `peak`, measured by the pack tool when it wrote the WAV); `None` when not measured. What a host
+    /// that raises some sounds above their authored level reads to keep them out of clipping (kh-host `ui_voice_gain`).
+    pub peak: Option<f32>,
+}
+
+/// (THE USER 2026-11-02: "sometimes Audio from specifically our mod will become very loud") A sound asset's UE
+/// concurrency (`ConcurrencyOverrides` of the asset: `MaxCount`, `ResolutionRule`): how many copies of it may sound at
+/// once, and what a further one does. Not serialized fields are UE's stock defaults (sheet sora-sound-rules rows
+/// `concurrency.max_count_default`, `concurrency.footstep_rule`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Concurrency {
+    pub max_count: u32,
+    /// `EMaxConcurrentResolutionRule::PreventNew`: the new copy is refused; any other rule stops the oldest copy.
+    pub prevent_new: bool,
 }
 
 /// One sound of a bank: everything the driver needs to play it.
@@ -168,6 +183,8 @@ pub struct Asset {
     pub attenuation: bool,
     /// `bOverrideStopFadeTime` + `StopFadeTime`.
     pub stop_fade: Option<f32>,
+    /// (THE USER 2026-11-02) The asset's concurrency settings, `None` = it has none (no limit of the UE side).
+    pub concurrency: Option<Concurrency>,
 }
 
 /// A category of the SEAD configuration.
@@ -506,6 +523,7 @@ impl Pack {
                         sample_rate: m.get("sample_rate").as_usize().unwrap_or(48_000) as u32,
                         samples: m.get("samples").as_usize().unwrap_or(0) as u32,
                         loop_points: if lp.is_null() { None } else { Some((lp.get("start").as_usize().unwrap_or(0) as u32, lp.get("end").as_usize().unwrap_or(0) as u32)) },
+                        peak: m.get("peak").as_f32(),
                     },
                 );
             }
@@ -614,9 +632,15 @@ impl Pack {
             let Some(&bank) = a.get("bank").as_str().and_then(|b| pack.bank_by_name.get(b)) else { continue };
             let other = a.get("other_props");
             let stop_fade = if other.get("bOverrideStopFadeTime").as_bool() == Some(true) { other.get("StopFadeTime").as_f32().or(Some(crate::rules::RULES.asset_stop_fade_time_default)) } else { None };
+            // (THE USER 2026-11-02) the asset's ConcurrencyOverrides: MaxCount (stock 16 when not stored), ResolutionRule
+            let c = a.get("concurrency");
+            let concurrency = (!c.is_null()).then(|| Concurrency {
+                max_count: c.get("MaxCount").as_usize().map_or(crate::rules::RULES.concurrency_max_count_default as u32, |n| n.max(1) as u32),
+                prevent_new: c.get("ResolutionRule").as_str().is_some_and(|r| r.ends_with("PreventNew")),
+            });
             pack.assets.insert(
                 path.clone(),
-                Asset { bank, index: a.get("sound_index").as_usize().unwrap_or(0) as u32, volume: opt_f32(a.get("volume")), looping: a.get("looping").as_bool().unwrap_or(false), attenuation: !a.get("attenuation").is_null(), stop_fade },
+                Asset { bank, index: a.get("sound_index").as_usize().unwrap_or(0) as u32, volume: opt_f32(a.get("volume")), looping: a.get("looping").as_bool().unwrap_or(false), attenuation: !a.get("attenuation").is_null(), stop_fade, concurrency },
             );
         }
 
@@ -638,7 +662,7 @@ impl Pack {
                 .collect();
             // "FadeOutTime 1; bNoSeFadeAtTheEffectEnd" of the effect-attached rows.
             let loop_stop = t.get("loop_stop").as_str().unwrap_or("");
-            let fade_out = loop_stop.split("FadeOutTime ").nth(1).and_then(|rest| rest.split(|c: char| c == ';' || c == ' ').next()).and_then(|n| n.parse::<f32>().ok());
+            let fade_out = loop_stop.split("FadeOutTime ").nth(1).and_then(|rest| rest.split([';', ' ']).next()).and_then(|n| n.parse::<f32>().ok());
             pack.triggers.push(Trigger {
                 id: t.get("id").as_str().unwrap_or("").to_string(),
                 route: t.get("route").as_str().unwrap_or("").to_string(),
@@ -728,7 +752,13 @@ impl Pack {
     /// become absolute paths under `dir`. Returns whether a root was found.
     pub fn merge_party_root(&mut self, dir: &Path) -> Result<bool, String> {
         let Ok(text) = std::fs::read_to_string(dir.join("manifest.json")) else { return Ok(false) };
-        let extra = Pack::from_json(&Json::parse(&text)?, None)?;
+        self.merge_root_text(dir, &text)
+    }
+
+    /// (TITLE-AUDIO) [`Pack::merge_party_root`] with the root's manifest given as text (a manifest made at run time for a
+    /// file of the user's own, e.g. kh-er's custom title music): material files are relative to `dir`.
+    pub fn merge_root_text(&mut self, dir: &Path, text: &str) -> Result<bool, String> {
+        let extra = Pack::from_json(&Json::parse(text)?, None)?;
         let mut index = HashMap::new();
         for (old, mut bank) in extra.banks.into_iter().enumerate() {
             if let Some(&have) = self.bank_by_name.get(&bank.name) {
@@ -767,6 +797,16 @@ impl Pack {
         }
         self.triggers.extend(extra.triggers);
         self.load_lip(dir); // (FACE) the party root's own voice lines' loudness
+        // (FINAL-FIX) the root's own actor classes (`dir/tables.json`, the `projectiles` format of tables.json: the shotlocks'
+        // projectiles, PACK/shotlocks/audio); a class the pack already has is kept as it is
+        if let Ok(text) = std::fs::read_to_string(dir.join("tables.json")) {
+            for row in Json::parse(&text)?.get("projectiles").items() {
+                let class = row.get("class").as_str().unwrap_or("").to_string();
+                let effects = row.get("effects").members().iter().flat_map(|(role, names)| names.items().iter().filter_map(|n| Some((role.clone(), n.as_str()?.to_string()))).collect::<Vec<_>>()).collect();
+                let actor = ActorSounds { class: class.clone(), command: opt_string(row.get("command")), effects, fire_se: opt_string(row.get("fire_se")), pawn_hit_se: opt_string(row.get("pawn_hit_se")), map_hit_se: opt_string(row.get("map_hit_se")) };
+                self.actors.entry(class.to_ascii_lowercase()).or_insert(actor);
+            }
+        }
         Ok(true)
     }
 

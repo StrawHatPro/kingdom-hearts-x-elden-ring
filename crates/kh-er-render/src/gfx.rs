@@ -88,7 +88,7 @@ fn routed_skipped(skipped: usize, of: usize) {
     let total = ROUTED_SKIPPED.fetch_add(skipped as u64, Ordering::Relaxed) + skipped as u64;
     let frames = ROUTED_SKIP_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
     let peak = ROUTED_SKIP_PEAK.fetch_max(skipped, Ordering::Relaxed);
-    if frames == 1 || skipped > peak || frames % 600 == 0 {
+    if frames == 1 || skipped > peak || frames.is_multiple_of(600) {
         rlog!("render: (FP) {skipped} of {of} routed chandelier fragment(s) skipped this frame: the upload buffer is full (the frame is drawn without them); {total} skipped in {frames} frame(s) so far");
     }
 }
@@ -110,6 +110,10 @@ struct PsoKey {
 
 // (IMPL_ER21) the camp menu's portrait: Sora into a target of our own at Present
 mod portrait;
+// (MIMIC SORA) the Mimic Tear's G-buffer writers and draws (crate::mimic)
+mod mimic_draw;
+// (MIMIC-RENDER) the Sora copies on the player's own route (crate::sora_copy)
+mod sora_copy_draw;
 // (ER party S4) Donald, Goofy and the team props: their libraries, pipeline states and passes (crate::party)
 #[cfg(feature = "party")]
 pub(crate) mod party;
@@ -231,6 +235,7 @@ struct GameKit {
     world: bool,
 }
 
+#[derive(Clone, Copy)] // (AUDIT-C) rage.rs redirects a draw's slot
 struct Draw {
     slot: usize,
     first_index: u32,
@@ -279,6 +284,8 @@ struct Assets {
     /// game's view-projection: drawn without the TAA's jitter (no anti-aliasing) and with no camera motion in his motion
     /// vectors (the TAA's history of the background pulled into him: "see-through"). Donald and Goofy never had it.)
     data_bound: usize,
+    /// (MIMIC-BOSS hotfix 3, MB3-FORMLEAK) the copies of Sora's own looks (their wear forms) and their descriptor tables (gfx/sora_copy_draw.rs)
+    copies: sora_copy_draw::CopyLooks,
 }
 
 #[derive(Default)]
@@ -367,8 +374,6 @@ pub(crate) struct Core {
     blob_depth: usize,
     /// The shadow mask whose view is in the contact shadow's table (pointer; 0 = white).
     blob_mask: usize,
-    /// The light target whose view is in every slot's table (pointer; 0 = white).
-    probe_light: usize,
     /// (discovery) What copies constant buffers of the game into a texture of ours.
     dump: Option<DumpKit>,
     game: Option<GameKit>,
@@ -469,6 +474,140 @@ struct HyCapture {
     /// (RSF round 19) the light probes of the KH surfaces (er_char.wgsl hcprobe / hcprobedown, read by hycap at t9); None = the
     /// files are not in the pack (hycap keeps hc_blur)
     probe: Option<HyProbe>,
+    /// (ER-NATIVE) the capture shader is hycap2.ps.dxil: it writes the native layout with the game's specular (t10)
+    spec_ok: bool,
+    /// (HAIR-BLEED) the census of KH pixels shaded without a captured texel of their own (hycensus.ps.dxil); None = not in the pack
+    census: Option<HyCensus>,
+}
+
+/// (HAIR-BLEED) THE SAFETY NET'S COUNT (the coordinator: "log every frame in which any pixel uses it"): in the native mode, the
+/// scene target over the capture's box is copied right before the KH colour draws (`before`); after them a full-screen pass over
+/// the box (hycensus.ps.dxil) keeps exactly the pixels a KH draw changed whose capture texel holds no KH surface (they take a
+/// neighbour's texel, the 4..64 px rings, or the rig), counted by an occlusion query per frame slot, read back when the slot comes
+/// round again (`pending`: the frame number it was drawn in).
+struct HyCensus {
+    pso: ID3D12PipelineState,
+    heap: ID3D12DescriptorHeap,
+    queries: ID3D12QueryHeap,
+    readback: ID3D12Resource,
+    /// the copy of the scene target (its pointer, the copy)
+    before: Option<(usize, ID3D12Resource)>,
+    pending: [Option<u64>; FRAME_SLOTS],
+}
+
+/// (HAIR-BLEED) pixels without their own texel in the latest counted frame / frames with any / frames counted, since the last line
+pub static CENSUS_FRAMES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub static CENSUS_HIT_FRAMES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub static CENSUS_PIXELS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static CENSUS_MAX: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CENSUS_LOGGED: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// (HAIR-BLEED) The census box: the capture's box clamped to the picture; None when empty.
+fn census_box(bx: [i32; 4], width: u32, height: u32) -> Option<[u32; 4]> {
+    let c = [bx[0].clamp(0, width as i32) as u32, bx[1].clamp(0, height as i32) as u32, bx[2].clamp(0, width as i32) as u32, bx[3].clamp(0, height as i32) as u32];
+    (c[2] > c[0] && c[3] > c[1]).then_some(c)
+}
+
+/// (HAIR-BLEED) Reads the count of `slot`'s previous census (its lists are done: the slot is being recorded again) and copies the
+/// scene target over the box into `before`, in `list` right before the KH colour draws. The target rests in RENDER_TARGET in
+/// the colour list. True when the copy was recorded (then `census_count` runs after the draws).
+///
+/// # Safety
+/// `list` is open; `target` is the scene target the colour list draws into, alive.
+unsafe fn census_before(device: &ID3D12Device, list: &ID3D12GraphicsCommandList, c: &mut HyCensus, slot: usize, target: &ID3D12Resource, bx: [u32; 4]) -> bool {
+    if let Some(frame) = c.pending[slot].take() {
+        let mut at: *mut c_void = std::ptr::null_mut();
+        let range = D3D12_RANGE { Begin: slot * 8, End: slot * 8 + 8 };
+        if c.readback.Map(0, Some(&range), Some(&mut at)).is_ok() {
+            let pixels = std::ptr::read_unaligned((at as *const u8).add(slot * 8) as *const u64);
+            c.readback.Unmap(0, Some(&D3D12_RANGE { Begin: 0, End: 0 }));
+            census_note(frame, pixels);
+        }
+    }
+    let pointer = target.as_raw() as usize;
+    if c.before.as_ref().map(|b| b.0) != Some(pointer) {
+        let desc = target.GetDesc();
+        let made = committed(device, D3D12_HEAP_TYPE_DEFAULT, &texture_desc(desc.Width as u32, desc.Height, 1, 1, desc.Format, D3D12_RESOURCE_FLAG_NONE), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, None);
+        match made {
+            Ok(copy) => c.before = Some((pointer, copy)),
+            Err(e) => {
+                rlog!("render: (HAIR-BLEED) the census's copy of the scene target cannot be made ({e})");
+                return false;
+            }
+        }
+    }
+    let Some((_, before)) = c.before.as_ref() else { return false };
+    list.ResourceBarrier(&[transition(target, 0, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE), transition(before, 0, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST)]);
+    let to = D3D12_TEXTURE_COPY_LOCATION { pResource: std::mem::transmute_copy(before), Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 } };
+    let from = D3D12_TEXTURE_COPY_LOCATION { pResource: std::mem::transmute_copy(target), Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 } };
+    let area = D3D12_BOX { left: bx[0], top: bx[1], front: 0, right: bx[2], bottom: bx[3], back: 1 };
+    list.CopyTextureRegion(&to, bx[0], bx[1], 0, &from, Some(&area as *const D3D12_BOX));
+    list.ResourceBarrier(&[transition(target, 0, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET), transition(before, 0, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)]);
+    true
+}
+
+/// (HAIR-BLEED) What the census pass needs: the colour list, its frame slot and frame, the scene target, the capture's geometry
+/// target, the box (clamped), the picture's size.
+#[derive(Clone, Copy)]
+struct CensusCx<'a> {
+    device: &'a ID3D12Device,
+    list: &'a ID3D12GraphicsCommandList,
+    slot: usize,
+    frame: u64,
+    target: &'a ID3D12Resource,
+    geo: &'a ID3D12Resource,
+    bx: [u32; 4],
+    width: u32,
+    height: u32,
+}
+
+/// (HAIR-BLEED) The census pass after the KH colour draws: the pixels of the box the KH draws changed whose capture texel holds
+/// no KH surface, counted by `slot`'s occlusion query and resolved into the readback buffer. Leaves the target in RENDER_TARGET;
+/// the caller sets its root state again.
+///
+/// # Safety
+/// `list` is open with `root` set; `target` and `geo` alive; `census_before` recorded the copy in this list.
+unsafe fn census_count(x: &CensusCx, c: &mut HyCensus) {
+    let CensusCx { device, list, slot, frame, target, geo, bx, width, height } = *x;
+    let Some((_, before)) = c.before.as_ref() else { return };
+    let size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) as usize;
+    let cpu = c.heap.GetCPUDescriptorHandleForHeapStart().ptr + slot * SLOT_TEXTURES * size;
+    let view = |format: DXGI_FORMAT| D3D12_SHADER_RESOURCE_VIEW_DESC { Format: format, ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D, Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 { Texture2D: D3D12_TEX2D_SRV { MostDetailedMip: 0, MipLevels: 1, PlaneSlice: 0, ResourceMinLODClamp: 0.0 } } };
+    let format = target.GetDesc().Format;
+    device.CreateShaderResourceView(target, Some(&view(format)), D3D12_CPU_DESCRIPTOR_HANDLE { ptr: cpu + 11 * size });
+    device.CreateShaderResourceView(before, Some(&view(format)), D3D12_CPU_DESCRIPTOR_HANDLE { ptr: cpu + 12 * size });
+    device.CreateShaderResourceView(geo, Some(&view(DXGI_FORMAT_R16G16B16A16_FLOAT)), D3D12_CPU_DESCRIPTOR_HANDLE { ptr: cpu + 13 * size });
+    list.ResourceBarrier(&[transition(target, 0, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)]);
+    list.SetDescriptorHeaps(&[Some(c.heap.clone())]);
+    list.SetGraphicsRootDescriptorTable(3, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: c.heap.GetGPUDescriptorHandleForHeapStart().ptr + (slot * SLOT_TEXTURES * size) as u64 });
+    list.OMSetRenderTargets(0, None, false, None);
+    list.RSSetViewports(&[D3D12_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: width as f32, Height: height as f32, MinDepth: 0.0, MaxDepth: 1.0 }]);
+    list.RSSetScissorRects(&[RECT { left: bx[0] as i32, top: bx[1] as i32, right: bx[2] as i32, bottom: bx[3] as i32 }]);
+    list.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    list.SetPipelineState(&c.pso);
+    list.BeginQuery(&c.queries, D3D12_QUERY_TYPE_OCCLUSION, slot as u32);
+    list.DrawInstanced(3, 1, 0, 0);
+    list.EndQuery(&c.queries, D3D12_QUERY_TYPE_OCCLUSION, slot as u32);
+    list.ResolveQueryData(&c.queries, D3D12_QUERY_TYPE_OCCLUSION, slot as u32, 1, &c.readback, (slot * 8) as u64);
+    list.ResourceBarrier(&[transition(target, 0, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET)]);
+    c.pending[slot] = Some(frame);
+}
+
+/// (HAIR-BLEED) A frame's count read back: totals for the status line, and a log line (at most one a second) for a frame with any.
+fn census_note(frame: u64, pixels: u64) {
+    CENSUS_FRAMES.fetch_add(1, Ordering::Relaxed);
+    if pixels == 0 {
+        return;
+    }
+    CENSUS_HIT_FRAMES.fetch_add(1, Ordering::Relaxed);
+    CENSUS_PIXELS.fetch_add(pixels, Ordering::Relaxed);
+    CENSUS_MAX.fetch_max(pixels, Ordering::Relaxed);
+    if let Ok(mut at) = CENSUS_LOGGED.lock() {
+        if at.is_none_or(|t| t.elapsed() >= Duration::from_secs(1)) {
+            *at = Some(Instant::now());
+            rlog!("render: (HAIR-BLEED) SAFETY NET USED: frame {frame}: {pixels} KH pixel(s) shaded without a captured texel of their own (a neighbour's, the rings' or the rig's light); at most one line a second");
+        }
+    }
 }
 
 /// (RSF round 19) THE LIGHT PROBES (the user: "lighting and even some detail behind Donald is appearing thru him like he's a
@@ -484,7 +623,9 @@ struct HyProbe {
     down: ID3D12PipelineState,
 }
 
-const HY_PROBE_SLICES: usize = 6;
+// (VIEWLIGHT round 3) 8 slices: the normal-keyed clusters' 6, + their light's second moment (the print discriminator's region test,
+// er_char.wgsl hc_probe_clusters) and a spare. An older hycap reads slices 0..5 only.
+const HY_PROBE_SLICES: usize = 8;
 const HY_PROBE_LEVELS: usize = 5;
 const HY_PROBE_TILE: u32 = 8;
 
@@ -507,8 +648,11 @@ struct HairLate {
     /// (ER91) the 4x hair pass of this frame (hair91.rs): the box around his head (scene pixels), its parameter block, his
     /// stencil (for the TAA class of the strands' own pixels)
     /// and the early depth's snapshot of this frame (the scene depth without him), when there
-    h91: Option<([u32; 4], u64, Option<u8>, Option<usize>)>,
+    h91: Option<Hair91Pass>,
 }
+
+/// (ER91) `h91` above: the box around his head, its parameter block, his stencil, the early depth's snapshot.
+type Hair91Pass = ([u32; 4], u64, Option<u8>, Option<usize>);
 
 #[derive(Default)]
 struct GlowKit {
@@ -540,6 +684,16 @@ struct GlowKit {
     /// the reduced masks' pipeline state (maskdown.ps.dxil) and the view of the full mask's stencil it reads (for which mask)
     maskdown: Option<(ID3D12PipelineState, ID3D12DescriptorHeap, usize)>,
     maskdown_failed: bool,
+    /// (MIMIC SORA) the Mimic Tear's G-buffer writers per key (one per slot; gfx/mimic_draw.rs), the keys they failed for and
+    /// why, and each mimic's skin of the frame before per (mimic, model) (his motion vectors): made only once a mimic was submitted
+    mimic_sets: HashMap<PsoKey, Vec<Option<ID3D12PipelineState>>>,
+    mimic_failed: Vec<PsoKey>,
+    mimic_why: String,
+    mimic_prev: HashMap<(usize, usize), (Vec<f32>, u64, Trs)>,
+    /// (MIMIC SORA, his arrival and dissolve) his forming writers per key (`_gb3_mf`; empty: the folder has none) and the
+    /// liquid pool's state per key (None: mmpool not in the pack)
+    mimic_form_sets: HashMap<PsoKey, Vec<Option<ID3D12PipelineState>>>,
+    mimic_pool: HashMap<PsoKey, Option<ID3D12PipelineState>>,
 }
 
 /// (IMPL_ER78, `r.hybrid_dump`) copies of a screen box of the game's targets around him, waiting in read-back buffers.
@@ -646,7 +800,7 @@ struct Shaders {
     sora_velocity: bool,
     /// (RSF) a PARTY set's own-record velocity vertex shader (its pack's `skin_v88.vs.dxil`; party.rs `velocity_own`); None
     /// for Sora's sets and for a party pack without it.
-    #[cfg_attr(not(feature = "party"), allow(dead_code))]
+    #[cfg(feature = "party")]
     velo_own: Option<Vec<u8>>,
 }
 
@@ -694,7 +848,8 @@ fn read_shaders(pack: &Path, library: &Library, suffix: &str) -> Result<Shaders,
     // (ER91) which hair files the outfit has (bit 0 ER87's, bit 1 ER91's): the mode for the whole outfit (hair.rs `mode_for`)
     let stem_of = |variant: &str| if hybrid { format!("{variant}{suffix}_hy3") } else if interior { format!("{variant}{suffix}_bli") } else if blood { format!("{variant}{suffix}_bl") } else if own { format!("{variant}{suffix}_pl") } else { format!("{variant}{suffix}") };
     let mut hair_files = 0u8;
-    for slot in library.slots.iter().filter(|s| !(s.mesh.starts_with(crate::xsiweapon::PREFIX) && crate::xsiweapon::shader_dir(s, &dir, suffix).0 != dir)) {
+    // (P5) also a keyblade's own material (`kb:` slots: PACK/keyblades/materials/er, xsiweapon.rs `shader_dir`)
+    for slot in library.slots.iter().filter(|s| crate::xsiweapon::shader_dir(s, &dir, suffix).0 == dir) {
         let stem = stem_of(&slot.variant());
         if crate::hair::pick(&dir, &stem, slot.masked && !slot.translucent).is_some() {
             hair_files |= 1;
@@ -706,8 +861,8 @@ fn read_shaders(pack: &Path, library: &Library, suffix: &str) -> Result<Shaders,
     let hair_mode = crate::hair::mode_for(hair_files);
     for slot in &library.slots {
         let variant = slot.variant();
-        // (XW) a form weapon's own material: its set from its own folder (no hair path)
-        if slot.mesh.starts_with(crate::xsiweapon::PREFIX) && crate::xsiweapon::shader_dir(slot, &dir, suffix).0 != dir {
+        // (XW) a form weapon's own material: its set from its own folder (no hair path); (P5) a keyblade's likewise
+        if crate::xsiweapon::shader_dir(slot, &dir, suffix).0 != dir {
             if !pixel.contains_key(&variant) {
                 let set = if hybrid { "_hy3" } else if interior { "_bli" } else if blood { "_bl" } else if own { "_pl" } else { "" };
                 pixel.insert(variant.clone(), read_of(slot, set)?);
@@ -773,7 +928,7 @@ fn read_shaders(pack: &Path, library: &Library, suffix: &str) -> Result<Shaders,
     if hair_mode == 3 {
         rlog!("render: (ER91) the 4x hair pass: {} hair variant(s) with its shaders{}", msaa.len(), if msaa.is_empty() { " (none: the fringe at the split as before)" } else { "" });
     }
-    Ok(Shaders { vertex, blob, velo, pixel, gbuffer, fringe, msaa, sora_velocity: true, velo_own: None })
+    Ok(Shaders { vertex, blob, velo, pixel, gbuffer, fringe, msaa, sora_velocity: true, #[cfg(feature = "party")] velo_own: None })
 }
 
 /// Our thread: the hooks, then whatever `CORE` needs made.
@@ -805,6 +960,8 @@ pub fn worker() {
             Glow(ID3D12Device, ID3D12RootSignature, PsoKey, Vec<(String, bool, bool, bool)>),
             /// (ER87) the hair fringe's set for this key (true: the glow mask's)
             Hair(ID3D12Device, ID3D12RootSignature, PsoKey, bool, Vec<(String, bool, bool, bool)>),
+            /// (MIMIC SORA) the Mimic Tear's G-buffer writers for this key (once a mimic was submitted)
+            Mimic(ID3D12Device, ID3D12RootSignature, PsoKey, Vec<(String, bool, bool, bool)>),
         }
         let job = {
             let guard = CORE.lock().unwrap();
@@ -818,6 +975,8 @@ pub fn worker() {
                 Some(core) if core.assets.is_some() && !core.lost && crate::hair::reload_wanted() => Some(Job::Load(core.device.clone())),
                 // (HY) `r.hybrid` was switched: the drawn outfit made again with / without the *_hy3 set (today's files when off)
                 Some(core) if core.assets.is_some() && !core.lost && crate::hybrid::reload_wanted() => Some(Job::Load(core.device.clone())),
+                // (P5) other keyblades equipped: the drawn outfit made again with their models (keyblade.rs; the old assets retired)
+                Some(core) if core.assets.is_some() && !core.lost && crate::keyblade::reload_wanted() => Some(Job::Load(core.device.clone())),
                 // (IMPL_ER21) the frame's own set first, then the portrait's
                 Some(core) => match ([core.wanted, core.wanted_more].into_iter().flatten().find(|key| !core.pso_sets.contains_key(key) && !core.pso_failed.contains(key)), core.assets.as_ref()) {
                     (Some(key), Some(assets)) => {
@@ -830,7 +989,9 @@ pub fn worker() {
                             let colour = [core.wanted, core.wanted_more].into_iter().flatten().filter(|k| core.pso_sets.contains_key(k)).map(|k| (k, false));
                             let glow = core.glow.wanted.filter(|k| core.glow.sets.contains_key(k)).map(|k| (k, true));
                             colour.chain(glow).find(|(k, g)| !core.glow.hair_sets.contains_key(&(*k, *g)) && !core.glow.hair_failed.contains(&(*k, *g)))
-                        }.filter(|_| crate::hair::fringe_ready()).map(|(key, glow)| Job::Hair(core.device.clone(), core.root.clone(), key, glow, assets.library.slots.iter().map(|s| (s.variant(), s.two_sided, s.translucent, s.masked)).collect()))),
+                        }.filter(|_| crate::hair::fringe_ready()).map(|(key, glow)| Job::Hair(core.device.clone(), core.root.clone(), key, glow, assets.library.slots.iter().map(|s| (s.variant(), s.two_sided, s.translucent, s.masked)).collect())))
+                        // (MIMIC SORA) the Mimic Tear's writers for the frame's own key, once a mimic was submitted and his set is there
+                        .or_else(|| core.wanted.filter(|k| crate::mimic::wanted() && core.pso_sets.contains_key(k) && !core.glow.mimic_sets.contains_key(k) && !core.glow.mimic_failed.contains(k)).map(|key| Job::Mimic(core.device.clone(), core.root.clone(), key, assets.library.slots.iter().map(|s| (s.variant(), s.two_sided, s.translucent, s.masked)).collect()))),
                     _ => None,
                 },
                 None => None,
@@ -840,6 +1001,9 @@ pub fn worker() {
             Some(Job::Load(device)) => {
                 let started = Instant::now();
                 let outfit = crate::outfit::begin_load();
+                // (P5) the keyblade models this load is for (keyblade.rs: the hand's keyblade whole, the other slots' bases)
+                let kb_models = crate::keyblade::begin_load();
+                let kb_changed = kb_models != crate::keyblade::loaded();
                 // SAFETY: object creation on the game's device from our own thread (free-threaded API).
                 let made = hook::as_ours(|| unsafe {
                     let queue = match &upload_queue {
@@ -853,6 +1017,7 @@ pub fn worker() {
                     // (IMPL_ER59) the outfit's folder (the main pack for KH3's own); its shaders are read with it
                     let look = crate::outfit::look_dir(&pack, &outfit);
                     let mut library = Library::load(&look)?;
+                    crate::rage::prepare(&look, &mut library); // (F-RAGE) form 7's baked slots, their glow masks (texture 13), the hair
                     // (ER79) its cloth drawn two-sided with the inside shaded (twosided.json, `boc.cloth_twosided`)
                     crate::outfit::apply_cloth_twosided(&look, &mut library);
                     // (ER81) its own shader set (own_shaders.json, complete, `boc.<outfit>.own_shaders` on): its post-process block
@@ -864,8 +1029,10 @@ pub fn worker() {
                     if !forms.is_empty() {
                         rlog!("render: (XSI) form weapon slots added: {}", forms.iter().map(|m| m.model.as_str()).collect::<Vec<_>>().join(", "));
                     }
-                    // (ER87) also when `r.hair` was switched since they were read (hair.rs)
-                    let fresh = if shaders.is_none() || shaders_for != look || shaders_suffix != suffix || crate::hair::reload_wanted() || crate::hybrid::reload_wanted() { Some(read_shaders(&look, &library, &suffix)?) } else { None };
+                    // (P5) the equipped keyblades' own materials (`kb:` slots, after the XS form weapons')
+                    crate::keyblade::add_slots(&mut library, &kb_models);
+                    // (ER87) also when `r.hair` was switched since they were read (hair.rs); (P5) or other keyblades came in
+                    let fresh = if shaders.is_none() || shaders_for != look || shaders_suffix != suffix || crate::hair::reload_wanted() || crate::hybrid::reload_wanted() || kb_changed { Some(read_shaders(&look, &library, &suffix)?) } else { None };
                     let assets = Assets::create(&device, &queue, &pack, library, &outfit)?;
                     // (IMPL_ER59) A SWAP: the frame's pipeline states for the new slots are made HERE, before it, so that he
                     // is not left undrawn while the worker makes them afterwards (a form change wears another outfit)
@@ -883,6 +1050,7 @@ pub fn worker() {
                 });
                 let mut guard = CORE.lock().unwrap();
                 crate::outfit::end_load(&outfit, made.is_ok());
+                crate::keyblade::end_load(&kb_models, made.is_ok()); // (P5)
                 let mut made_sets = Vec::new();
                 let made = made.map(|(assets, fresh, (look, suffix), sets)| {
                     if let Some(fresh) = fresh {
@@ -913,6 +1081,11 @@ pub fn worker() {
                                 core.glow.hair_failed.clear();
                                 // (ER91) and the 4x hair pass's
                                 crate::outfit::retire(Box::new(std::mem::take(&mut core.glow.hair_msaa)));
+                                // (MIMIC SORA) and the Mimic Tear's writers (the new outfit's own folder and suffix)
+                                crate::outfit::retire(Box::new(std::mem::take(&mut core.glow.mimic_sets)));
+                                core.glow.mimic_failed.clear();
+                                crate::outfit::retire(Box::new(std::mem::take(&mut core.glow.mimic_form_sets)));
+                                crate::outfit::retire(Box::new(std::mem::take(&mut core.glow.mimic_pool)));
                                 core.pso_sets.extend(made_sets.drain(..));
                             }
                             Err(e) => rlog!("render: OUTFIT {outfit} could not be made ready ({e}): the drawn one stays"),
@@ -993,12 +1166,13 @@ pub fn worker() {
                     Some(shaders) => hook::as_ours(|| unsafe {
                         let elements = layout();
                         let k = crate::hair::Target { format: key.target, depth: key.depth, front_ccw: key.front_ccw, cull: key.cull, alpha: key.alpha };
-                        let set = crate::hair::fringe_pipelines(&device, &root, k, glow, &slots, &shaders.vertex, &shaders.fringe, &elements)?;
+                        let inputs = crate::hair::Inputs { slots: &slots, vertex: &shaders.vertex, elements: &elements };
+                        let set = crate::hair::fringe_pipelines(&device, &root, k, glow, inputs, &shaders.fringe)?;
                         // (ER91) with the colour set, the 4x hair pass's (a failure there leaves the fringe as before)
                         let msaa = if glow || shaders.msaa.is_empty() {
                             None
                         } else {
-                            match crate::hair91::msaa_pipelines(&device, &root, key.front_ccw, key.cull, DXGI_FORMAT(key.depth), &slots, &shaders.vertex, &shaders.msaa, &shaders.pixel, &elements) {
+                            match crate::hair91::msaa_pipelines(&device, &root, k, inputs, &shaders.msaa, &shaders.pixel) {
                                 Ok(m) => Some(m),
                                 Err(e) => {
                                     rlog!("render: (ER91) the 4x hair pass's states for {key:?} failed ({e}): the fringe as before");
@@ -1029,6 +1203,44 @@ pub fn worker() {
                     }
                 }
             }
+            Some(Job::Mimic(device, root, key, slots)) => {
+                let started = Instant::now();
+                // (the drawn outfit's own folder and suffix: an outfit without the mimic set fails here, said once)
+                let dir = shaders_for.join("materials").join("er");
+                let made = match shaders.as_ref() {
+                    // SAFETY: as above.
+                    // (with them: his forming writers and the pool's state, THE USER 2026-11-03's arrival and dissolve; not fatal)
+                    Some(shaders) if crate::hybrid::SHADERS.load(Ordering::Relaxed) => hook::as_ours(|| unsafe {
+                        let set = mimic_draw::pipelines(&device, &root, key, &slots, &shaders.vertex, &dir, &shaders_suffix)?;
+                        let form = mimic_draw::form_pipelines(&device, &root, key, &slots, &shaders.vertex, &dir, &shaders_suffix).unwrap_or_else(|e| {
+                            rlog!("render: (MIMIC SORA) his forming writers: {e}: his arrival / dissolve is not drawn (he appears whole)");
+                            Vec::new()
+                        });
+                        let pool = mimic_draw::pool_pipeline(&device, &root, key, &pack.join("materials").join("er")).map_err(|e| rlog!("render: (MIMIC SORA) the liquid pool: {e}: no pool is drawn")).ok();
+                        Ok::<_, String>((set, form, pool))
+                    }),
+                    Some(_) => Err("the hybrid's *_hy3 / *_gb3 sets are not in use (r.hybrid = 0): the mimic is drawn only through the game's G-buffer".to_string()),
+                    None => Err("no shaders".to_string()),
+                };
+                let mut guard = CORE.lock().unwrap();
+                if let Some(core) = guard.as_mut() {
+                    let same = core.assets.as_ref().is_some_and(|a| a.library.slots.len() == slots.len());
+                    match made {
+                        Ok((set, form, pool)) if same => {
+                            rlog!("render: (MIMIC SORA) {} of {} Mimic Tear G-buffer writer state(s), {} forming writer(s), the pool {} for {key:?} in {:.2} s ({})", set.iter().flatten().count(), set.len(), form.iter().flatten().count(), if pool.is_some() { "made" } else { "NOT made" }, started.elapsed().as_secs_f32(), dir.display());
+                            core.glow.mimic_sets.insert(key, set);
+                            core.glow.mimic_form_sets.insert(key, form);
+                            core.glow.mimic_pool.insert(key, pool);
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            rlog!("render: (MIMIC SORA) the Mimic Tear's G-buffer writers for {key:?} could not be made ({e}): no mimic is drawn with this set");
+                            core.glow.mimic_why = e;
+                            core.glow.mimic_failed.push(key);
+                        }
+                    }
+                }
+            }
             None => {
                 // (ER party S4) the party's libraries and pipeline states, when nothing of Sora's own is waiting
                 #[cfg(feature = "party")]
@@ -1053,7 +1265,7 @@ pub fn worker() {
 
 /// The vertex layout of `model::Vertex` (the shader's inputs are LOC0..LOC7).
 fn layout() -> [D3D12_INPUT_ELEMENT_DESC; 8] {
-    let element = |index: u32, format: DXGI_FORMAT, offset: u32| D3D12_INPUT_ELEMENT_DESC { SemanticName: PCSTR(b"LOC\0".as_ptr()), SemanticIndex: index, Format: format, InputSlot: 0, AlignedByteOffset: offset, InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, InstanceDataStepRate: 0 };
+    let element = |index: u32, format: DXGI_FORMAT, offset: u32| D3D12_INPUT_ELEMENT_DESC { SemanticName: PCSTR(c"LOC".as_ptr().cast()), SemanticIndex: index, Format: format, InputSlot: 0, AlignedByteOffset: offset, InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, InstanceDataStepRate: 0 };
     [
         element(0, DXGI_FORMAT_R32G32B32_FLOAT, 0),
         element(1, DXGI_FORMAT_R32G32B32_FLOAT, 12),
@@ -1313,7 +1525,7 @@ unsafe fn pipelines(device: &ID3D12Device, root: &ID3D12RootSignature, key: PsoK
 /// format, no blend, no cull, his skin's vertex layout, the set's velocity pixel shader) with his pack's `skin_v88` vertex
 /// shader and taa.rs's depth test (GREATER_EQUAL + bias). Without it his frame copy carries the plain previous matrix
 /// (gfx/party.rs `prepare`), never the own-record one the plain vertex shader would read as a plain matrix.
-#[cfg_attr(not(feature = "party"), allow(dead_code))]
+#[cfg(feature = "party")]
 unsafe fn velocity_own_pipeline(device: &ID3D12Device, root: &ID3D12RootSignature, key: PsoKey, vertex: &[u8], pixel: &[u8]) -> Result<ID3D12PipelineState, String> {
     let elements = layout();
     let mut blend = D3D12_BLEND_DESC::default();
@@ -1411,7 +1623,17 @@ unsafe fn ensure_capture(device: &ID3D12Device, root: &ID3D12RootSignature, hy: 
         let dir = pack.join("materials").join("er");
         let vertex = std::fs::read(dir.join("blob.vs.dxil")).map_err(|e| format!("blob.vs.dxil: {e}"))?;
         // (RSF round 19, the offline harness: `KH_HYCAP_DIR=DIR` reads hycap.ps.dxil from DIR first, the pack stays as it is)
-        let pixel = std::env::var_os("KH_HYCAP_DIR").and_then(|d| std::fs::read(std::path::Path::new(&d).join("hycap.ps.dxil")).ok()).map_or_else(|| std::fs::read(dir.join("hycap.ps.dxil")), Ok).map_err(|e| format!("hycap.ps.dxil: {e} (kh-shaderc --only hycap)"))?;
+        let read_cap = |name: &str| std::env::var_os("KH_HYCAP_DIR").and_then(|d| std::fs::read(std::path::Path::new(&d).join(name)).ok()).map_or_else(|| std::fs::read(dir.join(name)), Ok);
+        // (ER-NATIVE) hycap2.ps.dxil = the same capture built with the native layout (the game's specular at t10): a pack that has
+        // it was built with this round's shaders (kh-shaderc --only hycap writes both); without it the specular is not captured
+        let (pixel, spec_ok) = match read_cap("hycap2.ps.dxil") {
+            Ok(p) => (p, true),
+            Err(_) => (read_cap("hycap.ps.dxil").map_err(|e| format!("hycap.ps.dxil: {e} (kh-shaderc --only hycap)"))?, false),
+        };
+        // (VIEWLIGHT, testing aid) which capture shaders this run reads
+        if let Some(d) = std::env::var_os("KH_HYCAP_DIR") {
+            rlog!("render: (testing aid) KH_HYCAP_DIR = {}: the capture's shaders are read from there first", std::path::Path::new(&d).display());
+        }
         let format = DXGI_FORMAT_R16G16B16A16_FLOAT;
         let clear = D3D12_CLEAR_VALUE { Format: format, Anonymous: D3D12_CLEAR_VALUE_0 { Color: [0.0; 4] } };
         let make = || committed(device, D3D12_HEAP_TYPE_DEFAULT, &texture_desc(width, height, 1, 1, format, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, Some(&clear)).map_err(|e| format!("the capture's target: {e}"));
@@ -1524,7 +1746,7 @@ unsafe fn ensure_capture(device: &ID3D12Device, root: &ID3D12RootSignature, hy: 
         })();
         let probe = match probe {
             Ok(p) => {
-                rlog!("render: (RSF round 19) the KH surfaces' light probes made ({}x{} x {HY_PROBE_SLICES} directions, {HY_PROBE_LEVELS} levels): the game's light on them prefiltered, nothing of the background printed (r.hybrid_fit 6)", p.w0, p.h0);
+                rlog!("render: (RSF round 19) the KH surfaces' light probes made ({}x{} x {HY_PROBE_SLICES} directions, {HY_PROBE_LEVELS} levels): the game's light on them prefiltered, nothing of the background printed; (VIEWLIGHT) keyed by the surface normal, the same from every camera (r.hybrid_normal_probes 1)", p.w0, p.h0);
                 Some(p)
             }
             Err(e) => {
@@ -1532,11 +1754,45 @@ unsafe fn ensure_capture(device: &ID3D12Device, root: &ID3D12RootSignature, hy: 
                 None
             }
         };
-        Ok(HyCapture { light, geo, width, height, inputs, rtv, pso, last_box: None, gb_pso, gb_rtv, probe })
+        // (HAIR-BLEED) the census of KH pixels without a texel of their own (not fatal: without the file, no count)
+        let census = match std::fs::read(dir.join("hycensus.ps.dxil")) {
+            Ok(c_pixel) => (|| -> windows::core::Result<HyCensus> {
+                let mut c_desc: std::mem::ManuallyDrop<D3D12_GRAPHICS_PIPELINE_STATE_DESC> = std::mem::ManuallyDrop::new(std::ptr::read(&desc));
+                c_desc.PS = D3D12_SHADER_BYTECODE { pShaderBytecode: c_pixel.as_ptr() as *const c_void, BytecodeLength: c_pixel.len() };
+                c_desc.NumRenderTargets = 0;
+                c_desc.RTVFormats = [DXGI_FORMAT_UNKNOWN; 8];
+                // (a bitwise copy: the root signature pointer is the caller's, never released here)
+                let pso = device.CreateGraphicsPipelineState::<ID3D12PipelineState>(&*c_desc)?;
+                let heap: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, NumDescriptors: (FRAME_SLOTS * SLOT_TEXTURES) as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, NodeMask: 0 })?;
+                for k in 0..FRAME_SLOTS * SLOT_TEXTURES {
+                    device.CreateShaderResourceView(None, Some(&null), D3D12_CPU_DESCRIPTOR_HANDLE { ptr: heap.GetCPUDescriptorHandleForHeapStart().ptr + k * size });
+                }
+                let mut queries: Option<ID3D12QueryHeap> = None;
+                device.CreateQueryHeap(&D3D12_QUERY_HEAP_DESC { Type: D3D12_QUERY_HEAP_TYPE_OCCLUSION, Count: FRAME_SLOTS as u32, NodeMask: 0 }, &mut queries)?;
+                let queries = queries.ok_or_else(|| windows::core::Error::from_hresult(windows::Win32::Foundation::E_FAIL))?;
+                let readback = committed(device, D3D12_HEAP_TYPE_READBACK, &buffer_desc((8 * FRAME_SLOTS) as u64), D3D12_RESOURCE_STATE_COPY_DEST, None)?;
+                Ok(HyCensus { pso, heap, queries, readback, before: None, pending: [None; FRAME_SLOTS] })
+            })()
+            .map_or_else(
+                |e| {
+                    rlog!("render: (HAIR-BLEED) the census of KH pixels without their own texel could not be made ({e}): no count");
+                    None
+                },
+                |c| {
+                    rlog!("render: (HAIR-BLEED) the census of KH pixels without their own texel is on (hycensus.ps.dxil, native mode)");
+                    Some(c)
+                },
+            ),
+            Err(_) => {
+                rlog!("render: (HAIR-BLEED) hycensus.ps.dxil is not in the pack: KH pixels without their own texel are not counted");
+                None
+            }
+        };
+        Ok(HyCapture { light, geo, width, height, inputs, rtv, pso, last_box: None, gb_pso, gb_rtv, probe, spec_ok, census })
     })();
     match made {
         Ok(cap) => {
-            rlog!("render: (HY) the hybrid's capture made: two {width}x{height} RGBA16F targets (the game's light on his surfaces, the normal and the sun's visibility)");
+            rlog!("render: (HY) the hybrid's capture made: two {width}x{height} RGBA16F targets (the game's light on his surfaces, the normal and the sun's visibility); (ER-NATIVE) {}", if cap.spec_ok { "hycap2: the native layout with the game's specular" } else { "hycap: no specular captured (an older pack)" });
             if let Some(old) = hy.cap.replace(cap) {
                 crate::outfit::retire(Box::new(old));
             }
@@ -1552,12 +1808,27 @@ unsafe fn ensure_capture(device: &ID3D12Device, root: &ID3D12RootSignature, hy: 
     }
 }
 
+/// What `record_capture` reads this frame (its doc says what each is).
+struct CaptureFrame<'a> {
+    slot_index: usize,
+    inputs: [usize; 8],
+    kh_maps: usize,
+    white: &'a ID3D12Resource,
+    frame_constants: u64,
+    bx: [i32; 4],
+    /// (ER-NATIVE) the game's specular accumulation (entry 10, R11G11B10; 0 = none: white, never read) and the native mode (the
+    /// light probes' passes are not drawn: nothing reads them then)
+    spec: usize,
+    native: bool,
+}
+
 /// (HY) THE CAPTURE PASS (in his colour list, right after the game's deferred stage): the game's light target, its shadow mask
 /// (0 = none: white) and its G-buffer's normal / parameters / colour (`inputs`, all resting readable: the plan checked their
 /// states) are read by hycap.ps.dxil into our two targets over `bx`; the box drawn the frame before is cleared first. Our
 /// targets go RENDER_TARGET -> PIXEL_SHADER_RESOURCE (they rest readable for every later draw of the frame, the hair fringe's
 /// at the velocity split included); no barrier on any resource of the game.
-unsafe fn record_capture(device: &ID3D12Device, list: &ID3D12GraphicsCommandList, root: &ID3D12RootSignature, cap: &mut HyCapture, slot_index: usize, inputs: [usize; 8], kh_maps: usize, white: &ID3D12Resource, frame_constants: u64, bx: [i32; 4]) {
+unsafe fn record_capture(device: &ID3D12Device, list: &ID3D12GraphicsCommandList, root: &ID3D12RootSignature, cap: &mut HyCapture, frame: &CaptureFrame) {
+    let CaptureFrame { slot_index, inputs, kh_maps, white, frame_constants, bx, spec, native } = *frame;
     let size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) as usize;
     let table = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: cap.inputs.GetCPUDescriptorHandleForHeapStart().ptr + slot_index * SLOT_TEXTURES * size };
     // (RSF2 round 15) entry 8: the KH caster maps (a 2D array, R16); none = a null array view (reads 0: no KH caster)
@@ -1565,6 +1836,15 @@ unsafe fn record_capture(device: &ID3D12Device, list: &ID3D12GraphicsCommandList
         let raw = kh_maps as *mut c_void;
         let desc = D3D12_SHADER_RESOURCE_VIEW_DESC { Format: DXGI_FORMAT_R16_UNORM, ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2DARRAY, Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 { Texture2DArray: D3D12_TEX2D_ARRAY_SRV { MostDetailedMip: 0, MipLevels: 1, FirstArraySlice: 0, ArraySize: KH_SLICES as u32, PlaneSlice: 0, ResourceMinLODClamp: 0.0 } } };
         device.CreateShaderResourceView(ID3D12Resource::from_raw_borrowed(&raw), Some(&desc), D3D12_CPU_DESCRIPTOR_HANDLE { ptr: table.ptr + 8 * size });
+    }
+    // (ER-NATIVE) entry 10: the game's specular accumulation (R11G11B10); none = white (hycap reads it only when the block says so)
+    {
+        let raw = spec as *mut c_void;
+        let at = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: table.ptr + 10 * size };
+        match ID3D12Resource::from_raw_borrowed(&raw) {
+            Some(resource) => device.CreateShaderResourceView(resource, None, at),
+            None => device.CreateShaderResourceView(white, None, at),
+        }
     }
     // (the light R11G11B10, the mask RGBA8 (or white), the normal R10G10B10A2, the parameters RGBA8, the colour through an sRGB view)
     // (RSF2 round 6) + the depth with the KH characters (its depth plane), the sun's cascade atlas (16-bit), the cascades' rows
@@ -1612,7 +1892,7 @@ unsafe fn record_capture(device: &ID3D12Device, list: &ID3D12GraphicsCommandList
     list.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     // (RSF round 19) THE LIGHT PROBES of this frame, level by level (each level's slices to RENDER_TARGET and back), from the
     // inputs bound above; then the capture's targets and table again
-    if let Some(pr) = cap.probe.as_ref() {
+    if let Some(pr) = cap.probe.as_ref().filter(|_| !native) {
         let prtv0 = pr.rtv.GetCPUDescriptorHandleForHeapStart();
         for l in 0..HY_PROBE_LEVELS {
             let (w, h) = ((pr.w0 >> l).max(1), (pr.h0 >> l).max(1));
@@ -1836,7 +2116,9 @@ impl Assets {
         let png_only = std::env::var("KH_ER_TEXTURES").is_ok_and(|v| v == "png");
         let load = |t: &kh_look::library::TextureRef| -> Result<Loaded, String> {
             let stem = Path::new(&t.file).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-            let dds = dir.join("er").join("tex").join(format!("{stem}.dds"));
+            // (P5) a merged library's texture (an absolute file: the keyblades') first from ITS library's er/tex
+            let own = Path::new(&t.file).is_absolute().then(|| Path::new(&t.file).parent().and_then(Path::parent).map(|lib| lib.join("er").join("tex").join(format!("{stem}.dds")))).flatten().filter(|d| d.is_file());
+            let dds = own.unwrap_or_else(|| dir.join("er").join("tex").join(format!("{stem}.dds")));
             if !png_only && t.mips && dds.is_file() {
                 if let Ok(blocks) = Compressed::load_dds(&dds, t.srgb) {
                     return Ok(Loaded::Blocks(blocks));
@@ -1882,8 +2164,10 @@ impl Assets {
         let cube = make(kh_look::ENV_SIZE, kh_look::ENV_SIZE, 6, DXGI_FORMAT_R16G16B16A16_FLOAT, &cube_levels, &cube_data, 8, 0)?;
 
         // ---- the descriptor table of every slot
+        // (MIMIC-BOSS hotfix 3, MB3-FORMLEAK) + the copies' own tables (copy_wear.rs TablePool), after the slots' and the three above
+        let copies = sora_copy_draw::CopyLooks::new(&library, library.slots.len() + 3);
         let srv_heap: ID3D12DescriptorHeap = device
-            .CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, NumDescriptors: ((library.slots.len() + 3) * SLOT_TEXTURES) as u32 /* (IMPL_ER39) + the light pass table */, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, NodeMask: 0 })
+            .CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, NumDescriptors: ((copies.tables().end) * SLOT_TEXTURES) as u32 /* (IMPL_ER39) + the light pass table */, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, NodeMask: 0 })
             .map_err(|e| text("CreateDescriptorHeap(srv)", e))?;
         let srv_size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) as usize;
         let start = srv_heap.GetCPUDescriptorHandleForHeapStart();
@@ -1915,6 +2199,16 @@ impl Assets {
         // the one after that is the light probes': the game's targets around his feet)
         for texture in 0..2 * SLOT_TEXTURES {
             device.CreateShaderResourceView(&white, None, D3D12_CPU_DESCRIPTOR_HANDLE { ptr: start.ptr + (library.slots.len() * SLOT_TEXTURES + texture) * srv_size });
+        }
+        // (MIMIC-BOSS hotfix 3, MB3-FORMLEAK) the copies' tables: white textures until a copy wears a form, the slots' fixed entries (the colour table,
+        // the cube, white for the game data and the hybrid's capture until they are bound with the slots')
+        for k in copies.tables() {
+            let at = |texture: usize| D3D12_CPU_DESCRIPTOR_HANDLE { ptr: start.ptr + (k * SLOT_TEXTURES + texture) * srv_size };
+            for texture in 0..SLOT_TEXTURES {
+                device.CreateShaderResourceView(&white, None, at(texture));
+            }
+            device.CreateShaderResourceView(table, None, at(TABLE_TEXTURE));
+            device.CreateShaderResourceView(&cube, Some(&cube_view), at(CUBE_TEXTURE));
         }
         textures.push(white.clone());
         textures.push(cube);
@@ -2008,7 +2302,44 @@ impl Assets {
                 retarget: None,
             });
         }
-        Ok(Assets { library, srv_heap, srv_size, white: white.clone(), _textures: textures, by_file, wear_clock: None, models, bones, khs: None, texture_bytes, hy_bound: [0; 2], data_bound: 0 })
+        // (P5) the equipped keyblades' models whose slots the library got (keyblade.rs `add_slots`): skinned on their own
+        // skeletons (the host's keychain pose of that skeleton for the hand's keyblade, a form part's clip pose, else the
+        // reference pose)
+        for kb in crate::keyblade::models_in(&library).into_iter().filter(|_| sora) {
+            let model = match Model::load(&kb.glb) {
+                Ok(m) => m,
+                Err(e) => {
+                    rlog!("render: (P5) keyblade model {} not read ({e}): not drawn", kb.model);
+                    continue;
+                }
+            };
+            if model.joints.len() > MAX_JOINTS {
+                rlog!("render: (P5) keyblade model {}: {} joints, the shader has room for {MAX_JOINTS}: not drawn", kb.model, model.joints.len());
+                continue;
+            }
+            let vertices = upload_buffer(device, model.vertex_bytes()).map_err(|e| text("vertex buffer", e))?;
+            let indices = upload_buffer(device, model.index_bytes()).map_err(|e| text("index buffer", e))?;
+            let draws: Vec<Draw> = model.primitives.iter().filter_map(|p| Some(Draw { slot: library.slots.iter().position(|s| s.mesh == kb.mesh && s.slot == p.material)?, first_index: p.first_index, index_count: p.index_count, base_vertex: p.base_vertex })).collect();
+            if draws.len() != model.primitives.len() {
+                rlog!("render: (P5) keyblade model {}: {} of {} primitive(s) have no slot: not drawn", kb.model, model.primitives.len() - draws.len(), model.primitives.len());
+            }
+            models.push(GpuModel {
+                mesh: kb.mesh.as_str(),
+                vertex_view: D3D12_VERTEX_BUFFER_VIEW { BufferLocation: vertices.GetGPUVirtualAddress(), SizeInBytes: model.vertex_bytes().len() as u32, StrideInBytes: std::mem::size_of::<crate::model::Vertex>() as u32 },
+                index_view: D3D12_INDEX_BUFFER_VIEW { BufferLocation: indices.GetGPUVirtualAddress(), SizeInBytes: model.index_bytes().len() as u32, Format: DXGI_FORMAT_R32_UINT },
+                _vertices: vertices,
+                _indices: indices,
+                draws,
+                joint_bones: match &kb.skeleton {
+                    Some(s) => model.joints.iter().map(|(name, _)| s.index_of(name)).collect(),
+                    None => vec![None; model.joints.len()],
+                },
+                inverse_bind: model.joints.iter().map(|(_, m)| *m).collect(),
+                reference: crate::keyblade::reference(kb),
+                retarget: None,
+            });
+        }
+        Ok(Assets { library, srv_heap, srv_size, white: white.clone(), _textures: textures, by_file, wear_clock: None, models, bones, khs: None, texture_bytes, hy_bound: [0; 2], data_bound: 0, copies })
     }
 }
 
@@ -2097,7 +2428,7 @@ impl Core {
             Ok((heap.ok_or_else(|| windows::core::Error::from_hresult(windows::Win32::Foundation::E_FAIL))?, results, frequency.max(1)))
         })()
         .ok();
-        Ok(Core { swap, device, queue, root, queries, sampler_heap, sampler_index, rtv_heap, dsv_heap, dsv_size, fence, fence_value: 0, slots, own_depth: None, retired: Vec::new(), assets: None, assets_failed: false, pso_sets: HashMap::new(), pso_failed: Vec::new(), wanted: None, wanted_more: None, portrait: None, portrait_failed: None, failures: 0, disabled: false, retry_at: None, drawn_total: 0, drawn_at_present: 0, idle_presents: 0, drawing: false, relearnt_at: None, why_not: "the game's deferred stage (G-buffer + HDR target with the scene depth) was not recognised in the frame", lost: false, stats: Stats::default(), told: Vec::new(), back_buffers: Vec::new(), blob_depth: 0, blob_mask: 0, probe_light: 0, dump: None, game: None, game_failed: false, light: None, rig_light: None, env_now: 1.0, calibration: crate::light::CALIBRATION_DEFAULT, velo: None, late: None, frame_no: 0, late_seen: 0, dim: None, late_drawn: 0, prev_skin: vec![(Vec::new(), 0, Trs::IDENTITY), (Vec::new(), 0, Trs::IDENTITY)], prev_origin: None, velocity_drawn: 0, cast: None, cast_kit: None, cast_failed: false, sun_kit: None, sun_failed: false, sun_now: None, kh_depth: None, cast_drawn: 0, cast_at: None, cast_micros: 0, early_now: None, late_kit: None, recomp_drawn: 0, stencil_now: None, stencil_seen: Vec::new(), pending: None, snapshot: None, early_drawn: 0, kh_maps: None, kh_maps_vp: None, fx_kit: None, fx_failed: false, hy: HybridKit::default(), glow: GlowKit::default(), #[cfg(feature = "party")] party: party::PartyKit::default() })
+        Ok(Core { swap, device, queue, root, queries, sampler_heap, sampler_index, rtv_heap, dsv_heap, dsv_size, fence, fence_value: 0, slots, own_depth: None, retired: Vec::new(), assets: None, assets_failed: false, pso_sets: HashMap::new(), pso_failed: Vec::new(), wanted: None, wanted_more: None, portrait: None, portrait_failed: None, failures: 0, disabled: false, retry_at: None, drawn_total: 0, drawn_at_present: 0, idle_presents: 0, drawing: false, relearnt_at: None, why_not: "the game's deferred stage (G-buffer + HDR target with the scene depth) was not recognised in the frame", lost: false, stats: Stats::default(), told: Vec::new(), back_buffers: Vec::new(), blob_depth: 0, blob_mask: 0, dump: None, game: None, game_failed: false, light: None, rig_light: None, env_now: 1.0, calibration: crate::light::CALIBRATION_DEFAULT, velo: None, late: None, frame_no: 0, late_seen: 0, dim: None, late_drawn: 0, prev_skin: vec![(Vec::new(), 0, Trs::IDENTITY), (Vec::new(), 0, Trs::IDENTITY)], prev_origin: None, velocity_drawn: 0, cast: None, cast_kit: None, cast_failed: false, sun_kit: None, sun_failed: false, sun_now: None, kh_depth: None, cast_drawn: 0, cast_at: None, cast_micros: 0, early_now: None, late_kit: None, recomp_drawn: 0, stencil_now: None, stencil_seen: Vec::new(), pending: None, snapshot: None, early_drawn: 0, kh_maps: None, kh_maps_vp: None, fx_kit: None, fx_failed: false, hy: HybridKit::default(), glow: GlowKit::default(), #[cfg(feature = "party")] party: party::PartyKit::default() })
     }
 
     /// Logs a text once.
@@ -2207,7 +2538,8 @@ impl Core {
         }
 
         // The host's frames: the pose of one (`r.poselag` frames ago), the camera of another (`r.lag`).
-        let (options, input, camera_of): (Options, Option<(Arc<FrameInput>, Instant, u32)>, Option<Arc<FrameInput>>) = {
+        type HostFrame = (Arc<FrameInput>, Instant, u32); // (its input, when it was submitted, by which thread)
+        let (options, input, camera_of): (Options, Option<HostFrame>, Option<Arc<FrameInput>>) = {
             let guard = SHARED.lock().unwrap();
             match guard.as_ref() {
                 Some(shared) => {
@@ -2380,7 +2712,10 @@ impl Core {
                 }
             }
         }
-        let early_reads: Option<ID3D12Resource> = early_states.and(self.snapshot.as_ref().filter(|s| scene.as_ref().is_some_and(|(sc, _)| sc.resource.as_raw() as usize == s.1)).map(|s| s.0.clone()));
+        // (HAIR-BLEED) with the split at the FIRST G-buffer list the scene depth there holds only what the game drew before it: no
+        // snapshot of "the world without him" exists in this frame (its readers take their own fallbacks: the scene depth)
+        let early_first = sub.is_some_and(|s| s.early_first);
+        let early_reads: Option<ID3D12Resource> = early_states.filter(|_| !early_first).and(self.snapshot.as_ref().filter(|s| scene.as_ref().is_some_and(|(sc, _)| sc.resource.as_raw() as usize == s.1)).map(|s| s.0.clone()));
         // (IMPL_ER65) the late re-composite needs the snapshot (the depth without him): its copies and views, made again when
         // the target, the scene depth or the snapshot change
         let recomp_now = LATE_SORA.load(Ordering::Relaxed) && hdr && void.is_none() && early_reads.is_some();
@@ -2464,7 +2799,7 @@ impl Core {
         } else {
             None
         };
-        let mut glow_draws: Vec<(usize, usize, u32, u32, i32, u64, u64, u64)> = Vec::new();
+        let mut glow_draws: Vec<crate::hair::HairDraw> = Vec::new();
         // (IMPL_ER80b) his mask for the game's light-shaft composite is made this frame (a twin of it exists, r.shaft_mask)
         let shaft_on = hdr && void.is_none() && scene.is_some() && crate::shaft::wanted();
         let Core { device, queue, root, sampler_heap, sampler_index, rtv_heap, dsv_heap, dsv_size, fence, fence_value, slots, assets, pso_sets, stats, queries, blob_depth, blob_mask, game, light: light_now, rig_light, env_now, calibration, prev_skin, velo, late, cast, cast_at, pending, snapshot, early_drawn, sun_kit, sun_now, kh_depth, kh_maps, kh_maps_vp, stencil_now, stencil_seen, frame_no, late_kit, hy, glow, #[cfg(feature = "party")] party, .. } = self;
@@ -2562,7 +2897,7 @@ impl Core {
         }
 
         // ---- the frame's constants
-        let mut camera = Some(()).filter(|_| options.live_camera && !options.at_present).and_then(|_| crate::camera_now()).filter(|c| c.right.is_finite() && c.position.is_finite() && c.fov > 0.01 && c.aspect > 0.1 && c.near > 0.0 && c.far > c.near).unwrap_or(camera_of.camera);
+        let mut camera = (options.live_camera && !options.at_present).then_some(()).and_then(|_| crate::camera_now()).filter(|c| c.right.is_finite() && c.position.is_finite() && c.fov > 0.01 && c.aspect > 0.1 && c.near > 0.0 && c.far > c.near).unwrap_or(camera_of.camera);
         if options.fov_horizontal {
             camera.fov = 2.0 * ((camera.fov * 0.5).tan() / camera.aspect).atan();
         }
@@ -2576,6 +2911,8 @@ impl Core {
         }
         let game_on = game_on || test_light.is_some();
         let options_light = options.light || test_light.is_some();
+        // (ER-NATIVE) the game's exposure AS READ (never eased): the native units' only input (light.rs `native_k`)
+        crate::light::note_exposure(light_now.as_ref().filter(|_| game_on));
         // (IMPL_ER86) THE STEADY LIGHT (stable.rs; `r.light_stable = 0`: the light as read, eased as before at the read-back):
         // the probes eased by his speed, the sun and the scene constants kept through frames without them, the exposure eased
         // in the log domain; everything below takes it in place of the frame as read
@@ -2589,9 +2926,13 @@ impl Core {
             rig.points = v.lights.clone();
         }
         let fallback = Vec3::new(kh_look::stand_in::KEY_DIR.y, kh_look::stand_in::KEY_DIR.z, kh_look::stand_in::KEY_DIR.x).normalize();
-        let from_game = light_now.as_ref().filter(|_| options_light && game_on).map(|l| crate::light::rig_for(l, fallback, options.key * crate::light::CALIBRATION_DEFAULT, options.ambient, crate::light::open_level_now()));
+        // (ER-NATIVE) light.rs `rig_now`: in the native mode the game's own constants at the native units (no probe, no level)
+        let from_game = light_now.as_ref().filter(|_| options_light && game_on).map(|l| crate::light::rig_now(l, fallback, options.key * crate::light::CALIBRATION_DEFAULT, options.ambient));
         // (ER85) an outfit drawn with its world's own set: the game's light reshaped as KH3 lights its characters (cgfield.rs)
-        let from_game = from_game.map(|r| if crate::cgfield::active() { crate::cgfield::shape_for_him(r, input.body.as_ref().map(|b| b.component_to_world.rotation * Vec3::Y), light_now.as_ref().map_or(1.0, |l| l.mask.w), &crate::cgfield::shape_now()) } else { r });
+        // (ER-NATIVE) not in the native mode: the game's light per texel lights the own sets too, at the same units
+        let from_game = from_game.map(|r| if crate::cgfield::active() && !(crate::hybrid::native_now() && crate::light::native_k().is_some()) { crate::cgfield::shape_for_him(r, input.body.as_ref().map(|b| b.component_to_world.rotation * Vec3::Y), light_now.as_ref().map_or(1.0, |l| l.mask.w), &crate::cgfield::shape_now()) } else { r });
+        // (VIEWLIGHT) the level eased as an eye adapts (light.rs `ease_rig`): no single frame steps it
+        let from_game = from_game.map(|r| crate::light::ease_rig(0, r));
         *rig_light = from_game;
         let (key_dir, key_tint, out_scale, ambient_up) = match from_game {
             Some(r) => {
@@ -2603,6 +2944,13 @@ impl Core {
                 (kh_look::stand_in::KEY_DIR.normalize(), options.key, if hdr { options.hdr_scale } else { 1.0 }, Vec3::ZERO)
             }
         };
+        // (AUDIT-C TF) the Blue Hour (bluehour.rs): the scene's lights off (no key, no shadow), lit by its sky light alone
+        let ambient_up = if crate::bluehour::active() {
+            (rig.key, rig.ambient, rig.shadows) = (Vec3::ZERO, crate::bluehour::sky_light() /* (AUDIT-B W-FIN) the Blue Hour's or the ceiling look's */, false);
+            Vec3::ZERO
+        } else {
+            ambient_up
+        };
         // (IMPL_ER39) THE LIGHT PASS's lights of this frame (pointlight.rs): the effects' particle lights and the hero
         // light behind its darkness gate (the game's light at his feet, read before any of ours); his AMBIENT takes a
         // share of their light at his chest (no direction: he is not lamp-lit; the pass itself is drawn before him).
@@ -2611,6 +2959,9 @@ impl Core {
         let mut party_lights: Vec<crate::pointlight::PassLight> = Vec::new();
         let lights_now = if hdr && void.is_none() {
             let exposure = light_now.as_ref().filter(|l| l.scene && game_on).map(|l| l.exposure);
+            // (ER-NATIVE) the effects on the characters' own units: the exposure as read (the native out scale is 1 / (reference
+            // white x it): the same mapping, one for every KH object)
+            let exposure = if crate::hybrid::native_now() { crate::light::exposure_now().filter(|_| game_on).or(exposure) } else { exposure };
             let to_target = crate::vfx::effect_scale(exposure, out_scale);
             let level = light_now.as_ref().filter(|_| game_on && options_light).and_then(crate::pointlight::white_level);
             // (IMPL_ER86) the darkness gate follows a reading only once it has held `hero.gate_hold_s` (stable.rs `Gate`)
@@ -2622,7 +2973,8 @@ impl Core {
             };
             let feet = input.body.as_ref().map(|b| b.component_to_world.translation);
             // (IMPL_ER44) the Keyblade light: a point on the blade (from the grip along it) and the weapon's opacity
-            let blade = input.weapon.as_ref().filter(|w| w.opacity > 0.0).and_then(|w| crate::shadowcaps::blade_point(w, crate::pointlight::settings().hero_blade).map(|p| (p, w.opacity)));
+            // (HEROLIGHT-KB) on the carrier's own blade line (a form weapon of the frame, else the hand's Keyblade: herolight.rs)
+            let blade = crate::herolight::sora_blade(input.weapon.as_ref(), &input.forms, &crate::pointlight::settings());
             // (ER party S4, U5) the hero light at the friend leader who carries it (his weapon tip) when Sora does not
             #[cfg(feature = "party")]
             let (hero_feet, blade) = match crate::party::hero_carrier_now() {
@@ -2648,6 +3000,7 @@ impl Core {
             };
             let mut for_him = planned.lights.clone();
             for_him.extend(world);
+            crate::fwdlight::set_lights(&for_him); // (VFX-2 lit) the same lights in the forward-lit effects' light grid
             // (ER party S4) the same lights for the friends' own point lights (gfx/party.rs `prepare`)
             #[cfg(feature = "party")]
             party_lights.clone_from(&for_him);
@@ -2664,6 +3017,7 @@ impl Core {
             planned.lights
         } else {
             crate::pointlight::for_sora(&[], None, camera_game, out_scale);
+            crate::fwdlight::set_lights(&[]); // (VFX-2 lit)
             Vec::new()
         };
         // THE REFLECTION ENVIRONMENT'S LEVEL: what the game's picture shows along its top (light.rs).
@@ -2784,6 +3138,17 @@ impl Core {
             Ok((ordered, light, mask, base))
         })();
         let hy_on = hy_plan.is_ok();
+        // (ER-NATIVE) THE GAME'S SPECULAR for the capture (survey.rs `spec2`: the second target of its diffuse light's pair), when
+        // the native mode draws, the pack's capture shader writes the native layout (hycap2.ps.dxil) and the target is readable,
+        // R11G11B10 of the scene's size and none of the others; 0 = not this frame (KH3's sun specular stands in, as before)
+        let hy_spec: usize = match (&hy_plan, sub) {
+            (Ok((ordered, light, mask, _)), Some(sub)) if hy_settings.native && hy.cap.as_ref().is_some_and(|c| c.spec_ok) => sub
+                .spec2
+                .filter(|s| survey::usable_now(*s, width, height) && survey::format_of(*s).is_some_and(|(f, ..)| crate::hybrid::light_ok(f, width as u64, height, (width as u64, height))))
+                .filter(|s| *s != *light && *s != *mask && *s != back.as_raw() as usize && ordered.iter().all(|t| t.resource != *s))
+                .unwrap_or(0),
+            _ => 0,
+        };
         match &hy_plan {
             Ok(_) => {
                 crate::hybrid::FRAMES_ON.fetch_add(1, Ordering::Relaxed);
@@ -2796,8 +3161,17 @@ impl Core {
         // on a white surface in scene units: Col_0 x the calibration / pi, as the rig's key before its shadow); the own sets'
         // lift (cgfield.rs) on the game's light as on the rig's
         let hy_sun = light_now.as_ref().filter(|_| game_on && options_light).and_then(|l| l.sun).map(|(dir, colour)| (math::game_dir_of_host(dir), colour * crate::light::CALIBRATION_DEFAULT * options.key * std::f32::consts::FRAC_1_PI));
-        let hy_frame = crate::hybrid::FrameIn { white: crate::light::reference_white(), k: 1.0 / out_scale.max(1.0e-9), fog: hy_fog, sun: hy_sun, own_set: crate::cgfield::active(), lift: crate::cgfield::lift_now() };
-        let hy_block = crate::hybrid::block(&hy_settings, hy_on, &hy_frame);
+        let hy_frame = crate::hybrid::FrameIn { white: crate::light::reference_white(), k: 1.0 / out_scale.max(1.0e-9), fog: hy_fog, sun: hy_sun, own_set: crate::cgfield::active(), lift: crate::cgfield::lift_now() * light_now.as_ref().filter(|_| game_on).map_or(1.0, crate::light::bleed_fix), er_spec: hy_spec != 0 }; // (VIEWLIGHT) the bleed fix (ER-NATIVE: the native rows set lift 1)
+        // (ER-NATIVE) with the game's specular captured the stand-in reflection cube is off: the game's own specular (its lights
+        // and its environment, for the material's F0) takes its place after KHS (er_char.wgsl kh_hybrid_after)
+        // (the forward-lit effects keep their cube: they have no G-buffer texel of their own)
+        let env_level_fx = env_level;
+        let env_level = if hy_spec != 0 { 0.0 } else { env_level };
+        // (VFX-2 lit) the forward-lit effects' light: this sun, the sun's visibility at his feet, the reflection environment, the rig
+        crate::fwdlight::set_frame(crate::fwdlight::frame_from(hy_sun, light_now.as_ref().filter(|_| game_on && options_light), from_game.as_ref(), env_level_fx, env_tint, out_scale));
+        // (VERUMREX) an outfit of the realistic family (its look file's `hybrid` block, cgfield.rs): its staircase mix and rig share
+        // (AUDIT-C TF) the Blue Hour: IndirectLightingIntensity 0: the game's light per texel is not taken (the rig's sky light)
+        let hy_block = crate::hybrid::block(&crate::cgfield::hybrid_for_own(&hy_settings), hy_on && !crate::bluehour::active(), &hy_frame);
         let mut frame: Vec<f32> = Vec::with_capacity(64);
         frame.extend_from_slice(&clip.to_cols_array());
         for v in [
@@ -2824,7 +3198,18 @@ impl Core {
             // What the shaded colour is multiplied with; w: 1 = the game's own view-projection is used.
             Vec4::new(out_scale, out_scale, out_scale, if game_on && options.jitter { 1.0 } else { 0.0 }),
             lit_key.extend(0.0),
-            lit_ambient.extend(0.0),
+            // (HAIR-BLEED, eye adaptation) w: the game's exposure as its tone mapper applies it (SC_SceneExposure /
+            // SC_PreExposure, light.rs exposure_now; 0 = none read yet): er_char.wgsl sets KH3's EyeAdaptation (v161.y) to
+            // tune.x x this, so an eye-adapted emissive reaches the tone mapper at its KH3 value
+            lit_ambient.extend({
+                // (MEASURED in game 2026-11-05: in the KH3 style tune.x x the exposure was 0.046 in the table room, which would put
+                // every reverse-adapted emissive at 6.7x the lit white there: the KH3 ratio needs KH3's eye adaptation at its
+                // reference, 1 / reference white, in BOTH styles; the shader takes tune.x x this value)
+                // (`r.kh_eye_adapt` OFF by default since 2026-11-06: 0 here = the shaders keep KH3's EyeAdaptation at 1, see EYE_ADAPT)
+                let w = eye_row(out_scale, EYE_ADAPT.load(Ordering::Relaxed));
+                EYE_NOW.store((out_scale * w).to_bits(), Ordering::Relaxed);
+                w
+            }),
             (ambient_up * out_scale).extend(0.0),
         ] {
             frame.extend_from_slice(&v.to_array());
@@ -2896,6 +3281,16 @@ impl Core {
                 if p.is_finite() {
                     hy_caps.push((p, p, 150.0));
                 }
+                // (FORMWEP-FIX) a part whose own clip carries it metres from its root (a transform unit at his mesh origin: the
+                // rockets of the form-change cinematic): a ball at each of its shown bones a metre from the balls it already has
+                let mut balls = vec![p];
+                for b in f.component.iter().filter(|b| b.scale.min_element() >= 0.5) {
+                    let q = b.then(&f.to_world).translation;
+                    if q.is_finite() && balls.len() < 8 && balls.iter().all(|c| (*c - q).length() > 100.0) {
+                        balls.push(q);
+                        hy_caps.push((q, q, 150.0));
+                    }
+                }
             }
             for k in 0..16 {
                 match caps.get(k) {
@@ -2962,7 +3357,8 @@ impl Core {
                 assets.wear_clock = Some(input.clock);
                 let before = (assets.library.wear.worn, assets.library.wear.target);
                 assets.library.wear.plain = crate::form_style() == 0; // (ER69) KH1's Second Form look
-                let changes = assets.library.step_wear(crate::wear_form(), dt);
+                let wear = crate::rage::frame(&mut assets.library, input.clock); // (F-RAGE) AntiVolume, hair; form 7 at the fade's half
+                let changes = assets.library.step_wear(wear, dt); // (F-RAGE) was crate::wear_form()
                 let start = assets.srv_heap.GetCPUDescriptorHandleForHeapStart();
                 for change in &changes {
                     let resource = assets.by_file.get(&change.file.file).unwrap_or(&assets.white);
@@ -2974,14 +3370,30 @@ impl Core {
                 }
             }
         }
+        // (P5) his hand's keyblade this frame: the Kingdom Key or the equipped keyblade's model (keyblade.rs)
+        let kb_hand = crate::keyblade::hand();
+        // (MIMIC-RENDER) THE SORA COPIES OF THIS FRAME (crate::sora_copy): the silver ones join the Mimic route below, the others
+        // are drawn by his own route after his draws; none submitted = the frame exactly as before
+        let sora_copies = crate::sora_copy::draws_or_test(&input);
+        assets.copies.begin_frame(*frame_no); // (MIMIC-BOSS hotfix 3, MB3-FORMLEAK) this frame's copy tables start empty
+        let kh_copies: Vec<&crate::sora_copy::SoraCopyDraw> = match (&sora_copies, void.is_none()) {
+            (Some(c), true) => crate::sora_copy::kh_copies(c),
+            _ => Vec::new(),
+        };
         if let Some(weapon) = &input.weapon {
-            assets.library.set_scalar("kingdom_key", "OpacityFade", weapon.opacity);
+            if let Some(mesh) = crate::keyblade::hand_mesh(&kb_hand) {
+                assets.library.set_scalar(mesh, "OpacityFade", weapon.opacity);
+            }
         }
         // (VFXR) the effects' drives of Sora's materials (SQEX_Material_InLight ...: vfx.rs apply_char_drives)
         crate::vfx::apply_char_drives(&mut assets.library, 0);
-        // (ER90) a form weapon is drawn whole
+        // (ER90) a form weapon is drawn whole; (P5) a keyblade's form part (named by its `kb:` mesh) too
         for f in &input.forms {
-            assets.library.set_scalar(&format!("{}{}", crate::xsiweapon::PREFIX, f.model), "OpacityFade", 1.0);
+            if f.model.starts_with(crate::keyblade::PREFIX) {
+                assets.library.set_scalar(&f.model, "OpacityFade", 1.0);
+            } else {
+                assets.library.set_scalar(&format!("{}{}", crate::xsiweapon::PREFIX, f.model), "OpacityFade", 1.0);
+            }
         }
 
         // ---- the upload buffer of the slot: constants as bytes, 256-aligned
@@ -3100,6 +3512,7 @@ impl Core {
         slot.allocator.Reset()?;
         slot.list.Reset(&slot.allocator, None)?;
         let list = &slot.list;
+        crate::vfx::begin_frame(slot_index); // (PARTY-NATIVE) no capture yet, nothing of this slot's earlier frame replayed
         // (IMPL_ER53) the early depth's own list (executed inside the deferred submission, before `list`)
         let early_list = if early_states.is_some() {
             slot.early_allocator.Reset()?;
@@ -3119,7 +3532,7 @@ impl Core {
             // (RSF2 round 8) bound per assets, the friends' rule (party.rs `m.data_bound`): a reloaded outfit is bound again
             let data = kit.texture.as_raw() as usize;
             if assets.data_bound != data {
-                for k in 0..assets.library.slots.len() {
+                for k in (0..assets.library.slots.len()).chain(assets.copies.tables()) /* (MIMIC-BOSS hotfix 3, MB3-FORMLEAK) */ {
                     device.CreateShaderResourceView(&kit.texture, None, D3D12_CPU_DESCRIPTOR_HANDLE { ptr: start.ptr + (k * SLOT_TEXTURES + DEPTH_TEXTURE) * assets.srv_size });
                 }
                 assets.data_bound = data;
@@ -3237,14 +3650,20 @@ impl Core {
             if let Some(body) = &input.body {
                 r.extend(crate::hybrid::bone_balls(&body.component, &body.component_to_world));
             }
+            // (MIMIC-RENDER) and his copies in their KH3 look (none: nothing added)
+            r.extend(crate::sora_copy::reach_of(&kh_copies));
             r
         };
-        let mut hy_box = crate::hybrid::scissor_box(&hy_reach, &clip, tan_y, width, height, 24.0);
+        let hy_box = crate::hybrid::scissor_box(&hy_reach, &clip, tan_y, width, height, 24.0);
+        #[cfg(feature = "party")]
+        let mut hy_box = hy_box;
         // (CAPPERF) each KH character's own box (the capture's level of detail goes by their pixels, not by the union's)
-        #[allow(unused_mut)]
-        let mut hy_boxes: Vec<[i32; 4]> = hy_box.into_iter().collect();
-        #[allow(unused_mut)]
-        let mut test_caps: Vec<(Vec3, Vec3, f32)> = if crate::hybrid::TEST.load(Ordering::Relaxed) { hy_caps.clone() } else { Vec::new() };
+        let hy_boxes: Vec<[i32; 4]> = hy_box.into_iter().collect();
+        #[cfg(feature = "party")]
+        let mut hy_boxes = hy_boxes;
+        let test_caps: Vec<(Vec3, Vec3, f32)> = if crate::hybrid::TEST.load(Ordering::Relaxed) { hy_caps.clone() } else { Vec::new() };
+        #[cfg(feature = "party")]
+        let mut test_caps = test_caps;
         #[cfg(feature = "party")]
         if let Some(plan) = party_plan.as_ref() {
             for pm in &plan.members {
@@ -3264,6 +3683,16 @@ impl Core {
         }
         // (RSF2 round 6) this frame's early list copies the scene depth with the KH characters in it (for the sun lookup)
         let kh_copy = sun_read_wanted() && early_list.is_some() && early_states.is_some() && scene.as_ref().is_some_and(|(sc, _)| kh_depth.as_ref().is_some_and(|k| k.1 == sc.resource.as_raw() as usize));
+        // (PARTY-NATIVE) THE LIT EFFECTS ON THE NATIVE ROUTE (vfx.rs): their G-buffer twins' formats, and the capture over the whole
+        // picture in a frame that draws one of them (their texels are captured with the characters')
+        if let (Ok((ordered, ..)), Some((_, depth_format))) = (&hy_plan, &scene) {
+            let typed = |k: usize| crate::hybrid::role_of(ordered[k].format).map_or(ordered[k].format, |(_, f)| f);
+            crate::vfx::set_gb_formats(Some(([typed(0), typed(1), typed(2)], depth_format.0)));
+        }
+        let fx_native = hy_settings.native && crate::vfx::native_wanted();
+        let full = [0, 0, width as i32, height as i32];
+        let hy_box = if fx_native { crate::hybrid::union_box(hy_box, Some(full)) } else { hy_box };
+        let hy_boxes: Vec<[i32; 4]> = hy_boxes.into_iter().chain(fx_native.then_some(full)).collect();
         let hy_on = match (&hy_plan, hy.cap.as_mut(), hy_box) {
             (Ok((ordered, light, mask, _)), Some(cap), Some(bx)) => {
                 // (RSF2 round 5) the capture's box into Sora's block (row 9): the capture shader's mean of the game's mask over
@@ -3304,7 +3733,8 @@ impl Core {
                 std::ptr::copy_nonoverlapping(rows.as_ptr() as *const u8, slot.mapped.add(at), rows.len() * 4);
                 let maps_ptr = if maps_row.is_some() { kh_maps.as_ref().map_or(0, |m| m.texture.as_raw() as usize) } else { 0 };
                 KH_MAPS_USED.fetch_add(u32::from(maps_ptr != 0), Ordering::Relaxed);
-                record_capture(device, list, root, cap, slot_index, [*light, *mask, ordered[0].resource, ordered[1].resource, ordered[2].resource, sun_inputs[0], sun_inputs[1], sun_inputs[2]], maps_ptr, &assets.white, frame_constants, bx);
+                record_capture(device, list, root, cap, &CaptureFrame { slot_index, inputs: [*light, *mask, ordered[0].resource, ordered[1].resource, ordered[2].resource, sun_inputs[0], sun_inputs[1], sun_inputs[2]], kh_maps: maps_ptr, white: &assets.white, frame_constants, bx, spec: hy_spec, native: hy_settings.native });
+                crate::hybrid::SPEC_FRAMES.fetch_add(u32::from(hy_spec != 0), Ordering::Relaxed);
                 *crate::hybrid::CAPTURE.lock().unwrap_or_else(|e| e.into_inner()) = format!("{}x{} box {:?}, light {}, mask {}", cap.width, cap.height, bx, survey::describe_resource(*light), if *mask == 0 { "(none: white)".to_string() } else { survey::describe_resource(*mask) });
                 true
             }
@@ -3315,6 +3745,22 @@ impl Core {
             }
             _ => false,
         };
+        // (PARTY-NATIVE) the capture for the lit effects' colour pass (vfx.rs): only in the native layout with the game's specular
+        crate::vfx::set_capture(match hy.cap.as_ref() {
+            Some(cap) if hy_on && hy_settings.native && hy_spec != 0 && cap.spec_ok => Some(crate::vfx::FxCapture { light: cap.light.as_raw() as usize, geo: cap.geo.as_raw() as usize, mark: hy_settings.lightset.min(1) as f32 / 255.0, cos: hy_settings.match_cos }),
+            _ => None,
+        });
+        // (PARTY-NATIVE-LIGHT) the sun for the lit translucent effects (vfx.rs late stage, the native mode): its colour as read (the
+        // filter of hy_sun), this frame's cascades (the atlas and our copy of their constants, read at the cast split) and the game ->
+        // host matrix, for the cascade lookup at each effect pixel
+        crate::vfx::set_sun(hy_settings.native.then(|| {
+            let fresh = sun_now.as_ref().filter(|s| s.at.elapsed() < Duration::from_millis(40));
+            let (atlas, cascades, rows) = match (fresh, sun_kit.as_ref()) {
+                (Some(s), Some(kit)) => (s.atlas, kit.texture.as_raw() as usize, { let h = crate::hybrid::settings(); crate::hybrid::sun_rows(h.sun_soft, h.sun_bias, &s.viewports) }),
+                _ => (0, 0, [0.0f32; 24]),
+            };
+            crate::vfx::FxSun { atlas, cascades, rows, host_from_game: math::host_from_game(camera_of.origin).to_cols_array(), colour: light_now.as_ref().filter(|_| game_on && options_light).and_then(|l| l.sun).map(|(_, c)| c.to_array()) }
+        }));
         if !hy_on && hy_plan.is_ok() {
             // (the colour list, not executed yet, reads the block with the hybrid off: today's light; the party's copies too)
             let at = (frame_constants - slot.upload.GetGPUVirtualAddress()) as usize + (frame.len() - crate::hybrid::BLOCK_FLOATS) * 4;
@@ -3328,7 +3774,7 @@ impl Core {
             let want = [cap.light.as_raw() as usize, cap.geo.as_raw() as usize];
             if assets.hy_bound != want {
                 let start = assets.srv_heap.GetCPUDescriptorHandleForHeapStart();
-                for k in 0..assets.library.slots.len() {
+                for k in (0..assets.library.slots.len()).chain(assets.copies.tables()) /* (MIMIC-BOSS hotfix 3, MB3-FORMLEAK) */ {
                     for (entry, resource) in [(HY_LIGHT_TEXTURE, &cap.light), (HY_MASK_TEXTURE, &cap.geo)] {
                         device.CreateShaderResourceView(resource, None, D3D12_CPU_DESCRIPTOR_HANDLE { ptr: start.ptr + (k * SLOT_TEXTURES + entry) * assets.srv_size });
                     }
@@ -3350,6 +3796,10 @@ impl Core {
                 let mut items: Vec<(String, ID3D12Resource, D3D12_PLACED_SUBRESOURCE_FOOTPRINT, i32, String)> = Vec::new();
                 let mut wanted: Vec<(String, usize, i32)> = ordered.iter().enumerate().map(|(k, t)| (crate::hybrid::ROLE_NAMES[k].to_string(), t.resource, t.format)).collect();
                 wanted.push(("light_diffuse".to_string(), *light, crate::hybrid::fmt::R11G11B10_FLOAT));
+                // (ER-NATIVE) the game's specular accumulation, when captured
+                if hy_spec != 0 {
+                    wanted.push(("light_specular".to_string(), hy_spec, crate::hybrid::fmt::R11G11B10_FLOAT));
+                }
                 if *mask != 0 {
                     wanted.push(("shadow_mask".to_string(), *mask, crate::hybrid::fmt::R8G8B8A8_UNORM));
                 }
@@ -3564,7 +4014,7 @@ impl Core {
                 }
                 let cx = party::PassCx { key, sampler_heap: &*sampler_heap, sora_heap: &assets.srv_heap, frame_constants, early_constants, rig: &rig, sh, env_level, env_tint, clock: input.clock, exposure: options.exposure, debug: options.debug };
                 list.OMSetRenderTargets(1, Some(&target_view), false, None);
-                party::contact_shadows(plan, list, pipeline, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: assets.srv_heap.GetGPUDescriptorHandleForHeapStart().ptr + (blob_table * SLOT_TEXTURES * assets.srv_size) as u64 }, &clip, tan_y, width, height, key_dir, sun_shadow > 0.0, &cx);
+                party::contact_shadows(plan, list, &party::ContactShadow { pipeline, table: D3D12_GPU_DESCRIPTOR_HANDLE { ptr: assets.srv_heap.GetGPUDescriptorHandleForHeapStart().ptr + (blob_table * SLOT_TEXTURES * assets.srv_size) as u64 }, key_dir, throw: sun_shadow > 0.0 }, &party::ScreenFit { clip: &clip, tan_y, width, height }, &cx);
             }
         }
         if before.len() > 1 {
@@ -3575,6 +4025,10 @@ impl Core {
             list.ClearDepthStencilView(depth_view, D3D12_CLEAR_FLAG_DEPTH, 0.0, 0, None);
         }
         list.RSSetScissorRects(&[RECT { left: 0, top: 0, right: width as i32, bottom: height as i32 }]);
+        // (AUDIT-C TF) the Ultimate Finish's Blue Hour (bluehour.rs): every non-character pixel emptied before his draws
+        if let (true, Some((_, format))) = (hdr, &scene) {
+            crate::bluehour::draw(&crate::bluehour::BlueHourCx { device: &*device, list, root: &*root, target_format: back_desc.Format, depth_format: *format });
+        }
         // (IMPL_ER74) OUR DECALS FIRST, before him (he covers them where he stands; they project onto the surfaces the
         // scene depth shows, his own included since his early depth: drawn after him they painted their pattern on his
         // body, 34.jpg / 38.jpg / 47.jpg), then the root state of his draws again
@@ -3597,7 +4051,8 @@ impl Core {
         let mut early_back: Vec<D3D12_RESOURCE_BARRIER> = Vec::new();
         if let (Some(la), Some(planes), Some((scene_now, _))) = (early_list, early_states, &scene) {
             let pointer = scene_now.resource.as_raw() as usize;
-            match snapshot.as_mut().filter(|s| s.1 == pointer) {
+            // (HAIR-BLEED) no snapshot copy at the first G-buffer list (the world is not drawn yet)
+            match snapshot.as_mut().filter(|s| s.1 == pointer && !early_first) {
                 Some(snap) => {
                     let mut first: Vec<D3D12_RESOURCE_BARRIER> = Vec::new();
                     for (k, state) in planes.iter().enumerate() {
@@ -3699,8 +4154,9 @@ impl Core {
             Some(first) => {
                 let has_opaque = |k: usize| assets.models[k].draws.iter().any(|d| !assets.library.slots[d.slot].translucent);
                 let later_skins = items.iter().enumerate().filter(|(n, (k, i))| i.is_none() && (*n > first || !has_opaque(*k))).count();
-                #[allow(unused_mut)]
-                let mut later_blocks: usize = items.iter().filter(|(_, i)| i.is_none()).map(|(k, _)| assets.models[*k].draws.len()).sum();
+                let later_blocks: usize = items.iter().filter(|(_, i)| i.is_none()).map(|(k, _)| assets.models[*k].draws.len()).sum();
+                #[cfg(feature = "party")]
+                let mut later_blocks = later_blocks;
                 #[cfg(feature = "party")]
                 if let Some(plan) = party_plan.as_ref() {
                     later_blocks += party::material_blocks(plan, party);
@@ -3717,10 +4173,10 @@ impl Core {
         // (IMPL_ER78) the G-buffer draws of this frame: (model, slot, index count, first index, base vertex, skin, skin a frame
         // ago, material constants) — PER DRAW: every opaque / masked slot of every model drawn (Sora, the Keyblade, an outfit,
         // and the party's models when they join `assets.models`)
-        let mut gb_draws: Vec<(usize, usize, u32, u32, i32, u64, u64, u64)> = Vec::new();
+        let mut gb_draws: Vec<crate::hair::HairDraw> = Vec::new();
         // (ER87) THE HAIR FRINGE (hair.rs): the hair slots' draws, drawn once more after all of his own with the fringe states
         let hair_set: Option<Vec<Option<ID3D12PipelineState>>> = glow.hair_sets.get(&(key, false)).filter(|s| crate::hair::on() && s.len() == assets.library.slots.len()).cloned();
-        let mut hair_draws: Vec<(usize, usize, u32, u32, i32, u64, u64, u64)> = Vec::new();
+        let mut hair_draws: Vec<crate::hair::HairDraw> = Vec::new();
         // (hair.rs `late`: when his motion vectors (the game: r.velocity) or the late re-composite (r.late_sora) split the game's
         // forward submission and he is nearer than `r.hair_late_far` m, the fringe and his translucent draws go to that split:
         // after the game's forward stage (its depth-tested sky and far field would cover pixels that carry no depth of his),
@@ -3751,6 +4207,12 @@ impl Core {
                 crate::hair::point_wanted(height as f32 / (2.0 * tan_y.max(1.0e-3) * d))
             });
         let mut late_translucent: Vec<crate::hair::HairDraw> = Vec::new();
+        // (HAIR-BLEED) the census of KH pixels without their own texel (native mode): the scene target over the box, before them
+        let census_bx = hy_box.filter(|_| hy_on && hy_settings.native).and_then(|b| census_box(b, width, height));
+        let census_on = match (census_bx, hy.cap.as_mut().and_then(|c| c.census.as_mut())) {
+            (Some(bx), Some(c)) => census_before(device, list, c, slot_index, back, bx),
+            _ => false,
+        };
         crate::passtime::stamp(device, queue, list, slot_index, 3); // (HAIRPERF) his colour draws
         for translucent in [false, true] {
             // (ER87) not late: the hair fringe between his opaque / masked and his translucent draws
@@ -3760,21 +4222,36 @@ impl Core {
             for &(model_index, inst) in &items {
                 let model = &assets.models[model_index];
                 // The model's pose: component-space bones and where the component stands.
+                let unit_pose: Vec<Trs>; // (FORMWEP-FIX) a transform unit's pose with an outfit on
                 let (to_world, pose): (Trs, &[Trs]) = match model.mesh {
                     "sora" => match &input.body {
                         Some(body) => (body.component_to_world, &body.component),
                         None => continue,
                     },
+                    // (P5) a model that is neither his hand's keyblade nor a form part this frame (another slot's keyblade,
+                    // the Kingdom Key while another is in his hand): not drawn
+                    m if crate::keyblade::role(m, &kb_hand, &input.forms) == crate::keyblade::Role::Skip => continue,
                     // (ER90, XSI request 1) a form weapon of an XS move: where the host hung it this frame (in an outfit's
-                    // hand as the Keyblade is); (XW) the pose of its own clip (none: its reference / bind pose)
-                    m if m.starts_with(crate::xsiweapon::PREFIX) => match inst.and_then(|i| input.forms.get(i)).or_else(|| input.forms.iter().find(|f| m.strip_prefix(crate::xsiweapon::PREFIX) == Some(f.model.as_str()))) {
-                        Some(f) => (
+                    // hand as the Keyblade is); (XW) the pose of its own clip (none: its reference / bind pose); (P5) a
+                    // keyblade's form part likewise (keyblade.rs `draw_form_weapon_parts`)
+                    m if crate::keyblade::role(m, &kb_hand, &input.forms) == crate::keyblade::Role::Form => match crate::keyblade::form_for(m, inst, &input.forms) {
+                        Some(f) => {
+                            let own: &[Trs] = if !f.component.is_empty() && f.component.len() == model.reference.len() { &f.component } else { &model.reference };
                             match (assets.models.iter().find_map(|m| m.retarget.as_ref()), &input.body) {
-                                (Some(r), Some(body)) => r.weapon_to_world(&f.to_world, &body.component, &r.frame(input.clock, &body.component_to_world, &body.local, &body.component).1, &body.component_to_world),
-                                _ => f.to_world,
-                            },
-                            if !f.component.is_empty() && f.component.len() == model.reference.len() { &f.component } else { &model.reference },
-                        ),
+                                // (FORMWEP-FIX) a transform unit standing at his mesh origin (keyblade.rs `place_part`): each of its
+                                // pieces near his hand follows the outfit's hand (outfit.rs `mesh_weapon_pose`)
+                                (Some(r), Some(body)) if f.to_world == body.component_to_world => {
+                                    let skeleton = crate::keyblade::table().and_then(|t| t.model(m.strip_prefix(crate::keyblade::PREFIX)?)).and_then(|k| k.skeleton.clone());
+                                    unit_pose = match skeleton {
+                                        Some(sk) => r.mesh_weapon_pose(&f.to_world, own, &sk, &body.component, &r.frame(input.clock, &body.component_to_world, &body.local, &body.component).1, &body.component_to_world),
+                                        None => own.to_vec(),
+                                    };
+                                    (f.to_world, &unit_pose[..])
+                                }
+                                (Some(r), Some(body)) => (r.weapon_to_world(&f.to_world, &body.component, &r.frame(input.clock, &body.component_to_world, &body.local, &body.component).1, &body.component_to_world), own),
+                                _ => (f.to_world, own),
+                            }
+                        }
                         None => continue,
                     },
                     _ => match &input.weapon {
@@ -3806,7 +4283,7 @@ impl Core {
                     ("sora", _) => 0,
                     // (party VF-b) a routed fragment instance: its own skin
                     (_, Some(i)) => 2 + assets.models.len() + i.saturating_sub(routed_base),
-                    (m, None) if m.starts_with(crate::xsiweapon::PREFIX) => 2 + model_index,
+                    (m, None) if crate::keyblade::role(m, &kb_hand, &input.forms) == crate::keyblade::Role::Form => 2 + model_index,
                     _ => 1,
                 };
                 let mut this_before = None;
@@ -3877,15 +4354,28 @@ impl Core {
                     la.SetGraphicsRootConstantBufferView(2, skin_constants);
                     la.SetGraphicsRootConstantBufferView(6, skin_before);
                 }
+                // (KBFX) a keyblade's form part / finisher pawn (Pegasus, the Hunny Launcher pots, the yo-yo hands) takes no
+                // blood: the body's amount spread their whole surfaces with brown-black blotches; KH3 draws them clean (his
+                // hand's keyblade keeps the blood as the Kingdom Key does)
+                // (KBFX) and the XS moves' form weapons (`xsi:` meshes drawn as Form): KH3's weapons stay clean too
+                let kb_part = (model.mesh.starts_with(crate::keyblade::PREFIX) || model.mesh.starts_with(crate::xsiweapon::PREFIX)) && crate::keyblade::role(model.mesh, &kb_hand, &input.forms) == crate::keyblade::Role::Form;
                 for draw in &model.draws {
+                    // (AUDIT-C) Rage Form: a face / skin / hair slot drawn with KH3's anti-mode owner (rage.rs `draw_slot`)
+                    let draw = &Draw { slot: crate::rage::draw_slot(draw.slot), ..*draw };
                     let material = &assets.library.slots[draw.slot];
                     if material.translucent != translucent || (options.only >= 0 && options.only as usize != draw.slot) {
                         continue;
                     }
-                    let mut params = assets.library.params(material, &object, &rig, assets.khs.as_ref().map(|(_, s)| s), input.clock, options.exposure, options.debug);
+                    // (HAIR-PULSE) a weapon's in-light centres from the world into its own object frame (vfx.rs weapon_in_light)
+                    let weapon_light = crate::vfx::weapon_in_light(material, &object);
+                    let material = weapon_light.as_ref().unwrap_or(material);
+                    let mut params = assets.library.params(material, &object, &rig, assets.khs.as_ref().map(|(_, s)| s), kh_look::library::LookFrame { clock: input.clock, exposure: options.exposure, debug: options.debug });
                     params.sh = sh;
+                    crate::rage::rows(material, &mut params.m); // (F-RAGE) an outfit's Rage glow (er_char.wgsl er_rage_glow)
                     // (ER79) a two-sided cloth slot: its interior factor (the _bli shaders shade its back faces as the inside)
                     params.khs.w = material.scalars.get(crate::outfit::INTERIOR_SCALAR).copied().unwrap_or(0.0);
+                    // (VERUMREX) the realistic family's scatter term on the game's light (er_char.wgsl kh_real_sss; 0 = none)
+                    params.look.w = crate::cgfield::real_sss();
                     params.fade.z = f32::from(u8::from(hair_point)); // (HAIRPERF) read by the ER91 hair shaders only
                     params.env.y = env_level;
                     (params.env.z, params.env.w) = (env_tint.x - 1.0, env_tint.z - 1.0);
@@ -3906,7 +4396,7 @@ impl Core {
                     list.SetPipelineState(&pipelines[draw.slot]);
                     list.SetGraphicsRootConstantBufferView(1, material_constants);
                     list.SetGraphicsRootDescriptorTable(3, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: srv_start.ptr + (draw.slot * SLOT_TEXTURES * assets.srv_size) as u64 });
-                    let share = if spared_constants != frame_constants { crate::blood::share(material) } else { 1.0 };
+                    let share = if spared_constants == frame_constants { 1.0 } else if kb_part { 0.0 } else { crate::blood::share(material) }; // (KBFX) kb_part
                     let spared = share < 1.0;
                     if spared {
                         list.SetGraphicsRootConstantBufferView(0, if share <= 0.0 { spared_constants } else { face_constants });
@@ -3945,6 +4435,174 @@ impl Core {
         // (FP) the whole buffer again for what follows; the routed fragments that did not fit, counted in the log
         limit.set(cap);
         routed_skipped(skipped_routed.iter().filter(|s| **s).count(), routed_count);
+        // (MIMIC-RENDER) THE SORA COPIES IN THEIR KH3 LOOK (gfx/sora_copy_draw.rs): his own passes for each (both Styles), after his
+        // draws; their frame block is his as uploaded (every row this frame wrote into it) without his blood and camera fade
+        if !kh_copies.is_empty() {
+            let block = std::slice::from_raw_parts(slot.mapped.add((frame_constants - upload_address) as usize) as *const f32, frame.len());
+            let cx = sora_copy_draw::CopyCx { device, list, early: early_list.zip(early_at), pipelines, hair_set: hair_set.as_deref(), hy_on, glow_on: glow_plan.is_some() || shaft_on, block, blood_at, frame_constants, early_constants, rig: &rig, sh, env_level, env_tint, look: kh_look::library::LookFrame { clock: input.clock, exposure: options.exposure, debug: options.debug }, only: options.only, frame_no: *frame_no, camera_game, height, tan_y, player: input.body.as_ref() };
+            drawn += sora_copy_draw::record(&cx, assets, &kh_copies, &mut put, sora_copy_draw::CopyOut { gb_draws: &mut gb_draws, glow_draws: &mut glow_draws, velo_skins: &mut velo_skins, early_draws: &mut early_draws });
+        }
+        // (MIMIC SORA, THE USER 2026-11-02: "Make sure mimic Sora uses the shaders that mimic should use from Elden Ring.") EACH
+        // MIMIC SORA (crate::mimic): a second instance of his own models (the body, the Keyblade) with his own skins: his early
+        // depth (+ stencil) with the slots' own shaders, his glow mask, motion vectors and shadow as Sora's, his G-buffer with the
+        // Mimic Tear writers in the G-buffer pass below; NO colour draw (the game's light passes shade his surface), no hair
+        // fringe, no translucent slot. Not drawn (the reason in `mimic_status`) when the hybrid's route cannot run this frame.
+        let mut mimic_gb: Vec<crate::hair::HairDraw> = Vec::new();
+        let mut mimic_reach: Vec<(Vec3, Vec3, f32)> = Vec::new();
+        let mut mimic_early = 0u32;
+        let mut mimic_count = 0usize;
+        // (THE USER 2026-11-03: his arrival "transforming into Sora" and his dissolve) the forming mimics' records (their own
+        // depth + G-buffer, nothing above the cut) and the liquid pools' blocks
+        let mut mimic_form_gb: Vec<crate::hair::HairDraw> = Vec::new();
+        let mut mimic_pools: Vec<u64> = Vec::new();
+        let mimic_look = crate::mimic::look();
+        // (the coordinator's PRE-BUILD: a mimic submitted now would be drawn: his states made for this key and outfit, the hybrid's route ran)
+        crate::mimic::set_ready(hy_plan.is_ok() && glow.mimic_sets.get(&key).is_some_and(|s| s.len() == assets.library.slots.len()) && glow.mimic_form_sets.get(&key).is_some_and(|s| s.len() == assets.library.slots.len()) && glow.mimic_pool.get(&key).is_some_and(Option::is_some));
+        // (MIMIC-RENDER) with the Sora copies drawn silver this frame (none: the host's list as it was)
+        if let Some(mimics) = crate::sora_copy::with_silver(crate::mimic::draws_or_test(&input), sora_copies.as_deref().map_or(&[], Vec::as_slice)) {
+            mimic_count = mimics.len().min(4);
+            let set = glow.mimic_sets.get(&key).filter(|s| s.len() == assets.library.slots.len()).cloned();
+            let set_why = match &set {
+                Some(_) => None,
+                None if glow.mimic_failed.contains(&key) => Some(glow.mimic_why.clone()),
+                None => Some("his pipeline states are being made".to_string()),
+            };
+            let targets_ok = hy_plan.as_ref().is_ok_and(|(o, ..)| mimic_draw::targets_known(o));
+            match (crate::mimic::frame_route(hy_plan.as_ref().err().copied(), set_why.as_deref(), targets_ok), set, early_list, early_at) {
+                (Ok(()), Some(set), Some(la), Some(base)) => {
+                    let outfit = assets.models.iter().find_map(|m| m.retarget.as_ref());
+                    let form_set = glow.mimic_form_sets.get(&key).filter(|s| s.len() == assets.library.slots.len()).cloned();
+                    for (n, m) in mimics.iter().enumerate().take(4) {
+                        // (MIMIC-BOSS hotfix 3, MB3-FORMLEAK) HIS OWN WEAR FORM (his costume, slide, Rage look and tables), never the player's
+                        let look = match (m.owner, m.wear_form) {
+                            (Some(owner), Some(wear)) => {
+                                let gpu = sora_copy_draw::CopyGpu { device, heap: &assets.srv_heap, srv_size: assets.srv_size, by_file: &assets.by_file, white: &assets.white };
+                                Some(assets.copies.prepare(&gpu, &assets.library, sora_copy_draw::LookStep { owner, wear, clock: input.clock, frame: *frame_no }))
+                            }
+                            _ => None,
+                        };
+                        // (his forming: the pool at his feet, drawn even with nothing of him formed)
+                        if let Some(radius) = m.form.pool() {
+                            let feet = Vec3::new(m.body.component_to_world.translation.x, m.body.component_to_world.translation.y, m.form.feet_z);
+                            if let Some(at) = put(&crate::mimic::pool_block(feet, radius, &mimic_look)) {
+                                mimic_pools.push(at);
+                                mimic_reach.push((feet, feet, radius * 1.1));
+                            }
+                        }
+                        let route = m.form.body();
+                        let forming = match route {
+                            crate::mimic::BodyRoute::None => continue,
+                            crate::mimic::BodyRoute::Whole => None,
+                            // (no forming writers in this folder: he is not drawn until he is whole; the pool still is)
+                            crate::mimic::BodyRoute::Forming { .. } if form_set.is_none() => continue,
+                            crate::mimic::BodyRoute::Forming { cut_z, band } => Some((cut_z, band)),
+                        };
+                        mimic_reach.extend(crate::hybrid::bone_balls(&m.body.component, &m.body.component_to_world));
+                        // (an outfit: its retargeted pose without its cloth simulation, which is the player's: outfit.rs `frame`)
+                        let outfit_pose = outfit.map(|r| r.pose_full(&m.body.local, &m.body.component).1);
+                        for &(model_index, inst) in &items {
+                            let model = &assets.models[model_index];
+                            // (P5) of the keyblades only his hand's (the mimic carries the keyblade Sora carries)
+                            if inst.is_some() || model.mesh.starts_with(crate::xsiweapon::PREFIX) || (model.mesh != "sora" && crate::keyblade::role(model.mesh, &kb_hand, &[]) != crate::keyblade::Role::Hand) {
+                                continue;
+                            }
+                            let (to_world, pose): (Trs, &[Trs]) = match (model.mesh, &m.weapon) {
+                                ("sora", _) => (m.body.component_to_world, if model.retarget.is_some() { outfit_pose.as_deref().unwrap_or(&m.body.component) } else { &m.body.component }),
+                                (_, Some(w)) if w.opacity > 0.0 => (
+                                    match (outfit, outfit_pose.as_ref()) {
+                                        (Some(r), Some(p)) => r.weapon_to_world(&w.to_world, &m.body.component, p, &m.body.component_to_world),
+                                        _ => w.to_world,
+                                    },
+                                    if w.component.len() == model.reference.len() { &w.component } else { &model.reference },
+                                ),
+                                _ => continue,
+                            };
+                            skin.clear();
+                            skin.extend_from_slice(&math::game_from_pack(&to_world).to_cols_array());
+                            for (joint, bone) in model.joint_bones.iter().enumerate() {
+                                let matrix = match bone.and_then(|b| pose.get(b)) {
+                                    Some(t) => math::joint_in_pack(t) * model.inverse_bind[joint],
+                                    None => Mat4::IDENTITY,
+                                };
+                                skin.extend_from_slice(&matrix.to_cols_array());
+                            }
+                            skin.resize(16 * (1 + if model.retarget.is_some() { MAX_JOINTS_OUTFIT } else { MAX_JOINTS }), 0.0);
+                            if let Some(r) = &model.retarget {
+                                r.write_leg_guard(&mut skin, pose);
+                            }
+                            // (the upload buffer full: this mimic model is left out, never the frame)
+                            let Some(at) = put(&skin) else { continue };
+                            let prev = glow.mimic_prev.entry((n, model_index)).or_insert_with(|| (Vec::new(), 0, Trs::IDENTITY));
+                            let before = if prev.0.len() == skin.len() && motion_continues(prev.1, &prev.2, *frame_no, &to_world) { put(&prev.0).unwrap_or(at) } else { at };
+                            prev.0.clone_from(&skin);
+                            (prev.1, prev.2) = (*frame_no, to_world);
+                            // (forming: no motion vectors and no shadow of the cut-away part: none at all until he is whole)
+                            if forming.is_none() {
+                                velo_skins.push((model_index, at, before));
+                            }
+                            let object = ObjectRows::new(&to_world, assets.library.bounds_of(model.mesh));
+                            la.IASetVertexBuffers(0, Some(&[model.vertex_view]));
+                            la.IASetIndexBuffer(Some(&model.index_view));
+                            la.SetGraphicsRootConstantBufferView(2, at);
+                            la.SetGraphicsRootConstantBufferView(6, before);
+                            for draw in &model.draws {
+                                let draw = &Draw { slot: assets.copies.look_slot(look, draw.slot).unwrap_or_else(|| crate::rage::draw_slot(draw.slot)), ..*draw }; // (AUDIT-C) (MIMIC-BOSS hotfix 3, MB3-FORMLEAK) his own Rage twin
+                                let own = assets.copies.material(&assets.library, look, m.owner, draw.slot); // (MIMIC-BOSS hotfix 3, MB3-FORMLEAK) his drives and wear
+                                let material = own.as_ref().unwrap_or(&assets.library.slots[draw.slot]);
+                                let writers = if forming.is_some() { form_set.as_deref().unwrap_or(&[]) } else { &set[..] };
+                                if crate::mimic::slot_pass(material.translucent, writers.get(draw.slot).is_some_and(Option::is_some)) != crate::mimic::SlotPass::DepthAndMimicGbuffer {
+                                    continue;
+                                }
+                                let Some(state) = pipelines.get(base + draw.slot) else { continue };
+                                // (HAIR-PULSE) a weapon's in-light centres from the world into its own object frame (vfx.rs weapon_in_light)
+                    let weapon_light = crate::vfx::weapon_in_light(material, &object);
+                    let material = weapon_light.as_ref().unwrap_or(material);
+                    let mut params = assets.library.params(material, &object, &rig, assets.khs.as_ref().map(|(_, s)| s), kh_look::library::LookFrame { clock: input.clock, exposure: options.exposure, debug: options.debug });
+                                params.sh = sh;
+                                params.khs.w = material.scalars.get(crate::outfit::INTERIOR_SCALAR).copied().unwrap_or(0.0);
+                                params.look.w = crate::cgfield::real_sss(); // (VERUMREX) as his main draws
+                                params.env.y = env_level;
+                                (params.env.z, params.env.w) = (env_tint.x - 1.0, env_tint.z - 1.0);
+                                // (forming: the cut and the liquid band, read by the _gb3_mf writers only: fade.w, misc.x)
+                                if let Some((cut_z, band)) = forming {
+                                    (params.fade.w, params.misc.x) = (cut_z, band);
+                                    // (the band takes the pool's liquid: albedo misc.y, gloss misc.z)
+                                    (params.misc.y, params.misc.z) = (mimic_look.pool_albedo, mimic_look.pool_gloss);
+                                }
+                                let Some(material_constants) = put(params.as_floats()) else { continue };
+                                // (MIMIC-BOSS hotfix 3, MB3-FORMLEAK) his own table where he wears other textures than the player's slot holds
+                                let table = assets.copies.table(look, draw.slot);
+                                assets.copies.note(material_constants, table, draw.slot);
+                                if forming.is_some() {
+                                    mimic_form_gb.push((model_index, draw.slot, draw.index_count, draw.first_index, draw.base_vertex, at, before, material_constants));
+                                    continue;
+                                }
+                                la.SetPipelineState(state);
+                                la.SetGraphicsRootConstantBufferView(1, material_constants);
+                                la.SetGraphicsRootDescriptorTable(3, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: srv_start.ptr + (table * SLOT_TEXTURES * assets.srv_size) as u64 });
+                                la.DrawIndexedInstanced(draw.index_count, 1, draw.first_index, draw.base_vertex, 0);
+                                mimic_early += 1;
+                                let rec = (model_index, draw.slot, draw.index_count, draw.first_index, draw.base_vertex, at, before, material_constants);
+                                mimic_gb.push(rec);
+                                if glow_plan.is_some() || shaft_on {
+                                    glow_draws.push(rec);
+                                }
+                            }
+                        }
+                    }
+                    early_draws += mimic_early;
+                    // (said again by the G-buffer pass when it draws him)
+                    crate::mimic::set_status("not drawn: the G-buffer pass did not run this frame (his early depth only)".to_string());
+                    // (each mimic's records of the frame before: only for the mimics drawn now)
+                    glow.mimic_prev.retain(|(n, _), _| *n < mimics.len());
+                }
+                (Err(why), ..) => crate::mimic::set_status(why),
+                _ => crate::mimic::set_status("not drawn: no early depth this frame".to_string()),
+            }
+            if mimic_gb.is_empty() && mimic_form_gb.is_empty() && mimic_pools.is_empty() && mimics.iter().take(4).all(|m| m.form.nothing()) {
+                crate::mimic::set_status("nothing of him this frame (not formed yet / dissolved: height 0, no pool)".to_string());
+            }
+        }
         // (ER87) THE HAIR FRINGE: the partly covered hair pixels, alpha = their coverage, depth GREATER than what his opaque /
         // masked draws left (only where they lie in front of his own surface or of the background), no depth write; after his
         // translucent draws (a strand end in front of an eye lies over it)
@@ -3968,7 +4626,7 @@ impl Core {
             let cx = party::PassCx { key, sampler_heap: &*sampler_heap, sora_heap: &assets.srv_heap, frame_constants, early_constants, rig: &rig, sh, env_level, env_tint, clock: input.clock, exposure: options.exposure, debug: options.debug };
             let early_kind = early_at.map(|_| stencil_value.is_some() && early_stencil_base(pipelines.len(), assets.library.slots.len()).is_some());
             for translucent in [false, true] {
-                if party::draw_pass(plan, party, translucent, list, early_list, early_kind, stencil_value, hy_on, &cx, &mut put).is_err() {
+                if party::draw_pass(plan, party, &party::DrawPass { translucent, list, early_list, early: early_kind, stencil: stencil_value, hy_on }, &cx, &mut put).is_err() {
                     return Err(overflow());
                 }
             }
@@ -4016,7 +4674,7 @@ impl Core {
                         list.SetGraphicsRootConstantBufferView(6, *skin_then);
                         list.SetPipelineState(pso);
                         list.SetGraphicsRootConstantBufferView(1, *material);
-                        list.SetGraphicsRootDescriptorTable(3, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: srv_start.ptr + (slot_k * SLOT_TEXTURES * assets.srv_size) as u64 });
+                        list.SetGraphicsRootDescriptorTable(3, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: srv_start.ptr + (assets.copies.table_of_record(*slot_k, *material) * SLOT_TEXTURES * assets.srv_size) as u64 }); // (MIMIC-BOSS hotfix 3, MB3-FORMLEAK)
                         list.DrawIndexedInstanced(*count, 1, *first_index, *base_vertex, 0);
                     }
                     // (ER87) the hair fringe out of the glow source too: x (1 - its coverage), in front of what is masked above
@@ -4098,7 +4756,7 @@ impl Core {
                     list.SetGraphicsRootConstantBufferView(6, *skin_then);
                     list.SetPipelineState(pso);
                     list.SetGraphicsRootConstantBufferView(1, *material);
-                    list.SetGraphicsRootDescriptorTable(3, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: srv_start.ptr + (slot_k * SLOT_TEXTURES * assets.srv_size) as u64 });
+                    list.SetGraphicsRootDescriptorTable(3, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: srv_start.ptr + (assets.copies.table_of_record(*slot_k, *material) * SLOT_TEXTURES * assets.srv_size) as u64 }); // (MIMIC-BOSS hotfix 3, MB3-FORMLEAK)
                     list.DrawIndexedInstanced(*count, 1, *first_index, *base_vertex, 0);
                 }
                 // (ER party S4) the friends' surfaces into the mask too
@@ -4214,18 +4872,42 @@ impl Core {
                 glow.shaft_frames += 1;
             }
         }
+        // (HAIR-BLEED) the census after every KH colour draw of this list (Sora, his weapons, the party), before the effects; then
+        // the colour list's root state again
+        if let (true, Some(bx), Some(cap)) = (census_on, census_bx, hy.cap.as_mut()) {
+            let geo = cap.geo.clone();
+            if let Some(c) = cap.census.as_mut() {
+                list.SetGraphicsRootSignature(&*root);
+                census_count(&CensusCx { device, list, slot: slot_index, frame: *frame_no, target: back, geo: &geo, bx, width, height }, c);
+                list.SetDescriptorHeaps(&[Some(assets.srv_heap.clone()), Some(sampler_heap.clone())]);
+                list.SetGraphicsRootConstantBufferView(0, frame_constants);
+                list.SetGraphicsRootDescriptorTable(4, sampler_heap.GetGPUDescriptorHandleForHeapStart());
+                list.SetGraphicsRootShaderResourceView(5, sampler_index.GetGPUVirtualAddress());
+                list.RSSetViewports(&[D3D12_VIEWPORT { TopLeftX: stage.0, TopLeftY: stage.1, Width: stage.2, Height: stage.3, MinDepth: 0.0, MaxDepth: 1.0 }]);
+                list.RSSetScissorRects(&[RECT { left: 0, top: 0, right: width as i32, bottom: height as i32 }]);
+                list.OMSetRenderTargets(1, Some(&target_view), false, Some(&depth_view));
+            }
+        }
         // (vfx) SORA'S EFFECTS, in the same list right after him (vfx.rs): the scene arrangement only,
         // with the game's own depth. Nothing in there can fail the frame; it leaves the depth as it found it.
         if let (true, Some((scene, format))) = (hdr, &scene) {
             let exposure = light_now.as_ref().filter(|l| l.scene && game_on).map(|l| l.exposure);
-            crate::vfx::draw(&crate::vfx::DrawCx { device: &*device, list, slot: slot_index, target: back, target_view, depth: &scene.resource, depth_format: *format, depth_view, width, height, clip_from_game: clip, camera: camera_game, right: math::game_dir_of_host(camera.right), up: math::game_dir_of_host(camera.up), forward: math::game_dir_of_host(camera.forward), depth_a, depth_b, proj00: 1.0 / (tan_y * camera.aspect), scale: crate::vfx::effect_scale(exposure, out_scale), lit: Vec3::splat(fx_level), stage: if late_stage { crate::vfx::Stage::Early } else { crate::vfx::Stage::All } });
+            let fx_cx = crate::vfx::DrawCx { device: &*device, list, slot: slot_index, target: back, target_view, depth: &scene.resource, depth_format: *format, depth_view, width, height, clip_from_game: clip, camera: camera_game, right: math::game_dir_of_host(camera.right), up: math::game_dir_of_host(camera.up), forward: math::game_dir_of_host(camera.forward), depth_a, depth_b, proj00: 1.0 / (tan_y * camera.aspect), scale: crate::vfx::effect_scale(exposure, out_scale), lit: Vec3::splat(fx_level), stage: if late_stage { crate::vfx::Stage::Early } else { crate::vfx::Stage::All } };
+            crate::vfx::draw(&fx_cx);
+            // (FREEZE-FX) the frozen Elden Ring bodies' ice shells (iceshell.rs), into the same target over the same depth
+            if crate::iceshell::draw(&fx_cx) {
+                list.SetGraphicsRootSignature(&*root);
+                list.SetDescriptorHeaps(&[Some(assets.srv_heap.clone()), Some(sampler_heap.clone())]);
+                list.SetGraphicsRootConstantBufferView(0, frame_constants);
+                list.OMSetRenderTargets(1, Some(&target_view), false, Some(&depth_view));
+            }
             survey::WATCH.store(back.as_raw() as usize, Ordering::Relaxed);
             *late = Some(LateFx { slot: slot_index, target: back.as_raw() as usize, depth: scene.resource.as_raw() as usize, depth_format: *format, width, height, frame_constants, clip, camera: camera_game, right: math::game_dir_of_host(camera.right), up: math::game_dir_of_host(camera.up), forward: math::game_dir_of_host(camera.forward), depth_a, depth_b, proj00: 1.0 / (tan_y * camera.aspect), scale: crate::vfx::effect_scale(exposure, out_scale), lit: Vec3::splat(fx_level), effects: late_stage, recomp: false, snap: early_reads.clone() /* (ZFIN) */ });
             // (ZFIN) ZETTAFLARE'S FINALE on an Elden Ring character (finale.rs), after the effects: here when the late pass does
             // not draw the effects' late stage (else draw_late does, after them)
             if !late_stage {
                 let view = crate::finale::View { clip, camera: camera_game, right: math::game_dir_of_host(camera.right), up: math::game_dir_of_host(camera.up), forward: math::game_dir_of_host(camera.forward), depth_a, depth_b, proj00: 1.0 / (tan_y * camera.aspect), width, height };
-                let fcx = crate::finale::FinaleCx { device: &*device, list, root: &*root, slot: slot_index, target_view, target_format: back_desc.Format, depth: &scene.resource, snapshot: early_reads.as_ref(), view, scale: crate::vfx::effect_scale(exposure, out_scale) };
+                let fcx = crate::finale::FinaleCx { device: &*device, list, slot: slot_index, target_view, target_format: back_desc.Format, depth: &scene.resource, snapshot: early_reads.as_ref(), view, scale: crate::vfx::effect_scale(exposure, out_scale) };
                 if crate::finale::draw(&fcx) {
                     list.SetGraphicsRootSignature(&*root);
                     list.SetDescriptorHeaps(&[Some(assets.srv_heap.clone()), Some(sampler_heap.clone())]);
@@ -4299,7 +4981,11 @@ impl Core {
         let party_gb = party_plan.as_ref().is_some_and(|p| !p.gb.is_empty());
         #[cfg(not(feature = "party"))]
         let party_gb = false;
-        if let (Some(la), Ok((ordered, _, _, base)), false) = (early_list, &hy_plan, gb_draws.is_empty() && !party_gb) {
+        // (MIMIC SORA) the pass also runs for a mimic alone (Sora not drawn)
+        let mimic_any = !(mimic_gb.is_empty() && mimic_form_gb.is_empty() && mimic_pools.is_empty());
+        // (PARTY-NATIVE) the lit effects' G-buffer twins kept by this frame's colour pass (vfx.rs): the pass runs with them too
+        let fx_gb = crate::vfx::replay_pending(slot_index);
+        if let (Some(la), Ok((ordered, _, _, base)), false) = (early_list, &hy_plan, gb_draws.is_empty() && !party_gb && !mimic_any && !fx_gb) {
             let rtv_size = device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) as usize;
             if hy.rtv.is_none() {
                 hy.rtv = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: (crate::hybrid::ROLES * FRAME_SLOTS) as u32, Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE, NodeMask: 0 }).ok();
@@ -4312,7 +4998,11 @@ impl Core {
             let scissor = crate::hybrid::scissor_box(&hy_reach, &clip, tan_y, width, height, 24.0);
             // (ER party S4) the friends' draws set their own boxes: the pass runs with them even when Sora has none
             let scissor = scissor.or(if party_gb { Some([0, 0, width as i32, height as i32]) } else { None });
-            if let (Some(heap), true, Some(sc)) = (hy.rtv.as_ref(), resources.len() == crate::hybrid::ROLES, scissor) {
+            // (MIMIC SORA) the mimics' draws set their own box (gfx/mimic_draw.rs): the pass runs with them too
+            let scissor = if !mimic_any { scissor } else { scissor.or(crate::hybrid::scissor_box(&mimic_reach, &clip, tan_y, width, height, 24.0)) };
+            // (PARTY-NATIVE) the lit effects set their own (the whole picture: vfx.rs gbuffer_replay)
+            let scissor = scissor.or(if fx_gb { Some([0, 0, width as i32, height as i32]) } else { None });
+            if let (Some(heap), true, Some(sc)) =(hy.rtv.as_ref(), resources.len() == crate::hybrid::ROLES, scissor) {
                 la.RSSetScissorRects(&[RECT { left: sc[0], top: sc[1], right: sc[2], bottom: sc[3] }]);
                 let first = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: heap.GetCPUDescriptorHandleForHeapStart().ptr + slot_index * crate::hybrid::ROLES * rtv_size };
                 let mut to_rt: Vec<D3D12_RESOURCE_BARRIER> = Vec::new();
@@ -4344,14 +5034,34 @@ impl Core {
                     la.SetGraphicsRootConstantBufferView(6, *skin_then);
                     la.SetPipelineState(state);
                     la.SetGraphicsRootConstantBufferView(1, *material);
-                    la.SetGraphicsRootDescriptorTable(3, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: srv_start.ptr + (slot_k * SLOT_TEXTURES * assets.srv_size) as u64 });
+                    la.SetGraphicsRootDescriptorTable(3, D3D12_GPU_DESCRIPTOR_HANDLE { ptr: srv_start.ptr + (assets.copies.table_of_record(*slot_k, *material) * SLOT_TEXTURES * assets.srv_size) as u64 }); // (MIMIC-BOSS hotfix 3, MB3-FORMLEAK)
                     la.DrawIndexedInstanced(*count, 1, *first_index, *base_vertex, 0);
                 }
                 // (ER party S4) the friends' G-buffer writes (each his own frame block and scissor box)
                 #[cfg(feature = "party")]
                 if let Some(plan) = party_plan.as_ref() {
                     let cx = party::PassCx { key, sampler_heap: &*sampler_heap, sora_heap: &assets.srv_heap, frame_constants, early_constants, rig: &rig, sh, env_level, env_tint, clock: input.clock, exposure: options.exposure, debug: options.debug };
-                    party::gbuffer_pass(plan, party, la, &cx, &clip, tan_y, width, height);
+                    party::gbuffer_pass(plan, party, la, &cx, &party::ScreenFit { clip: &clip, tan_y, width, height });
+                }
+                // (MIMIC SORA) THE MIMICS' G-BUFFER: the Mimic Tear's writers into all five targets (Sora's frame block again)
+                // (THE USER 2026-11-03: his arrival and dissolve) then the forming ones (their own depth, nothing above the cut) and
+                // the liquid pools at their feet
+                if let (true, Some(set), Some(bx)) = (mimic_any, glow.mimic_sets.get(&key), crate::hybrid::scissor_box(&mimic_reach, &clip, tan_y, width, height, 24.0)) {
+                    la.SetGraphicsRootConstantBufferView(0, frame_constants);
+                    let cx = mimic_draw::GbCx { device, list: la, first, rtv_size, ordered, resources: &resources, depth_view, assets, srv_start, scissor: [bx[0].clamp(0, width as i32), bx[1].clamp(0, height as i32), bx[2].clamp(0, width as i32), bx[3].clamp(0, height as i32)] };
+                    let form_set: &[Option<ID3D12PipelineState>] = glow.mimic_form_sets.get(&key).map_or(&[], Vec::as_slice);
+                    let pool = glow.mimic_pool.get(&key).and_then(Option::as_ref).filter(|_| !mimic_pools.is_empty()).map(|p| (p, mimic_pools.as_slice()));
+                    let n = mimic_draw::gbuffer(&cx, &[(set.as_slice(), mimic_gb.as_slice()), (form_set, mimic_form_gb.as_slice())], pool);
+                    crate::mimic::set_status(format!("drawn: {mimic_count} mimic(s) through the game's G-buffer (WetAspectParam 18), {mimic_early} early-depth / {n} G-buffer draw(s) ({} forming, {} pool(s)) this frame, no colour pass", mimic_form_gb.len(), mimic_pools.len()));
+                } else if mimic_any {
+                    crate::mimic::set_status("not drawn: his screen box is off the picture".to_string());
+                }
+                // (PARTY-NATIVE) THE LIT EFFECTS' G-BUFFER TWINS (vfx.rs): into the same three targets and the scene depth, the
+                // characters' stencil class; then our root signature and heaps again
+                if fx_gb && crate::vfx::gbuffer_replay(&crate::vfx::GbReplayCx { list: la, slot: slot_index, targets: first, depth: depth_view, width, height }) > 0 {
+                    la.SetGraphicsRootSignature(&*root);
+                    la.SetDescriptorHeaps(&[Some(assets.srv_heap.clone()), Some(sampler_heap.clone())]);
+                    la.SetGraphicsRootConstantBufferView(0, frame_constants);
                 }
                 if !back_from_rt.is_empty() {
                     la.ResourceBarrier(&back_from_rt);
@@ -4424,6 +5134,16 @@ impl Core {
                 let mut then: Vec<D3D12_RESOURCE_BARRIER> = (0..planes).map(|k| transition(&scene_now.resource, k, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE)).collect();
                 then.push(transition(copy, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
                 la.ResourceBarrier(&then);
+            }
+            // (HAIR-BLEED) THE G-BUFFER STAGE'S OWN COPIES AGAIN, now with every KH character's depth and G-buffer in them (both
+            // styles; `r.hybrid_recopy`): the game copied its scene depth and normal in its last G-buffer list for its decals, and
+            // its later passes (ambient occlusion, light) read those copies. MEASURED in game 2026-11-05 (HAIR-BLEED/STATE.md): with
+            // the copies made before the KH draws the game's occlusion at KH texels was 0.50 against 0.68 with them in, and the
+            // light at KH texels carried the shapes of what lies behind them.
+            if let (true, Some(s), Some((scene_now, _)), false) = (RECOPY.load(Ordering::Relaxed), sub, &scene, early_back.is_empty()) {
+                let redone = redo_stage_copies(la, s, &scene_now.resource, early_back.len() as u32);
+                RECOPIED.fetch_add(redone, Ordering::Relaxed);
+                RECOPY_MISSED.fetch_add((s.stage_copy_count as u32).saturating_sub(redone), Ordering::Relaxed);
             }
             if !early_back.is_empty() {
                 la.ResourceBarrier(&early_back);
@@ -4752,7 +5472,7 @@ pub fn after_submission(queue: usize, submission: survey::Submission) {
     // SAFETY: the game used this resource in the lists it just submitted: it is alive.
     unsafe {
         let Some(resource) = ID3D12Resource::from_raw_borrowed(&raw) else { return };
-        let result = core.draw(resource, rest, hdr, Some(&submission).filter(|_| hdr), None);
+        let result = core.draw(resource, rest, hdr, hdr.then_some(&submission), None);
         core.outcome(result);
     }
 }
@@ -4917,6 +5637,89 @@ pub fn effects_depth_pass(queue: usize, sub: survey::Submission) {
     // SAFETY: our own objects; the two depths were used by lists the game has just submitted.
     let result = unsafe { core.draw_effects_depth(half, half_planes, scene, scene_planes) };
     core.outcome(result);
+}
+
+/// (HAIR-BLEED) KH3's EyeAdaptation Sora's shaders take this frame (er_char.wgsl v161.y = tune.x x the game's exposure; 0 = none
+/// known, they keep 1), for the status line.
+pub static EYE_NOW: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// (HAIR-BLEED) `r.kh_eye_adapt` (default OFF since 2026-11-06): KH3's EyeAdaptation handed to the shaders as 1 / reference
+/// white. OFF = 1, KH3's own camera exposure, at which its reference white (light.rs `reference_white`, "at KH3's camera exposure
+/// 1") is defined: the route maps KH3's whole output by ONE factor (out scale x the game's exposure), so the KH3 shading itself must
+/// run at the exposure KH3 graded it at. The user's reports on the build with 0.306 (2026-11-06: the Elden Ring style flat and
+/// washed out at RT OFF in daylight, Sora "far brighter, flatter" than Rennala in her chamber) fit what 0.306 does: KHS's rim term
+/// (materials.wgsl kh_khs, `r3 x 1 / v161.y`, built from the colour table and the normal, not from the light) became 3.27x
+/// stronger, a constant lift that dominates where the game's light is low. Kept as a testing aid (`r.kh_eye_adapt = 1`).
+pub static EYE_ADAPT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// (HAIR-BLEED) The frame block's `lit_ambient.w` for a block drawn at `out_scale` (tune.x): er_char.wgsl takes KH3's EyeAdaptation
+/// (v161.y) as tune.x x this, so this is (1 / reference white) / tune.x: v161.y = 1 / reference white (0.306), the eye adaptation
+/// at which KH3 shows its reference white at its tone mapper's 1.0, the units of the whole route (light.rs `native_k`). 0 (the
+/// shaders keep 1) when off or without a valid scale. Pure.
+pub(crate) fn eye_row(out_scale: f32, on: bool) -> f32 {
+    let white = crate::light::reference_white();
+    if on && out_scale.is_finite() && out_scale > 0.0 && white > 0.0 {
+        1.0 / (white * out_scale)
+    } else {
+        0.0
+    }
+}
+
+/// (HAIR-BLEED) `r.hybrid_recopy` (default on): the G-buffer stage's copies are made again after the KH G-buffer pass.
+pub static RECOPY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+/// (HAIR-BLEED) copies redone / not redone (a destination's state unknown, a source not found) since the last status line.
+pub static RECOPIED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub static RECOPY_MISSED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// (HAIR-BLEED) The game's copies of its scene depth / G-buffer targets of this submission's G-buffer stage (survey.rs
+/// `StageCopy`), recorded again into the early list `la` after the KH characters' G-buffer pass: the sources from the states
+/// they rest in there (the scene depth's `planes` planes in DEPTH_WRITE, a G-buffer target in the state the game left it in at
+/// the split, which our pass put back), the destination from its state at the split, both back afterwards. Returns how many
+/// were recorded; a copy whose destination state is unknown or whose source is neither is left as the game made it.
+///
+/// # Safety
+/// `la` is open; the resources named in `s` are the game's, used in the lists it has just submitted (alive).
+unsafe fn redo_stage_copies(la: &ID3D12GraphicsCommandList, s: &survey::Submission, depth: &ID3D12Resource, planes: u32) -> u32 {
+    let mut done = 0u32;
+    let depth_ptr = depth.as_raw() as usize;
+    for c in &s.stage_copies[..s.stage_copy_count.min(survey::STAGE_COPIES)] {
+        if c.dst_state == 0 || c.dst == depth_ptr {
+            continue;
+        }
+        // the source's state(s) here
+        let src_states: Vec<(u32, i32)> = if c.src == depth_ptr {
+            (0..planes).map(|k| (k, D3D12_RESOURCE_STATE_DEPTH_WRITE.0)).collect()
+        } else {
+            match s.gbuffer[..s.gbuffer_count.min(crate::hybrid::ROLES)].iter().find(|t| t.resource == c.src && t.state != 0) {
+                Some(t) => vec![(D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, t.state)],
+                None => continue,
+            }
+        };
+        let (dst_raw, src_raw) = (c.dst as *mut c_void, c.src as *mut c_void);
+        let (Some(dst), Some(src)) = (ID3D12Resource::from_raw_borrowed(&dst_raw), ID3D12Resource::from_raw_borrowed(&src_raw)) else { continue };
+        let mut to: Vec<D3D12_RESOURCE_BARRIER> = src_states.iter().filter(|(_, st)| *st != D3D12_RESOURCE_STATE_COPY_SOURCE.0).map(|(k, st)| transition(src, *k, D3D12_RESOURCE_STATES(*st), D3D12_RESOURCE_STATE_COPY_SOURCE)).collect();
+        let mut back: Vec<D3D12_RESOURCE_BARRIER> = src_states.iter().filter(|(_, st)| *st != D3D12_RESOURCE_STATE_COPY_SOURCE.0).map(|(k, st)| transition(src, *k, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATES(*st))).collect();
+        if c.dst_state != D3D12_RESOURCE_STATE_COPY_DEST.0 {
+            to.push(transition(dst, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATES(c.dst_state), D3D12_RESOURCE_STATE_COPY_DEST));
+            back.push(transition(dst, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATES(c.dst_state)));
+        }
+        if !to.is_empty() {
+            la.ResourceBarrier(&to);
+        }
+        match c.subresources {
+            None => la.CopyResource(dst, src),
+            Some(r) => {
+                let to_loc = D3D12_TEXTURE_COPY_LOCATION { pResource: std::mem::transmute_copy(dst), Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: r.dst_sub } };
+                let from_loc = D3D12_TEXTURE_COPY_LOCATION { pResource: std::mem::transmute_copy(src), Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: r.src_sub } };
+                let area = r.area.map(|a| D3D12_BOX { left: a[0], top: a[1], front: a[2], right: a[3], bottom: a[4], back: a[5] });
+                la.CopyTextureRegion(&to_loc, r.at[0], r.at[1], r.at[2], &from_loc, area.as_ref().map(|b| b as *const D3D12_BOX));
+            }
+        }
+        if !back.is_empty() {
+            la.ResourceBarrier(&back);
+        }
+        done += 1;
+    }
+    done
 }
 
 pub fn early_wanted() -> bool {
@@ -5229,7 +6032,11 @@ struct CastKit {
     heap: ID3D12DescriptorHeap,
     root: ID3D12RootSignature,
     copy: ID3D12PipelineState,
+    /// (RSF2 round 15) the KH caster maps' pipeline: no depth bias (the owner test compares the atlas against these maps)
     depth: ID3D12PipelineState,
+    /// (LIGHT-RT) the pipeline into the GAME'S ATLAS: the depth bias of castbias.rs, so the game's sun mask does not band his
+    /// own surface (shadow acne) where it shades him (the Elden Ring Style takes that mask raw)
+    depth_atlas: ID3D12PipelineState,
     depth_dbg: ID3D12PipelineState,
     lists: Vec<(ID3D12CommandAllocator, ID3D12GraphicsCommandList, u64)>,
 }
@@ -5274,14 +6081,18 @@ unsafe fn make_kh_maps(device: &ID3D12Device) -> windows::core::Result<KhMaps> {
     Ok(KhMaps { texture, dsv })
 }
 
-/// (RSF2 round 6) What the cast split of this frame read: the atlas (pointer, size) and the viewports of the rows, finest first.
+/// (RSF2 round 6) What the cast split of this frame read: the atlas (pointer) and the viewports of the rows, finest first.
 #[derive(Clone)]
 struct SunNow {
     atlas: usize,
-    width: u32,
-    height: u32,
     viewports: Vec<[f32; 4]>,
     at: Instant,
+}
+
+/// (LIGHT-RT) A caster rasterizer state with the depth bias of the KH casters drawn into the game's sun atlas (castbias.rs).
+pub(crate) fn cast_rasterizer(base: D3D12_RASTERIZER_DESC) -> D3D12_RASTERIZER_DESC {
+    let (bias, slope, clamp) = crate::castbias::atlas_bias();
+    D3D12_RASTERIZER_DESC { DepthBias: bias, SlopeScaledDepthBias: slope, DepthBiasClamp: clamp, ..base }
 }
 
 impl Core {
@@ -5322,9 +6133,15 @@ impl Core {
             ..Default::default()
         };
         let depth: ID3D12PipelineState = self.device.CreateGraphicsPipelineState(&pso).map_err(|e| text("shadow depth pipeline", e))?;
+        // (LIGHT-RT) the same, biased away from the sun, for the game's atlas
+        let plain_raster = pso.RasterizerState;
+        let mut pso_atlas = pso;
+        pso_atlas.RasterizerState = cast_rasterizer(plain_raster);
+        let depth_atlas: ID3D12PipelineState = self.device.CreateGraphicsPipelineState(&pso_atlas).map_err(|e| text("shadow depth pipeline (atlas)", e))?;
         // (testing aid, `r.shadow_dbg = 98`: his footprint pushed to the light's near plane, drawn whatever is there)
-        let mut pso_dbg = pso;
-        let dbg = CAST_PUSH_BIAS.load(Ordering::Relaxed) as i32;
+        let mut pso_dbg = pso_atlas;
+        pso_dbg.RasterizerState = plain_raster;
+        let dbg = CAST_PUSH_BIAS.load(Ordering::Relaxed);
         pso_dbg.RasterizerState.DepthBias = dbg;
         pso_dbg.DepthStencilState.DepthFunc = if dbg < 0 { D3D12_COMPARISON_FUNC_ALWAYS } else { D3D12_COMPARISON_FUNC_GREATER_EQUAL };
         pso_dbg.RasterizerState.DepthBias = dbg.abs() - 1;
@@ -5337,7 +6154,8 @@ impl Core {
             lists.push((allocator, list, 0u64));
         }
         rlog!("render: HIS REAL SHADOW: his skinned mesh is drawn depth-only into the game's cascaded shadow atlas (r.shadow_real), each cascade with the game's own light matrices of that pass");
-        Ok(CastKit { texture, rtv, heap, root, copy, depth, depth_dbg, lists })
+        rlog!("render: {}", crate::castbias::status());
+        Ok(CastKit { texture, rtv, heap, root, copy, depth, depth_atlas, depth_dbg, lists })
     }
 
     unsafe fn make_fx_kit(&mut self) -> Result<FxKit, String> {
@@ -5554,7 +6372,7 @@ impl Core {
                     None => {}
                 }
             }
-            self.sun_now = Some(SunNow { atlas: sun.resource, width: size.0, height: size.1, viewports: rows, at: Instant::now() });
+            self.sun_now = Some(SunNow { atlas: sun.resource, viewports: rows, at: Instant::now() });
         }
         Ok(())
     }
@@ -5631,7 +6449,7 @@ impl Core {
             list.SetDescriptorHeaps(&[Some(kit.heap.clone()), Some(self.sampler_heap.clone())]);
             list.SetGraphicsRootConstantBufferView(0, frame.frame_constants);
             list.SetGraphicsRootDescriptorTable(3, kit.heap.GetGPUDescriptorHandleForHeapStart());
-            list.SetPipelineState(if CAST_PUSH.load(Ordering::Relaxed) { &kit.depth_dbg } else { &kit.depth });
+            list.SetPipelineState(if CAST_PUSH.load(Ordering::Relaxed) { &kit.depth_dbg } else { &kit.depth_atlas });
             for (model_index, now, _) in &frame.skins {
                 let Some(model) = assets.models.get(*model_index) else { continue };
                 list.IASetVertexBuffers(0, Some(&[model.vertex_view]));
@@ -5647,7 +6465,7 @@ impl Core {
             // (ER party S4) the friends into the same cascade (their own skin shader)
             #[cfg(feature = "party")]
             if !frame.party.is_empty() {
-                party::cast(&mut self.party, &frame.party, &self.device, &self.root, &list, &kit.heap, &self.sampler_heap);
+                party::cast(&mut self.party, &frame.party, &self.device, &self.root, &list, (&kit.heap, &self.sampler_heap), true);
             }
             list.ResourceBarrier(&[transition(atlas, 0, D3D12_RESOURCE_STATE_DEPTH_WRITE, rest)]);
             drawn += 1;
@@ -5684,7 +6502,7 @@ impl Core {
                     #[cfg(feature = "party")]
                     for (k, member) in frame.party.iter().take(KH_SLICES - 1).enumerate() {
                         list.OMSetRenderTargets(0, None, false, Some(&slice_view(k + 1)));
-                        party::cast(&mut self.party, &vec![member.clone()], &self.device, &self.root, &list, &kit.heap, &self.sampler_heap);
+                        party::cast(&mut self.party, &vec![member.clone()], &self.device, &self.root, &list, (&kit.heap, &self.sampler_heap), false);
                     }
                     list.ResourceBarrier(&[transition(&maps.texture, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)]);
                     self.kh_maps_vp = Some((pass.viewport, Instant::now()));
@@ -6152,7 +6970,7 @@ impl Core {
             // (ZFIN) ZETTAFLARE'S FINALE on an Elden Ring character (finale.rs), after the effects' late stage
             let view = crate::finale::View { clip: late.clip, camera: late.camera, right: late.right, up: late.up, forward: late.forward, depth_a: late.depth_a, depth_b: late.depth_b, proj00: late.proj00, width: late.width, height: late.height };
             let snap = late.snap.as_ref().filter(|_| self.snapshot.as_ref().is_some_and(|s| s.1 == late.depth));
-            let fcx = crate::finale::FinaleCx { device: &self.device, list, root: &self.root, slot: late.slot, target_view, target_format: desc.Format, depth: &scene.resource, snapshot: snap, view, scale: late.scale };
+            let fcx = crate::finale::FinaleCx { device: &self.device, list, slot: late.slot, target_view, target_format: desc.Format, depth: &scene.resource, snapshot: snap, view, scale: late.scale };
             if crate::finale::draw(&fcx) {
                 list.OMSetRenderTargets(1, Some(&target_view), false, Some(&depth_view));
             }
@@ -6370,6 +7188,10 @@ pub fn status() -> String {
                 _ => String::new(),
             };
             let light = format!("{light}\n  velocity: {} frame(s) with his motion vectors written | late pass (after the game's forward stage): {} frame(s) with late effects / darkening drawn, the scene darkened in {} | real shadow: {} cascade pass(es) drawn into the game's atlas, {} us of CPU in all{} | (IMPL_ER65) late re-composite: {} frame(s) | (IMPL_ER53) early depth: {} frame(s) with his depth in the scene depth right after the G-buffer ({} draws in the latest; (IMPL_ER56) stencil {}, ground taps {:?})", std::mem::take(&mut core.velocity_drawn), std::mem::take(&mut core.late_drawn), crate::vfx::DIMMED_FRAMES.swap(0, Ordering::Relaxed), std::mem::take(&mut core.cast_drawn), std::mem::take(&mut core.cast_micros), if core.cast_failed { " (OFF: failed)" } else { "" }, std::mem::take(&mut core.recomp_drawn), std::mem::take(&mut core.early_drawn), EARLY_DRAWS.load(Ordering::Relaxed), match STENCIL_USED.load(Ordering::Relaxed) { 0 => "not written".to_string(), v => format!("{:#04x} written (ER88: TAA class {}{})", v - 1, taa_class((v - 1) as u8), if v - 1 == CHAR_STENCIL as u32 { ", the characters' value" } else { "" }) }, core.stencil_seen);
+            // (MIMIC SORA) his drawing, once a mimic was submitted (nothing otherwise)
+            let light = if crate::mimic::wanted() { format!("{light}\n  {}", crate::mimic::mimic_status()) } else { light };
+            // (MIMIC-RENDER) the Sora copies, once one was submitted
+            let light = if crate::sora_copy::wanted() { format!("{light}\n  {}", crate::sora_copy::status()) } else { light };
             // (IMPL_ER80) the glow mask: frames masked / skipped this second and why
             let glow_line = if !GLOW_MASK.load(Ordering::Relaxed) {
                 "OFF (r.glow_mask 0: the glow of what lies behind him is blurred over him, as before)".to_string()
@@ -6392,7 +7214,7 @@ pub fn status() -> String {
                 "render {state}: {} presents, {} drawn ({} draws/frame, {} with the game's depth), {} waiting for pipelines, {} skipped busy, {} without a scene, {} skipped (unknown frame shape); our CPU time {:.3} ms/frame (max {:.3}), GPU time {:.3} ms/frame (max {:.3}); the host's frame was {:.1} ms old when drawn (least {:.1}, most {:.1}; same thread {} times){light}",
                 s.presents,
                 s.drawn,
-                if s.drawn > 0 { s.draws / s.drawn } else { 0 },
+                s.draws.checked_div(s.drawn).unwrap_or(0),
                 s.with_scene_depth,
                 s.waiting,
                 s.busy,
@@ -6453,7 +7275,7 @@ mod tests {
     #[test]
     fn the_hybrid_views_follow_the_outfit_textures() {
         assert!(texture_descriptor(kh_look::library::SLOT_TEXTURES_MAX - 1) < HY_LIGHT_TEXTURE);
-        assert!(HY_LIGHT_TEXTURE != HY_MASK_TEXTURE && HY_MASK_TEXTURE < SLOT_TEXTURES);
+        const { assert!(HY_LIGHT_TEXTURE != HY_MASK_TEXTURE && HY_MASK_TEXTURE < SLOT_TEXTURES) };
         assert!(![TABLE_TEXTURE, CUBE_TEXTURE, DEPTH_TEXTURE].contains(&HY_LIGHT_TEXTURE) && ![TABLE_TEXTURE, CUBE_TEXTURE, DEPTH_TEXTURE].contains(&HY_MASK_TEXTURE));
     }
 
@@ -6502,5 +7324,45 @@ mod tests {
         assert_eq!(ground_stencil(&[0, 0, 0, 0, 0]), None);
         assert_eq!(ground_stencil(&[0, 0x21, 0x21, 0x05, 0]), Some(0x21));
         assert_eq!(ground_stencil(&[0x05]), Some(0x05));
+    }
+
+    // (HAIR-BLEED) THE COVERAGE GATE of the copy fix: every KH G-buffer writer of the frame (Sora's draws with every outfit,
+    // Keyblade, form weapon and routed fragment model in `assets.models`; the party's members (Donald, Goofy, the Moogle and any
+    // later friend: party::gbuffer_pass); the Mimic / AI Sora sets: mimic_draw::gbuffer; the targets 3 / 4 clear) is recorded
+    // into the early list BEFORE the game's stage copies are made again, and the early list is closed only after them; the
+    // early depth (every opaque / masked slot of every drawn model) precedes all of it. Both styles: nothing here reads
+    // `r.hybrid_native`. If a new G-buffer writer is added after the re-copy, or the re-copy moves, this test fails.
+    // (HAIR-BLEED) KH3's eye adaptation the shaders get (tune.x x the row) is 1 / reference white at every out scale (native and
+    // the KH3 style's rig levels alike: measured 0.0052, 0.0016 and 0.13 x the exposure in game), 0 = off
+    #[test]
+    fn the_eye_adaptation_is_kh3s_reference_at_every_level() {
+        let white = crate::light::reference_white();
+        for out in [0.005218_f32, 0.0016, 0.13, 1.0] {
+            assert!((out * eye_row(out, true) - 1.0 / white).abs() < 1.0e-6, "out {out}");
+        }
+        assert_eq!(eye_row(0.005, false), 0.0);
+        assert_eq!(eye_row(0.0, true), 0.0);
+        assert_eq!(eye_row(f32::NAN, true), 0.0);
+        assert!((1.0 / white - 0.3057).abs() < 1.0e-3, "1 / {white}");
+        assert!(!EYE_ADAPT.load(Ordering::Relaxed), "off by default since 2026-11-06: KH3's own camera exposure (v161.y = 1)");
+    }
+
+    #[test]
+    fn the_stage_copies_are_redone_after_every_kh_gbuffer_writer() {
+        let text = include_str!("gfx.rs");
+        let body = &text[text.find("unsafe fn draw(&mut self, back: &ID3D12Resource").expect("draw")..];
+        let at = |needle: &str| body.find(needle).unwrap_or_else(|| panic!("{needle} is not in draw()"));
+        let early = at("early_draws += 1;");
+        let sora_gb = at("for (model_index, slot_k, count, first_index, base_vertex, skin_now, skin_then, material) in &gb_draws {");
+        let party_gb = at("party::gbuffer_pass(plan, party, la, &cx");
+        let mimic_gb = at("mimic_draw::gbuffer(&cx");
+        let gb_clear = at("crate::hybrid::GB_CLEARED.fetch_add(1, Ordering::Relaxed);");
+        let recopy = at("redo_stage_copies(la, s, &scene_now.resource, early_back.len() as u32)");
+        let close = recopy + body[recopy..].find("la.Close()?;").expect("the early list's Close after the re-copy");
+        for (name, writer) in [("early depth", early), ("Sora's G-buffer", sora_gb), ("the party's G-buffer", party_gb), ("the mimics' G-buffer", mimic_gb), ("targets 3 / 4", gb_clear)] {
+            assert!(writer < recopy, "{name} must be recorded before the stage copies are redone");
+        }
+        assert!(recopy < close);
+        assert!(!body[..close].contains("r.hybrid_native") && RECOPY.load(Ordering::Relaxed), "the re-copy is on by default, in both styles");
     }
 }

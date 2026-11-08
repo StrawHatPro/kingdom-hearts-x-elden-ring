@@ -5,7 +5,7 @@
 //! is read as partydraw.rs draws it:
 //! - `live` = `poser.pose(id, alpha)` with sora.rs's alpha (`r.interp` off, the default: 1 = the latest step);
 //! - `interp` = `poser.pose(id, true alpha)` with Sora and the camera at the same alpha (`r.interp = 1`).
-//! Metrics: crates/kh-partyhost/src/sm_metrics.rs. `cargo test -p kh-er --lib --release sm_ -- --nocapture
+//!   Metrics: crates/kh-partyhost/src/sm_metrics.rs. `cargo test -p kh-er --lib --release sm_ -- --nocapture
 //! --test-threads=1` prints the table; `SM_OUT=<dir>` writes one CSV per run (the frame strips' input).
 
 use glam::{Vec2, Vec3};
@@ -15,8 +15,7 @@ use kh_host::party::PartyChara;
 
 use super::*;
 
-#[path = "../../../../kh-partyhost/src/sm_metrics.rs"]
-pub(super) mod metrics; // (FOL2) pub(super): fol2_tests.rs prints this table with the FOL2 switch
+use crate::sm_metrics as metrics;
 use metrics::{DrawnSample, SimSample};
 
 /// The frame clock: Elden Ring's frame times.
@@ -92,7 +91,7 @@ fn step_with(r: &mut Run, input: Input) {
     let f = forward(lead.yaw);
     r.core.camera.position = lead.position - f * 450.0 + Vec3::Z * 220.0;
     r.core.camera.rotation = kh_camera::Rot { pitch: -15.0, yaw: lead.yaw, roll: 0.0 };
-    r.core.step(&mut r.sora, &r.out, STEP, TargetId::NONE, &r.world, &Ik(&r.world), &mut r.fakes, &mut r.null.audio, &mut r.null.effects, None, r.t);
+    r.core.step(&mut r.sora, CoreStep { out: &r.out, dt: STEP, lock_on: TargetId::NONE, world: &r.world, ik: &Ik(&r.world), targets: &mut r.fakes, audio: &mut r.null.audio, effects: &mut r.null.effects, sora_look: None, now: r.t });
     r.t += STEP as f64;
 }
 

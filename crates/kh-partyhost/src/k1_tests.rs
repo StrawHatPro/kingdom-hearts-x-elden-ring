@@ -25,6 +25,13 @@ impl kh_core::Targets for NoEnemies {
     fn apply_hit(&mut self, _hit: &HitRecord) -> HitResult {
         HitResult::default()
     }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
+    }
 }
 
 impl PartyTargets for NoEnemies {
@@ -129,8 +136,11 @@ impl Harness {
     }
 }
 
-/// What the AI members are this step: (name, position, yaw, velocity, clip, anim time).
-fn ai_bodies(h: &Harness) -> Vec<(&'static str, Vec3, f32, Vec3, &'static str, f32, Option<kh_party::pad::LocoPose>)> {
+/// An AI member this step: (name, position, yaw, velocity, clip, anim time, his speed-matched pose).
+type AiBody = (&'static str, Vec3, f32, Vec3, &'static str, f32, Option<kh_party::pad::LocoPose>);
+
+/// What the AI members are this step.
+fn ai_bodies(h: &Harness) -> Vec<AiBody> {
     let mut v = Vec::new();
     for (c, id) in h.rt.members.iter() {
         if h.rt.leader == Some(*id) {
@@ -185,7 +195,7 @@ pub fn measure(leader: Option<PartyChara>, path: Path, secs: f32) -> Option<Vec<
     let mut prev_pose: Vec<Option<kh_party::pad::LocoPose>> = ai_bodies(&h).iter().map(|b| b.6).collect();
     let mut prev_state: Vec<&'static str> = vec![""; 8];
     let mut prev_lp = h.leader_pos().0;
-    let mut slide_n = vec![0u32; 8];
+    let mut slide_n = [0u32; 8];
     let mut gap_sum = vec![0.0f32; m.len()];
     let steps = (secs / DT) as usize;
     let mut heading;

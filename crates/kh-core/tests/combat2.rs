@@ -308,11 +308,13 @@ fn a_guard_meets_hits_by_the_rule_table_and_opens_the_counter() {
     assert!(bench.events().any(|e| matches!(e, EventKind::PlayerGuarded { success: true, .. })));
     let guarded = bench.sora.combat().guard.guarded.expect("the guarded hit is recorded");
     assert_eq!((guarded.part, guarded.attacker), (BodyReaction::Guard, ReactionResult::NoReaction));
-    // The counter window is open: the reaction command is on show in its single slot, and an
-    // attack out of the guard is the forced counter kind on the guarded attacker.
+    // The counter window is open: (INT-F, KH3 1:1) its command is shown on the Attack slot (kh-host hud_forms
+    // `attack_text`), NOT as a situation entry, and an attack out of the guard is the forced counter kind on the guarded
+    // attacker.
     assert!(bench.sora.actions().counter_window > 0.0);
     let command = bench.sora.actions().counter_command;
-    assert_eq!(bench.host.ui.as_ref().unwrap().situation.slot_b.map(|e| (e.kind.value(), e.ex)), Some((command, true)));
+    assert!(matches!(command, 3..=5), "the window's command: {command}");
+    assert!(bench.host.ui.as_ref().unwrap().situation.slot_b.is_none(), "no situation entry for the counter window");
     let expected = kh_core::combat::guard::guard_counter_kind(&bench.sora.status().abilities);
     bench.tap(PadButton::ATTACK);
     bench.step(&[], &[]);
@@ -582,7 +584,9 @@ fn the_transformation_into_second_form() {
     assert_eq!(hud.slot_b.map(|e| (e.kind, e.class)), Some((Cmd::LmStunimpact, 4)));
     assert_eq!(hud.form.map(|f| (f.kind, f.total, f.wear_form)), Some((Cmd::ChangeL1, 30.0, 5)));
     assert!(bench.events().any(|e| matches!(e, EventKind::SituationSlot { kind: Cmd::LmStunimpact, slot: Slot::B, .. })));
-    assert!(bench.effects().contains(&"vs_com_lv2"));
+    // (HAIR-PULSE) KH3 never raises the form charge level (weapons spawned with level -1, the setter has no caller:
+    // build/sora_tmp/weapons/HAIR-PULSE/STATE.md section 6): no charge glow, no burst
+    assert!(!bench.effects().contains(&"vs_com_lv2") && !bench.effects().contains(&"vs_com_kyp01"), "{:?}", bench.effects());
 
     // The form's attack state is COMBO_LIMIT (90): MaxCombo 6, finishers 7A, 7B, 7C (10.5).
     bench.host.targets[0].position = Vec3::new(200.0, 0.0, 0.0);

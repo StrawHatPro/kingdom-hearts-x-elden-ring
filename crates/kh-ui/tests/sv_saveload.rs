@@ -7,7 +7,7 @@ use std::path::Path;
 use kh_ui::camp::CampKey;
 use kh_ui::def::write_png;
 use kh_ui::menu::{SE_MENU_CLOSE, SE_MENU_CURSOR, SE_MENU_DECIDE, SE_MENU_REFUSED};
-use kh_ui::saveload::{Phase, Portrait, Progress, SaveLoadResult, SaveLoadScreen, SlotMode, SlotState, SlotSummary, DELETE_FAILED, DELETE_IN_USE, LOAD_QUESTION, MESSAGE_MIN_FRAMES, SE_SAVE_DONE};
+use kh_ui::saveload::{Phase, Portrait, Progress, SaveLoadResult, SaveLoadScreen, SlotMode, SlotState, SlotSummary, DELETE_FAILED, DELETE_FOR_NEW_GAME, DELETE_IN_USE, LOAD_QUESTION, MESSAGE_MIN_FRAMES, SE_SAVE_DONE};
 use kh_ui::savepoint::{SavePointCommand, SavePointMenu, SavePointResult, LOAD_TEXT, MAX_COMMANDS};
 use kh_ui::{Canvas, Fonts, Matrix, Pack, Renderer, UiSound};
 
@@ -204,6 +204,97 @@ fn the_save_points_load_asks_first_and_deletes_on_the_load_list_too() {
     assert_eq!(screen.phase(), Phase::ConfirmDelete(1));
     screen.key(CampKey::Down, false, &mut sounds);
     assert_eq!(screen.key(CampKey::Decide, false, &mut sounds), Some(SaveLoadResult::Delete(6)));
+}
+
+/// (SAVE-DELETE, the user 2026-11-07: "allow deleting save games from the load game screen from the title, same as save
+/// point menu") THE TITLE'S LOAD SCREEN as kh-er opens it (`delete_enabled` from the save point's own switch, no load
+/// question, no world so no row is the running game's, the stage background): the save point's Delete unchanged (the
+/// guide line, Y asks with the cursor on No, nothing without Yes, then the rows anew and the list keeps the pad), and A on a
+/// used row still loads at once (KH3's title has no load question).
+#[test]
+fn the_titles_load_screen_deletes_as_the_save_point_does_and_still_loads_on_a() {
+    let Some((mut screen, fonts, _)) = screen() else { return };
+    (screen.delete_enabled, screen.delete_current, screen.confirm_load, screen.delete_only) = (true, false, false, false);
+    let title_slots: Vec<SlotSummary> = slots().into_iter().map(|s| SlotSummary { is_current: false, ..s }).collect();
+    let mut sounds = Vec::new();
+    screen.open_load(&title_slots, true, &mut sounds);
+    settle(&mut screen, &mut sounds, 60);
+    assert_eq!(screen.phase(), Phase::List);
+    // the button prompt in the help bar: the save point's guide, "<icon(Triangle)> Delete" (Y on an Xbox pad; the icon
+    // follows the remap tables and the Button Icons setting through kh-ui glyphs.rs)
+    assert_eq!(screen.movie.text("menuLoadClearData.loadClearDataObj.helpText.txHelpText.textField").as_deref(), Some("Select a slot to load from.\n<icon(Triangle)> Delete"));
+    shot("title_load_delete_guide", &screen, &fonts);
+    // no running game: the first used row (index 1, the save point's "current" one) is asked about like any other
+    assert_eq!(screen.cursor(), 0);
+    screen.key(CampKey::Down, false, &mut sounds);
+    assert_eq!(screen.cursor(), 1);
+    sounds.clear();
+    assert_eq!(screen.key(CampKey::Triangle, false, &mut sounds), None);
+    assert_eq!((screen.phase(), sounds.as_slice()), (Phase::ConfirmDelete(1), [UiSound::Play(SE_MENU_DECIDE)].as_slice()));
+    assert_eq!(screen.message().as_deref(), Some("Delete the save data in this slot?"));
+    // No (the cursor's place): nothing told; B: nothing told
+    assert_eq!(screen.key(CampKey::Decide, false, &mut sounds), None);
+    assert_eq!(screen.phase(), Phase::List);
+    screen.key(CampKey::Triangle, false, &mut sounds);
+    assert_eq!(screen.key(CampKey::Cancel, false, &mut sounds), None);
+    assert_eq!(screen.phase(), Phase::List);
+    // Yes: Delete(1), "Deleting..."; the host's rows anew + Done: NO DATA, the list again, the screen stays up
+    screen.key(CampKey::Triangle, false, &mut sounds);
+    screen.key(CampKey::Up, false, &mut sounds);
+    assert_eq!(screen.key(CampKey::Decide, false, &mut sounds), Some(SaveLoadResult::Delete(1)));
+    assert_eq!(screen.phase(), Phase::Busy);
+    let mut new = title_slots.clone();
+    new[1] = SlotSummary::empty(1);
+    screen.set_slots(&new);
+    screen.set_progress(Progress::Done);
+    assert_eq!(settle(&mut screen, &mut sounds, MESSAGE_MIN_FRAMES as usize + 30), None);
+    assert!(screen.is_open());
+    assert_eq!((screen.phase(), screen.cursor()), (Phase::List, 1));
+    assert_eq!(screen.movie.current_label("menuLoadClearData.loadClearDataObj.coList.container.i1.dataLabel"), Some("empty"));
+    shot("title_load_delete_done", &screen, &fonts);
+    // the deleted row: A refuses, Y refuses (nothing asked)
+    sounds.clear();
+    assert_eq!(screen.key(CampKey::Decide, false, &mut sounds), None);
+    assert_eq!(screen.key(CampKey::Triangle, false, &mut sounds), None);
+    assert_eq!((screen.phase(), sounds.as_slice()), (Phase::List, [UiSound::Play(SE_MENU_REFUSED), UiSound::Play(SE_MENU_REFUSED)].as_slice()));
+    // A on another used row: loads at once, no question
+    screen.key(CampKey::Up, false, &mut sounds);
+    assert_eq!(screen.cursor(), 0);
+    assert_eq!(screen.key(CampKey::Decide, false, &mut sounds), None);
+    assert_eq!(screen.phase(), Phase::Deciding);
+    assert_eq!(settle(&mut screen, &mut sounds, 30), Some(SaveLoadResult::Load(0)));
+}
+
+/// (NG delete) A new game with every slot in use: the load list only deletes; A asks the Delete question as Y does and
+/// nothing is ever loaded.
+#[test]
+fn the_new_games_delete_list_deletes_on_a_and_never_loads() {
+    let Some((mut screen, fonts, _)) = screen() else { return };
+    (screen.delete_enabled, screen.delete_only) = (true, true);
+    let mut sounds = Vec::new();
+    screen.open_load(&slots(), true, &mut sounds);
+    settle(&mut screen, &mut sounds, 60);
+    assert_eq!(screen.movie.text("menuLoadClearData.loadClearDataObj.helpText.txHelpText.textField").as_deref(), Some(format!("{DELETE_FOR_NEW_GAME}\n<icon(Triangle)> Delete").as_str()));
+    shot("newgame_delete_list", &screen, &fonts);
+    // an empty row: refused
+    screen.key(CampKey::Down, false, &mut sounds);
+    assert_eq!(screen.cursor(), 2);
+    sounds.clear();
+    assert_eq!(screen.key(CampKey::Decide, false, &mut sounds), None);
+    assert_eq!((screen.phase(), sounds.as_slice()), (Phase::List, [UiSound::Play(SE_MENU_REFUSED)].as_slice()));
+    // a used row: the Delete question (the cursor on No), No gives the list back, nothing told
+    screen.key(CampKey::Up, false, &mut sounds);
+    screen.key(CampKey::Up, false, &mut sounds);
+    assert_eq!(screen.cursor(), 0);
+    assert_eq!(screen.key(CampKey::Decide, false, &mut sounds), None);
+    assert_eq!((screen.phase(), screen.message().as_deref()), (Phase::ConfirmDelete(1), Some("Delete the save data in this slot?")));
+    assert_eq!(screen.key(CampKey::Decide, false, &mut sounds), None);
+    assert_eq!(screen.phase(), Phase::List);
+    // Yes: Delete(0), never Load
+    screen.key(CampKey::Decide, false, &mut sounds);
+    screen.key(CampKey::Up, false, &mut sounds);
+    assert_eq!(screen.key(CampKey::Decide, false, &mut sounds), Some(SaveLoadResult::Delete(0)));
+    assert_eq!(screen.phase(), Phase::Busy);
 }
 
 #[test]

@@ -4,7 +4,7 @@
 //! normal, f2c a point, f60 the offset along the normal, f5c the extra radius. DAT_149b5c798 (an FVector in .data's
 //! zero-filled part, used as the zero vector by its other readers): zero.
 
-use super::coll::{fn_143b15850, fn_143b1b110, fn_143b1c700};
+use super::coll::{fn_143b15850, fn_143b1b110, fn_143b1c700, Capsule};
 use super::m::{rsqrt, sqrt, V3};
 use super::records::{CollObj, Particle};
 
@@ -53,30 +53,30 @@ pub fn fn_143b1be30(ps: &mut [Particle], p: usize, o: &CollObj, u: f32, v: f32, 
     if ps[p].f276 == 0 {
         push = pen * 0.5;
         let q = &mut ps[p];
-        q.f0[0] = (nx * push) + q.f0[0];
-        q.f0[1] = (ny * push) + q.f0[1];
-        q.f0[2] = (nz * push) + q.f0[2];
+        q.f0[0] += nx * push;
+        q.f0[1] += ny * push;
+        q.f0[2] += nz * push;
         q.f279 = 1;
         // (the C adds the plane's own normal here, not the flipped one)
-        q.f64[0] = (push * o.f20[0]) + q.f64[0];
-        q.f64[2] = (o.f20[2] * push) + q.f64[2];
-        q.f64[1] = (o.f20[1] * push) + q.f64[1];
+        q.f64[0] += push * o.f20[0];
+        q.f64[2] += o.f20[2] * push;
+        q.f64[1] += o.f20[1] * push;
         let fr = q.f268;
         let (vx, vy, vz) = (q.f0[0] - q.fc[0], q.f0[1] - q.fc[1], q.f0[2] - q.fc[2]);
         let vn = ((vx * nx) + (vy * ny)) + (vz * nz);
         let (mut tx, mut ty, mut tz) = (vx - (nx * vn), vy - (ny * vn), vz - (nz * vn));
         if (((pen * pen) * fr) * fr) * 0.25 <= ((ty * ty) + (tx * tx)) + (tz * tz) {
-            ty = ty * fr;
-            tx = fr * tx;
-            tz = tz * fr;
+            ty *= fr;
+            tx *= fr;
+            tz *= fr;
         }
-        q.f0[0] = q.f0[0] - tx;
-        q.f0[2] = q.f0[2] - tz;
-        q.f0[1] = q.f0[1] - ty;
+        q.f0[0] -= tx;
+        q.f0[2] -= tz;
+        q.f0[1] -= ty;
     }
     let (ka, kb, kc) = (ps[a].f276, ps[b].f276, ps[c].f276);
     if ka != 0 || kb != 0 || kc != 0 {
-        push = push * 2.5;
+        push *= 2.5;
     }
     let (sw, sv, su) = (push * w, push * v, push * u);
     let tri_velocity = |ps: &[Particle], r: V3| -> V3 {
@@ -97,13 +97,13 @@ pub fn fn_143b1be30(ps: &mut [Particle], p: usize, o: &CollObj, u: f32, v: f32, 
     let mut len = 0.0f32;
     let move_vertex = |ps: &mut [Particle], i: usize, by: f32, weight: f32, len: &mut f32| {
         let q = &mut ps[i];
-        q.f0[0] = q.f0[0] - (nx * by);
-        q.f0[2] = q.f0[2] - (nz * by);
-        q.f0[1] = q.f0[1] - (ny * by);
+        q.f0[0] -= nx * by;
+        q.f0[2] -= nz * by;
+        q.f0[1] -= ny * by;
         q.f279 = 1;
-        q.f64[0] = q.f64[0] - (nx * by);
-        q.f64[1] = q.f64[1] - (ny * by);
-        q.f64[2] = q.f64[2] - (nz * by);
+        q.f64[0] -= nx * by;
+        q.f64[1] -= ny * by;
+        q.f64[2] -= nz * by;
         let lim = fr * by;
         let k = if lim * lim <= tt {
             if tt <= 0.0 {
@@ -116,9 +116,9 @@ pub fn fn_143b1be30(ps: &mut [Particle], p: usize, o: &CollObj, u: f32, v: f32, 
         } else {
             weight
         };
-        q.f0[0] = (rx * k) + q.f0[0];
-        q.f0[1] = (ry * k) + q.f0[1];
-        q.f0[2] = (rz * k) + q.f0[2];
+        q.f0[0] += rx * k;
+        q.f0[1] += ry * k;
+        q.f0[2] += rz * k;
     };
     if ka == 0 {
         move_vertex(ps, a, sw, w, &mut len);
@@ -175,9 +175,10 @@ pub fn fn_143b1cb50(ps: &mut [Particle], o: &CollObj, p2: usize, p3: usize) {
     let r = o.f5c;
     let dn = ((dir[0] * n[0]) + (dir[1] * n[1])) + (dir[2] * n[2]);
     if dn.abs() < 0.2 {
-        fn_143b15850(ps, p2, p3, 0.0, a, b, 0.0, off, r);
-        fn_143b15850(ps, p2, p3, 0.0, b, c, 0.0, off, r);
-        fn_143b15850(ps, p2, p3, 0.0, c, a, 0.0, off, r);
+        let seg = Capsule { p1: p2, p2: p3, taper: 0.0 };
+        fn_143b15850(ps, seg, Capsule { p1: a, p2: b, taper: 0.0 }, off, r);
+        fn_143b15850(ps, seg, Capsule { p1: b, p2: c, taper: 0.0 }, off, r);
+        fn_143b15850(ps, seg, Capsule { p1: c, p2: a, taper: 0.0 }, off, r);
         for p in [p2, p3] {
             let (s, t) = tri_bary(ps[p].f0, ps[a].f0, ps[b].f0, ps[c].f0);
             if s >= 0.0 && t >= 0.0 && s + t < 1.0 {
@@ -217,6 +218,6 @@ pub fn fn_143b1cb50(ps: &mut [Particle], o: &CollObj, p2: usize, p3: usize) {
         None
     };
     if let Some((e0, e1)) = edge {
-        fn_143b15850(ps, p2, p3, 0.0, e0, e1, 0.0, off, r);
+        fn_143b15850(ps, Capsule { p1: p2, p2: p3, taper: 0.0 }, Capsule { p1: e0, p2: e1, taper: 0.0 }, off, r);
     }
 }

@@ -202,7 +202,7 @@ impl SpellCaster {
         s.battle_level = stats.battle_level.max(1);
         s.mp_cost_scale = stats.mp_cost_scale;
         s.mp_charging = stats.mp_charging;
-        let mut set = own.clone();
+        let mut set = *own;
         for kind in GRAND_ABILITIES {
             let n = grand.count(kind).min(255) as u8;
             set.set(kind, n, n);
@@ -287,7 +287,6 @@ impl SpellCaster {
                 super::grand::on_damage(&mut cx, points, shot.cmd);
             }
         }
-        drop(cx);
         self.pawn.events.clear();
         self.shots += 1;
         vec![id]
@@ -501,6 +500,12 @@ impl Effects for RemapEffects<'_> {
     fn tint(&mut self, handle: EffectHandle, tint: crate::host::Tint) {
         self.inner.tint(handle, tint); // (DON-MAGIC tint) passed on
     }
+    fn color(&mut self, handle: EffectHandle, rgba: [f32; 4]) {
+        self.inner.color(handle, rgba); // (AUDIT-C) passed on
+    }
+    fn timing(&mut self, handle: EffectHandle, timing: crate::host::EffectTiming) {
+        self.inner.timing(handle, timing); // (AUDIT-B W-FIN) passed on
+    }
     fn place(&mut self, handle: EffectHandle, at: glam::Vec3) {
         self.inner.place(handle, at); // (DON-MAGIC orbit) passed on
     }
@@ -611,6 +616,13 @@ impl Targets for CasterTargets<'_, '_> {
     // the team-attack seam is Sora's: the caster's actors never ask it
     fn friends(&self, _out: &mut Vec<Friend>) {}
     fn friend_link(&mut self, _req: FriendLinkRequest) {}
+    // (AUDIT-B) forwarded: the hit's bone and its pose are the wrapped host's
+    fn hit_bone(&self, id: crate::host::TargetId, at: glam::Vec3) -> Option<crate::host::TargetBone> {
+        self.inner.hit_bone(id, at)
+    }
+    fn bone_pose(&self, id: crate::host::TargetId, bone: crate::host::TargetBone) -> Option<crate::host::BonePose> {
+        self.inner.bone_pose(id, bone)
+    }
 }
 
 #[cfg(test)]

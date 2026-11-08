@@ -260,7 +260,7 @@ pub fn launch(pw: &mut NpcPawn, w: &dyn World) -> bool {
     if let Some(target) = pw.trav.jump.target {
         let g = pw.cmc.gravity_z(&pw.params);
         let (h0, hm) = (pw.trav.jump.h0, pw.trav.jump.h_min);
-        let v = crate::actions::jump_velocity(pw.position(), target, h0, hm, g, pw.params.gravity_jump_up_scale, pw.params.gravity_jump_duration_scale, pw.params.gravity_jump_duration_time);
+        let v = crate::actions::jump_velocity(pw.position(), target, h0, hm, crate::actions::JumpGravity { g, s_up: pw.params.gravity_jump_up_scale, s_dur: pw.params.gravity_jump_duration_scale, t_dur: pw.params.gravity_jump_duration_time });
         if v == Vec3::ZERO {
             return false;
         }

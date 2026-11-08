@@ -451,7 +451,7 @@ mod tests {
         let attrs = ObjectAttributes { length: std::mem::size_of::<ObjectAttributes>() as u32, root: std::ptr::null_mut(), name: &name, attributes: 0, security: std::ptr::null_mut(), qos: std::ptr::null_mut() };
         let before = SEEN_SEQ.load(Ordering::SeqCst);
         // SAFETY: an open handle and attributes of ours.
-        unsafe { record(open.as_raw_handle() as *mut c_void, &attrs) };
+        unsafe { record(open.as_raw_handle(), &attrs) };
         let (seq, seen) = read_seen().unwrap();
         assert_eq!(seq, before + 1);
         assert_eq!(std::fs::canonicalize(&seen).unwrap(), std::fs::canonicalize(&file).unwrap());

@@ -42,6 +42,8 @@ pub struct SoraView {
     /// (kh-partyhost SORA_ACTOR) and his feet. A Cure, an item or an Ether the friends aim at him, and the Cure's area
     /// round its target, reach him through `PartyOutput::ai_sora_heals` (before: lost on a member that does not exist).
     pub ai_sora: Option<(MemberId, Vec3)>,
+    /// (GF-ARTS) AI Sora's HP share: Bodyguard's reading (the view's own HP is the leader's while a friend leads).
+    pub ai_sora_hp: f32,
 }
 
 /// The view the Warp state tests against: position, rotation (deg), horizontal FOV (deg), aspect.
@@ -76,7 +78,7 @@ impl PartyCamera {
 
 impl Default for SoraView {
     fn default() -> SoraView {
-        SoraView { position: Vec3::ZERO, yaw: 0.0, velocity: Vec3::ZERO, on_ground: true, hp: 1, hp_max: 1, mp: 0, mp_max: 0, dead: false, in_battle: false, lock_on: TargetId::NONE, total_exp: 0, game_level: GameLevel::Standard, camera: None, state: 0, max_speed: 0.0, analog: 1.0, ai_sora: None }
+        SoraView { position: Vec3::ZERO, yaw: 0.0, velocity: Vec3::ZERO, on_ground: true, hp: 1, hp_max: 1, mp: 0, mp_max: 0, dead: false, in_battle: false, lock_on: TargetId::NONE, total_exp: 0, game_level: GameLevel::Standard, camera: None, state: 0, max_speed: 0.0, analog: 1.0, ai_sora: None, ai_sora_hp: 1.0 }
     }
 }
 
@@ -135,7 +137,8 @@ pub struct MemberView {
     pub mp_max: i32,
     /// MP is recharging (after a Cure / running out): `MyMpChargeTime` 30 s [A].
     pub mp_charging: bool,
-    /// Charge progress 0..1 while `mp_charging`.
+    /// Charge progress 0..1 while `mp_charging` (of his own length, `mp_rule::charge_time`); the HUD's number is
+    /// `mp_rule::hud_charge_value`.
     pub mp_charge: f32,
     pub level: u32,
     pub ko: bool,
@@ -145,7 +148,7 @@ pub struct MemberView {
     pub swimming: bool,
     pub ride_on: bool,
     pub can_battle: bool,
-    pub items: [ItemSlot; 4],
+    pub items: [ItemSlot; crate::status::MAX_SLOTS],
     pub command: (CommandTicket, CommandStatus),
     pub cooldowns: ActionCooldowns,
     pub anim: AnimView,

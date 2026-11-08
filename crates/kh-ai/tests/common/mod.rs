@@ -1,6 +1,5 @@
 //! A tiny host for the tests: kinematic pawns (move / turn / action / item / cure / warp take
 //! fixed times), a player, training dummies, a flat floor (StraightNav).
-#![allow(dead_code)]
 
 use glam::Vec3;
 use kh_ai::*;
@@ -24,7 +23,7 @@ pub struct Pawn {
 impl Pawn {
     pub fn new(member: u8, uid: i32, pos: Vec3) -> Pawn {
         Pawn {
-            view: BodyView { member, uid, position: pos, hp: 200, hp_max: 200, mp: 100, mp_max: 100, can_battle: true, items: [Some("POTION"), Some("POTION"), None, None], ..Default::default() },
+            view: BodyView { member, uid, position: pos, hp: 200, hp_max: 200, mp: 100, mp_max: 100, can_battle: true, items: [Some("POTION"), Some("POTION"), None, None, None], ..Default::default() },
             cmd: None,
             ticket: 0,
             status: Vec::new(),
@@ -187,13 +186,7 @@ pub struct World {
 
 impl World {
     pub fn new() -> World {
-        let mut p = PlayerView::default();
-        p.actor = ActorView { actor: ActorRef::Player, uid: 0, radius: 34.0, ..Default::default() };
-        p.hp = 100;
-        p.hp_max = 100;
-        p.mp = 100;
-        p.mp_max = 100;
-        p.on_ground = true;
+        let p = PlayerView { actor: ActorView { actor: ActorRef::Player, uid: 0, radius: 34.0, ..Default::default() }, hp: 100, hp_max: 100, mp: 100, mp_max: 100, on_ground: true, ..Default::default() };
         World { player: p, dummies: Vec::new(), allies: Vec::new(), camera: CameraView { position: Vec3::new(-400.0, 0.0, 200.0), fov: 70.0, aspect: 1.77, ..Default::default() }, nav: TestNav { floor_z: Some(0.0), ..Default::default() }, gimmicks: Vec::new(), volumes: Vec::new(), focus: None }
     }
     pub fn add_dummy(&mut self, id: u32, pos: Vec3) {
@@ -264,7 +257,7 @@ impl Party {
         world.set_player(Vec3::ZERO, 0.0);
         let pawns = vec![Pawn::new(0, UID_DONALD, Vec3::new(-150.0, 150.0, 0.0)), Pawn::new(1, UID_GOOFY, Vec3::new(-150.0, -150.0, 0.0))];
         let mut p = Party { pack, ais, pawns, shared: AiShared::new(), world, time: 0.0 };
-        p.pawns[0].view.items = [Some("POTION"), Some("ETHER"), None, None];
+        p.pawns[0].view.items = [Some("POTION"), Some("ETHER"), None, None, None];
         p.sync_allies();
         p
     }

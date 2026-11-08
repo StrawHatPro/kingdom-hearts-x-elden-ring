@@ -206,12 +206,13 @@ fn shotlock_paths_end_their_effects() {
 #[test]
 fn form_guard_dodge_glide_and_combo_end_their_effects() {
     let mut b = Bench::new();
-    // Second Form: the charge effect on the Keyblade, until the form runs out by itself.
+    // Second Form until it runs out by itself. (HAIR-PULSE) No charge effect: KH3 never raises the form charge level
+    // (build/sora_tmp/weapons/HAIR-PULSE/STATE.md section 6).
     b.sora.debug_add_style(100.0);
     b.run(15);
     b.step(&[PadButton::SITUATION]);
     b.run(60);
-    assert!(b.started.contains(&"vs_com_lv2"), "the form's charge effect: {:?}", b.started);
+    assert!(!b.started.contains(&"vs_com_lv2") && !b.started.contains(&"vs_com_kyp01"), "no charge glow: {:?}", b.started);
     // A hit while the form is up, a cast in the form, then the form's own end.
     b.hit(Kind::Blow, "NONE", 0.0);
     b.run(120);

@@ -4,10 +4,12 @@
 //! methods and also sets a few clips directly through its `m_pGFx...` handles: those are the
 //! `native_*` functions at the end (docs/sora-ui-spec.md 5.1).
 //!
-//! NOT PORTED (they need the form-logo movies `act_logo/*`, which the pack does not hold): the
-//! `Loader` of the form logo (`m_actLogoLoader`, `onActLogoLoadComplete`); `m_mcCmdActLogo` is
-//! therefore always null, as it is in the game while no logo is loaded.
+//! (F-HUD) The `Loader` of the form logo (`m_actLogoLoader`, `onActLogoLoadComplete`) is ported: the pack holds the
+//! form-logo movies `act_logo/*` (`tools/sora_ui_pack.js`, the CHANGE_* rows' movies) and the host hands them to the
+//! movie with [`HudCommand::provide_logo`] (as the game's Loader finds them by their path); the loaded content's first
+//! child is `m_mcCmdActLogo` (`cmdMenu.cmdActLogo.cmdActLogoShort.actLogo.<child>`).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::controls;
@@ -145,8 +147,19 @@ const CMD_CENTER: &str = "cmdMenu.cmdCenter";
 const CMD_EX_TOP: &str = "cmdMenu.cmdExTop";
 const CMD_SCUT_TOP: &str = "cmdMenu.cmdScutTop";
 const CMD_SCUT_SHORT: &str = "cmdMenu.cmdScutTop.cmdShort";
+/// (GOOFY) The shortcut panel's base: the entries' plates, under the entries' sets (`cmdExTextSet1 .. 4`, 32 apart).
+const CMD_SCUT_BASE: &str = "cmdMenu.cmdScutTop.cmdShort.cmdEx.cmdExBaseSet";
+/// (GOOFY) KH3's situation command timer gauge (`actGgAnm`), reused on a recharging shortcut entry.
+const RECHARGE_CLASS: &str = "HudCommand_fla.McActGgAnm_140";
+/// (GOOFY) Where it goes for the first entry, in `cmdEx` units: the situation command has it 9 left of and 2 above its name
+/// (`cmdAct1`: gauge 146, 5; name 155, 7); a shortcut entry's name is at 144, 5 of its set.
+const RECHARGE_AT: (f32, f32) = (135.0, 3.0);
+/// (GOOFY) The entries' sets are this far apart (`cmdExTextSet1 .. 4` at y 0, 32, 64, 96).
+const SHORTCUT_ROW_STEP: f32 = 32.0;
 const CMD_ACT_LOGO: &str = "cmdMenu.cmdActLogo";
 const CMD_ACT_LOGO_SHORT: &str = "cmdMenu.cmdActLogo.cmdActLogoShort";
+/// (F-HUD) `m_cmdActLogo.cmdActLogoShort.actLogo`: the clip the Loader is a child of (`onAddedToStage`).
+pub const ACT_LOGO_HOST: &str = "cmdMenu.cmdActLogo.cmdActLogoShort.actLogo";
 const CMD_TITLE_TOP: &str = "cmdMenu.cmdTitleTop";
 const CMD_TITLE: &str = "cmdMenu.cmdTitleTop.cmdTitle";
 const CMD_MAIN_TOP: &str = "cmdMenu.cmdMainTop";
@@ -157,6 +170,10 @@ const CMD_SUB1_NEXT: &str = "cmdMenu.cmdSubTop.cmdSub1Set.cmdSub1Next";
 const NAME: &str = "txCmdName.txCmdNameCol.coCmdName";
 /// `...cmdNumber.cmdNumCol.txCmdNumber.cmdNumberTxt` below a text clip.
 const NUMBER_TXT: &str = "cmdNumber.cmdNumCol.txCmdNumber.cmdNumberTxt";
+/// (ASH-ROWS) The straight middle of a first-level row's plates, in the row's units: the dark pill (shape 227, 0 .. 246,
+/// its rounded ends 16 wide) and the list colour's / cursor's bitmap pills (shapes 229 .. 244, -2 .. 248, ends 18 wide
+/// with their glow) are uniform across in between ([`HudCommand::set_sub_row_width`] stretches only this part).
+pub const SUB_ROW_STRETCH: (f32, f32) = (24.0, 222.0);
 
 pub struct HudCommand {
     pub movie: Movie,
@@ -198,11 +215,22 @@ pub struct HudCommand {
     cmd_main_change: bool,
     cmd_main_label: String,
     link_command_none: bool,
+    /// (GOOFY) See [`HudCommand::set_main_two_rows`].
+    main_two_rows: bool,
+    /// (LEADER RESET) The Items row's own height before the two-row list moved it up (None: not moved), put back when the
+    /// list is four rows again.
+    items_row_y: Option<f32>,
     legacy_mode: bool,
     /// `ExternalInterface.call("OnCallback", id, param)` since the last `take_callbacks`.
     callbacks: Vec<(i32, i32)>,
     /// Every interface call, newest last (tests and the debug page); capped.
     pub calls: Vec<String>,
+    /// (F-HUD) The logo movies the Loader can load, by movie name ([`HudCommand::provide_logo`]).
+    logo_movies: HashMap<String, Arc<MovieDef>>,
+    /// (F-HUD) `m_actLogoLoader`: a load in progress (its COMPLETE comes on the next frame).
+    logo_pending: Option<Arc<MovieDef>>,
+    /// (F-HUD) `m_mcCmdActLogo`: the path of the loaded logo's first child; None = null.
+    logo_clip: Option<String>,
 }
 
 fn main_btn(i: i32) -> String {
@@ -216,6 +244,26 @@ pub fn action_button_path(slot: usize) -> String {
 
 fn act_btn(i: usize) -> String {
     format!("{CMD_ACT_ALL}.cmdActState.cmdActPos{}", i + 1)
+}
+
+/// `setStyle`'s arguments after the two styles.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StyleArgs<'a> {
+    pub a3: i32,
+    pub a4: i32,
+    pub a5: bool,
+    pub a6: Option<&'a str>,
+    pub a7: i32,
+}
+
+/// `setActionSelectButton`'s arguments after the action and the button.
+#[derive(Clone, Copy, Debug, Default)]
+struct ActionButtonArgs<'a> {
+    a3: &'a str,
+    a4: i32,
+    a5: i32,
+    a6: i32,
+    a7: bool,
 }
 
 fn ex_set(panel: &str, row: usize) -> String {
@@ -258,9 +306,14 @@ impl HudCommand {
             cmd_main_change: false,
             cmd_main_label: String::new(),
             link_command_none: false,
+            main_two_rows: false,
+            items_row_y: None,
             legacy_mode: false,
             callbacks: Vec::new(),
             calls: Vec::new(),
+            logo_movies: HashMap::new(), // (F-HUD)
+            logo_pending: None,
+            logo_clip: None,
         };
         // <init>: the BitmapNumbers of the seven situation buttons get their component
         // parameters (McActCount_145.__setProp_*), updateStyle(1).
@@ -278,8 +331,61 @@ impl HudCommand {
         hud.movie.goto_and_play(CMD_ACT_LOGO, "loop");
         hud.movie.goto_and_play(CMD_TITLE, "loop");
         hud.act_logo = true;
+        // (F-HUD) m_actLogoLoader.visible = false; actLogo.addChild(m_actLogoLoader): the Loader is empty (its content is
+        // attached into ACT_LOGO_HOST when a load completes).
         hud.calls.clear();
         hud
+    }
+
+    /// (F-HUD) Makes a logo movie (`act_logo/ActLogoKNN`) loadable: the game's Loader finds the movie of the path
+    /// `setStyle` / `setModeIn` gets; here the host provides it (`forms_hud_style::FormStyle::logo`).
+    pub fn provide_logo(&mut self, def: Arc<MovieDef>) {
+        self.logo_movies.insert(def.name.clone(), def);
+    }
+
+    /// (F-HUD) `m_mcCmdActLogo`: the loaded logo clip's path (None = null: nothing loaded yet, or unloaded).
+    pub fn act_logo_clip(&self) -> Option<&str> {
+        self.logo_clip.as_deref()
+    }
+
+    /// (F-HUD) `m_actLogoLoader.unloadAndStop()` / `unload()`: the content leaves the display list.
+    fn logo_loader_unload(&mut self) {
+        self.logo_pending = None;
+        if self.logo_clip.take().is_some() {
+            self.log("actLogoLoader.unloadAndStop()".into());
+        }
+        self.movie.detach(ACT_LOGO_HOST);
+    }
+
+    /// (F-HUD) `m_actLogoLoader.load(new URLRequest(url))`: the movie of the path, complete on the next frame.
+    fn logo_loader_load(&mut self, url: &str) {
+        self.logo_loader_unload();
+        let def = crate::forms_hud_style::logo_movie_name(url).and_then(|name| self.logo_movies.get(name).cloned());
+        self.log(format!("actLogoLoader.load({url:?}){}", if def.is_some() { "" } else { " (not provided)" }));
+        self.logo_pending = def;
+    }
+
+    /// (F-HUD) `onActLogoLoadComplete(a1)`: the Loader shows, its content's first child becomes `m_mcCmdActLogo` and
+    /// plays `in`.
+    fn on_act_logo_load_complete(&mut self, def: &Arc<MovieDef>) {
+        let Some(name) = self.movie.attach_first_child(ACT_LOGO_HOST, def) else { return };
+        let clip = format!("{ACT_LOGO_HOST}.{name}");
+        // (F-HUD fix, the round's "Double Form shows no logo") `getChildAt(0)` keeps its place in the loaded root: ActLogoK24 /
+        // K25 put their clip at (-178, -111) / (-186, -882) and draw it back from there; `attach_first_child` zeroes it.
+        let placed = def.root.ops.first().and_then(|ops| ops.iter().find(|op| !op.remove && op.ch.is_some())).and_then(|op| op.matrix);
+        if let (Some(m), Some(node)) = (placed, self.movie.node_mut(&clip)) {
+            (node.matrix.tx, node.matrix.ty) = (m.tx, m.ty);
+        }
+        self.log(format!("onActLogoLoadComplete({name})"));
+        self.movie.goto_and_play(&clip, "in");
+        self.logo_clip = Some(clip);
+    }
+
+    /// (F-HUD) `m_mcCmdActLogo.gotoAndPlay(label)` when it is not null.
+    fn act_logo_play(&mut self, label: &str) {
+        if let Some(clip) = self.logo_clip.clone() {
+            self.movie.goto_and_play(&clip, label);
+        }
     }
 
     /// `McActCount_145.__setProp_actCountS_*` / `__setProp_actCountSs_*`: bitmap `ActCount`,
@@ -331,6 +437,10 @@ impl HudCommand {
         for event in self.movie.take_events() {
             self.on_anim_end(&event);
         }
+        // (F-HUD) the Loader's Event.COMPLETE after the frame its load started in
+        if let Some(def) = self.logo_pending.take() {
+            self.on_act_logo_load_complete(&def);
+        }
     }
 
     /// The `OnCallback(id, param)` calls the movie made (10 = attack text reset, 20 = form logo out).
@@ -347,22 +457,25 @@ impl HudCommand {
                         self.set_mode_command(MODE_COMMAND_IN_END, &[], &[], false);
                     } else {
                         self.set_mode_command(MODE_COMMAND_OUT_END, &[], &[], false);
+                        self.act_logo_play("off"); // (F-HUD)
                         self.callbacks.push((CALLBACK_ID_ANIM_ACTLOGO_OUT, 0));
                     }
+                } else if self.act_logo_mode == -1 && a1.value == ANIM_MCACTLOGOANM_OUT {
+                    // (F-HUD) the style's logo went out: m_mcCmdActLogo "off", m_actLogoLoader.unloadAndStop()
+                    self.act_logo_play("off");
+                    self.logo_loader_unload();
                 }
-                // (m_nActLogoMode == -1 && OUT: the logo loader is unloaded; nothing is loaded here.)
             }
             ANIM_MCMAIN_WEAPON => self.cmd_main_change = true,
             ANIM_MCMAIN_ATTACK => {
                 self.callbacks.push((CALLBACK_ID_ATTACK_TEXT_RESET, 0));
                 self.cmd_main_change = false;
             }
-            ANIM_MCMAIN_FINISH => {
-                if !self.cmd_main_label.is_empty() {
+            ANIM_MCMAIN_FINISH
+                if !self.cmd_main_label.is_empty() => {
                     let label = self.cmd_main_label.clone();
                     self.movie.goto_and_play(&main_btn(MAIN_COMMAND_LIST_ATTACK), &label);
                 }
-            }
             _ => {}
         }
     }
@@ -370,6 +483,9 @@ impl HudCommand {
     /// `unloadLogoLoader()`.
     pub fn unload_logo_loader(&mut self) {
         self.log("unloadLogoLoader()".into());
+        // (F-HUD) m_actLogoLoader.unloadAndStop() (its removeEventListener(COMPLETE) names the Loader, not its
+        // contentLoaderInfo where the listener is: it removes nothing)
+        self.logo_loader_unload();
     }
 
     /// `setLegacyMode(a1)`.
@@ -410,6 +526,7 @@ impl HudCommand {
             self.set_main_command(MAIN_COMMAND_STYLE_IN);
         } else {
             self.act_logo_mode = -1;
+            self.logo_loader_unload(); // (F-HUD) m_mcCmdActLogo = null; m_actLogoLoader.visible = false; .unloadAndStop()
             if self.label_is(CMD_ACT_LOGO_SHORT, "off") || self.label_is(CMD_ACT_LOGO_SHORT, "out") {
                 self.movie.goto_and_play(CMD_ACT_LOGO_SHORT, "in");
             }
@@ -436,7 +553,7 @@ impl HudCommand {
             }
             self.mode_command = false;
             if !a5.is_empty() && a3 != 0 {
-                // m_actLogoLoader.load(a5): the logo movie is not in the pack.
+                self.logo_loader_load(a5); // (F-HUD) m_actLogoLoader.unload(); .load(new URLRequest(a5))
                 self.act_logo_mode = a1;
             }
             if !self.act_logo {
@@ -590,6 +707,43 @@ impl HudCommand {
         self.movie.goto_and_play(&format!("{CMD_MAIN}.cmdLeft"), label);
     }
 
+    /// (GOOFY, PLAN.md R19) A MAIN LIST OF TWO ROWS WITH NO NEW MOVIE WORK: the Magic row is hidden and the Items row is drawn in its
+    /// place, so the list reads Attack / Items with no hole. The rows keep their indices (the cursor skips the hidden one:
+    /// kh-party `FriendMenu`), so the Items list, its numbers and its opening stay the movie's own. Off: the rows as authored.
+    ///
+    /// (LEADER RESET, THE USER 2026-11-02: Donald's menu read "Attack / Magicunement / (empty) / Items" after Goofy died and a
+    /// Donald save was loaded) OFF PUTS THE ITEMS ROW BACK ON ITS OWN LINE: before, off only gave the row back to the timeline,
+    /// but `cmdMain` places its rows once and never again, so the third row (Donald's Attunement, Sora's Items) stayed on the
+    /// Magic row's line and its own line stood empty. Its height from before the move is kept and put back.
+    pub fn set_main_two_rows(&mut self, on: bool) {
+        if on == self.main_two_rows {
+            return;
+        }
+        self.log(format!("setMainTwoRows({on})"));
+        self.main_two_rows = on;
+        let (magic, items) = (main_btn(MAIN_COMMAND_LIST_MAGIC), main_btn(MAIN_COMMAND_LIST_ITEM));
+        if on {
+            let row_y = self.movie.node(&magic).map(|n| n.matrix.ty);
+            self.movie.set_visible(&magic, false);
+            if let (Some(y), Some(n)) = (row_y, self.movie.node_mut(&items)) {
+                self.items_row_y = Some(self.items_row_y.unwrap_or(n.matrix.ty));
+                n.matrix.ty = y;
+                n.script_matrix = true;
+            }
+        } else {
+            if let Some(n) = self.movie.node_mut(&magic) {
+                n.script_visible = None;
+            }
+            let own_y = self.items_row_y.take();
+            if let Some(n) = self.movie.node_mut(&items) {
+                if let Some(y) = own_y {
+                    n.matrix.ty = y;
+                }
+                n.script_matrix = false; // the timeline's own place from here on
+            }
+        }
+    }
+
     /// `SetLinkCommandNone(a1)`.
     pub fn set_link_command_none(&mut self, a1: bool) {
         self.log(format!("SetLinkCommandNone({a1})"));
@@ -672,7 +826,7 @@ impl HudCommand {
                 self.movie.goto_and_play(CMD_MAIN, "in2");
                 self.movie.goto_and_play(CMD_CENTER, "in2");
                 self.movie.goto_and_play(CMD_BACK, "in2");
-                self.set_style(self.style, -1, 0, 0, false, None, 0);
+                self.set_style(self.style, -1, StyleArgs::default());
             }
             MAIN_COMMAND_STYLE_OUT => {
                 if !self.command_title {
@@ -682,7 +836,7 @@ impl HudCommand {
                     let label = if self.label_is(clip, "loop") { "out2" } else { "off" };
                     self.movie.goto_and_play(clip, label);
                 }
-                self.set_style(-1, self.style, 0, 0, false, None, 0);
+                self.set_style(-1, self.style, StyleArgs::default());
             }
             MAIN_COMMAND_LOGO_IN => {
                 self.movie.goto_and_play(CMD_MAIN, "in2");
@@ -730,7 +884,7 @@ impl HudCommand {
                 self.movie.goto_and_play(CMD_MAIN, "in");
                 self.movie.goto_and_play(CMD_CENTER, "in");
                 self.movie.goto_and_play(CMD_BACK, "in");
-                self.set_style(0, -1, 0, 0, false, None, 0);
+                self.set_style(0, -1, StyleArgs::default());
             }
             MAIN_COMMAND_FIRST_STYLE_IN => {
                 self.movie.goto_and_play(CMD_TITLE_TOP, "loop");
@@ -744,7 +898,7 @@ impl HudCommand {
                 self.movie.goto_and_play(CMD_MAIN, "off");
                 self.movie.goto_and_play(CMD_CENTER, "off");
                 self.movie.goto_and_play(CMD_BACK, "off");
-                self.set_style(0, -1, 0, 0, false, None, 0);
+                self.set_style(0, -1, StyleArgs::default());
             }
             MAIN_COMMAND_ATTACK_TEXT_CHANGE => {
                 let label = if self.cmd_main_label != "up2" { "weapon" } else { "weapon2" };
@@ -759,8 +913,8 @@ impl HudCommand {
     }
 
     /// `setStyle(a1, a2, a3, a4, a5, a6, a7)`: style in `a1`, style out `a2`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn set_style(&mut self, a1: i32, a2: i32, a3: i32, a4: i32, a5: bool, a6: Option<&str>, a7: i32) {
+    pub fn set_style(&mut self, a1: i32, a2: i32, rest: StyleArgs<'_>) {
+        let StyleArgs { a3, a4, a5, a6, a7 } = rest;
         self.log(format!("setStyle({a1}, {a2}, {a3}, {a4}, {a5}, {a6:?}, {a7})"));
         if a2 >= 0 {
             if a2 == 0 {
@@ -770,6 +924,8 @@ impl HudCommand {
                     self.movie.goto_and_play(CMD_ACT_LOGO_SHORT, "out");
                     let label = if self.label_is(CMD_ACT_LOGO_GG_SHORT, "loop") || self.label_is(CMD_ACT_LOGO_GG_SHORT, "break") { "out" } else { "off" };
                     self.movie.goto_and_play(CMD_ACT_LOGO_GG_SHORT, label);
+                } else {
+                    self.act_logo_play("off"); // (F-HUD) m_mcCmdActLogo.gotoAndPlay("off")
                 }
                 self.set_action_select(ACTION_COMMAND_PUSH_DOWN, 0, 0);
             }
@@ -780,6 +936,7 @@ impl HudCommand {
                     self.set_style_normal(0);
                 }
             } else {
+                self.logo_loader_unload(); // (F-HUD) m_mcCmdActLogo = null; m_actLogoLoader.visible = false; .unloadAndStop()
                 self.movie.goto_and_play(CMD_ACT_LOGO_SHORT, "in");
                 if a5 {
                     self.movie.goto_and_play(CMD_ACT_LOGO_GG_SHORT, "in");
@@ -795,8 +952,9 @@ impl HudCommand {
                     self.movie.goto_and_play(CMD_ACT_LOGO_GG_SHORT, "off");
                 }
                 self.mode_command = false;
-                if a6.is_some() {
+                if let Some(url) = a6 {
                     self.movie.goto_and_play(CMD_TITLE, "off");
+                    self.logo_loader_load(url); // (F-HUD) m_actLogoLoader.unload(); .load(new URLRequest(a6))
                     self.act_logo_mode = -1;
                     self.command_title = false;
                 } else {
@@ -1005,6 +1163,67 @@ impl HudCommand {
     /// The clip name of a first-level row (for tests): `cmdSub1_N`.
     pub fn sub_row_clip(&self, list: i32, row: usize) -> String {
         self.sub_btn(list as usize, row)
+    }
+
+    /// (ASH-ROWS, THE USER 2026-11-05: "For the ash summons, make the bubble dynamically extend to show the whole name
+    /// (only for spirit ashes)") A FIRST-LEVEL ROW DRAWN `by` PIXELS WIDER (0 = as authored). LOCAL: KH3's rows never
+    /// change width (its plates are fixed bitmaps). The row's three plates (`@1` the dark backing pill, `cmdSubBase1` the
+    /// list colour's plate, `cmdSubBaseSel` the cursor's highlight and its pulse) are stretched in their straight middle
+    /// ([`SUB_ROW_STRETCH`]: the rounded ends keep their art, [`crate::player::Stretch`]); the number field
+    /// (`cmdText1.cmdNumber`) moves right with the plate's end; the name's `TextFieldAdjust` field (`coCmdName`,
+    /// `m_originalTextFieldW`) grows with it, so a name that fits the wider field is not squeezed (KH3 squeezes only a
+    /// text wider than its field). The row's slide and fade animations move the plates as before (only their width is
+    /// set). The rows are shared by every list: a list without wide rows sets 0. `number_by` = how far the number moves
+    /// (the name's growth); the plate's `by` may be more (a count wider than the field, which is sized for an "x3").
+    pub fn set_sub_row_width(&mut self, list: i32, row: usize, by: f32, number_by: f32) {
+        let clip = self.sub_btn(list as usize, row);
+        let (by, number_by) = (by.max(0.0), number_by.clamp(0.0, by.max(0.0)));
+        let stretch = (by > 0.0).then_some(crate::player::Stretch { from: SUB_ROW_STRETCH.0, to: SUB_ROW_STRETCH.1, by });
+        for part in ["@1", "cmdSubBase1", "cmdSubBaseSel"] {
+            if let Some(s) = self.movie.sprite_mut(&format!("{clip}.{part}")) {
+                s.stretch = stretch;
+            }
+        }
+        let authored = self.sub_number_authored_x(&clip);
+        if let (Some(x), Some(node)) = (authored, self.movie.node_mut(&format!("{clip}.cmdText1.cmdNumber"))) {
+            node.matrix.tx = x + number_by;
+            node.script_matrix = number_by > 0.0;
+        }
+        let by = number_by;
+        let name = format!("{clip}.cmdText1.{NAME}");
+        let field_w = match self.movie.node(&format!("{name}.textField")).map(|n| &n.kind) {
+            Some(crate::player::Kind::Text(t)) => t.def.bounds.x1 - t.def.bounds.x0,
+            _ => return,
+        };
+        let shown = self.movie.text(&name).unwrap_or_default();
+        if let Some(s) = self.movie.sprite_mut(&name) {
+            if s.text_adjust.as_ref().is_some_and(|(_, w)| (*w - (field_w + by)).abs() > 1e-3) {
+                // `m_originalTextFieldW` of the wider field; the text shown is laid out again in it
+                s.text_adjust = Some(("\u{0}".to_string(), field_w + by));
+                crate::controls::text_adjust_set(s, &shown, &self.fonts);
+            }
+        }
+    }
+
+    /// (ASH-ROWS) How much wider than authored a first-level row is drawn ([`HudCommand::set_sub_row_width`]).
+    pub fn sub_row_width(&self, list: i32, row: usize) -> f32 {
+        let clip = self.sub_btn(list as usize, row);
+        self.movie.sprite(&format!("{clip}.cmdSubBase1")).and_then(|s| s.stretch).map_or(0.0, |st| st.by)
+    }
+
+    /// (ASH-ROWS) How far right of its authored place a first-level row's number field stands.
+    pub fn sub_row_number_shift(&self, list: i32, row: usize) -> f32 {
+        let clip = self.sub_btn(list as usize, row);
+        match (self.sub_number_authored_x(&clip), self.movie.node(&format!("{clip}.cmdText1.cmdNumber"))) {
+            (Some(x), Some(node)) => node.matrix.tx - x,
+            _ => 0.0,
+        }
+    }
+
+    /// (ASH-ROWS) The number field's authored x in a row's text clip (`cmdText1`'s first frame places `cmdNumber`).
+    fn sub_number_authored_x(&self, clip: &str) -> Option<f32> {
+        let text = self.movie.sprite(&format!("{clip}.cmdText1"))?;
+        text.def.ops.first()?.iter().find(|op| op.name.as_deref() == Some("cmdNumber")).and_then(|op| op.matrix).map(|m| m.tx)
     }
 
     fn main_index(&self) -> usize {
@@ -1228,7 +1447,7 @@ impl HudCommand {
                 }
             }
         }
-        self.set_action_select_button(ACTION_COMMAND_BUTTON_IN, l7 as i32, a2, a3, a1, a4, a5);
+        self.set_action_select_button(ACTION_COMMAND_BUTTON_IN, l7 as i32, ActionButtonArgs { a3: a2, a4: a3, a5: a1, a6: a4, a7: a5 });
         self.action_pos[l7] = a1;
         self.action_idx[a1 as usize] = l7 as i32;
         self.action_btn_cnt += 1;
@@ -1256,29 +1475,32 @@ impl HudCommand {
     pub fn delete_action_select_button(&mut self, a1: i32, a2: bool, a3: bool) {
         self.log(format!("deleteActionSelectButton({a1}, {a2}, {a3})"));
         let Some(l5) = (0..ACTION_COMMAND_MAX).find(|l4| self.action_pos[*l4] == a1 && a1 >= 0) else { return };
-        self.set_action_select_button(if a2 { ACTION_COMMAND_BUTTON_DECIDE_OUT } else { ACTION_COMMAND_BUTTON_OUT }, l5 as i32, "", 0, 0, 0, false);
+        self.set_action_select_button(if a2 { ACTION_COMMAND_BUTTON_DECIDE_OUT } else { ACTION_COMMAND_BUTTON_OUT }, l5 as i32, ActionButtonArgs::default());
         self.action_pos[l5] = -1;
         self.action_idx[a1 as usize] = -1;
         self.action_btn_cnt -= 1;
         for l4 in 0..ACTION_COMMAND_MAX {
             if self.action_pos[l4] >= 0 && self.action_pos[l4] > a1 {
-                self.set_action_select_button(ACTION_COMMAND_BUTTON_PUSH_DOWN, l4 as i32, "", 0, 0, 0, false);
+                self.set_action_select_button(ACTION_COMMAND_BUTTON_PUSH_DOWN, l4 as i32, ActionButtonArgs::default());
                 self.action_pos[l4] -= 1;
                 self.action_idx[self.action_pos[l4] as usize] = l4 as i32;
             }
         }
-        // (a2 && a3 && m_mcCmdActLogo != null: the form logo plays "finishIn"; no logo here.)
-        let _ = a3;
+        if a2 && a3 {
+            self.act_logo_play("finishIn"); // (F-HUD) m_mcCmdActLogo != null: the form logo plays "finishIn"
+        }
     }
 
     /// `deleteActionSelectEventButton(a1, a2, a3)`.
     pub fn delete_action_select_event_button(&mut self, a1: bool, a2: bool, a3: bool) {
         self.log(format!("deleteActionSelectEventButton({a1}, {a2}, {a3})"));
-        let _ = a2;
         self.visible_situation_finish_button = false;
         let l4 = CMD_ACT_LOGO_GG_SHORT;
         if a1 {
             self.movie.goto_and_play(CMD_ACT_EV_SHORT, "down");
+            if a2 {
+                self.act_logo_play("finishIn"); // (F-HUD) m_mcCmdActLogo != null: the form logo plays "finishIn"
+            }
             if self.label_is(l4, "loop") || self.label_is(l4, "break") {
                 self.movie.goto_and_play(l4, "out");
             } else if self.label_is(l4, "off") && a3 {
@@ -1361,7 +1583,7 @@ impl HudCommand {
     pub fn play_action_command_effect(&mut self, a1: i32) {
         self.log(format!("playActionCommandEffect({a1})"));
         if let Some(button) = self.action_idx.get(a1.max(0) as usize).copied().filter(|b| *b >= 0) {
-            self.set_action_select_button(ACTION_COMMAND_BUTTON_EFFECT, button, "", 0, 0, 0, false);
+            self.set_action_select_button(ACTION_COMMAND_BUTTON_EFFECT, button, ActionButtonArgs::default());
         }
     }
 
@@ -1369,7 +1591,7 @@ impl HudCommand {
     pub fn break_action_select_button(&mut self, a1: i32) {
         self.log(format!("breakActionSelectButton({a1})"));
         if let Some(button) = self.action_idx.get(a1.max(0) as usize).copied().filter(|b| *b >= 0) {
-            self.set_action_select_button(ACTION_COMMAND_BUTTON_BREAK, button, "", 0, 0, 0, false);
+            self.set_action_select_button(ACTION_COMMAND_BUTTON_BREAK, button, ActionButtonArgs::default());
         }
     }
 
@@ -1385,8 +1607,8 @@ impl HudCommand {
     }
 
     /// `setActionSelectButton(a1, a2, a3, a4, a5, a6, a7)`.
-    #[allow(clippy::too_many_arguments)]
-    fn set_action_select_button(&mut self, a1: i32, a2: i32, a3: &str, a4: i32, a5: i32, a6: i32, a7: bool) {
+    fn set_action_select_button(&mut self, a1: i32, a2: i32, rest: ActionButtonArgs<'_>) {
+        let ActionButtonArgs { a3, a4, a5, a6, a7 } = rest;
         let Some(button) = (0..ACTION_COMMAND_MAX as i32).contains(&a2).then_some(a2 as usize) else { return };
         let l8 = act_btn(button);
         let act = format!("{l8}.cmdAct");
@@ -1593,11 +1815,11 @@ impl HudCommand {
                     self.movie.goto_and_play(&format!("{deck}.cmdScutPage{}", page + 1), if a2 == page { "loop" } else { "disabled" });
                 }
                 let l9 = [BUTTON_TEXT_RIGHT, BUTTON_TEXT_UP, BUTTON_TEXT_LEFT, BUTTON_TEXT_DOWN];
-                for l3 in 0..SHORTCUT_COMMAND_MAX {
+                for (l3, text) in l9.into_iter().enumerate() {
                     let l5 = ex_set(l7, l3);
                     self.movie.goto_and_play(&l5, "loop");
                     self.movie.goto_and_play(&format!("{l5}.cmdExText1"), "on");
-                    self.pad_text(&format!("{l5}.padBtn.txPadBtn"), l9[l3]); // (RC)
+                    self.pad_text(&format!("{l5}.padBtn.txPadBtn"), text); // (RC)
                 }
                 self.movie.goto_and_play(CMD_TITLE, "scutIn");
                 self.set_title_top(TITLE_TOP_SHORTCUT, false, false);
@@ -1763,6 +1985,42 @@ impl HudCommand {
     /// `m_pGFxShortcutName[row]`: `col1` / `col2`.
     pub fn native_shortcut_name(&mut self, row: usize, label: &str) {
         self.movie.goto_and_play(&format!("{}.cmdExText1.txCmdName", ex_set(CMD_SCUT_SHORT, row)), label);
+    }
+
+    /// (GOOFY) A RECHARGING SHORTCUT ENTRY (THE USER 2026-11-02: "Goofy's abilities (except taunt) should cost more MP, and
+    /// introduce a cooldown with a visible timer, they are way too spammable"). KH3's shortcut entries have no timer; its
+    /// situation commands do: `actGgAnm`, KH3's own command timer gauge (`HudCommand_fla.McActGgAnm_140`: a dark backing, the
+    /// bar drained by a mask over its 219 frames, `frames::situation_gauge_frame`; `actGg` holds its colours `wep`, `atf`,
+    /// `magic`, `friend`, `link`). One instance per entry is put in the panel's base (`cmdExBaseSet`), which the entries' sets
+    /// are drawn over: it lies on the entry's plate and under its name, where the situation command has it. `frame` None hides it.
+    pub fn set_shortcut_recharge(&mut self, row: usize, frame: Option<i32>, color: &str) {
+        let name = format!("gofRecharge{}", row + 1);
+        let path = format!("{CMD_SCUT_BASE}.{name}");
+        let Some(frame) = frame else {
+            if self.movie.exists(&path) {
+                self.movie.set_visible(&path, false);
+            }
+            return;
+        };
+        if !self.movie.exists(&path) {
+            if !self.movie.exists(CMD_SCUT_BASE) || !self.movie.add_instance(CMD_SCUT_BASE, RECHARGE_CLASS, &name) {
+                return;
+            }
+            // the entry's set stands `row` steps down; the gauge sits where the situation command puts it beside its name
+            self.movie.set_position(&path, RECHARGE_AT.0, RECHARGE_AT.1 + row as f32 * SHORTCUT_ROW_STEP, 0.0);
+        }
+        let gauge = format!("{path}.actGg");
+        if !self.label_is(&gauge, color) {
+            self.movie.goto_and_play(&gauge, color);
+        }
+        self.movie.goto_frame(&path, frame.max(1) as u32);
+        self.movie.set_visible(&path, true);
+    }
+
+    /// (GOOFY) The recharge gauge of a shortcut entry is on show (tests): its frame.
+    pub fn shortcut_recharge(&self, row: usize) -> Option<u32> {
+        let path = format!("{CMD_SCUT_BASE}.gofRecharge{}", row + 1);
+        self.movie.node(&path).filter(|n| n.is_visible()).and_then(|_| self.movie.current_frame(&path))
     }
 
     /// `m_pGFxActionCmdText[button]`: `on` / `off` / `disabled`.

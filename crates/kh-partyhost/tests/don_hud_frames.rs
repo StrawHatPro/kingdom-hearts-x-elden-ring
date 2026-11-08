@@ -116,8 +116,11 @@ impl Rig {
             snapshot.step = self.sora.ui_snapshot().step + k as u64 + 1;
             let st = self.status.donald.as_ref().unwrap();
             let hud = kh_party::donald::hud::DonHud::with(st, &self.book, self.lock.then_some(LOCK.0), self.affinity, &kh_party::donald::data());
-            let feed = DonHudFeed { hud, menu: self.menu.don_view(Chara::Donald, &self.status), worn: self.worn.clone() };
+            let feed = DonHudFeed { hud, menu: self.menu.don_view(Chara::Donald, &self.status) };
             self.hud.set_don(Some(don_view_of(&feed, &[])));
+            // (ALLY-BUFF) the worn spells: their own feed now (whoever leads), the icons kh-partyhost's `ally_buffs_of` names
+            let buffs = self.worn.iter().filter(|w| w.1 || w.2 > 0).map(|w| kh_host::party::AllyBuff { chara: w.0, icon: if w.1 { "Aero" } else { "Thunder" }.to_string(), left: 10.0, total: 20.0 }).collect();
+            self.hud.set_ally_buffs(kh_host::party::AllyBuffsView { buffs, look: None });
             let view = View { clip_from_world: glam::Mat4::orthographic_rh(0.0, 1920.0, 1080.0, 0.0, -1.0, 1.0), size: (1920.0, 1080.0) };
             self.hud.frame(&mut Frame { snapshot: &snapshot, sora: &self.sora, events: &[], state: kh_core::StateId::Idle, step_dt: 1.0 / 60.0, play_seconds: 0, targets: &Dummy, to_view: same, view: Some(view), words: &[], dt: 1.0 / 60.0, ticks: 1, pressed: PadButtons::NONE, nav: Vec::new() });
             let dt = 1.0 / 60.0;
@@ -184,7 +187,7 @@ fn colour_on(rig: &Rig, movie: &str, paths: &[&str], bg: [f32; 3]) -> ([f32; 3],
     }
     let without = draw(&hidden);
     let (mut n, mut sum) = (0f32, [0f32; 3]);
-    for (p, q) in full.chunks_exact(4).zip(without.chunks_exact(4)) {
+    for (p, q) in full.as_chunks::<4>().0.iter().zip(without.as_chunks::<4>().0) {
         if p.iter().zip(q).take(3).any(|(x, y)| x.abs_diff(*y) > 24) {
             n += 1.0;
             for c in 0..3 {
@@ -357,7 +360,7 @@ fn donalds_hud_badges_pips_marks_stars_tracker_and_statuses() {
     rig.frames(&[], 6);
     rig.picture("09_worn_friend_orbs");
     assert_eq!(rig.hud.don_worn().len(), 1);
-    assert!(colour_of(&rig, "HudStatus", "sttsPc.donWorn2").1 > 60.0, "the orbs icon draws by Goofy");
+    assert!(colour_of(&rig, "HudStatus", "sttsPc.allyBuff2_0").1 > 60.0, "the orbs icon draws by Goofy");
     // all three wearing one; a member with both shows one icon (the rule itself is allyfx's)
     rig.worn = vec![(PartyChara::Donald, false, 2), (PartyChara::Goofy, true, 0), (PartyChara::Sora, true, 4)];
     rig.st().core.attune.cast = Some(kh_party::donald::attune::AttuneCast { element: Element::Aero, left: 0.3, total: 0.6 });
@@ -365,7 +368,7 @@ fn donalds_hud_badges_pips_marks_stars_tracker_and_statuses() {
     rig.picture("08_worn_all_three_and_attuning");
     assert_eq!(rig.hud.don_worn().len(), 3);
     for slot in 0..3 {
-        assert_eq!(rig.hud.movie("HudStatus").unwrap().sprite(&format!("sttsPc.donWorn{slot}")).map(|s| s.gfx.len()), Some(1), "one icon on slot {slot}");
+        assert_eq!(rig.hud.movie("HudStatus").unwrap().sprite(&format!("sttsPc.allyBuff{slot}_0")).map(|s| s.gfx.len()), Some(1), "one icon on slot {slot}");
     }
     // Sora leads again: the focus gauge is the HUD driver's again
     rig.hud.set_don(None);
@@ -578,19 +581,20 @@ fn donalds_menu_on_the_hud_lists_target_list_quick_cast_and_y() {
     rig.picture("15_y_cost_zettaflare_with_target");
     assert!(has(&rig, "Zettaflare"), "a target: Zettaflare offered");
     assert!(rig.hud.don_y_costs().iter().filter(|c| c.1 == 4).count() == 2, "Ultima and Zettaflare: four stars each");
-    // (ZETTA 2026-10-23, the user: "Zettaflare needs to use up all of your magic (it needs all of your current MP to be useable) and then put you into the red MP bar mode with a 30% slower recharge rate"; asked, the user chose "Requires a full MP bar") short of a full bar: no Zettaflare row
+    // (THE USER 2026-11-02: "make sure Donald and his spells (including Zettaflare) have this as well. Zettaflare should instantly
+    // put Donald into MP reserve") the full bar of 2026-10-23 is gone: any MP above 0 offers it (all of it goes, MP Charge at once)
     rig.status.mp = rig.status.max_mp() - 1;
     rig.frames(&[], 30);
-    assert!(!has(&rig, "Zettaflare"), "max MP - 1: no Zettaflare row (it needs a full bar)");
+    assert!(has(&rig, "Zettaflare"), "max MP - 1: Zettaflare offered");
     rig.status.mp = 1;
     rig.frames(&[], 30);
-    assert!(!has(&rig, "Zettaflare"), "1 MP: no Zettaflare row");
+    assert!(has(&rig, "Zettaflare"), "1 MP: Zettaflare offered");
     rig.status.mp = 0;
     rig.frames(&[], 30);
     assert!(!has(&rig, "Zettaflare"), "no MP: no Zettaflare row");
     rig.menu.don.feed.has_target = false;
-    // short of MP: the rows it can't pay leave the list
-    rig.status.mp = 1;
+    // short of MP (the party's MP rule: 0 MP): the rows it can't pay leave the list
+    rig.status.mp = 0;
     rig.frames(&[], 30);
     rig.picture("15_y_cost_4_charges_no_mp");
     assert!(rig.menu.snapshot(Chara::Donald, &rig.status).situations.is_empty(), "no greyed Y rows");

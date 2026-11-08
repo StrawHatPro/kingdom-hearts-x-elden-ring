@@ -9,7 +9,7 @@
 
 use kh_core::{PadButtons, Sora, TargetId, Vec3};
 use kh_host::hud::{Frame, HostReaction, Hud, HudTargets, TargetView};
-use kh_host::hud_layers::{draw_movie_in, stage_root, Draw, Drawn, Perf};
+use kh_host::hud_layers::{draw_movie_in, stage_root, Draw, DrawArea, Drawn, Perf};
 use kh_host::party::{PartyChara, PartyHudSlot};
 
 struct NoTargets;
@@ -41,12 +41,12 @@ fn picture(fonts: &kh_ui::Fonts, movie: &kh_ui::Movie) -> Vec<u8> {
     let (stage, view) = stage_root(1920.0, 1080.0);
     let mut draw = Draw::default();
     let mut renderer = kh_ui::render::Renderer::new(fonts.clone());
-    let rect = match draw_movie_in(&mut draw, &mut renderer, movie, &stage, (1920.0, 1080.0), true, Perf::default(), Some(view)) {
+    let rect = match draw_movie_in(&mut draw, &mut renderer, movie, &stage, DrawArea { size: (1920.0, 1080.0), clip: Some(view) }, true, Perf::default()) {
         Drawn::Picture(rect, _) => rect,
         _ => panic!("the movie drew nothing"),
     };
     let mut out = vec![0u8; 1920 * 1080 * 4];
-    for (i, o) in out.chunks_exact_mut(4).enumerate() {
+    for (i, o) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let y = (i / 1920) as f32 / 1080.0;
         o.copy_from_slice(&[(60.0 + 40.0 * y) as u8, (30.0 + 10.0 * y) as u8, 22, 255]);
     }

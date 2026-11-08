@@ -266,7 +266,7 @@ impl Status {
     pub fn apply_damage_to_sora(&mut self, damage: f32, hit: &HitOnSora) -> DamageOutcome {
         let before = self.hp;
         let mut outcome = DamageOutcome { applied: false, hp_before: before, hp_after: before, lost: 0, survived: None, dead: false, mp_gained: 0 };
-        if self.placeholder || (!(damage > 0.0) && !hit.forced) || before < 1 {
+        if self.placeholder || (damage.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) && !hit.forced) || before < 1 {
             return outcome;
         }
         let mut new = before - ue_floor(damage);
@@ -520,21 +520,21 @@ impl Status {
             return MpUse::default();
         }
         let current = self.mp;
-        let used;
-        if cost < 0 {
+        
+        let used = if cost < 0 {
             self.set_mp(-1);
-            used = current;
+            current
         } else if current - cost < 0 {
             if self.has(ETresAbilityKind::MpLeave) && current > 0 {
                 self.set_mp(0);
             } else {
                 self.set_mp(-1);
             }
-            used = current;
+            current
         } else {
             self.set_mp(current - cost);
-            used = cost;
-        }
+            cost
+        };
         let mut healed = 0;
         let n = self.count(ETresAbilityKind::WizzardStar);
         if used > 0 && n > 0 && self.hp > 0 {

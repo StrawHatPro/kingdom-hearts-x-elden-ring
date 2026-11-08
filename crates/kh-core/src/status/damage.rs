@@ -270,7 +270,7 @@ pub fn compute_damage(attacker: &Attacker, defender: &Defender, attack: &DamageA
         x = 0.0;
         go = false;
     }
-    if !(power > 0.0) {
+    if power.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
         x = 0.0;
         go = false;
     }
@@ -290,7 +290,7 @@ pub fn compute_damage(attacker: &Attacker, defender: &Defender, attack: &DamageA
     }
     // 4. base = max(S - D, 1).
     x -= d;
-    if !(x >= 1.0) {
+    if x.partial_cmp(&1.0).is_none_or(std::cmp::Ordering::is_lt) {
         x = 1.0;
     }
     // 5. The defender's limits.
@@ -332,13 +332,13 @@ pub fn compute_damage(attacker: &Attacker, defender: &Defender, attack: &DamageA
             }
         }
         // The player and friends: base at most 80 unless min >= 80. [I] 0x1406326B5
-        if matches!(defender.kind, DefenderKind::Player | DefenderKind::Friend) && x > 80.0 && !(lo >= 80.0) {
+        if matches!(defender.kind, DefenderKind::Player | DefenderKind::Friend) && x > 80.0 && lo.partial_cmp(&80.0).is_none_or(std::cmp::Ordering::is_lt) {
             x = 80.0;
         }
     }
     let base = x;
     // 6. dmg = ceil((base - 1e-6) * (power - 1e-6)). [I] 0x1406326DF..0x140632705
-    const EPS: f32 = 9.999_999_974_752_427e-7;
+    const EPS: f32 = 1e-6;
     x = ue_ceil((x - EPS) * (power - EPS)) as f32;
     let after_power = x;
     // 7. The defender's cuts and resists.

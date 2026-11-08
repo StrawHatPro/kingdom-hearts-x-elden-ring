@@ -291,7 +291,38 @@ function attackData() {
   const yn = (b) => (b ? 'yes' : 'no');
   // (XSI) the XS rows go after the others: the indices of the rows before them stay what they were
   const xsi = /^(sclf_|schm_giantstamp|scsk_chandelier|scsw_myriad|an_counter|an_riskcharge|an_crimsonblast|sf_reflectivelaser|sf_lfshoot)/;
-  return [...j.rows.filter((r) => keep.test(r.id) && !xsi.test(r.id)), ...j.rows.filter((r) => xsi.test(r.id))].map((r) => [r._row_name, r.m_Power, strip(r.m_DamageKind).replace('TRES_DMG_KIND_', ''), strip(r.m_DamageAttribute).replace('TRES_DMG_ATTR_', ''), r.m_DamagePowerScale, r.m_DamageParabolaAngle, r.m_DamageMoveLength, r.m_DamageBrakeParam,
+  // (F-SHIELD) Counter Shield's / Frying Pan's rows (SCSH_*, SH2_*, FINISH_SH_*: sheets/port/sora-form-shield.json row.*) after all
+  // the others: no index moves
+  const fsh = /^(scsh_|sh2_|finish_sh_)/;
+  // (F-STAFF) Mirage Staff's rows (SCWA_*: sheets/port/sora-form-staff.json row.*) after all the others: no index moves
+  const fst = /^scwa_/;
+  // (F-RAGE) Rage Form's rows (AN_*: sheets/port/sora-form-rage.json row.*) that the XS rows above do not carry, after all the
+  // others: no index moves
+  const frg = (id) => /^an_/.test(id) && !xsi.test(id);
+  // (F-SHIP) Highwind's / Storm Flag's rows (SCHL_*, SCFL_*: sheets/port/sora-form-ship.json row.*) after all the others: no index
+  // moves
+  const fship = /^(schl_|scfl_)/;
+  // (F-HAMMER) Hyper Hammer's / Drill Punch's / Boom Hammer's / Clock Drill's rows (SCHM_*, HM2_*, SCDR_*, DR2_*: sheets/port/
+  // sora-form-hammer.json row.*) that the XS rows above do not carry, after all the others: no index moves
+  const fhm = (id) => /^(schm_|hm2_|scdr_|dr2_)/.test(id) && !xsi.test(id);
+  // (F-LIGHTDARK) Dark Form's / Double Form's rows (SCDF_*, SCTF_*: sheets/port/sora-form-lightdark.json; Light Form's SCLF_* are
+  // the XS rows above; SCGM_COUNTER of the Light / Dark Burst projectiles is F-NANO's below) after all the others: no index moves
+  const fld = /^(scdf_|sctf_)/;
+  // (F-ARROWGUN) the gun forms' rows (SCDW_*, DW2_*, SCBZ_*, BZ2_*: sheets/port/sora-form-arrowgun.json row.*) after all the others:
+  // no index moves
+  const fag = /^(scdw_|dw2_|scbz_|bz2_)/;
+  // (F-NANO) Nano Arms' rows (SCGM_*: sheets/port/sora-form-nano.json row.*) after all the others: no index moves
+  const fgm = /^scgm_/;
+  // (F-ULTIMATE) Ultimate Form's rows (SCSW_*: sheets/port/sora-form-ultimate.json row.*) that the XS rows above do not carry
+  // (SCSW_MYRIAD / _END), after all the others: no index moves
+  const fsw = (id) => /^scsw_/.test(id) && !xsi.test(id);
+  // (F-CLAWS) the claw / yo-yo / blade forms' rows (SCCL_*, CL2_*, SCYO_*, SCSK_*: sheets/port/sora-form-claws.json row.*) that the XS
+  // rows above do not carry (SCSK_CHANDELIER / _END), after all the others: no index moves
+  const fcl = (id) => /^(sccl_|cl2_|scyo_|scsk_)/.test(id) && !xsi.test(id);
+  // (SHOT-A) the shotlocks' rows (SF_*: every ShootFlow kind's, for kh-core magic/shotlocks; magic/spells.rs attack_row reads
+  // them) that the XS rows above do not carry (SF_REFLECTIVELASER / _RANGE, SF_LFSHOOT), after all the others: no index moves
+  const fsf = (id) => /^sf_/.test(id) && !xsi.test(id);
+  return [...j.rows.filter((r) => keep.test(r.id) && !xsi.test(r.id)), ...j.rows.filter((r) => xsi.test(r.id)), ...j.rows.filter((r) => fsh.test(r.id)), ...j.rows.filter((r) => fst.test(r.id)), ...j.rows.filter((r) => frg(r.id)), ...j.rows.filter((r) => fship.test(r.id)), ...j.rows.filter((r) => fhm(r.id)), ...j.rows.filter((r) => fld.test(r.id)), ...j.rows.filter((r) => fag.test(r.id)), ...j.rows.filter((r) => fgm.test(r.id)), ...j.rows.filter((r) => fsw(r.id)) /* (F-ULTIMATE) */, ...j.rows.filter((r) => fcl(r.id)) /* (F-CLAWS) */, ...j.rows.filter((r) => fsf(r.id)) /* (SHOT-A) */].map((r) => [r._row_name, r.m_Power, strip(r.m_DamageKind).replace('TRES_DMG_KIND_', ''), strip(r.m_DamageAttribute).replace('TRES_DMG_ATTR_', ''), r.m_DamagePowerScale, r.m_DamageParabolaAngle, r.m_DamageMoveLength, r.m_DamageBrakeParam,
     strip(r.m_KnockbackType).replace('TRES_AHKBT_', ''), r.m_DamageExecRate, r.m_DamageEffectTime, strip(r.m_BadStatusKind).replace('TRES_BADSTAT_', ''), r.m_BadStatusGenRate, r.m_BadStatusEffectTime, r.m_BadStatusEffectParam, strip(r.m_TeamCheckType),
     r.m_ReactionPowerValue, yn(r.m_bIsScrumAttack), r.m_ArmorAttackPower, r.m_FormPoint, yn(r.m_bIsMagicAttack), yn(r.m_bIsIvalidGuard), yn(r.m_bIsRapidFire), yn(r.m_bIsKillerAttack), yn(r.m_bIsAttractionDamage), yn(r.m_bIsCounterAttack), yn(r.m_bIsEnableWeakGuardAttack),
     r.m_ReflectLevel, strip(r.m_ReflectReaction).replace(/TRES_ATK_R[RS]_/, ''), r.m_RevengePoint, strip(r.m_PhysForceLv).replace('TPDF_', ''), 'sheets/entities/DataTable/Player/Attack/p_ex001_AttackData.json row ' + r.id]);

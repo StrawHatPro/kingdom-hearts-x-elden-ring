@@ -38,8 +38,9 @@ use windows::Win32::Graphics::Dxgi::*;
 
 use crate::rlog;
 
-/// Layers a host may use (drawn in index order).
-pub const MAX_LAYERS: usize = 16;
+/// Layers a host may use (drawn in index order). (INT-F) 17: kh-host's 16 HUD layers (F-HUD's "HudOperation") and the
+/// new-game cover after them (kh-er newgame.rs `COVER_LAYER`).
+pub const MAX_LAYERS: usize = 17;
 const SLOTS: usize = 3;
 /// (ER party S4) the friends' pictures' descriptors (after Sora's picture's): one per picture and frame slot.
 #[cfg(feature = "party")]
@@ -454,7 +455,7 @@ impl Gpu {
         desc.RTVFormats[0] = view_format;
         let made: windows::core::Result<ID3D12PipelineState> = self.device.CreateGraphicsPipelineState(&desc);
         // (the description holds a borrowed root signature: it must not be released through it)
-        std::mem::forget(std::mem::replace(&mut desc.pRootSignature, ManuallyDrop::new(None)));
+        let _ = std::mem::replace(&mut desc.pRootSignature, ManuallyDrop::new(None));
         let made = made?;
         self.pipelines.insert(view_format.0, made.clone());
         Ok(made)
@@ -782,6 +783,6 @@ mod picture_tests {
         // a hand-over that is not renewed lapses within a few frames (it was half a second)
         assert!(picture_opacity(1.0, PICTURE_HOLD_MS - 1, true, true, true, 1.0).is_some());
         assert_eq!(picture_opacity(1.0, PICTURE_HOLD_MS, true, true, true, 1.0), None);
-        assert!(PICTURE_HOLD_MS <= 150);
+        const { assert!(PICTURE_HOLD_MS <= 150) };
     }
 }

@@ -48,6 +48,8 @@ struct Party {
     link: Option<(i32, u32)>,
     link_steps: u32,
     action: u8,
+    /// (COMBAT-FIX) Team shots Goofy's link view hands over (each step while listed).
+    team_shots: Vec<kh_core::host::TeamShot>,
 }
 
 impl Targets for Party {
@@ -67,6 +69,11 @@ impl Targets for Party {
             if let Some((kind, n)) = self.link {
                 link = FriendLinkView { kind, phase: n as u8, finished: n >= self.link_steps, sora: Some((Vec3::new(0.0, 0.0, 300.0), 0.0)), sora_motion: Some("GShootRise"), sora_action: (n == 3).then_some(self.action), ..FriendLinkView::default() };
             }
+            if uid == 12 {
+                for (slot, shot) in link.shots.iter_mut().zip(self.team_shots.iter()) {
+                    *slot = Some(*shot);
+                }
+            }
             out.push(Friend { uid, position: Vec3::new(0.0, y, 0.0), yaw: 0.0, ko: false, combi_time: 1, combi_up: 0, offer: self.offer.filter(|o| o.0 == uid).map(|o| (o.1, o.2)), link });
         }
     }
@@ -78,6 +85,13 @@ impl Targets for Party {
             self.link = None;
         }
         self.requests.push(req);
+    }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
     }
 }
 
@@ -185,7 +199,7 @@ fn a_friend_leaders_combo_rolls_the_unison_and_ai_sora_plays_it() {
     // latches the kind; Sora, idle (no pad press), plays it as his attack and asks for Donald.
     let mut b = Bench::new();
     b.party.dummy = Some(TargetInfo { id: TargetId(1), position: Vec3::new(200.0, 0.0, 0.0), center: Vec3::new(200.0, 0.0, 90.0), velocity: Vec3::ZERO, yaw: 180.0, radius: 40.0, half_height: 90.0, flags: TargetFlags(TargetFlags::ALIVE | TargetFlags::HITTABLE | TargetFlags::LOCKABLE | TargetFlags::ENEMY), hp: 1.0e6, hp_max: 1.0e6 });
-    let abilities = b.sora.status().abilities.clone();
+    let abilities = b.sora.status().abilities;
     let sora_at = b.sora.output().position;
     let ok = b.sora.combat_mut().friend.roll_leader_unison(&abilities, 11, sora_at + Vec3::new(0.0, 150.0, 0.0), sora_at);
     assert!(ok, "rolled");
@@ -198,4 +212,37 @@ fn a_friend_leaders_combo_rolls_the_unison_and_ai_sora_plays_it() {
     assert!(b.party.requests.iter().any(|r| matches!(r, FriendLinkRequest::Unison { uid: 11, .. })));
     // Goofy leading never gets Donald's kinds; out of range nothing is rolled.
     assert!(!b.sora.combat_mut().friend.roll_leader_unison(&abilities, 12, sora_at + Vec3::new(900.0, 0.0, 0.0), sora_at));
+}
+
+/// (COMBAT-FIX) A team shot with `follow` rides the link pawn that carries Sora (KH3 moves a shape on the pawn's socket with
+/// the pawn: Trinity Guard's bash spheres on X_Link03_skt, 0x140647950): its centre is Sora's root + the place turned by his
+/// yaw on every step of its life, while one without `follow` stays where it was spawned.
+#[test]
+fn a_following_team_shot_rides_the_pawn_that_carries_sora() {
+    let mut b = Bench::new();
+    let start = b.step(&[], &[]).position;
+    let local = Vec3::new(80.0, 0.0, 120.0);
+    let riding = kh_core::host::TeamShot { row: "FR_SHIELDGUARDIAN_SHIELDBASH", position: start + local, radius: 100.0, grow: 0.0, max: 100.0, life: 1.0, effect: "", follow: Some(local) };
+    let fixed = kh_core::host::TeamShot { row: "FR_SHIELDGUARDIAN_HEAVYBASH", follow: None, ..riding };
+    b.party.team_shots = vec![riding, fixed];
+    b.step(&[], &[]);
+    b.party.team_shots.clear();
+    let centre = |b: &Bench, row: &str| b.sora.combat().shots.iter().find(|s| s.name == row).map(|s| s.centre()).expect(row);
+    let fixed_at = centre(&b, "FR_SHIELDGUARDIAN_HEAVYBASH");
+    // he runs (the stick forward and right): the riding sphere goes with him, turned by his yaw
+    let mut last = None;
+    for _ in 0..30 {
+        let input = kh_core::Input { move_stick: kh_core::Vec2::new(0.6, 1.0), ..kh_core::Input::default() };
+        let (mut audio, mut effects, mut ui) = (NullAudio, NullEffects, NullUi);
+        let mut host = Host { world: &b.world, targets: &mut b.party, audio: &mut audio, effects: &mut effects, ui: &mut ui };
+        last = Some(b.sora.step_hosted(DT, &input, &mut host));
+    }
+    let last = last.expect("30 steps");
+    let moved = (last.position - start).truncate().length();
+    assert!(moved > 100.0, "he ran {moved} cm");
+    let (sin, cos) = last.yaw.to_radians().sin_cos();
+    let want = last.position + Vec3::new(local.x * cos - local.y * sin, local.x * sin + local.y * cos, local.z);
+    let at = centre(&b, "FR_SHIELDGUARDIAN_SHIELDBASH");
+    assert!(at.distance(want) < 15.0, "the riding sphere {at} against his root + the place {want}");
+    assert_eq!(centre(&b, "FR_SHIELDGUARDIAN_HEAVYBASH"), fixed_at, "the other one stays");
 }

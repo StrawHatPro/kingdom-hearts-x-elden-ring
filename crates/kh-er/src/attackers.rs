@@ -15,14 +15,14 @@
 //! - The effectivity of a member (0x1402c2a60): an active SpEffect's `teamOffenseEffectivity` when it is not -1, else
 //!   `NpcThinkParam.TeamAttackEffectivity` (+0x54) READ THROUGH THE ROW POINTER of the AI (+0x30) at every hand-out.
 //!   So a value written in the loaded table counts within a second, for enemies already standing too.
-//! THE MAPPING: a row's value is capped at floor(100 / N): N members with it fit the budget, N + 1 do not. 0 stays 0 (it
-//! uses no budget: every such member already attacks). The real values (regulation 2.7.1.0, read offline from a copy):
-//! 1727 of 2215 rows are above 20; most enemies have 30 - 100 (1 - 3 at once); the Godrick-soldier family c4300 already has
-//! 20 (5 at once) and does not change.
-//! IN MEMORY ONLY: regulation.bin is never touched; every value is written back when Sora stops, when this is dropped
-//! (the payload replaced, the mode switched) and when the key goes to 0. Each changed row also carries its own value in
-//! two of its padding bytes (`pad4`, zero in every row of the game), so a payload that starts over rows a crashed
-//! payload left capped still finds the game's numbers.
+//!   THE MAPPING: a row's value is capped at floor(100 / N): N members with it fit the budget, N + 1 do not. 0 stays 0 (it
+//!   uses no budget: every such member already attacks). The real values (regulation 2.7.1.0, read offline from a copy):
+//!   1727 of 2215 rows are above 20; most enemies have 30 - 100 (1 - 3 at once); the Godrick-soldier family c4300 already has
+//!   20 (5 at once) and does not change.
+//!   IN MEMORY ONLY: regulation.bin is never touched; every value is written back when Sora stops, when this is dropped
+//!   (the payload replaced, the mode switched) and when the key goes to 0. Each changed row also carries its own value in
+//!   two of its padding bytes (`pad4`, zero in every row of the game), so a payload that starts over rows a crashed
+//!   payload left capped still finds the game's numbers.
 
 /// The attack budget of a team (`CSTeamAi` +0x30, written 100 by its constructor 0x14034e3f0; no other writer).
 pub const TEAM_BUDGET: u32 = 100;

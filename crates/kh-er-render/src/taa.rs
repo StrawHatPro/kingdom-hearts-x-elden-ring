@@ -252,7 +252,7 @@ pub(crate) fn own_route_depth(d: &mut D3D12_GRAPHICS_PIPELINE_STATE_DESC) {
 }
 
 /// (RSF) `r.velocity_own`: the party's velocity draws take their own-record states only while it is on (as Sora's).
-#[cfg_attr(not(feature = "party"), allow(dead_code))]
+#[cfg(feature = "party")]
 pub(crate) fn own_wanted() -> bool {
     OWN_WANTED.load(Ordering::Relaxed)
 }

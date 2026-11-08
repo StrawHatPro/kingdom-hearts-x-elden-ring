@@ -72,6 +72,8 @@ pub(crate) fn controller_update(state: &mut StateData, s: &mut Ctx, input: &Inpu
     // run before every request of the frame, so an attack pressed on the frame an enemy comes
     // into range already has it as its target.
     crate::combat::targeting::update(s, dt);
+    // (F-ARROWGUN) UpdateLockon's shooter-aim steps (5's tail, 6: the RT hold -> ShooterMode) and the RT hold flag (slot 713).
+    crate::combat::forms::arrowgun::aim::controller_post(state, s, dt);
     // The formchange gauge's tick (controller slot 829; combat strand F 10.2).
     crate::combat::style::tick(state, s, dt);
     // (XSI) The XS abilities' per-step part (abilities/xs: Sonic Dash's airtime, the Ancient Light offer).
@@ -85,10 +87,13 @@ pub(crate) fn controller_update(state: &mut StateData, s: &mut Ctx, input: &Inpu
         // controller+0x8F4 (0x1413F80F0) and pawn+0x638 (0x1405BC470): combat spec 9.6.
         combat.reaction_block = (combat.reaction_block - dt).max(0.0);
         combat.no_damage_timer = (combat.no_damage_timer - dt).max(0.0);
+        combat.invincible_timer = (combat.invincible_timer - dt).max(0.0); // (SHOT-C) pawn+0xE44, 0x141449CD0
     }
     // The action states' part of the same ticks (actions.rs): the availability bits return, the
     // battle flag is mirrored from the host (controller slot 630), the counter window counts down.
     crate::actions::pawn_tick(s, dt);
+    // (weapons P2) the Keyblade switch's part of the pawn tick (0x14144A530): the combo carry timer, the glide-resume bit.
+    crate::states::weapon_change::pawn_tick(state, s, dt);
     // (magic implementer) The command timers (controller slot 635), then slot 800: the shotlock
     // aim mode (magic spec F A1). While it is open the whole normal dispatch below is skipped;
     // only the airstep state still takes the jump press (it aborts the flight).
@@ -140,6 +145,9 @@ pub(crate) fn controller_update(state: &mut StateData, s: &mut Ctx, input: &Inpu
         } else if dodge_roll::try_dodge(state, s, stick_yaw, magnitude) {
             return;
         }
+    } else if input.pad.held.has(PadButton::GUARD) && !input.pad.held.has(PadButton::LeftShoulder) {
+        // (F-SHIELD) actions spec 2.1: GUARD held (not pressed): GuardHeld() (slot 56 0x14143CA20; the shield guard).
+        guard::guard_held(state);
     }
     // (The NORMAL attack press is not issued here: the HUD command menu makes the request in
     // the UI tick, after the state tick: `ui_attack_request` below; combat strand A 1.1.)
@@ -168,7 +176,7 @@ pub(crate) fn controller_update(state: &mut StateData, s: &mut Ctx, input: &Inpu
         jump::jump_held(state);
     }
     // 3. stick active (!(mag < 0.1), 0x1413F206D): MoveInput, then TryRun.
-    if !(magnitude < p.input_stick_active_min) {
+    if magnitude.partial_cmp(&p.input_stick_active_min).is_none_or(std::cmp::Ordering::is_ge) {
         // moveYaw = cameraYaw + atan2(LeftX, LeftY) with the camera's roll 0 (2.3). The camera
         // yaw is the previous frame's (the host passes it so). The engine's polynomial Atan2 is
         // within 1e-4 degrees of this one (change E7).
@@ -194,6 +202,10 @@ pub(crate) fn controller_update(state: &mut StateData, s: &mut Ctx, input: &Inpu
         hopping::move_input(state, yaw, magnitude);
         // ... and FLOATING (0x141441099).
         floating::move_input(state, yaw, magnitude);
+        // (F-SHIELD) ... and GUARD (0x141440600 case 0xC): the shield guard's walk.
+        guard::move_input(state, yaw, magnitude);
+        // (F-ARROWGUN) ... and SHOOTERMODE (0x141440600 case 40): the stick magnitude (the manual aim test).
+        crate::states::shooter_mode::move_input(state, yaw, magnitude); // (AUDIT-A ARROWGUN) + the stick yaw (+0xA8)
         run::try_run(state, s, yaw, magnitude);
     }
 }

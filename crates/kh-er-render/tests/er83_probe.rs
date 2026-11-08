@@ -5,6 +5,9 @@ use glam::Vec3;
 use kh_anim::pose::component_space;
 use kh_anim::{Animator, Pack, Settings, Trs};
 
+/// A bone's index by name in one skeleton.
+type IndexOf<'a> = dyn Fn(&str) -> Option<usize> + 'a;
+
 fn pack_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../build/sora_pack")
 }
@@ -31,7 +34,7 @@ fn probe_hands() {
             let (_, out) = r.pose_full(&local, &comp);
             let f3 = |n: &str| sk.index_of(n);
             let f1 = |n: &str| r.index_of(n);
-            let list: [(&str, &Vec<Trs>, &dyn Fn(&str) -> Option<usize>); 2] = [("KH3", &comp, &f3), ("KH1", &out, &f1)];
+            let list: [(&str, &Vec<Trs>, &IndexOf<'_>); 2] = [("KH3", &comp, &f3), ("KH1", &out, &f1)];
             for (who, pose, idx) in list {
                 let buki = pose[idx("R_buki").unwrap()];
                 let koshi = pose[idx("koshi").unwrap()];

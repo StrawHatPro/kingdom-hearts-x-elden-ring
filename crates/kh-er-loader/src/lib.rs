@@ -69,7 +69,6 @@ static LOG: Mutex<Option<(std::fs::File, Instant)>> = Mutex::new(None);
 
 /// (LOGPRIV) the mod's log filter: no personal information in this log either
 #[path = "../../kh-er/src/redact.rs"]
-#[allow(dead_code)]
 mod redact;
 
 fn log(text: &str) {
@@ -317,9 +316,9 @@ fn reload_if_changed(loader: &mut Loader) {
     // SAFETY: valid module handle, NUL-terminated names.
     let (init, frame, shutdown) = unsafe {
         (
-            GetProcAddress(module, b"kh_er_init\0".as_ptr()),
-            GetProcAddress(module, b"kh_er_frame\0".as_ptr()),
-            GetProcAddress(module, b"kh_er_shutdown\0".as_ptr()),
+            GetProcAddress(module, c"kh_er_init".as_ptr().cast()),
+            GetProcAddress(module, c"kh_er_frame".as_ptr().cast()),
+            GetProcAddress(module, c"kh_er_shutdown".as_ptr().cast()),
         )
     };
     let (Some(init), Some(frame)) = (init, frame) else {

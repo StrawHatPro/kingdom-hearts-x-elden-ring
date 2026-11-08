@@ -445,6 +445,7 @@ impl Story {
     /// a row of kind `self` that is ready and was not tried in this session (she is expected to speak by herself; a
     /// menu row that is ready as well is the fallback inside the same rest), a menu row that is ready (the entry is
     /// selected), an automatic row that is ready and whose rest was already tried here (its scene is expected).
+    #[cfg(test)]
     pub fn talk_offer(&self, grace: u32, flag: &dyn Fn(u32) -> Option<bool>, entry_gate: bool) -> Option<Offer> {
         self.talk_offer_lifting(grace, flag, entry_gate, &|_| false, false).map(|(o, _)| o)
     }

@@ -63,6 +63,12 @@ impl PoseTap {
         self.latest_world.get(*self.index.get(name)?).copied()
     }
 
+    /// (FREEZE-FX) Every bone's world place and turn as of the latest step (the effects whose particles start on his mesh:
+    /// `SQEX_VertexSpawn` bUseAttachMeshVertex, KH3's frozen look).
+    pub fn bones_world(&self) -> HashMap<String, (Vec3, Quat)> {
+        self.index.iter().filter_map(|(name, &k)| self.latest_world.get(k).map(|t| (name.clone(), (t.translation, t.rotation)))).collect()
+    }
+
     /// (INT) Takes `other`'s latest pose (bones; the index when this tap has none), no samples: the effect side keeps the
     /// step before this way without a new allocation each step.
     pub fn copy_latest_from(&mut self, other: &PoseTap) {

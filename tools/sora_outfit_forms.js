@@ -12,8 +12,11 @@
 //             (16 x 16 x 16) learnt from the texel pairs of p_ex001_0d0N (default) -> p_ex001_5d0N (Second Form);
 //             a colour the pairs never show stays as it is.
 //   materials/textures/<name>_f5.png, materials/er/tex/p_ex001_5*.dds (copies)
+// (weapons P5b) then EVERY OTHER WEAR FORM of the WearformSets (`allForms` below): KH3 Sora's (main pack) and the outfits'.
+// wear_extra.json is merged, never replaced: tools/sora_outfit_formcolours.js's rows (`kb_forms`) are kept.
 //
-//   node tools/sora_outfit_forms.js
+//   node tools/sora_outfit_forms.js                  both phases
+//   node tools/sora_outfit_forms.js --all-forms-only the all-forms phase alone (--list-written: the new files)
 'use strict';
 const fs = require('fs'), path = require('path');
 const bc = require('./lib/bcdec');
@@ -161,8 +164,133 @@ function main() {
     }
     if (direct.length) extra.direct['5'] = direct;
     if (!Object.keys(extra.forms).length && !direct.length) { console.log(`${o.id}: no clothes to give a form look`); continue; }
-    fs.writeFileSync(path.join(dir, 'materials/wear_extra.json'), JSON.stringify(extra, null, 1) + '\n');
+    // (weapons P5b) merged into the file as it is: the rows of other tools (tools/sora_outfit_formcolours.js's `kb_forms` wear
+    // forms: KH1 / KH2 forms 1..10, KH2's own 5) and this tool's all-forms phase (`all_forms`) are kept
+    const file = path.join(dir, 'materials/wear_extra.json');
+    const before = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
+    if (before) {
+      const theirs = new Set(((before.kb_forms || {}).wear_forms || []).map(String));
+      for (const [k, rows] of Object.entries(before.direct || {})) if (theirs.has(k) || !(k in extra.direct)) extra.direct[k] = rows;
+      if (theirs.has('5')) delete extra.direct['105'];
+      for (const [k, f] of Object.entries(before.forms || {})) if (!(k in extra.forms)) extra.forms[k] = f;
+      for (const key of ['kb_forms', 'all_forms']) if (before[key]) extra[key] = before[key];
+    }
+    fs.writeFileSync(file, JSON.stringify(extra, null, 1) + '\n');
     console.log(`${o.id}: Second Form = ${shared.length ? 'KH3\'s own costume on its p_ex001 clothes (' + shared.length + ' materials)' : ''}${shared.length && direct.length ? ' + ' : ''}${direct.length ? direct.length + ' clothes recoloured (' + direct.map((d) => d.from.split('/').pop()).join(', ') + ')' : ''}`);
   }
+  allForms(index, main);
 }
-main();
+
+// (weapons P5b, the user 2026-11-03: KH3_WEAPONS_PLAN.md 1.3 "OUTFIT x FORM COLOURS") EVERY WEAR FORM OF A WEARFORMSET.
+// tools/sora_material_pack.js packs wear forms 0 and 5 only (materials.json `wear_forms`); KH3's WearformSets have all of
+// ETresCharWearForm 0..10 (1 Brave, 2 Wisdom, 3 Solid, 4 Grace, 5 Limit, 6 Final, 7 Anti = the default textures with the point
+// texture p_ex001_7f00, 8 Light, 9 Dark, 10 TWO-KB). Here the others go into the library's wear_extra.json `forms` (kh-look
+// library.rs `add_wear_extra`: a form materials.json has is never replaced), for
+//   - KH3 Sora (the main pack, p_ex001_WearformSet): build/sora_pack/materials/wear_extra.json (a NEW file of this tool);
+//   - every outfit with a WearformSet of its own (Toy Box, Monstropolis, The Caribbean, Verum Rex: outfits.json `wearform_set`);
+//   - an outfit whose clothes ARE KH3 Sora's material instances (San Fransokyo): p_ex001_WearformSet's rows of those instances.
+// Textures: the PNG (decoded from the cooked DDS, as tools/sora_material_pack.js writes its own) in `<library>/textures`, and the
+// cooked DDS itself in `<library>/er/tex` when it is a block format the renderer reads (kh-shaderc copy_textures' rule). Only new
+// files are written. A form one of whose textures is not in assets_converted is left out (the outfit then keeps its clothes).
+const CONTENT_DIR = path.join(ROOT, 'assets_converted/textures/KINGDOM HEARTS III/Content');
+const PKG_DIR = path.join(ROOT, 'assets_converted/packages/KINGDOM HEARTS III/Content');
+const P_EX001_SET = '/Game/Blueprints/Player/p_ex001/p_ex001_WearformSet';
+const FORM_NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+function readWearformSet(set) {
+  const f = path.join(PKG_DIR, set.replace(/^\/Game\//, '').split('.')[0] + '.uasset.json');
+  if (!fs.existsSync(f)) return null;
+  const d = JSON.parse(fs.readFileSync(f, 'utf8'));
+  const e = d.exports.find((x) => /WearformSet/.test(x.class)); if (!e) return null;
+  const importPath = (i) => { let im = d.imports[-i - 1]; const names = [im.objectName]; while (im.outerIndex) { im = d.imports[-im.outerIndex - 1]; names.unshift(im.objectName); } return names[0] + (names.length > 1 ? '.' + names.slice(1).join('.') : ''); };
+  const structOf = (items) => Object.fromEntries(items.map((p) => [p.name, p.value]));
+  const out = {};
+  for (const pr of (e.data && e.data.props) || []) {
+    if (pr.name !== 'm_Forms') continue;
+    const u = structOf(pr.value); const idx = pr.arrayIndex || 0;
+    if (!u.m_bTextureReplace) continue;
+    const tex = (i) => (i && i < 0 ? importPath(i) : null);
+    out[idx] = { name: u.m_FormName || 'Normal', materials: ((u.m_TextureReplaceData || {}).items || []).map((it) => { const r = structOf(it); return { index: r.m_ReplaceIndex, material: r.m_ReplaceMaterialName, image: tex(r.m_ImageTexture), point: tex(r.m_PointTexture) }; }) };
+  }
+  return out;
+}
+
+// a texture of the set into a library folder: { file, srgb, mips, asset } or null (not converted)
+function putTexture(libDir, asset, wrote) {
+  const content = asset.replace(/^\/Game\//, '').split('.')[0];
+  const dds = path.join(CONTENT_DIR, content + '.dds'), side = path.join(CONTENT_DIR, content + '.texture.json');
+  if (!fs.existsSync(dds) || !fs.existsSync(side)) return null;
+  const s = JSON.parse(fs.readFileSync(side, 'utf8')); const pr = Object.fromEntries((s.props || []).map((x) => [x.tag.name, x.value]));
+  const srgb = pr.SRGB === undefined ? true : !!pr.SRGB;
+  const name = path.basename(content);
+  const data = fs.readFileSync(dds);
+  const png = path.join(libDir, 'textures', name + '.png');
+  let mips = 1;
+  if (!fs.existsSync(png)) {
+    const t = bc.decodeDds(data, 0); mips = t.mipCount;
+    fs.mkdirSync(path.dirname(png), { recursive: true });
+    fs.writeFileSync(png, bc.encodePng(t.width, t.height, Buffer.from(t.rgba), { alpha: true, srgb }));
+    wrote.push(png);
+  } else mips = data.length >= 32 ? Math.max(1, data.readUInt32LE(28)) : 1;
+  // the cooked file for the renderer (kh-shaderc copy_textures: DXT1 / DXT5 / ATI2 / BC7 family, sizes a multiple of 4)
+  const four = data.subarray(84, 88).toString('latin1'); const fmt = data.length >= 132 ? data.readUInt32LE(128) : 0;
+  const block = ['DXT1', 'DXT5', 'ATI2'].includes(four) || (four === 'DX10' && [71, 72, 77, 78, 83, 98, 99].includes(fmt));
+  const w = data.readUInt32LE(16), h = data.readUInt32LE(12);
+  const to = path.join(libDir, 'er', 'tex', name + '.dds');
+  // (SETUP-TOOLS) written whether or not <library>/er exists yet: in a build from scratch this step runs before the shader phase makes
+  // the folder (the development pack had it, so its DDS were written; a fresh build left every wear form without them)
+  if (block && w % 4 === 0 && h % 4 === 0 && !fs.existsSync(to)) {
+    fs.mkdirSync(path.dirname(to), { recursive: true }); fs.copyFileSync(dds, to); wrote.push(to);
+  }
+  return { file: 'textures/' + name + '.png', asset, srgb, mips };
+}
+
+function allForms(index, mainMats) {
+  const libs = [{ id: 'kh3', dir: path.join(PACK, 'materials'), mats: mainMats, set: P_EX001_SET, only: null }];
+  for (const o of index.outfits) {
+    if (!o.dir) continue;
+    const dir = path.join(PACK, o.dir, 'materials');
+    const mats = JSON.parse(fs.readFileSync(path.join(dir, 'materials.json'), 'utf8'));
+    const instances = new Set(Object.values(mats.materials).filter((m) => m.mesh === 'sora').map((m) => m.asset.split('.').pop()));
+    if (o.wearform_set) libs.push({ id: o.id, dir, mats, set: o.wearform_set, only: null });
+    // clothes that are KH3 Sora's own instances (San Fransokyo): KH3's set, those instances' rows
+    const own = ((mainMats.wear_forms || {})['0'] || { materials: [] }).materials;
+    if (!o.wearform_set && own.some((m) => instances.has(m.material))) libs.push({ id: o.id, dir, mats, set: P_EX001_SET, only: instances });
+  }
+  const wrote = [];
+  for (const lib of libs) {
+    const set = readWearformSet(lib.set);
+    if (!set) { console.log(`${lib.id}: no WearformSet ${lib.set}: no wear forms added`); continue; }
+    const file = path.join(lib.dir, 'wear_extra.json');
+    const extra = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { format: 'kh3-sora-wear-extra/1', generator: 'tools/sora_outfit_forms.js ' + VERSION, forms: {}, direct: {} };
+    extra.forms = extra.forms || {};
+    // the forms the library has already: materials.json's and wear_extra.json's of other phases (San Fransokyo's 0 / 5 above)
+    const have = new Set([...Object.keys(lib.mats.wear_forms || {}), ...Object.entries(extra.forms).filter(([, f]) => !/\(all forms\)/.test(f.by || '')).map(([k]) => k)]);
+    const added = [], missing = [];
+    for (const n of FORM_NUMBERS) {
+      const key = String(n);
+      if (have.has(key) || !set[n]) continue;
+      const rows = set[n].materials.filter((m) => !lib.only || lib.only.has(m.material));
+      if (!rows.length) continue;
+      let ok = true;
+      const materials = rows.map((m) => {
+        const out = { index: m.index, material: m.material };
+        for (const k of ['image', 'point']) { if (!m[k]) continue; const t = putTexture(lib.dir, m[k], wrote); if (!t) { ok = false; missing.push(`${n}:${m[k].split('.').pop()}`); } else out[k] = t; }
+        return out;
+      });
+      if (!ok) { delete extra.forms[key]; continue; }
+      extra.forms[key] = { name: set[n].name, replace: true, materials, by: 'tools/sora_outfit_forms.js ' + VERSION + ' (all forms)' };
+      added.push(n);
+    }
+    if (!added.length && !extra.all_forms) { console.log(`${lib.id}: no wear form to add from ${lib.set.split('/').pop()}`); continue; }
+    extra.all_forms = { generator: 'tools/sora_outfit_forms.js ' + VERSION, set: lib.set, wear_forms: added, note: 'forms rows of these wear forms: the WearformSet\'s own costume textures (forms materials.json lacks); kh-look library.rs add_wear_extra' };
+    fs.writeFileSync(file, JSON.stringify(extra, null, 1) + '\n');
+    console.log(`${lib.id}: wear forms ${added.join(', ') || '-'} added from ${lib.set.split('/').pop()}${missing.length ? ` (left out, texture not converted: ${missing.join(', ')})` : ''}`);
+  }
+  console.log(`all forms: ${wrote.length} new texture file(s)`);
+  if (process.argv.includes('--list-written')) for (const f of wrote) console.log('  + ' + path.relative(ROOT, f));
+}
+
+if (process.argv.includes('--all-forms-only')) {
+  allForms(JSON.parse(fs.readFileSync(path.join(PACK, 'outfits/outfits.json'), 'utf8')), JSON.parse(fs.readFileSync(path.join(PACK, 'materials/materials.json'), 'utf8')));
+} else main();

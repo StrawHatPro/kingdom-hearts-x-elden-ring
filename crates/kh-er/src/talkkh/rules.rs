@@ -11,9 +11,8 @@
 
 /// Talk-script commands (bank 1).
 pub mod cmd {
-    /// TalkToPlayer(talk param id, -1, -1, flag): plays the block of TalkParam rows id, id + 1, ... one line each.
-    #[allow(dead_code)] // (the line itself is read from the talk object: hooks.rs `update_hook`)
-    pub const TALK: i32 = 1;
+    // Command 1, TalkToPlayer(talk param id, -1, -1, flag): plays the block of TalkParam rows id, id + 1, ... one line each.
+    // It has no number here: the line itself is read from the talk object (hooks.rs `update_hook`).
     /// ShowShopMessage(1): the NPC's talk list (menu type 1). Other arguments are left to the game.
     pub const SHOW_SHOP_MESSAGE: i32 = 10;
     /// OpenGenericDialog(type, text, buttons, ?, ?): buttons 3 = Yes / No (the answer: query 22), 1 = OK.
@@ -422,8 +421,8 @@ pub const OK_TEXT: i32 = 1;
 
 /// ONE TALK OBJECT's line this frame, as the game's talk update left it (hooks.rs reads `CSTalkIns` after the update:
 /// + 0x2d talking, + 4 the block's first TalkParam id, + 8 the line's index in the block, + 0x34 the subtitle's
-/// TalkMsg id, + 0x2f the TalkToPlayer flag that the game's skip respects, + 0x54 / + 0x58 the line's elapsed time and
-/// length).
+///   TalkMsg id, + 0x2f the TalkToPlayer flag that the game's skip respects, + 0x54 / + 0x58 the line's elapsed time and
+///   length).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LineSnap {
     pub ins: usize,
@@ -606,9 +605,11 @@ pub struct AmbientBook {
 impl AmbientBook {
     /// `held_ins`: the talk object of the held conversation of ours (its lines are the held one's); `held_talk`: a talk
     /// whose lines are held ones (its camera is on and no battle) even before its conversation began.
+    #[cfg(test)]
     pub fn step(&mut self, lines: &[LineSnap], camera_talks: &[i32], in_battle: bool, held_ins: Option<usize>, dt: f32) -> Vec<AmbientAct> {
         self.step_with(lines, camera_talks, in_battle, held_ins, None, dt)
     }
+
 
     /// (CV3) `dismissed`: the talk object whose held conversation the leader WALKED AWAY from: its further lines are
     /// ambient (the NPC goes on talking as the player leaves, as in Elden Ring), whatever its talk camera says.

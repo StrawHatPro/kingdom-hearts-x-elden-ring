@@ -33,7 +33,7 @@ use std::sync::Arc;
 
 use glam::Vec3;
 
-use crate::pack::{Cmp, EventCmd, MacroCmd, MacroField, Pack, Param, Selection, SeqCmd, SoundDef, TrackCmd};
+use crate::pack::{EventCmd, MacroCmd, MacroField, Pack, Param, Selection, SeqCmd, SoundDef, TrackCmd};
 use crate::rng::CrtRand;
 use crate::rules::RULES;
 
@@ -281,7 +281,7 @@ struct SeqRun {
 
 impl SeqRun {
     fn finished(&self) -> bool {
-        self.reached_end && self.track.as_ref().map_or(true, |t| t.ended)
+        self.reached_end && self.track.as_ref().is_none_or(|t| t.ended)
     }
 }
 
@@ -312,6 +312,10 @@ struct Instance {
     /// Cycle: seconds to the next pick, and the last group picked.
     cycle: Option<(f32, Option<usize>)>,
     dead: bool,
+    /// (GOS) Not under the host's silence ([`Driver::set_silence`]): a menu's sound of the host's.
+    exempt: bool,
+    /// (MIMIC-BOSS hotfix 3, MB3-AUDIO) Whose sound it is ([`Driver::set_scope`]): 0 = the KH3 world, else one copy of a character.
+    scope: u32,
 }
 
 /// A live sound, for a debug page.
@@ -349,6 +353,16 @@ pub struct Driver {
     next_voice: VoiceId,
     out: Vec<VoiceCommand>,
     notes: Vec<Note>,
+    /// (GOS, THE USER 2026-11-03: "silence all music and other SFX when on death screen" / "(except for menu SFX, dont
+    /// silence that)") THE HOST'S SILENCE: a gain on every sound that is not marked [`Driver::set_exempt`], on its own
+    /// fade (real time: it goes on while a category is paused). 1 = nothing is changed. Not a SEAD layer: no category
+    /// is touched, so a menu sound in a category the world also uses is never caught by it.
+    silence: Fade,
+    /// (MIMIC-BOSS hotfix 3, MB3-AUDIO) THE SCOPE OF THE SOUNDS STARTED NOW: 0 = the KH3 world (the player's Sora, the party, the menus), else one
+    /// copy of a character (kh_audio::copies). The start macros and the category pools see only the sounds of the same
+    /// scope, so two instances of the same character never cancel, stop or steal each other's sounds; within one scope
+    /// every SEAD rule is KH3's own.
+    scope: u32,
 }
 
 const SILENT: VoiceParams = VoiceParams { volume: 0.0, pitch: 1.0, pan: 0.0, pan_depth: 1.0, lowpass: 1.0, reverb_send: 0.0 };
@@ -361,11 +375,43 @@ fn differs(a: &VoiceParams, b: &VoiceParams) -> bool {
 impl Driver {
     /// `seed`: the host's seed of the selection generator (the game's is the clock).
     pub fn new(pack: Arc<Pack>, seed: u32) -> Driver {
-        Driver { pack, rng: CrtRand::new(seed), instances: Vec::new(), categories: HashMap::new(), order_cursor: HashMap::new(), last_random: HashMap::new(), next_key: 1, next_voice: 1, out: Vec::new(), notes: Vec::new() }
+        Driver { pack, rng: CrtRand::new(seed), instances: Vec::new(), categories: HashMap::new(), order_cursor: HashMap::new(), last_random: HashMap::new(), next_key: 1, next_voice: 1, out: Vec::new(), notes: Vec::new(), silence: Fade::at(1.0), scope: 0 }
+    }
+
+    /// (GOS) THE HOST'S SILENCE: every sound not marked [`Driver::set_exempt`] goes to `gain` (0 = silent, 1 = as
+    /// authored) over `fade` seconds of [`Driver::update`]'s time. Sounds started later are under it at once.
+    pub fn set_silence(&mut self, gain: f32, fade: f32) {
+        self.silence.go(gain.clamp(0.0, 1.0), fade, 0);
+    }
+
+    /// (GOS) The silence's gain now (1 = none).
+    pub fn silence(&self) -> f32 {
+        self.silence.value()
+    }
+
+    /// (GOS) Sound `key` is never under the host's silence (a menu's sound). False: no such live sound.
+    pub fn set_exempt(&mut self, key: SoundKey) -> bool {
+        match self.instances.iter_mut().find(|s| s.key == key && !s.dead) {
+            Some(s) => {
+                s.exempt = true;
+                true
+            }
+            None => false,
+        }
     }
 
     pub fn pack(&self) -> &Arc<Pack> {
         &self.pack
+    }
+
+    /// (MIMIC-BOSS hotfix 3, MB3-AUDIO) The scope the sounds started from now on belong to (see the field); returns the one before.
+    pub fn set_scope(&mut self, scope: u32) -> u32 {
+        std::mem::replace(&mut self.scope, scope)
+    }
+
+    /// (MIMIC-BOSS hotfix 3, MB3-AUDIO) The scope of the sounds started now.
+    pub fn scope(&self) -> u32 {
+        self.scope
     }
 
     /// Starts sound `index` of `bank` (spec 2.1): the start macro, then the category pool. The
@@ -381,8 +427,9 @@ impl Driver {
         // 1. The start macro (interpreter 0x145976BA0).
         if def.macro_start != 0 {
             if let Some(commands) = pack.macros.get(&def.macro_start) {
-                // A2.
-                let all = |instances: &[Instance]| -> Vec<usize> { (0..instances.len()).filter(|&i| !instances[i].dead && !instances[i].stopping).collect() };
+                // A2. (MIMIC-BOSS hotfix 3, MB3-AUDIO) the live sounds of this scope only
+                let scope = self.scope;
+                let all = |instances: &[Instance]| -> Vec<usize> { (0..instances.len()).filter(|&i| !instances[i].dead && !instances[i].stopping && instances[i].scope == scope).collect() };
                 let mut set = all(&self.instances);
                 let id = |bank_number: i32, number: u32| bank_number as i64 * 65_536 + number as i64;
                 for command in commands {
@@ -439,7 +486,8 @@ impl Driver {
         // 2. The category pool (0x14596E140): full -> the lowest priority, oldest on ties, is
         // stopped at once unless the new sound's priority is lower, which is then dropped.
         if pool_size > 0 {
-            let members: Vec<usize> = (0..self.instances.len()).filter(|&i| !self.instances[i].dead && self.instances[i].pool == pool).collect();
+            // (MIMIC-BOSS hotfix 3, MB3-AUDIO) the pool of this scope: a copy's sounds never steal the player's, nor his theirs
+            let members: Vec<usize> = (0..self.instances.len()).filter(|&i| !self.instances[i].dead && self.instances[i].pool == pool && self.instances[i].scope == self.scope).collect();
             if members.len() >= pool_size as usize {
                 let victim = members.into_iter().min_by_key(|&i| (self.instances[i].priority, self.instances[i].key)).expect("a full pool has a member");
                 if def.priority < self.instances[victim].priority {
@@ -484,6 +532,8 @@ impl Driver {
             seqs: Vec::new(),
             cycle: None,
             dead: false,
+            exempt: false,
+            scope: self.scope,
         });
         self.notes.push(Note::Play { key, bank, index });
         PlayOutcome::Started(key)
@@ -525,6 +575,18 @@ impl Driver {
 
     pub fn is_playing(&self, key: SoundKey) -> bool {
         self.instances.iter().any(|s| s.key == key && !s.dead)
+    }
+
+    /// (THE USER 2026-11-02: "...shotlock's startup sfx is way too loud") THE LOUDEST A LIVE SOUND IS AUTHORED TO PEAK,
+    /// 0 .. 1 of full scale: its SEAD volume x the volume it was started with (the asset's x the caller's) x the
+    /// largest peak of its tracks' materials (the pack manifest's `peak`). `None`: no such sound, or no material of it
+    /// has a measured peak. What a host that raises a sound above its authored level reads to keep it out of clipping.
+    pub fn peak_level(&self, key: SoundKey) -> Option<f32> {
+        let s = self.instances.iter().find(|s| s.key == key && !s.dead)?;
+        let def = self.pack.sound(s.bank, s.index)?;
+        let materials = &self.pack.bank(s.bank).materials;
+        let peak = def.tracks.values().filter_map(|t| materials.get(&t.material).and_then(|m| m.peak)).reduce(f32::max)?;
+        Some(def.volume * s.user_volume.to * peak)
     }
 
     /// Moves a 3D sound (one attached to a bone follows it: the host calls this every step).
@@ -665,7 +727,7 @@ impl Driver {
                     if *no_repeat && self.last_random.get(&(bank, index)) == Some(&pick) {
                         let mut best: Option<usize> = None;
                         for (i, g) in choose.iter().enumerate() {
-                            if i != pick && best.map_or(true, |b| g.weight > choose[b].weight) {
+                            if i != pick && best.is_none_or(|b| g.weight > choose[b].weight) {
                                 best = Some(i);
                             }
                         }
@@ -714,6 +776,8 @@ impl Driver {
             c.pitch.advance(dt);
             c.pause.advance(dt);
         }
+        self.silence.advance(dt); // (GOS)
+        let silence = self.silence.value();
         let mut instances = std::mem::take(&mut self.instances);
         for s in &mut instances {
             if s.dead {
@@ -792,7 +856,7 @@ impl Driver {
                 s.cycle = Some((timer, last));
             }
 
-            let base_volume = def.volume * s.user_volume.value() * s.stop.value() * category.pause.value() * s.macro_fade.value() * s.volume_3d * category.volume();
+            let base_volume = def.volume * s.user_volume.value() * s.stop.value() * category.pause.value() * s.macro_fade.value() * s.volume_3d * category.volume() * if s.exempt { 1.0 } else { silence } /* (GOS) */;
             for seq in &mut s.seqs {
                 let Some(seq_def) = def.sequences.get(seq.seq) else {
                     seq.reached_end = true;
@@ -1016,6 +1080,3 @@ impl Driver {
         std::mem::take(&mut self.out)
     }
 }
-
-#[allow(dead_code)]
-fn _cmp_is_used(_: Cmp) {}

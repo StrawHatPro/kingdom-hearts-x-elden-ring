@@ -369,7 +369,7 @@ function findMe3() {
 // ---------------------------------------------------------------- the pack
 // A pack is complete when the pack tools, the replay, the shaders and the generated data have all run (packgen writes
 // build/packgen/done.json at the end of a whole build).
-const PACK_REQUIRED = ['manifest.json', 'sora.glb', 'materials/er/skin.vs.dxil', 'vfx/er/shaders.json', 'ui/manifest.json', 'audio/manifest.json', 'party/n_ex001/manifest.json', 'party/n_ex002/manifest.json'];
+const PACK_REQUIRED = ['manifest.json', 'sora.glb', 'materials/er/skin.vs.dxil', 'vfx/er/shaders.json', 'ui/manifest.json', 'audio/manifest.json', 'party/n_ex001/manifest.json', 'party/n_ex002/manifest.json', 'keyblades/manifest.json', 'party/n_ex014/manifest.json'];
 // (written when tools/packgen.js has made the whole pack: a pack build that stopped half way is built again)
 const PACK_DONE = path.join(REPO, 'build', 'packgen', 'pack_done.json');
 
@@ -383,8 +383,8 @@ const PACK_DONE = path.join(REPO, 'build', 'packgen', 'pack_done.json');
 // A pack built before the fingerprints existed: its shaders are made again (the update that brought them changed only
 // those), then the fingerprints are written.
 const PACK_PRINTS = path.join(REPO, 'build', 'packgen', 'pack_inputs_fp.json');
-const PACK_EPOCH = 1;
-const SHADER_INPUTS = ['tools/packgen/recipes/shaders.json', 'tools/packgen_shaders.js', 'tools/packgen_overlays.js'];
+const PACK_EPOCH = 2; // (2: 2026-11, the weapons round: keyblades, forms, Moogle, shotlocks audio, the new shader sets)
+const SHADER_INPUTS = ['tools/packgen/recipes/shaders.json', 'tools/packgen/recipes/anti_h91_kh1.json', 'tools/packgen_shaders.js', 'tools/packgen_overlays.js'];
 function listFiles(rel) {
   const out = [];
   const walk = (r) => {
@@ -622,16 +622,29 @@ async function downloadDxcLinux() {
     ok(`pack: ${packDir} (its shaders made again)`);
   } else if (full) {
     if (!fromSource || missing.length || opt['rebuild-pack']) prep();
-    say('   building the pack from your KH3 install: extract, convert, research, pack, replay, shaders (half an hour or more, about 80 GB of disk)');
     // a build that stopped goes on where it stopped (tools/packgen.js --resume: build/packgen/done_steps.json); --rebuild-pack starts again
     const doneSteps = path.join(REPO, 'build', 'packgen', 'done_steps.json');
-    if (opt['rebuild-pack'] || !missing.length) fs.rmSync(doneSteps, { force: true }); // (PACKUPDATE: changed tools start again too)
+    // (2026-11, RELEASE-PREP) the last build FINISHED (pack_done.json) and files are missing: a new version that needs pack
+    // files the earlier one did not make (0.1.3: keyblades, n_ex014), not a build that stopped. The finished build's step
+    // list would make --resume skip every step: start again instead
+    const lastFinished = !opt.pack && exists(PACK_DONE);
+    if (lastFinished && missing.length && !opt['rebuild-pack']) say('   this version needs pack files the last build did not make: the pack is made again (half an hour or more)');
+    if (opt['rebuild-pack'] || !missing.length || lastFinished) fs.rmSync(doneSteps, { force: true }); // (PACKUPDATE: changed tools start again too)
     const resume = exists(doneSteps) ? ['--resume'] : [];
+    say('   building the pack from your KH3 install: extract, convert, research, pack, replay, shaders (half an hour or more, about 80 GB of disk)');
     if (resume.length) say('   going on with the last pack build (the steps it finished are kept; --rebuild-pack starts again)');
     // a build from the start starts from an empty pack folder: a pack tool that records what its folder holds (the
     // outfits' file counts and sizes in outfits/outfits.json) would else count the files a previous build's later steps
     // left there, and the replay's check of the recorded files fails (the same on Windows and Linux)
-    else fs.rmSync(path.join(REPO, 'build', 'sora_pack'), { recursive: true, force: true, maxRetries: 3 });
+    // (2026-11) and from an empty build/sora_tmp (the research data and the pack tools' staging): a build run again found the
+    // files the earlier build's later steps had left there, made other values and the replay's recipes failed (the research
+    // scripts are staged there again from tools/research by the build itself)
+    else {
+      for (const d of ['sora_pack', 'sora_tmp']) fs.rmSync(path.join(REPO, 'build', d), { recursive: true, force: true, maxRetries: 3 });
+      // (a build from the start that stops before its end leaves no "finished" mark and no fingerprints of the earlier
+      // pack: the next run goes on with it, --resume)
+      for (const f of [PACK_DONE, PACK_PRINTS]) fs.rmSync(f, { force: true });
+    }
     if (run(process.execPath, ['tools/packgen.js', 'extract', 'convert', 'research', 'pack', 'replay', 'shaders', '--er', erGame, ...workers, ...resume], { env: packEnv })) stop(1, ['the pack build failed: the step that failed and its log are above (build/packgen/logs).', 'Run the setup again after fixing it: the build goes on from the step that failed.']);
     fs.mkdirSync(path.dirname(PACK_DONE), { recursive: true }); fs.writeFileSync(PACK_DONE, JSON.stringify({ done: new Date().toISOString(), kh3: exeNow }, null, 1) + '\n');
     writePrints();

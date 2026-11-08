@@ -982,9 +982,9 @@ fn the_default_loadout_uses_exactly_180_ap() {
     // The player gates (spec 5.2): without the script flag the ability does not count.
     let mut g = s.clone();
     assert_eq!((g.count(A::Airslide), g.count(A::Superslide), g.has(A::Doubleflight), g.has(A::Airdodge)), (3, 3, true, true));
-    g.action_flags = 0xFF & !(1 << 1) & !(1 << 7);
+    g.action_flags = !(1 << 1) & !(1 << 7);
     assert_eq!((g.count(A::Airslide), g.count(A::Superslide), g.has(A::Doubleflight), g.has(A::Airdodge), g.has(A::Superjump)), (0, 0, true, false, false));
-    g.action_flags = 0xFF & !1 & !(1 << 4);
+    g.action_flags = !1 & !(1 << 4);
     assert_eq!((g.has(A::Doubleflight), g.has(A::FocusAspir), g.count(A::Airslide)), (false, false, 3));
     // A meal's bonus ability counts once without being owned (0x140580810).
     let mut meal = s.clone();
@@ -1096,7 +1096,7 @@ fn gauge_frames_of_the_ui_specs_test_list() {
     assert_eq!(frames(&mut sora, 249, 99), (499, 100, false, false), "never full unless full");
     // Test 3: pinch at HP <= 62 (frame 125), off at 63.
     assert_eq!(frames(&mut sora, 62, 100), (125, 101, true, true));
-    assert_eq!(frames(&mut sora, 63, 100).3, false);
+    assert!(!frames(&mut sora, 63, 100).3);
     // Max HP 280 -> base 561; max HP 139 -> base 279; max HP 400 -> the base stays 669.
     let base = |status: Status| { let mut s = spawn(status); s.step(DT, &Input::default(), &world); s.ui_snapshot().gauges };
     assert_eq!(base(level99("vitality", "STANDARD")).hp_base_frame, 561);

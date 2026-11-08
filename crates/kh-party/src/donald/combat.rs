@@ -18,7 +18,7 @@ use super::attune::{AttuneCast, Attunement};
 use super::element::{ElemSet, Element};
 use super::learn::DonLearned;
 use super::react::Reaction;
-use super::spells::{mp_of_cost, mp_of_pct, price_pct, ArcaneLine, PriceCtx, SpellRef};
+use super::spells::{mp_of_cost, price_pct, ArcaneLine, PriceCtx, SpellRef};
 use super::tune::DonData;
 
 /// Something the host shows or pays.
@@ -167,7 +167,7 @@ impl DonCore {
     /// The element of the n-th missile (4.6: with two attunements they alternate; none = plain arcane).
     pub fn missile_element(&self, n: u32) -> Option<Element> {
         match (self.attune.slots[0], self.attune.slots[1]) {
-            (Some(a), Some(b)) => Some(if n % 2 == 0 { a.element } else { b.element }),
+            (Some(a), Some(b)) => Some(if n.is_multiple_of(2) { a.element } else { b.element }),
             (Some(a), None) => Some(a.element),
             _ => None,
         }
@@ -260,13 +260,16 @@ impl DonCore {
                 // 2026-10-22); the slower MP regen follows its cast (commit_cast)
                 // (ZETTA 2026-10-23, the user: "Zettaflare needs to use up all of your magic (it needs all of your current MP to be useable) and then put you into the red MP bar mode with a 30% slower recharge rate"; asked, the user chose "Requires a full MP bar") A FULL MP BAR: castable only with all of his MP (MP == max MP), all of it spent: his MP
                 // Charge (the red bar, as Cure's) runs, `zetta.regen_mult` as fast
+                // (THE USER 2026-11-02: "make sure Donald and his spells (including Zettaflare) have this as well. Zettaflare should
+                // instantly put Donald into MP reserve") the full bar is gone: the party's MP rule, any MP above 0 casts it; it
+                // still takes ALL of it and starts MP Charge at its start (zettaflare::begin, crate::mp_rule::spend_all)
                 if !zetta_mp_ok(mp, max_mp) {
                     return Err(Refusal::NotEnoughMp { need: max_mp.max(1) });
                 }
                 return Ok(CastPlan { spell, mp, pct: mp as f32, attuned: false, quick: false, echo: false, cast: row.cast, charges });
             }
             let need = mp_of_cost(row.cost_att, scale); // a set MP cost like the rest of his magic (user, 2026-10-22)
-            if mp < need {
+            if !mp_ok(mp, need) {
                 return Err(Refusal::NotEnoughMp { need });
             }
             return Ok(CastPlan { spell, mp: need, pct: row.cost_att, attuned: false, quick: false, echo: false, cast: row.cast, charges });
@@ -289,7 +292,7 @@ impl DonCore {
         let echo = spell.is_base() && self.echo.is_some_and(|(ee, until)| ee == e && self.clock <= until);
         let pct = price_pct(row, PriceCtx { attuned, quick, echo_free: echo }).ok_or(Refusal::NeedsFullPower)?;
         let need = mp_of_cost(pct, scale); // fixed MP like Sora (user, 2026-10-22); `pct` now holds that cost
-        if need > 0 && mp < need {
+        if !mp_ok(mp, need) {
             return Err(Refusal::NotEnoughMp { need });
         }
         Ok(CastPlan { spell, mp: need, pct, attuned, quick, echo, cast: row.cast, charges: 0 })
@@ -648,19 +651,31 @@ impl DonCore {
             if line == ArcaneLine::Zettaflare && !self.zettaflare_ready(learned, d) {
                 continue;
             }
-            // (ZETTA 2026-10-23, the user: "Zettaflare needs to use up all of your magic (it needs all of your current MP to be useable) and then put you into the red MP bar mode with a 30% slower recharge rate"; asked, the user chose "Requires a full MP bar") offered only with a full MP bar (it spends all of it)
+            // (ZETTA 2026-10-23, the user: "Zettaflare needs to use up all of your magic (it needs all of your current MP to be useable) and then put you into the red MP bar mode with a 30% slower recharge rate") offered only with MP to spend (it spends all of it);
+            // (THE USER 2026-11-02: "make sure Donald and his spells (including Zettaflare) have this as well") any MP above 0, no longer a full bar
             if line == ArcaneLine::Zettaflare && !zetta_mp_ok(mp, max_mp) {
                 continue;
             }
-            // set MP costs (user, 2026-10-22); (ZETTA 2026-10-23) Zettaflare: his whole (full) bar
+            // set MP costs (user, 2026-10-22); (ZETTA 2026-10-23) Zettaflare: his whole bar
             let need = if line == ArcaneLine::Zettaflare { max_mp.max(1) } else { spell.row(d).map_or(0, |r| mp_of_cost(r.cost_att, d.tune.cost_scale)) };
-            out.push(YOffer { spell, charges, mp: need, affordable: mp >= need });
+            out.push(YOffer { spell, charges, mp: need, affordable: mp_ok(mp, need) }); // (THE USER 2026-11-02) the party's MP rule
         }
         out
     }
 }
 
-/// (ZETTA 2026-10-23, the user: "Zettaflare needs to use up all of your magic (it needs all of your current MP to be useable) and then put you into the red MP bar mode with a 30% slower recharge rate"; asked, the user chose "Requires a full MP bar") ZETTAFLARE'S MP RULE: a FULL MP bar (his MP at its max, above 0).
+/// (THE USER 2026-11-02: "let Goofy use his last MP and go into MP reserve, make sure Donald and his spells (including Zettaflare)
+/// have this as well") HIS SPELLS' MP GATE, the party's MP rule (crate::mp_rule) on his MP now: a price above 0 needs MP above 0;
+/// one dearer than what he has takes the last of it into MP Charge when the cast starts (cast::begin). MP Charge leaves his MP at
+/// 0, so it refuses here too (and cast::begin checks the charge itself).
+pub fn mp_ok(mp: i32, need: i32) -> bool {
+    need <= 0 || mp > 0
+}
+
+/// (ZETTA 2026-10-23, the user: "Zettaflare needs to use up all of your magic (it needs all of your current MP to be useable) and then put you into the red MP bar mode with a 30% slower recharge rate") ZETTAFLARE'S MP RULE.
+/// (THE USER 2026-11-02: "make sure Donald and his spells (including Zettaflare) have this as well. Zettaflare should instantly put
+/// Donald into MP reserve") the full bar of 2026-10-23 gave way to the party's MP rule: any MP above 0 (`max_mp` is its price, all
+/// of his bar; whatever is left goes, and MP Charge starts at once).
 pub fn zetta_mp_ok(mp: i32, max_mp: i32) -> bool {
-    mp > 0 && mp >= max_mp
+    mp_ok(mp, max_mp.max(1))
 }

@@ -43,7 +43,7 @@ impl Canvas {
     pub fn to_rgba8(&self, out: &mut Vec<u8>) {
         out.clear();
         out.reserve(self.w * self.h * 4);
-        for p in self.px.chunks_exact(4) {
+        for p in self.px.as_chunks::<4>().0 {
             let a = p[3];
             if a <= 1.0e-6 {
                 out.extend_from_slice(&[0, 0, 0, 0]);
@@ -59,7 +59,7 @@ impl Canvas {
     pub fn to_rgba8_over(&self, bg: impl Fn(usize, usize) -> [f32; 3], out: &mut Vec<u8>) {
         out.clear();
         out.reserve(self.w * self.h * 4);
-        for (i, p) in self.px.chunks_exact(4).enumerate() {
+        for (i, p) in self.px.as_chunks::<4>().0.iter().enumerate() {
             let b = bg(i % self.w, i / self.w);
             let a = p[3];
             let c = |v: f32, b: f32| ((v + b * (1.0 - a)) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
@@ -374,7 +374,7 @@ pub fn fill(canvas: &mut Canvas, c: &Coverage, paint: &PaintFn, clip: Option<&Ma
             let (bx, by) = inv.apply(px, py);
             (bx * scale.0 - 0.5, by * scale.1 - 0.5, inv.a * scale.0, inv.b * scale.1)
         });
-        for (i, (&k0, p)) in cov.iter().zip(row.chunks_exact_mut(4)).enumerate() {
+        for (i, (&k0, p)) in cov.iter().zip(row.as_chunks_mut::<4>().0).enumerate() {
             if k0 <= 0.0 {
                 continue;
             }
@@ -473,6 +473,99 @@ static LEGACY_ADD_COVERAGE: std::sync::atomic::AtomicBool = std::sync::atomic::A
 
 pub fn set_legacy_add_coverage(on: bool) {
     LEGACY_ADD_COVERAGE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// (F-HUD) A LAYER group (blend mode 2) drawn on its own, composited normally (premultiplied over) through `clip`.
+/// (INTERACT-MARK) ONE PASS OF FLASH'S BOX BLUR over a premultiplied surface: each pixel becomes the mean of the `wx`
+/// pixels of its row around it (`(wx - 1) / 2` before, `wx / 2` after; outside the surface counts as transparent), then
+/// the same down the columns with `wy`. A width of 1 leaves that direction as it is.
+pub fn box_blur(layer: &mut Canvas, wx: usize, wy: usize) {
+    let (w, h) = (layer.w, layer.h);
+    let mut line: Vec<[f32; 4]> = Vec::new();
+    let mut pass = |len: usize, count: usize, width: usize, at: &dyn Fn(usize, usize) -> usize, px: &mut [f32]| {
+        if width <= 1 || len == 0 {
+            return;
+        }
+        let (before, after) = ((width - 1) / 2, width / 2);
+        let scale = 1.0 / width as f32;
+        for n in 0..count {
+            line.clear();
+            line.extend((0..len).map(|i| {
+                let k = at(n, i);
+                [px[k], px[k + 1], px[k + 2], px[k + 3]]
+            }));
+            let mut sum = [0.0f32; 4];
+            let add = |sum: &mut [f32; 4], p: &[f32; 4], sign: f32| sum.iter_mut().zip(p).for_each(|(s, v)| *s += sign * v);
+            for p in line.iter().take(after.min(len)) {
+                add(&mut sum, p, 1.0);
+            }
+            for i in 0..len {
+                if let Some(p) = line.get(i + after) {
+                    add(&mut sum, p, 1.0);
+                }
+                if i > before {
+                    add(&mut sum, &line[i - before - 1], -1.0);
+                }
+                let k = at(n, i);
+                px[k..k + 4].iter_mut().zip(&sum).for_each(|(d, s)| *d = (s * scale).max(0.0));
+            }
+        }
+    };
+    pass(w, h, wx, &|row, x| (row * w + x) * 4, &mut layer.px);
+    pass(h, w, wy, &|col, y| (y * w + col) * 4, &mut layer.px);
+}
+
+pub fn over_layer(canvas: &mut Canvas, layer: &Canvas, clip: Option<&Mask>) {
+    for ly in 0..layer.h {
+        let dy = layer.y0 + ly as i32;
+        let cy = dy - canvas.y0;
+        if cy < 0 || cy as usize >= canvas.h {
+            continue;
+        }
+        for lx in 0..layer.w {
+            let k = (ly * layer.w + lx) * 4;
+            let s = &layer.px[k..k + 4];
+            if s[3] <= 0.0 {
+                continue;
+            }
+            let dx = layer.x0 + lx as i32;
+            let cxp = dx - canvas.x0;
+            if cxp < 0 || cxp as usize >= canvas.w {
+                continue;
+            }
+            let kk = clip.map_or(1.0, |m| m.at(dx, dy));
+            if kk <= 0.0 {
+                continue;
+            }
+            let i = (cy as usize * canvas.w + cxp as usize) * 4;
+            let d = &mut canvas.px[i..i + 4];
+            let a = s[3] * kk;
+            for c in 0..4 {
+                d[c] = s[c] * kk + d[c] * (1.0 - a);
+            }
+        }
+    }
+}
+
+/// (F-HUD) Flash's ERASE (12) and ALPHA (11) inside a LAYER group: the layer drawn so far (`canvas`) keeps
+/// `1 - alpha` (ERASE) or `alpha` (ALPHA) of the child drawn in `child`; ALPHA leaves nothing where the child is not.
+pub fn erase_layer(canvas: &mut Canvas, child: &Canvas, alpha_mode: bool) {
+    for cy in 0..canvas.h {
+        let dy = canvas.y0 + cy as i32;
+        for cxp in 0..canvas.w {
+            let dx = canvas.x0 + cxp as i32;
+            let (lx, ly) = (dx - child.x0, dy - child.y0);
+            let sa = if lx >= 0 && ly >= 0 && (lx as usize) < child.w && (ly as usize) < child.h { child.px[(ly as usize * child.w + lx as usize) * 4 + 3] } else { 0.0 };
+            let keep = if alpha_mode { sa } else { 1.0 - sa };
+            if keep >= 1.0 {
+                continue;
+            }
+            let i = (cy * canvas.w + cxp) * 4;
+            for v in &mut canvas.px[i..i + 4] {
+                *v *= keep.max(0.0);
+            }
+        }
+    }
 }
 
 pub fn blend_layer(canvas: &mut Canvas, layer: &Canvas, mode: u8, clip: Option<&Mask>) {

@@ -78,7 +78,7 @@ fn main() {
                     let (old, new) = (draw(&mut renderer, &movie, false), draw(&mut renderer, &movie, true));
                     samples += 1;
                     let mut score = 0;
-                    for (p, q) in old.px.chunks_exact(4).zip(new.px.chunks_exact(4)) {
+                    for (p, q) in old.px.as_chunks::<4>().0.iter().zip(new.px.as_chunks::<4>().0) {
                         if p[3] <= 0.0 && q[3] <= 0.0 {
                             continue;
                         }

@@ -94,8 +94,6 @@ pub(crate) struct Queue {
 /// More `DoChain`s than this in one `MainProc` call is a state loop: the call stops and says so.
 const MAX_PASSES: usize = 8;
 
-// `push_state`, `do_finish` and `do_restart` have no caller among the stage-1 states.
-#[allow(dead_code)]
 impl Queue {
     pub fn new() -> Queue {
         Queue { queued: Vec::new(), front_is_running: true, finish: false, restart: false, chain: false, flags: StateFlags::default() }
@@ -154,7 +152,8 @@ impl Queue {
     }
 
     /// Flag 2: end the running state and begin it again (the same instance, no Reset) when it is
-    /// still the queue's front.
+    /// still the queue's front. No state asks for it yet: only the queue's own tests do.
+    #[cfg(test)]
     pub fn do_restart(&mut self) {
         self.restart = true;
     }
@@ -192,6 +191,15 @@ pub(crate) fn main_proc(state: &mut StateData, s: &mut Ctx, dt: f32) {
             let from = state.id();
             state.end(s);
             let (next, fresh) = s.queue.next(*state);
+            // (NOCOMBAT) THE LAST WORD of the no-combat rule: an offensive state that got queued by any route does not begin
+            // (the default begins in its place)
+            let (next, fresh) = match crate::nocombat::state_act(&next) {
+                Some(act) if !crate::nocombat::allows(crate::nocombat::Fighter::Sora, act) => {
+                    s.note("nocombat: an offensive state was queued where attacks are forbidden: it does not begin");
+                    (StateData::DEFAULT, true)
+                }
+                _ => (next, fresh),
+            };
             *state = next;
             if fresh {
                 // PushState calls Reset: the base Reset clears m_bEnableChange.
@@ -227,6 +235,8 @@ pub(crate) fn on_notifies(state: &mut StateData, s: &mut Ctx, notifies: &Notifie
         s.queue.flags.enable_change = true;
     }
     state.on_notifies(s, notifies);
+    // (AUDIT-C) the BpEvent windows of the form clips for the state-event camera blueprints (states/bp_event.rs)
+    super::bp_event::emit(state, s, notifies);
 }
 
 #[cfg(test)]

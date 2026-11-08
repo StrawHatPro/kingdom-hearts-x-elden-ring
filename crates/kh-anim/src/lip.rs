@@ -148,7 +148,7 @@ mod tests {
 
     /// A line of `parts` (seconds, loudness 0..1).
     fn line(parts: &[(f32, f32)]) -> Vec<u8> {
-        parts.iter().flat_map(|&(secs, l)| std::iter::repeat((l * 255.0) as u8).take((secs * RATE).round() as usize)).collect()
+        parts.iter().flat_map(|&(secs, l)| std::iter::repeat_n((l * 255.0) as u8, (secs * RATE).round() as usize)).collect()
     }
 
     #[test]

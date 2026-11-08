@@ -349,6 +349,8 @@ pub fn on_start(sora: &mut Sora, root: &Path, loadout_path: &Path, control: &Con
         let loadout = save::test_loadout(&new_base, level as u32, levels_sheet.as_deref()); // (DF) the new-game difficulty
         *sora.status_mut() = Status::from_loadout(&loadout);
         reset_command(sora);
+        kh_host::weapons::begin_new_game(); // (weapons P1) no Keyblades / Workshop of another character
+        kh_host::hud::tie_keyblade_levels(sora.status_mut()); // (weapons INT) the core's Keyblade levels = the record's
         erlog!("save: sora.level = {level}: the test loadout of that level (HP {}, MP {}); NOTHING is read or written while the key is there", sora.status().max_hp(), sora.status().max_mp());
         *guard = None;
         crate::savegate::set_armed(false, "sora.level testing: Sora has no save data"); // (savegate)
@@ -358,6 +360,8 @@ pub fn on_start(sora: &mut Sora, root: &Path, loadout_path: &Path, control: &Con
         erlog!("save: the character could not be identified (game data manager not there): level-1 new game in memory, nothing is written");
         *sora.status_mut() = Status::from_loadout(&save::new_game_loadout(&new_base, levels_sheet.as_deref())); // (DF)
         reset_command(sora);
+        kh_host::weapons::begin_new_game(); // (weapons P1) no Keyblades / Workshop of another character
+        kh_host::hud::tie_keyblade_levels(sora.status_mut()); // (weapons INT) the core's Keyblade levels = the record's
         *guard = None;
         crate::savegate::set_armed(false, "the character could not be identified"); // (savegate)
         return;
@@ -365,6 +369,29 @@ pub fn on_start(sora: &mut Sora, root: &Path, loadout_path: &Path, control: &Con
     let key = save::character_key(&name, slot);
     // (`save.dir`: another folder beside `mods`, for tests on a copy of the save)
     let dir = root.join(control.str("save.dir").unwrap_or("saves"));
+    // (NG, the user 2026-11-02: "I started new game as Goofy but I was Sora") THE GAME HAS JUST MADE THIS CHARACTER (its own
+    // STEP_BeginNewGame ran since the last start): every file of ours in its slot is the replaced character's. SEEN: a
+    // level-1 file of 16 s from an earlier new game of the same name and slot was loaded as this one's (play time could
+    // not tell them apart), with its starter Sora, and the title's pick of Goofy was never taken. They are moved into
+    // `deleted\` (byte for byte, as the save menu's Delete does) and this start is a new game.
+    let fresh = crate::title::take_new_game_begun() && play_ms < 600_000;
+    if fresh {
+        if guard.as_ref().is_some_and(|s| s.key == key) {
+            *guard = None;
+        }
+        if let Ok(n) = usize::try_from(slot) {
+            let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()).to_string();
+            match kh_host::save::delete_slot_files(&dir, n, &stamp) {
+                Ok(moved) if moved.is_empty() => {}
+                Ok(moved) => erlog!("save: (NG) A NEW GAME WAS JUST MADE IN SLOT {n}: {} file(s) of the character it replaced were moved into {}", moved.len(), kh_host::save::trash_dir(&dir, n, &stamp).display()),
+                Err(e) => erlog!("save: (NG) a new game was just made in slot {n}, but the replaced character's files could NOT all be moved aside ({e}): a new game, NOTHING is written this session"),
+            }
+        }
+    }
+    // (SAVE-DELETE) the title's Continue ranks the slots by their latest load or save: this character's load is now
+    if slot >= 0 {
+        crate::slots::record_loaded(&dir, &key);
+    }
     let marked = marker(&dir, &key).is_file();
     // (IMPL_ER21) `save.points_only = 1` IS ABSOLUTE: a character that exists (its save-points marker, its creation
     // marker, Sora's own file, or more than five minutes of play) is armed at once; a NEW one is armed when its
@@ -378,6 +405,9 @@ pub fn on_start(sora: &mut Sora, root: &Path, loadout_path: &Path, control: &Con
         if let Some(latest) = state.latest.clone() {
             let mut inventory = crate::hud::inventory();
             latest.apply(&base, sora, &mut inventory);
+            latest.run_weapons(); // (weapons P1)
+            kh_host::hud::Hud::tie_keyblade_slots(sora.status_mut(), &inventory.spare_weapons); // (weapons P11, ROUND D9) the save's Keyblade slots into the core
+            kh_host::hud::tie_keyblade_levels(sora.status_mut()); // (weapons INT) the record's Keyblade levels into the core
             crate::hud::set_formation_record(&latest.party); // (party P)
             #[cfg(feature = "party")]
             crate::partyui::load_record(&latest.party); // (ER party S6) the friends' progression, the formation, Zero EXP, the unlocks
@@ -404,6 +434,11 @@ pub fn on_start(sora: &mut Sora, root: &Path, loadout_path: &Path, control: &Con
             loaded = Loaded::NewGame;
         }
     }
+    // (NG) a file still there after the move above failed is never this new character's (and is not overwritten)
+    if fresh && matches!(loaded, Loaded::Save(_) | Loaded::Backup(_)) {
+        writable = false;
+        loaded = Loaded::NewGame;
+    }
     // (IMPL_ER11) A version-1 file (made before the choices existed) of a character that is still at the very start
     // (level 1, no EXP) is asked too; an older character keeps Balance + the warrior's path (what its file was built with).
     let version_1 = std::fs::read_to_string(save::save_path(&dir, &key)).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).is_some_and(|v| v["version"].as_u64() == Some(1));
@@ -427,6 +462,9 @@ pub fn on_start(sora: &mut Sora, root: &Path, loadout_path: &Path, control: &Con
                 }
             }
             found.apply(&base, sora, &mut inventory);
+            found.run_weapons(); // (weapons P1)
+            kh_host::hud::Hud::tie_keyblade_slots(sora.status_mut(), &inventory.spare_weapons); // (weapons P11, ROUND D9) the save's Keyblade slots into the core
+            kh_host::hud::tie_keyblade_levels(sora.status_mut()); // (weapons INT) the record's Keyblade levels into the core
             crate::hud::set_formation_record(&found.party); // (party P)
             #[cfg(feature = "party")]
             crate::partyui::load_record(&found.party); // (ER party S6) the friends' progression, the formation, Zero EXP, the unlocks
@@ -451,6 +489,7 @@ pub fn on_start(sora: &mut Sora, root: &Path, loadout_path: &Path, control: &Con
             #[cfg(feature = "party")]
             crate::partyui::load_record(&serde_json::Value::Null);
             *sora.status_mut() = Status::from_loadout(&save::new_game_loadout(&new_base, levels_sheet.as_deref())); // (DF)
+            kh_host::weapons::begin_new_game(); // (weapons P1) no Keyblades / Workshop of another character
             // (IMPL_ER12) THE PAIR CHOSEN ON THE TITLE'S BLACK, before this character existed: its true start is built
             // from it now and the after-intro question does not come.
             // (IMPL_ER13) ONLY A CHARACTER THAT IS NEW (under 10 minutes of the game's play time) takes it: a load of an
@@ -519,7 +558,10 @@ fn paired_ms(now_ms: u64) -> u64 {
 fn capture(state: &mut State, sora: &Sora) {
     let play_ms = paired_ms(er_identity().map_or(0, |(_, _, ms)| ms));
     let play_seconds = crate::hud::play_seconds().max(state.latest.as_ref().map_or(0.0, |l| l.play_seconds as f64)) as u64;
+    kh_host::hud::keyblade_levels_into_record(sora.status()); // (weapons INT) the core's Keyblade levels into the record
+    kh_host::hud::Hud::keyblade_slots_into_record(sora.status(), &crate::hud::inventory().spare_weapons); // (weapons P11, ROUND D9) a D-pad switch reaches the record
     let mut now = SoraSave::capture(sora, &crate::hud::inventory(), &state.name, play_seconds, play_ms);
+    now.take_running_weapons(); // (weapons P1) the Keyblades, their levels and slots, the Workshop's record (save v6)
     now.party = crate::hud::formation_record(); // (party P) the save point's Party Formation
     // (ER party S6) with the party live: format 2 + the v5 friends record + Zero EXP + the unlocks (save.kh version 5)
     #[cfg(feature = "party")]
@@ -665,22 +707,6 @@ pub fn creation_saved() {
 /// (savegate) The marker of a character whose saving belongs to the save points.
 fn marker(dir: &Path, key: &str) -> PathBuf {
     dir.join(format!("{key}.points"))
-}
-
-/// (savegate) THE SAVE POINT'S SAVE WAS WRITTEN by the game and by us: from now this character saves at save
-/// points only (the marker file is made; nothing happens without `save.points_only`).
-pub fn arm_points_only() {
-    if !crate::savegate::mode_on() {
-        return;
-    }
-    let Ok(guard) = STATE.lock() else { return };
-    let Some(state) = guard.as_ref() else { return };
-    let path = marker(&state.dir, &state.key);
-    let _ = std::fs::create_dir_all(&state.dir);
-    match std::fs::write(&path, "This character saves at save points only (kh-er save.points_only). Delete this file to give its saving back to Elden Ring.\r\n") {
-        Ok(()) => crate::savegate::set_armed(true, "its first Save at a save point"),
-        Err(e) => erlog!("save: the marker {} could not be written ({e}): the game goes on saving by itself", path.display()),
-    }
 }
 
 /// (save) hook in `SoraHost::stop`: Sora stops with the player still there.

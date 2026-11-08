@@ -34,10 +34,8 @@ use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-/// `kh-app`'s loadout reader (the test stock of the camp menu), shared as source.
-#[allow(dead_code)]
-#[path = "../../kh-host/src/loadout_shared.rs"]
-mod loadout;
+/// `kh-app`'s loadout reader (the test stock of the camp menu), through kh-host's copy of the source.
+use kh_host::rig::loadout;
 
 unsafe extern "system" fn window_proc(window: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     DefWindowProcW(window, message, w, l)
@@ -96,8 +94,8 @@ fn portrait_frame(data: &kh_host::menu_portrait::PortraitData, out: kh_host::men
         visible: out.visible,
         picture: out.picture,
         alpha: out.alpha,
-        before_layer: 7,
-        with_layer: 6,
+        before_layer: kh_host::hud_layers::layer_index("GameHelp"), // (INT-F) by name
+        with_layer: kh_host::hud_layers::layer_index("CampMenu"),
         clear: kh_host::menu_portrait::CLEAR,
     }
 }
@@ -168,7 +166,9 @@ fn main() {
     hud.config_external = flag("--config-external");
     // (IMPL_ER21) `--title-entry`: "Title Screen" in the camp menu and in the save-point menu, as the Elden Ring host has it
     hud.title_entry = flag("--title-entry");
-    // (IMPL_ER59) `--outfits`: the camp menu's Outfits entry, from the pack's outfits.json (as kh-er's boc.rs offers it)
+    // (IMPL_ER59) `--outfits`: the outfit list from the pack's outfits.json, the list Boc's Outfits screen shows (kh-er boc.rs).
+    // (THE USER 2026-11-02: "Move the Outfits selection to Boc") the camp menu has no Outfits entry any more; Boc's
+    // "Alter garments" is the only way in
     if flag("--outfits") {
         let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../build/sora_pack/outfits/outfits.json")).unwrap_or_default();
         let list: Vec<(String, String)> = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|j| j["outfits"].as_array().cloned()).unwrap_or_default().iter().filter_map(|o| Some((o["id"].as_str()?.to_string(), o["name"].as_str()?.to_string()))).collect();
@@ -348,7 +348,7 @@ fn main() {
             // (IMPL_ER34) AFTER the layers: placed by the menu state whose picture is on screen (--portrait-nosync: by this frame's)
             if let Some(p) = portrait.as_mut() {
                 let now = hud.movie("CampMenu").and_then(|movie| kh_host::menu_portrait::placement(p.data.target, movie, &root, size));
-                let camp = &layers.layers[6];
+                let camp = &layers.layers[kh_host::hud_layers::layer_index("CampMenu")]; // (INT-F) by name
                 let placed = if hud.movie("CampMenu").is_none() { portrait_sync.clear(); None } else if flag("--portrait-nosync") { now } else { portrait_sync.step(now, camp.sent, camp.taken, camp.busy()) };
                 let out = placed.map(|at| p.frame_at(at, STEP));
                 if flag("--portrait-trace") {

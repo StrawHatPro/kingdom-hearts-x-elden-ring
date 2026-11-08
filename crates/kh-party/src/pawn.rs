@@ -50,6 +50,8 @@ pub struct StepCtx<'a> {
     pub ice_rails: &'a [kh_core::magic::RailNode],
     /// (ZETTA) Zettaflare's zones the AI members keep out of (`Party::don_zetta_zones`).
     pub zones: &'a [crate::donald::zettaflare::AvoidZone],
+    /// (GOOFY) The attacks the host sees coming (`Party::set_telegraphs`).
+    pub telegraphs: &'a [crate::goofy::Telegraph],
 }
 
 /// `UTresNpcState_Warp` (Init slot 95 0x141266C10, Begin 96 0x14125BAE0, Tick 97 0x14126DD90, End 98
@@ -78,6 +80,8 @@ pub struct WarpRun {
 struct DieRun {
     timer: f32,
     sub: u8,
+    /// (KILLPLANE) a kill plane's KO: no revive (the timer, a heal, an item) until the host stands him up (its respawn).
+    held: bool,
 }
 
 /// One member.
@@ -105,6 +109,8 @@ pub struct NpcPawn {
     /// 0x1405B7C50, kinds of kh-core `combat::badstat::kind`), and the bad-status state's sub-step.
     pub bad: (u8, f32),
     pub bad_sub: u8,
+    /// (MIMIC-STANCE) A stance break (kh-core combat/stance.rs, the route Sora's core shares): the STUN state while it lasts.
+    pub stance: kh_core::combat::stance::StanceBreak,
     /// (party I1) movement +0xB70 bit 4 (vt+0x998, set by the jump tick 0x1404408A0 for a STUN-ed NPC): the movement
     /// ignores the overlapped forces in the sky (vt+0x990 0x140589250 false). No force volumes exist in the port.
     pub ignore_overlap_force: bool,
@@ -123,6 +129,9 @@ pub struct NpcPawn {
     /// A repelled weapon this step (the point it was repelled at): the Reflect state next.
     pub reflect_from: Option<Vec3>,
     reflect_dir: Vec3,
+    /// (THE USER 2026-11-02: the bounce off a shield, repel.rs) the impact's hold of the next / running Reflect (seconds of its
+    /// first frame before the clip and the push run); 0 = at once.
+    pub reflect_hold: f32,
     /// Seconds the pawn has not moved (movement +0xC68, GetTimeMotionless).
     pub motionless: f32,
     /// (party P) the pad drive (stream P); None = AI-controlled.
@@ -150,6 +159,8 @@ pub struct NpcPawn {
     pub dmg_index: u8,
     /// Stream E's handle counter of this member (E.2) and the voices to play at the next step (E.4).
     pub seam: kh_core::host::party::SeamHandles,
+    /// (FREEZE-FX) KH3's frozen look on him while his BadStatFreeze runs, its break when it ends (crate::freeze_fx).
+    pub freeze_look: kh_core::combat::freeze_look::FreezeLook,
     pub voices: Vec<(kh_core::host::party::VoiceGroup, i32, kh_core::host::party::VoiceMode)>,
     /// E.3: the notify handler of this member's clips (what its notify states started) and its scratch events.
     pub notify_seam: kh_core::host::party::PartyNotify,
@@ -180,6 +191,11 @@ pub struct NpcPawn {
     /// (DON-KIT) What Donald's party auras give this member this step (donald/aura.rs `PartyAura::at`, set by
     /// pad/donald.rs `aura_to_members` before the members step): Thunder's movement, Aero's evasion / recovery.
     pub don_aura: crate::donald::aura::AuraEffect,
+    /// (PARTY-WEAPONS) his weapon out / away and its appear sequence (crate::weapon_draw, after each party step)
+    pub weapon: crate::weapon_draw::WeaponDraw,
+    /// (SPIRITSPRING) PORT ADDITION: the host's spiritspring lift for the next step, cm above the jump's take-off (a pad-driven
+    /// leader's jump still rising tops out there: [`crate::pad::spring_lift`]); taken by every step, None = untouched.
+    pub spring_lift: Option<f32>,
 }
 
 /// (party ER S1) How far the running goal may have moved from the one the host's waypoint was made for (cm).
@@ -311,6 +327,7 @@ impl NpcPawn {
             warp: WarpRun::default(),
             bad: (0, 0.0),
             bad_sub: 0,
+            stance: Default::default(), // (MIMIC-STANCE)
             ignore_overlap_force: false,
             burn_hops: 0,
             burn_yaw: 0.0,
@@ -320,6 +337,7 @@ impl NpcPawn {
             anim_wrapped: false,
             reflect_from: None,
             reflect_dir: Vec3::ZERO,
+            reflect_hold: 0.0,
             pad: None,
             motionless: 0.0,
             in_battle: false,
@@ -338,6 +356,7 @@ impl NpcPawn {
             turn: TurnRun::default(),
             dmg_index: 0,
             seam: kh_core::host::party::SeamHandles::for_member(kh_core::host::PartyMember(id.0)),
+            freeze_look: Default::default(), // (FREEZE-FX)
             voices: Vec::new(),
             notify_seam: kh_core::host::party::PartyNotify::new(),
             notify_events: Vec::new(),
@@ -352,6 +371,8 @@ impl NpcPawn {
             don_ward_offer: 0, // (DON-KIT)
             don_ward_used: 0, // (DON-KIT)
             don_aura: crate::donald::aura::AuraEffect::NEUTRAL, // (DON-KIT)
+            weapon: Default::default(), // (PARTY-WEAPONS)
+            spring_lift: None,
         }
     }
 
@@ -422,7 +443,18 @@ impl NpcPawn {
         // (DON-MAGIC part A) an AI Donald casting (crate::donald::cast) keeps his cast clip: no move, turn, action or motion
         // command runs it over (his AI asks again once the cast is over)
         let casting = ai && self.status.donald.is_some() && crate::donald::cast::casting(self);
+        let casting = casting || crate::pad::goofy::ai_holds(self); // (GF-AI) AI Goofy's shield, parries and strings: the same (his tree asks again after)
         let refused = casting && matches!(cmd, MemberCommand::MoveTo { .. } | MemberCommand::TurnTo { .. } | MemberCommand::Action { .. } | MemberCommand::UseItem { .. } | MemberCommand::Cure { .. } | MemberCommand::PlayMotion { .. } | MemberCommand::Idle { .. } | MemberCommand::Stop);
+        let refused = refused || crate::pad::goofy::ai_chase_refuses(self, &cmd); // (GF-AI) AI Goofy's walk to a Breaker
+        // (NOCOMBAT) THE NO-COMBAT RULE AT THE COMMAND INTAKE (the AI's trees, the pad, the team-attack hand-over all come here):
+        // no action (every Donald / Goofy action is an attack or a spell), no Cure, no team-attack state
+        let act = match cmd {
+            MemberCommand::Action { .. } => Some(if self.pad.is_some() { kh_core::nocombat::Act::Attack } else { kh_core::nocombat::Act::AiAttack }),
+            MemberCommand::Cure { .. } => Some(kh_core::nocombat::Act::Magic),
+            MemberCommand::EnterFrState { .. } => Some(kh_core::nocombat::Act::TeamAttack),
+            _ => None,
+        };
+        let refused = refused || act.is_some_and(|a| !kh_core::nocombat::allows(self.chara.fighter(), a));
         let refused = refused || match cmd {
             MemberCommand::Action { def, .. } => ai && !crate::actions::viable_in(def, self.state),
             MemberCommand::Cure { .. } => ai && !crate::actions::viable_in(crate::ActionDef::DonaldCure, self.state),
@@ -461,7 +493,7 @@ impl NpcPawn {
         };
         if let Some(def) = gated {
             // (party X2) a leader's Sora spell parked for this action pays Sora's cost at its Shot, not this ability's
-            let payable = crate::leader_magic::parked(self) || actions::ability(def).map_or(true, |k| self.status.don_tree_gate(k).unwrap_or_else(|| self.status.can_pay(k))); // (DON-PROG) Donald's KH3 spell abilities are gone: his state answers the gate
+            let payable = crate::leader_magic::parked(self) || actions::ability(def).is_none_or(|k| self.status.don_tree_gate(k).unwrap_or_else(|| self.status.can_pay(k))); // (DON-PROG) Donald's KH3 spell abilities are gone: his state answers the gate
             if def.chara() != self.chara || !payable {
                 self.record(t, CommandStatus::Failed);
                 return t;
@@ -516,6 +548,12 @@ impl NpcPawn {
     }
 
     /// (DON-PROG) That command is answered by the overhaul: Succeeded (its choice started) or Failed, and not taken.
+    /// (PARTY-AI, THE USER 2026-11-03: "the party leader can hit friendly NPCs, but not AI allies") The bit every hit of his
+    /// carries: `kh_core::host::HIT_FLAG_AI` unless the player drives him (a pad: the leader).
+    pub fn hit_flag(&self) -> u32 {
+        kh_core::host::ai_hit_flag(self.pad.is_some())
+    }
+
     pub(crate) fn don_take_pending(&mut self, ok: bool) {
         if !self.cmd_new {
             return;
@@ -523,6 +561,22 @@ impl NpcPawn {
         if let Some((t, _)) = self.cmd.take() {
             self.cmd_new = false;
             self.record(t, if ok { CommandStatus::Succeeded } else { CommandStatus::Failed });
+        }
+    }
+
+    /// (GF-AI) The MoveTo of the AI goes to `goal` instead (AI Goofy's leash).
+    pub(crate) fn set_move_goal(&mut self, goal: MoveGoal) {
+        if let Some((_, MemberCommand::MoveTo { goal: g, .. })) = self.cmd.as_mut() {
+            *g = goal;
+        }
+    }
+
+    /// (GF-AI) That MoveTo is over before it went anywhere, new or running.
+    pub(crate) fn answer_move(&mut self, ok: bool) {
+        if self.cmd_new {
+            self.don_take_pending(ok);
+        } else {
+            self.finish_command(ok);
         }
     }
 
@@ -607,7 +661,7 @@ impl NpcPawn {
         for (clip, ends) in cut {
             crate::notify_seam::events_of(self.chara, clip.sequence, clip.notifies, &ends, &mut evs);
             if !evs.is_empty() {
-                self.notify_seam.dispatch(m, &mut self.seam, &evs, at, 0, host.audio, host.effects);
+                self.notify_seam.dispatch(m, &mut self.seam, &evs, kh_core::host::party::NotifyPlace { location: at, effect_group: 0 }, host.audio, host.effects);
             }
         }
         self.notify_events = evs;
@@ -743,7 +797,7 @@ impl NpcPawn {
         if self.hurt.dying {
             return HitResult { accepted: false, ..HitResult::default() };
         }
-        // (party X3G) a pad Goofy's kit: the Hop / Surf / finishers' invincibility, the shield guard and Perfect Guard
+        // (GOOFY) Goofy, pad or AI: the hop's invincibility, the guard, every parry
         if let Some(r) = crate::pad::goofy::on_hit(self, hit) {
             return r;
         }
@@ -752,6 +806,7 @@ impl NpcPawn {
         let before = self.status.hp;
         self.status.hp = (self.status.hp - dmg).max(0);
         self.status.hp = self.status.don_survive(before, self.status.hp, self.state == NpcStateId::Damage); // (DON-PROG) Second Chance / Withstand Combo on Donald
+        self.status.hp = self.status.gof_survive(before, self.status.hp, self.state == NpcStateId::Damage); // (GOOFY) on Goofy
         let _ = self.status.don_mp_rage(before - self.status.hp); // (DON-PROG) MP Rage
         let dealt = before - self.status.hp;
         // QuarterHP (E.4): 0 < hp_after < hp_before and hp_after < CeilToInt(max_hp x 0.25) [the voice gate
@@ -779,6 +834,7 @@ impl NpcPawn {
         let reflected = matches!(hit.info.victim_result, kh_core::host::ReactionResult::Reflect | kh_core::host::ReactionResult::GuardReflect);
         if reflected && !killed && !matches!(self.state, NpcStateId::Reflect) {
             let from = if hit.attacker.valid { hit.attacker.position } else { self.position() - hit.direction * 100.0 };
+            self.reflect_hold = 0.0; // (a hit on him that repels him plays at once, as KH3)
             self.begin_reflect(from);
             return HitResult { accepted: true, damage_dealt: dealt as f32, hp_after: self.status.hp as f32, killed, guarded: false };
         }
@@ -799,7 +855,7 @@ impl NpcPawn {
                 h.info.clear_bad_status();
             }
             // burning: m_bIsNoDamageResponse (pawn vt+0x2078): HP without a reaction
-            let no_reaction = self.state == NpcStateId::BadStatBurn || crate::pad::goofy::no_reaction(self, hit); // (party X3G) Stalwart, Shield Guardian
+            let no_reaction = self.state == NpcStateId::BadStatBurn || crate::pad::goofy::no_reaction(self, hit); // (GOOFY) the Guard Break's stagger plays on
             if no_reaction {
             } else if self.begin_reaction(&h, dealt > 0) {
                 // (GOOFY-HR) begin_reaction: the reaction with the character's own clip lengths and its first clip
@@ -841,7 +897,7 @@ impl NpcPawn {
         self.action = None;
         self.react.release();
         self.enter(NpcStateId::Die);
-        self.die = DieRun { timer: self.status.revive_time(), sub: if self.on_ground() { 0 } else { 3 } };
+        self.die = DieRun { timer: self.status.revive_time(), sub: if self.on_ground() { 0 } else { 3 }, held: false };
         self.cmc.stop_movement();
         // Anim names 0x141246E00: index 0 BadStatStunStart (air: BadStatStuAirStart).
         let clip = if self.on_ground() { "BadStatStunStart" } else { "JumpNormalDownLoop" };
@@ -849,11 +905,45 @@ impl NpcPawn {
         self.events.push(PartyEventKind::Ko);
     }
 
+    /// (KILLPLANE, THE USER 2026-11-06: "kill planes in Elden Ring need to ISNTANTLY kill the party leader or party members, it
+    /// should ignore any abilities you have") HIS KO NOW, UNCONDITIONAL AND HELD: HP 0 and the Die state at once, past every
+    /// hit rule (no hit is taken: no guard, Interpose, dodge, invincibility, Second Chance or Withstand Combo, no dying
+    /// reaction first), and no revive afterwards (the revive timer, a heal, an item) until the host stands him up again
+    /// (`to_idle`: its respawn). In the Die state already: held from now on. True: he went down now.
+    pub fn kill_unconditional(&mut self) -> bool {
+        self.status.hp = 0;
+        let downed = self.state != NpcStateId::Die;
+        if downed {
+            self.start_die();
+        }
+        self.die.held = true;
+        downed
+    }
+
+    /// (HUD-REVIVE, THE USER 2026-11-07: "healing at a save point should be able to revive downed party members") A REVIVE TO FULL
+    /// HP (the save point's): in the Die state, his HP to his maximum (a kill plane's hold lifted: the save point stands up every
+    /// member), and the Die tick ends it as KH3's does on HP > 0 (Tick 0x141249F80 sub-step 1: BadStatStunEnd, then End
+    /// 0x141244670 = invincibility off, collision on, `Revived`, Idle; KO'd in the air: down at the ground first). True: he was down.
+    pub fn revive_full(&mut self) -> bool {
+        if self.state != NpcStateId::Die {
+            return false;
+        }
+        self.die.held = false;
+        self.status.hp = self.status.max_hp();
+        true
+    }
+
+    /// (KILLPLANE) In a kill plane's KO: no revive until the host stands him up.
+    pub fn ko_held(&self) -> bool {
+        self.state == NpcStateId::Die && self.die.held
+    }
+
     // ------------------------------------------------------------------ the step
 
     pub fn step(&mut self, cx: &StepCtx, host: &mut PartyHost) {
         let dt = cx.dt;
         self.status.tick(dt);
+        self.stance_step(dt); // (MIMIC-STANCE)
         // CanBattle 0x141257340: the latch +0xCA8 is set once the battle has run for more than 0.5 s
         // (FUN_140541660: world time - battle start +0xA7C) and cleared with the battle flag (vt+0x1740).
         if self.in_battle {
@@ -873,6 +963,8 @@ impl NpcPawn {
         // (party P)
         if self.pad.is_some() {
             crate::pad::pre_move(self, cx, host);
+        } else {
+            crate::pad::goofy::ai_pre_move(self, cx, host); // (GF-AI) AI Goofy's buttons run the same moves
         }
         self.play_voices(host);
         crate::hurt::flush(self, host); // (GOOFY-HR) the hit effect of the last hit
@@ -891,6 +983,7 @@ impl NpcPawn {
         self.end_cut_states(host);
         // movement with the pose tick inside (Sora's order).
         self.cmc.tick_head(host.world, &self.params, dt);
+        crate::pad::spring_lift(self, dt); // (SPIRITSPRING) after the release cut and the launch, before the physics
         let tick = self.anim.tick(dt);
         self.anim_wrapped = tick.wrapped;
         // E.3: the seam part of the fired notifies (sound, weapon SE, auto SE, voice, actor voice, effects) through
@@ -901,7 +994,7 @@ impl NpcPawn {
             if !evs.is_empty() {
                 let m = kh_core::host::PartyMember(self.id.0);
                 let at = self.position();
-                self.notify_seam.dispatch(m, &mut self.seam, &evs, at, 0, host.audio, host.effects);
+                self.notify_seam.dispatch(m, &mut self.seam, &evs, kh_core::host::party::NotifyPlace { location: at, effect_group: 0 }, host.audio, host.effects);
             }
             self.notify_events = evs;
         }
@@ -956,14 +1049,13 @@ impl NpcPawn {
                         }
                     }
                 }
-                (ClipNotifyData::Raw("Timing"), _) => {
-                    if self.state == NpcStateId::Action && actions::is_jump(self) {
+                (ClipNotifyData::Raw("Timing"), _)
+                    if self.state == NpcStateId::Action && actions::is_jump(self) => {
                         if let Some(mut r) = self.action {
                             r.jump.decel = true;
                             self.action = Some(r);
                         }
                     }
-                }
                 _ => {}
             }
         }
@@ -1027,6 +1119,8 @@ impl NpcPawn {
             // (B4) 0x141270B20: from any state the request may replace (not Die / FR; already in Reflect: kept)
             if !matches!(self.state, NpcStateId::Die | NpcStateId::Fr(_) | NpcStateId::Reflect) {
                 self.begin_reflect(at);
+            } else {
+                self.reflect_hold = 0.0;
             }
         }
         // GetTimeMotionless (movement +0xC68): [inf] under 10 cm/s counts
@@ -1405,7 +1499,8 @@ impl NpcPawn {
         if self.state == NpcStateId::Die {
             return;
         }
-        let (k, _) = self.bad;
+        // (MIMIC-STANCE) a stance break runs the STUN state (kh-core combat/stance.rs)
+        let k = if self.stance.broken() { kind::STUN } else { self.bad.0 };
         let st = match k {
             kind::STUN => NpcStateId::BadStatStun,
             kind::SNEEZE => NpcStateId::BadStatSneeze,
@@ -1526,6 +1621,41 @@ impl NpcPawn {
         }
     }
 
+    /// (MIMIC-STANCE) HIS STANCE IS BROKEN for `seconds` (kh-core combat/stance.rs, the route Sora's core shares: a Goofy's Stagger
+    /// book filled his gauge): KH3's STUN state (BadStatStunStart / Loop / End, or his set's M_0241 - M_0243) on the ground for
+    /// the window, no action, whatever hits him meanwhile. False: refused (no time, or he is down).
+    pub fn stance_break(&mut self, seconds: f32) -> bool {
+        self.stance_breakable() && self.stance.open(seconds)
+    }
+
+    /// (MIMIC-STANCE) A break may start now: he is up (HP above 0, not in Die or a lethal blow, not in a team attack's drive).
+    pub fn stance_breakable(&self) -> bool {
+        self.status.hp > 0 && self.state != NpcStateId::Die && !self.hurt.dying && !matches!(self.state, NpcStateId::Fr(_))
+    }
+
+    /// (MIMIC-STANCE) A running break lasts at least `seconds` more (a Breaker winds up on him).
+    pub fn stance_hold(&mut self, seconds: f32) {
+        self.stance.hold(seconds);
+    }
+
+    /// (MIMIC-STANCE) The break ends now (its window ran out, or a Breaker's slam is about to land). True: he was broken.
+    pub fn stance_release(&mut self) -> bool {
+        self.stance.release()
+    }
+
+    /// (MIMIC-STANCE) The break's clock, and its STUN state once he is free to take it (on the ground, out of a reaction, a
+    /// repel, a scripted move): the kh-core stun trigger's rule.
+    fn stance_step(&mut self, dt: f32) {
+        self.stance.tick(dt);
+        if !self.stance.broken() || !self.on_ground() || self.hurt.dying {
+            return;
+        }
+        if matches!(self.state, NpcStateId::BadStatStun | NpcStateId::Damage | NpcStateId::Die | NpcStateId::Reflect | NpcStateId::Fr(_) | NpcStateId::Ladder) {
+            return;
+        }
+        self.enter_bad_state();
+    }
+
     /// 0x1412470D0: index 0 / 1 / 2 = Start / Loop / End, else the M_024x rows.
     fn stun_clip(&self, i: usize) -> &'static str {
         let set = tables::anim_set(self.chara);
@@ -1549,7 +1679,7 @@ impl NpcPawn {
                     self.play(c, -1.0);
                     self.bad_sub = 1;
                 }
-                1 if self.bad.0 != kind::STUN => {
+                1 if self.bad.0 != kind::STUN && !self.stance.broken() => {
                     let c = self.stun_clip(2);
                     self.play(c, -1.0);
                     self.bad_sub = 2;
@@ -1587,19 +1717,40 @@ impl NpcPawn {
         self.action = None;
         self.abort_command();
         self.enter(NpcStateId::Reflect);
+        // (THE USER 2026-11-02: "bounce off playing their animation from KH3 ... whoever we add in the future") the rows
+        // repel.clip / repel.air_clip of HIS OWN set (sheet party-hurt; KH3's AttackReflect / AttackAirReflect), else the
+        // fallback row: repel.rs `clip`, no name of a character here
         let set = tables::anim_set(self.chara);
-        let clip = if !self.on_ground() && set.get("AttackAirReflect").is_some() { "AttackAirReflect" } else { "AttackReflect" };
-        self.play(clip, 0.1);
+        if let Some(clip) = crate::repel::clip(|c: &str| set.get(c).is_some(), !self.on_ground()) {
+            self.play(clip, 0.1);
+        }
         self.reflect_dir = horizontal(self.position() - at).normalize_or_zero();
         if self.reflect_dir == Vec3::ZERO {
             self.reflect_dir = -forward(self.yaw);
         }
         self.cmc.stop_movement();
-        let v = self.reflect_dir * tables::param("reflect.speed");
-        self.cmc.set_velocity_xy(Vec2::new(v.x, v.y));
+        // (THE USER 2026-11-02) the bounce off a shield holds the impact first (`reflect_hold`, row repel.hold): no push yet
+        if self.reflect_hold <= 0.0 {
+            let v = self.reflect_dir * tables::param("reflect.speed");
+            self.cmc.set_velocity_xy(Vec2::new(v.x, v.y));
+        }
     }
 
     fn reflect_tick(&mut self, dt: f32) {
+        // (THE USER 2026-11-02) the impact's hold: the clip's first frame, standing; then the clip and the push as KH3
+        if self.reflect_hold > 0.0 {
+            self.reflect_hold -= dt;
+            self.anim.speed = 0.0;
+            self.cmc.set_velocity_xy(Vec2::ZERO);
+            if self.reflect_hold > 0.0 {
+                return;
+            }
+            self.reflect_hold = 0.0;
+            self.anim.speed = 1.0;
+            let v = self.reflect_dir * tables::param("reflect.speed");
+            self.cmc.set_velocity_xy(Vec2::new(v.x, v.y));
+            return;
+        }
         let s = (horizontal(self.cmc.velocity).length() - tables::param("reflect.braking") * dt).max(0.0);
         let v = self.reflect_dir * s;
         self.cmc.set_velocity_xy(Vec2::new(v.x, v.y));
@@ -1695,8 +1846,20 @@ impl NpcPawn {
 
     /// `UTresNpcState_Die` Tick 0x141249F80 / End 0x141244670.
     fn die_tick(&mut self, dt: f32) {
-        self.die.timer -= dt;
-        if self.die.timer <= 0.0 {
+        // (KILLPLANE) a kill plane's KO stays down: the timer stands, a heal or an item given meanwhile is taken back
+        if self.die.held {
+            self.status.hp = 0;
+        } else if !self.in_battle && self.pad.is_none() {
+            // (HUD-REVIVE, THE USER 2026-11-07: "allies revive when combat ends") out of the party's combat (his battle flag is
+            // the party-wide one: Party::set_in_battle) the timer is over at once: KH3's revive amount below, then the get-up.
+            // OUR DESIGN: KH3's Die has no battle-end revive (Tick 0x141249F80: the timer or HP > 0 only). An ALLY's rule: the
+            // leader the pad drives (a friend leading) stays down, his KO is the party's game over (kh-er death.rs).
+            self.die.timer = 0.0;
+        } else {
+            // in combat: the user's 60 s baseline (row revive.in_combat_time, FriendStatus::revive_time at start_die)
+            self.die.timer -= dt;
+        }
+        if self.die.timer <= 0.0 && !self.die.held {
             self.die.timer = 0.0;
             if self.status.hp < 1 {
                 // vt+0x2198 (0x141264140) amount through vt+0x1878 (recover).
@@ -1766,7 +1929,7 @@ impl NpcPawn {
             mp: self.status.mp,
             mp_max: self.status.max_mp(),
             mp_charging: self.status.mp_charge_left > 0.0,
-            mp_charge: if self.status.mp_charge_left > 0.0 { 1.0 - self.status.mp_charge_left / tables::cparam(self.chara, "mp_charge_time") } else { 0.0 },
+            mp_charge: crate::mp_rule::charge_progress(&self.status), // (THE USER 2026-11-02) of his own charge length (Donald's R7 one, not the friends' 30 s)
             level: self.status.level,
             ko: self.state == NpcStateId::Die,
             revive_left: self.revive_left(),
@@ -1841,7 +2004,7 @@ pub fn damage_dir_index(dir: Vec3, actor_yaw: f32) -> u8 {
 /// - Wall (vt+0x1CC8 = 0x141262420): phase 0 M_0223 (index 0, 2, 3) / M_0224 (index 1), else M_0211;
 ///   phase 1 JumpNormalDownLoop, phase 2 Land;
 /// - the plain fall of the air flinch: JumpNormalDownLoop / Land (UTresAICharState_Damage 0x140449060).
-/// Frozen / Stunned keep the bad-status loop (their own states).
+///   Frozen / Stunned keep the bad-status loop (their own states).
 pub fn damage_clip(chara: Chara, phase: Phase, index: u8) -> &'static str {
     let set = tables::anim_set(chara);
     let pick = |name: &'static str, fallback: &'static str| if set.get(name).is_some() { name } else { fallback };

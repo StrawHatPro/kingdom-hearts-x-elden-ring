@@ -156,6 +156,12 @@ impl ListView {
         format!("{}.container.i{slot}", self.path)
     }
 
+    /// (SYNTH-MOOGLE) Where `createListItems` put row slot `slot` (its one-column place): from the authored row's pitch
+    /// and offset, never from the row clips (a caller that moves them, as the Material List's grid, reads this).
+    pub fn slot_origin(&self, slot: usize) -> (f32, f32) {
+        (-self.offset.0, slot as f32 * self.pitch - self.offset.1)
+    }
+
     /// The constructor and `createListItems`: the authored row gives the class and the pitch
     /// and goes; `rows` instances `i0 ..` take its place. True when the rows exist.
     fn ensure(&mut self, movie: &mut Movie) -> bool {
@@ -358,9 +364,7 @@ impl ListView {
     /// Forces every row to be shown again (after the clip was rebuilt or the data changed its
     /// meaning under the same indices).
     pub fn invalidate(&mut self) {
-        for slot in &mut self.shown {
-            *slot = (-2, false, false);
-        }
+        self.shown.fill((-2, false, false));
     }
 }
 
@@ -471,7 +475,7 @@ pub fn window_scroll(focus: usize, scroll: usize, visible: usize, margin: usize,
     let (focus, scroll, visible, margin) = (focus as i64, scroll as i64, visible as i64, margin as i64);
     let mut to = scroll;
     if focus - scroll < visible - margin {
-        if focus - scroll <= margin - 1 {
+        if focus - scroll < margin {
             to = focus - margin;
         }
     } else {

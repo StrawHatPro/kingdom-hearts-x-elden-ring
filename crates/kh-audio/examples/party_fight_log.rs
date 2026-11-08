@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use glam::Vec3;
 use kh_audio::engine::PartyVoiceMode;
-use kh_audio::{BoneFrame, Engine, Language, Listener, Pack, SeamPlay};
+use kh_audio::{AutoSeTick, BoneFrame, Engine, Language, Listener, Pack, SeamPlay};
 
 const DT: f32 = 1.0 / 60.0;
 const DONALD: u8 = 0;
@@ -102,7 +102,7 @@ fn main() {
             let k = (step - 200) as usize % walk.len();
             let (anim, time, frame) = &walk[k];
             let surface = if step < 290 { 10 } else { 13 };
-            engine.party_auto_se(DONALD, DT, frame, surface, Some((anim, *time)), &listener, &|_| None);
+            engine.party_auto_se(DONALD, AutoSeTick { dt: DT, frame, surface, anim: Some((anim, *time)), listener: &listener, bone: &|_| None });
         }
         engine.update(DT, &listener, &|_| Some(Vec3::ZERO));
         for l in engine.take_log() {

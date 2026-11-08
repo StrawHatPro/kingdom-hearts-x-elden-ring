@@ -162,6 +162,8 @@ pub fn effect_command(engine: &mut Engine, attaches: &mut Attaches, command: &Ef
             attaches.effect.remove(&handle.0);
         }
         EffectCommand::Tint(..) => {} // (DON-MAGIC tint) a colour: nothing to hear
+        EffectCommand::Color(..) => {} // (AUDIT-C) a colour: nothing to hear
+        EffectCommand::Timing(..) => {} // (AUDIT-B W-FIN) fades / delay: nothing to hear
         // (ZETTA) a moved world effect's sounds follow it
         EffectCommand::Transform(handle, at, _, _) => {
             if let Some(a @ kh_core::Attach::World(_)) = attaches.effect.get_mut(&handle.0) {
@@ -191,6 +193,23 @@ pub fn sound_states(engine: &mut Engine, events: &[kh_core::Event]) -> Vec<&'sta
     unknown
 }
 
+/// (THE USER 2026-11-02: "...shotlock's startup sfx is way too loud" / "sometimes Audio from specifically our mod will
+/// become very loud") THE GAIN A HUD SOUND IS PLAYED WITH when a host raises its menus (`HostAudio::ui_gain`, linear):
+/// only as far as the sound's authored peak (`Driver::peak_level`: SEAD volume x start volume x material peak) reaches
+/// `ceiling`, and never below 1 (KH3's own level); a gain of 1 or less is taken as it is. An unknown peak is not
+/// raised. Before, every HUD sound got the whole gain (+12 dB in the Elden Ring host): the shotlock aim's se00000_039
+/// (authored peak 0.84) came out at 3.36 before the output level, the game-over loop at 2.76 (the user's log: peak
+/// 1.457 after the -6 dB output level, 625 samples clipped).
+pub fn ui_voice_gain(gain: f32, ceiling: f32, peak: Option<f32>) -> f32 {
+    if gain <= 1.0 {
+        return gain.max(0.0);
+    }
+    match peak {
+        Some(p) if p > 0.0 => (ceiling / p).clamp(1.0, gain),
+        _ => 1.0,
+    }
+}
+
 /// What one engine step needs from its host.
 pub struct Tick<'a> {
     pub dt: f32,
@@ -216,7 +235,7 @@ pub fn tick(engine: &mut Engine, attaches: &Attaches, t: &Tick) -> (Vec<VoiceCom
         let frame = BoneFrame::from_positions(&sample.positions, sample.grounded);
         let surface = (t.surface)(sample.positions[0]);
         let tap = t.tap;
-        for event in engine.auto_se(t.dt, &frame, surface, Some((sample.anim, sample.anim_time)), t.listener, &|bone| tap.bone(bone)) {
+        for event in engine.auto_se(kh_audio::AutoSeTick { dt: t.dt, frame: &frame, surface, anim: Some((sample.anim, sample.anim_time)), listener: t.listener, bone: &|bone| tap.bone(bone) }) {
             detected.push((event, surface));
         }
     }

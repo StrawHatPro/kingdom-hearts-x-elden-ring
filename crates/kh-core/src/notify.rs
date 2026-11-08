@@ -24,7 +24,26 @@ pub const NOTIFY_ID_NONE: u32 = u32::MAX;
 
 /// The seam id of a name a notify carries.
 pub fn notify_asset_id(name: &str) -> u32 {
-    NOTIFY_ASSETS.binary_search(&name).map_or(NOTIFY_ID_NONE, |i| NOTIFY_ID_BASE + i as u32)
+    // (F-RAGE) the list is two sorted runs (tools/gen_port.js: the assets only a form anim set names come after the others,
+    // so no id moves): a binary search over the whole misses names of the first run; a scan finds every one.
+    NOTIFY_ASSETS.iter().position(|n| *n == name).map_or(NOTIFY_ID_NONE, |i| NOTIFY_ID_BASE + i as u32)
+}
+
+/// (AUDIT-C TF) The prefix of a weapon alias that KH3 plays from the LEFT hand's weapon (`ETresSoundAliasUnit::LH_WEAPON`).
+pub const LEFT_HAND_ALIAS: &str = "LH_WEAPON:";
+const LEFT_HAND_SWING: [&str; 20] = ["LH_WEAPON:SWING1", "LH_WEAPON:SWING2", "LH_WEAPON:SWING3", "LH_WEAPON:SWING4", "LH_WEAPON:SWING5", "LH_WEAPON:SWING6", "LH_WEAPON:SWING7", "LH_WEAPON:SWING8", "LH_WEAPON:SWING9", "LH_WEAPON:SWING10", "LH_WEAPON:SWING11", "LH_WEAPON:SWING12", "LH_WEAPON:SWING13", "LH_WEAPON:SWING14", "LH_WEAPON:SWING15", "LH_WEAPON:SWING16", "LH_WEAPON:SWING17", "LH_WEAPON:SWING18", "LH_WEAPON:SWING19", "LH_WEAPON:SWING20"];
+const LEFT_HAND_HIT: [&str; 20] = ["LH_WEAPON:HIT1", "LH_WEAPON:HIT2", "LH_WEAPON:HIT3", "LH_WEAPON:HIT4", "LH_WEAPON:HIT5", "LH_WEAPON:HIT6", "LH_WEAPON:HIT7", "LH_WEAPON:HIT8", "LH_WEAPON:HIT9", "LH_WEAPON:HIT10", "LH_WEAPON:HIT11", "LH_WEAPON:HIT12", "LH_WEAPON:HIT13", "LH_WEAPON:HIT14", "LH_WEAPON:HIT15", "LH_WEAPON:HIT16", "LH_WEAPON:HIT17", "LH_WEAPON:HIT18", "LH_WEAPON:HIT19", "LH_WEAPON:HIT20"];
+
+/// (AUDIT-C TF) A weapon alias (SWING1 .. / HIT1 ..) as the LEFT hand's weapon plays it (`LH_WEAPON:SWING3`): KH3's
+/// PlayWeaponSwingSE 0x1405615F0 / PlayWeaponHitSE 0x1405612A0 take the weapon actor of the notify's unit (RH_WEAPON 1,
+/// LH_WEAPON 2, RL 4, LL 5: pawn vt+0x1428(unit)) and play the alias from THAT actor's m_SoundAssets_Swing / _Hit; a hand
+/// without a weapon plays nothing. Double Form's AnimSet23 clips carry 31 LH_WEAPON notifies (Oblivion's swings, set 02021);
+/// no other clip of Sora's has one. The host resolves the prefix with the left hand's sets (kh-audio `Routes::left_swing`).
+/// None: not an alias of the tables.
+pub fn left_hand_alias(alias: &str) -> Option<&'static str> {
+    let (table, number) = if let Some(n) = alias.strip_prefix("SWING") { (&LEFT_HAND_SWING, n) } else { (&LEFT_HAND_HIT, alias.strip_prefix("HIT")?) };
+    let k = number.parse::<usize>().ok()?.checked_sub(1)?;
+    table.get(k).copied()
 }
 
 /// What a notify state started, to stop at its End.
@@ -108,7 +127,9 @@ pub(crate) fn dispatch(cx: &mut Ctx, notifies: &Notifies) {
                     // (audio implementer) 0x1405615F0 (audio spec 5.1): attached at `m_SocketName`
                     // when `m_bFollow` (no socket = the mesh), else AT THE MESH LOCATION of this
                     // moment (a fixed point: it does not follow him).
-                    NotifyData::WeaponSe { alias, socket, follow, volume, pitch, fade_out, .. } => {
+                    NotifyData::WeaponSe { alias, unit, socket, follow, volume, pitch, fade_out, .. } => {
+                        // (AUDIT-C TF) LH_WEAPON: the left hand's weapon plays it (Double Form's Oblivion)
+                        let alias = if unit == "LH_WEAPON" { left_hand_alias(alias).unwrap_or(alias) } else { alias };
                         if follow {
                             sound(cx, alias, socket, volume, pitch, fade_out)
                         } else if !alias.is_empty() {

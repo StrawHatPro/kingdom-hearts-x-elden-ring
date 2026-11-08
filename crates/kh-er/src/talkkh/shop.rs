@@ -13,10 +13,16 @@
 //!   Smithing Table) reads 0 WITHOUT the game's function being called: no prompt is put up, the talk never starts. A
 //!   script not in the list that runs OpenEnhanceShop (command 24) all the same: the command is not run (the
 //!   reinforcement menu never opens) and its talk id is refused from then on (run-time detection; logged).
-//!   The other exchange windows (Enia's remembrances, Boc's alterations, Seluvis's puppets, the duplication of an Ash of
-//!   War: their own commands) stay Elden Ring's.
+//!   The other exchange windows (Enia's remembrances, Seluvis's puppets, the duplication of an Ash of War: their own
+//!   commands) stay Elden Ring's. (THE USER 2026-11-02) Boc's alterations (command 142) open the KH Outfits screen
+//!   instead: alter.rs.
+//! - (P7 SMITHS, THE USER 2026-11-03: the Keyblade Forge "accessible from any instance Elden Ring's blacksmithing menu would
+//!   appear") THE SMITHS' REFUSAL ABOVE IS RETIRED while the Forge is on (`forge.kh`, default; smith.rs, held here as
+//!   [`ShopTalk::smith`] and asked FIRST for every command and query-59 answer): their prompt (query 56) is the game's again,
+//!   command 24 opens KH3's Keyblade Forge (forgekh.rs), their non-upgrade options are trimmed, and a smith's 22 / 46 never
+//!   reaches the KH shop. `npc.smith_talk` (`smith_block`) and the sheet's list still decide only with `forge.kh = 0`.
 
-use super::rules::{cmd, env, Decision, Val};
+use super::rules::{env, Decision, Val};
 use kh_host::shop::TalkNumbers;
 
 /// A merchant's request for the KH shop.
@@ -38,7 +44,7 @@ pub struct ShopRequest {
 pub struct ShopTalk {
     /// `shop.menu` (default on).
     pub menu_on: bool,
-    /// `npc.smith_talk = 0` (default): the smiths' talk is refused.
+    /// `npc.smith_talk = 0` (default): the smiths' talk is refused. (P7) Only while the Forge is off (`smith.on`).
     pub smith_block: bool,
     /// The sheet's smiths (talk ids).
     pub smith_ids: Vec<i32>,
@@ -47,9 +53,13 @@ pub struct ShopTalk {
     pub numbers: Option<TalkNumbers>,
     /// The request waiting for / shown by the KH shop (at most one).
     pub request: Option<ShopRequest>,
-    serial: u32,
+    // (INT) visible to talkkh's modules: P7's smith tests build a ShopTalk with `..ShopTalk::default()`
+    pub(super) serial: u32,
     /// Log lines for the frame (`shop:` lines).
     pub notes: Vec<String>,
+    /// (P7 SMITHS) the smiths' talk -> the Keyblade Forge (talkkh/smith.rs; forgekh.rs keeps its keys and rows and opens the
+    /// Forge): asked before the rules here.
+    pub smith: super::smith::SmithTalk,
 }
 
 impl ShopTalk {
@@ -57,13 +67,17 @@ impl ShopTalk {
         self.numbers.unwrap_or_default()
     }
 
-    /// A talk whose prompt is refused (a smith while `npc.smith_talk = 0`).
+    /// A talk whose prompt is refused (a smith while `npc.smith_talk = 0`; (P7) never while the Forge is on).
     pub fn refuses(&self, talk_id: i32) -> bool {
-        self.smith_block && (self.smith_ids.contains(&talk_id) || self.smith_seen.contains(&talk_id))
+        self.smith_block && !self.smith.on && (self.smith_ids.contains(&talk_id) || self.smith_seen.contains(&talk_id))
     }
 
-    /// A COMMAND of a talk script: `Some(Swallow)` = the game does not run it (the KH shop / nothing stands in).
+    /// A COMMAND of a talk script: `Some(Swallow)` = the game does not run it (the KH shop / the Forge / nothing stands in).
     pub fn on_event(&mut self, talk_id: i32, ins: usize, id: i32, args: &[Val]) -> Option<Decision> {
+        // (P7 SMITHS) the Forge's rules first: a smith's 24, his trimmed options, his 22 / 46 never the KH shop's
+        if let Some(d) = self.smith.on_event(talk_id, ins, id, args) {
+            return Some(d);
+        }
         let n = self.n();
         let int = |k: usize| args.get(k).and_then(Val::int).unwrap_or(-1);
         if (id == n.open_buy || id == n.open_sell) && self.menu_on {
@@ -94,6 +108,10 @@ impl ShopTalk {
         if id != env::MENU_OPEN {
             return None;
         }
+        // (P7 SMITHS) the reinforcement menu reads open while the Forge stands in for it
+        if let Some(v) = self.smith.on_env(talk_id, id, args) {
+            return Some(v);
+        }
         let r = self.request.as_ref().filter(|r| r.talk_id == talk_id)?;
         let n = self.n();
         let wanted = args.first().and_then(Val::int).unwrap_or(-1);
@@ -109,12 +127,11 @@ impl ShopTalk {
     }
 }
 
-/// The talk list's own commands are left to rules.rs (this file never answers them).
-#[allow(dead_code)]
-const _LEFT_TO_RULES: [i32; 2] = [cmd::SHOW_SHOP_MESSAGE, cmd::CLOSE_MENU];
+// The talk list's own commands (`cmd::SHOW_SHOP_MESSAGE`, `cmd::CLOSE_MENU`) are left to rules.rs (this file never answers them).
 
 #[cfg(test)]
 mod tests {
+    use super::super::rules::cmd;
     use super::*;
 
     const KALE: i32 = 800_006_000;
@@ -150,7 +167,8 @@ mod tests {
     }
 
     /// (SHOP) THE SMITHS: their prompt query reads 0 before the game is asked; the reinforcement menu never opens; a
-    /// script not in the sheet that opens it is refused from then on; `npc.smith_talk = 1` lets them talk.
+    /// script not in the sheet that opens it is refused from then on; `npc.smith_talk = 1` lets them talk. (P7) All of it
+    /// only with the Forge off (`forge.kh = 0`; the Forge's side: smith/tests.rs).
     #[test]
     fn shop_the_smiths_cannot_be_talked_to() {
         let mut t = talk();

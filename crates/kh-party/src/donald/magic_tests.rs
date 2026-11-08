@@ -79,6 +79,13 @@ impl Targets for Dummies {
     fn size_class(&self, id: TargetId) -> u8 {
         self.list.iter().find(|d| d.id == id).map_or(0, |d| d.size)
     }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
+    }
 }
 
 #[derive(Default)]
@@ -603,6 +610,32 @@ fn flood_arc_push_wet_wall_stun_and_puddle() {
     let h = rig.dummies.hits_on(1);
     assert!(!h.is_empty(), "the ring reaches behind him");
     assert_eq!(h[0].damage_kind, Kind::Parabola, "Lv 3 knocks small enemies down");
+}
+
+/// (PARTY-AI 2026-11-03, the in-game round's E6: `party don-cast l1.aero.1` was queued for the Aero icon, but l1.aero is the
+/// ATTACK Aero; the buff is l2.aero.N, and the word could only put it on Donald or Sora) the debug cast's member target
+/// (`party don-cast ID goofy|donald|leader`) puts an ally spell on that member; an attack id is not turned into a buff.
+#[test]
+fn a_debug_ally_cast_goes_on_the_member_it_names() {
+    let mut rig = Rig::new(&[Vec3::new(3000.0, 0.0, 0.0)]);
+    let goofy = rig.party.spawn(Chara::Goofy, Vec3::new(0.0, 300.0, 0.0), 0.0);
+    rig.party.don_fx.debug_casts.push(SpellRef::Line2(Element::Aero, 3));
+    rig.party.don_fx.debug_on_member = Some(goofy);
+    rig.secs(1.5);
+    let b = super::allyfx::barrier_of(&rig.party, goofy).expect("the barrier on Goofy");
+    assert_eq!(b.level, 3);
+    assert!(super::allyfx::barrier_of(&rig.party, rig.don).is_none(), "not on Donald");
+    assert!(rig.party.don_fx.debug_on_member.is_none(), "the target is used once");
+    // Ball Lightning the same way
+    rig.party.don_fx.debug_casts.push(SpellRef::Line2(Element::Thunder, 2));
+    rig.party.don_fx.debug_on_member = Some(rig.don);
+    rig.secs(1.5);
+    assert!(super::allyfx::orbs_of(&rig.party, rig.don).is_some_and(|o| o.orbs > 0), "the balls on Donald");
+    // an attack spell with a member named: still at the foe, no wearer
+    rig.party.don_fx.debug_casts.push(SpellRef::Line1(Element::Aero, 1));
+    rig.party.don_fx.debug_on_member = Some(goofy);
+    rig.secs(1.5);
+    assert!(super::allyfx::barrier_of(&rig.party, goofy).is_some_and(|b| b.left < 40.0 - 2.0), "Goofy's barrier was not renewed by the attack Aero");
 }
 
 #[test]
@@ -1370,4 +1403,20 @@ fn kitfx_no_extra_sound_is_a_looping_asset() {
         }
     }
     assert!(bad.is_empty(), "{bad:#?}");
+}
+
+/// (PARTY-AI, THE USER 2026-11-03: "the party leader can hit friendly NPCs, but not AI allies") Donald's spell as the leader (a pad)
+/// is the player's: it may strike a friendly NPC; the same spell from AI Donald carries the AI bit and passes through.
+#[test]
+fn donalds_spell_hits_friendly_npcs_only_while_he_leads() {
+    let mut rig = Rig::new(&[Vec3::new(800.0, 0.0, 0.0)]);
+    rig.cast(SpellRef::Line2(Element::Fire, 1), e1(), 1.5);
+    assert!(!rig.dummies.hits.is_empty(), "the spell landed");
+    assert!(rig.dummies.hits.iter().all(|h| kh_core::host::may_hit_friendly(h.flags)), "leading: the player's spell");
+    rig.dummies.hits.clear();
+    rig.party.set_pad(rig.don, None); // AI Donald
+    rig.secs(2.0);
+    rig.cast(SpellRef::Line2(Element::Fire, 1), e1(), 1.5);
+    assert!(!rig.dummies.hits.is_empty(), "the spell landed");
+    assert!(rig.dummies.hits.iter().all(|h| !kh_core::host::may_hit_friendly(h.flags)), "AI Donald's spell passes through friendly NPCs");
 }

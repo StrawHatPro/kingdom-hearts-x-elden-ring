@@ -113,14 +113,21 @@ pub unsafe extern "C" fn kh_er_init(dir: *const u16, len: usize, generation: u32
         crate::inputs::install();
         // KH3's camera (cam.rs): the game's camera step and audio listener are detoured; undone with the renderer's hooks.
         crate::cam::install();
+        crate::chrtime::install(); // (WORLDTIME-2) the characters' and the bullets' own delta (KH3's world slow); undone with the renderer's hooks
         // Elden Ring's HUD part by part (erhud.rs): its HUD-group step is detoured; undone with the renderer's hooks.
         crate::erhud::install();
         // Saving only at save points (savegate.rs): the game's save-start functions are detoured; undone with the renderer's hooks.
         crate::savegate::install();
+        crate::eroptions::install(); // (CAMP-OPTIONS) the title SYSTEM and the in-game System open our settings screen; undone with the renderer's hooks
         // The game's own pause (pause.rs): the in-game step's update is detoured; undone with the renderer's hooks.
         crate::pause::install();
+        crate::reactmark::install(); // (INTERACT-MARK) the action-button region tests and step: what Elden Ring's prompt is about; undone with the renderer's hooks
         // (IMPL_ER12) the title's flow (title.rs): its step's state setter, BeginNewGame and three dialog factories are detoured; undone with the renderer's hooks.
         crate::title::install();
+        crate::titlemusic::install(); // (TITLE-AUDIO) the game's sound maker: its title-menu sounds -> KH3's; undone with the renderer's hooks
+        crate::ersound::install(); // (ER-TWEAKS) the character voice play: the hidden Tarnished's voice muted; undone with the renderer's hooks
+        crate::dragonmsg::install(); // (ER-TWEAKS) the EMEVD bank-2007 dispatcher: the draconic-power popup not shown; undone with the renderer's hooks
+        crate::mimic_music::install(); // (MIMIC-MUSIC) the game's SetBossBGM core detoured
         crate::tutorial::install(); // (IMPL_ER13)
         crate::remo::install(); // (IMPL_ER12) the cutscene's animation acts
         crate::talkkh::install(); // (CV2) the talk scripts' commands / queries, the talk update and its subtitle: Elden Ring's conversations as KH bubbles (`talk.kh`)
@@ -152,6 +159,10 @@ pub extern "C" fn kh_er_frame(phase: u32, dt: f32) {
         erlog!("PANIC in phase {phase}: {}; this payload is now inert", panic_text(&payload));
         // Best effort: give the player back.
         let _ = catch_unwind(frame::shutdown);
+        let _ = catch_unwind(crate::gosound::shutdown); // (GOS) Elden Ring's master volume given back before anything goes
+        let _ = catch_unwind(crate::ngquiet::shutdown); // (CC-MUTE) the creation's input hold and KH silence released
+        let _ = catch_unwind(crate::titlemusic::shutdown); // (TITLE-AUDIO) Elden Ring's mix given back (the title's silence)
+        let _ = catch_unwind(crate::mimic_music::shutdown); // (MIMIC-MUSIC) Elden Ring's music given back
         let _ = catch_unwind(crate::fx::shutdown); // (fx) our audio device and threads
         let _ = catch_unwind(crate::save::shutdown); // (save)
         let _ = catch_unwind(crate::newgame::shutdown); // (IMPL_ER11) the cover
@@ -164,22 +175,34 @@ pub extern "C" fn kh_er_frame(phase: u32, dt: f32) {
     let _ = catch_unwind(crate::zfinale::release); // (ZFIN) a body hidden by the finale is drawn again
     let _ = catch_unwind(crate::gracehide::release); // (SV)
     let _ = catch_unwind(crate::gracelock::release); // (SV)
+    let _ = catch_unwind(crate::ertext::release); // (MUNNY-TEXT) Elden Ring's message tables point at its own text again
     let _ = catch_unwind(crate::telescope::release); // (TELESCOPE) the telescopes' rows get their region back
     let _ = catch_unwind(crate::erkeyui::release); // (HUD2)
+    let _ = catch_unwind(crate::dragonmsg::release); // (ER-TWEAKS) the game's event messages all pass again
     let _ = catch_unwind(crate::pause::release); // (IMPL_ER11) our hold on the world is taken back before the hooks go
     let _ = catch_unwind(crate::titleload::shutdown); // (IMPL_ER15) the masked summary bytes go back before anything else
     let _ = catch_unwind(crate::hud::shutdown); // (hud) Elden Ring's HUD and speed given back, our threads ended
         let _ = catch_unwind(kh_er_render::shutdown);
         crate::inputs::uninstalled();
     crate::cam::uninstalled();
+    crate::chrtime::uninstalled(); // (WORLDTIME-2)
     crate::erhud::uninstalled();
     crate::loot::uninstalled(); // (loot)
     crate::savegate::uninstalled();
+    crate::eroptions::uninstalled(); // (CAMP-OPTIONS)
+    crate::titlemusic::uninstalled(); // (TITLE-AUDIO)
+    crate::ersound::uninstalled(); // (ER-TWEAKS)
+    crate::dragonmsg::uninstalled(); // (ER-TWEAKS)
+    crate::mimic_music::uninstalled(); // (MIMIC-MUSIC)
+    crate::remap_er::uninstalled(); // (CAMP-OPTIONS) the game window's own procedure back
+    crate::dinput_mask::uninstalled(); // (CAMP-OPTIONS) DirectInput's own methods back
     crate::pause::uninstalled();
+    crate::reactmark::uninstalled(); // (INTERACT-MARK)
     crate::title::uninstalled();
     crate::tutorial::uninstalled();
     crate::remo::uninstalled();
     crate::talkkh::uninstalled(); // (CV2)
+    crate::spirit::uninstalled(); // (THE USER 2026-11-02: "Summon") the buddy range step and the HUD spirit block
     }
 }
 
@@ -191,6 +214,10 @@ pub extern "C" fn kh_er_shutdown() {
     if let Err(payload) = catch_unwind(frame::shutdown) {
         erlog!("PANIC in shutdown: {}", panic_text(&payload));
     }
+    let _ = catch_unwind(crate::gosound::shutdown); // (GOS) Elden Ring's master volume given back before anything goes
+    let _ = catch_unwind(crate::ngquiet::shutdown); // (CC-MUTE) the creation's input hold and KH silence released
+    let _ = catch_unwind(crate::titlemusic::shutdown); // (TITLE-AUDIO) Elden Ring's mix given back (the title's silence)
+    let _ = catch_unwind(crate::mimic_music::shutdown); // (MIMIC-MUSIC) Elden Ring's music given back
     let _ = catch_unwind(crate::fx::shutdown); // (fx) our audio device and threads
     let _ = catch_unwind(crate::save::shutdown); // (save)
     let _ = catch_unwind(crate::newgame::shutdown); // (IMPL_ER11) the cover
@@ -203,8 +230,10 @@ pub extern "C" fn kh_er_shutdown() {
     let _ = catch_unwind(crate::zfinale::release); // (ZFIN) a body hidden by the finale is drawn again
     let _ = catch_unwind(crate::gracehide::release); // (SV)
     let _ = catch_unwind(crate::gracelock::release); // (SV)
+    let _ = catch_unwind(crate::ertext::release); // (MUNNY-TEXT) Elden Ring's message tables point at its own text again
     let _ = catch_unwind(crate::telescope::release); // (TELESCOPE) the telescopes' rows get their region back
     let _ = catch_unwind(crate::erkeyui::release); // (HUD2)
+    let _ = catch_unwind(crate::dragonmsg::release); // (ER-TWEAKS) the game's event messages all pass again
     let _ = catch_unwind(crate::pause::release); // (IMPL_ER11) our hold on the world is taken back before the hooks go
     let _ = catch_unwind(crate::titleload::shutdown); // (IMPL_ER15) the masked summary bytes go back before anything else
     let _ = catch_unwind(crate::hud::shutdown); // (hud) Elden Ring's HUD and speed given back, our threads ended
@@ -214,14 +243,24 @@ pub extern "C" fn kh_er_shutdown() {
     }
     crate::inputs::uninstalled();
     crate::cam::uninstalled();
+    crate::chrtime::uninstalled(); // (WORLDTIME-2)
     crate::erhud::uninstalled();
     crate::loot::uninstalled(); // (loot)
     crate::savegate::uninstalled();
+    crate::eroptions::uninstalled(); // (CAMP-OPTIONS)
+    crate::titlemusic::uninstalled(); // (TITLE-AUDIO)
+    crate::ersound::uninstalled(); // (ER-TWEAKS)
+    crate::dragonmsg::uninstalled(); // (ER-TWEAKS)
+    crate::mimic_music::uninstalled(); // (MIMIC-MUSIC)
+    crate::remap_er::uninstalled(); // (CAMP-OPTIONS) the game window's own procedure back
+    crate::dinput_mask::uninstalled(); // (CAMP-OPTIONS) DirectInput's own methods back
     crate::pause::uninstalled();
+    crate::reactmark::uninstalled(); // (INTERACT-MARK)
     crate::title::uninstalled();
     crate::tutorial::uninstalled();
     crate::remo::uninstalled();
     crate::talkkh::uninstalled(); // (CV2)
+    crate::spirit::uninstalled(); // (THE USER 2026-11-02: "Summon") the buddy range step and the HUD spirit block
     erlog!("payload shut down");
 }
 

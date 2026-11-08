@@ -2,8 +2,7 @@
 //! NAVLINK_JUMP (the friends' jump / fall state 0x2B) may warp unless the jump is the rail leave's (state byte
 //! +0xA9, set only by 0x141252210); CLIMBING and DANGLE (the switch default) never warp.
 
-mod common;
-use common::*;
+use crate::common::*;
 use glam::Vec3;
 use kh_ai::*;
 

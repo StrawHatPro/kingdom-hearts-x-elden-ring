@@ -217,10 +217,13 @@ pub struct YOffers {
     pub party_talks: usize,
     /// Elden Ring's own action prompt is up, with its text when read.
     pub er_prompt: Option<Option<String>>,
+    /// (EMOTE-PROMPTS) a gesture-gated event's command is offered (gestureprompt.rs): the gesture's name.
+    pub gesture: Option<String>,
 }
 
 /// (pure) THE Y INTERACTIONS IN Y'S ORDER (sora.rs: the save point's command first, then a party talk, which wins Y over
-/// Elden Ring's prompt (CV3), then Elden Ring's prompt): the first is the green event button.
+/// Elden Ring's prompt (CV3), then Elden Ring's prompt, then (EMOTE-PROMPTS) a gesture-gated event's command): the first is
+/// the green event button.
 pub fn reactions(o: &YOffers) -> Vec<kh_host::hud::HostReaction> {
     use kh_host::hud::{Hud, HostReaction};
     let mut out = Vec::new();
@@ -233,6 +236,10 @@ pub fn reactions(o: &YOffers) -> Vec<kh_host::hud::HostReaction> {
     if let Some(text) = &o.er_prompt {
         let (kind, name) = text.as_deref().map(kh_name).unwrap_or((Some(KIND_EXAMINE), "Examine".to_string()));
         out.push(HostReaction { kind, name });
+    }
+    // (EMOTE-PROMPTS) the gesture's command last: Elden Ring's own prompt (a talk) keeps its Y
+    if let Some(name) = &o.gesture {
+        out.push(HostReaction { kind: None, name: name.clone() });
     }
     out
 }
@@ -308,7 +315,7 @@ mod tests {
     fn rc_donalds_recruit_talk_is_the_green_talk_bar_and_wins_y() {
         let owner = crate::unlock::DONALD_OWNER;
         crate::conv::offer_talk(owner, true);
-        let offers = YOffers { save: false, party_talks: crate::conv::party_talks_offered(), er_prompt: Some(Some("Talk".into())) };
+        let offers = YOffers { save: false, party_talks: crate::conv::party_talks_offered(), er_prompt: Some(Some("Talk".into())), gesture: None };
         let list = reactions(&offers);
         assert!(offers.party_talks >= 1);
         assert_eq!(list.first().map(|r| (r.kind, r.name.as_str())), Some((Some(KIND_TALK), "Talk")), "his Talk is the green bar");
@@ -322,8 +329,13 @@ mod tests {
         let names = |o: &YOffers| reactions(o).iter().map(|r| (r.kind, r.name.clone())).collect::<Vec<_>>();
         assert!(reactions(&YOffers::default()).is_empty());
         // the save point first, then a party talk (it wins Y over the game's prompt), then the game's prompt
-        let all = YOffers { save: true, party_talks: 1, er_prompt: Some(Some("Talk".into())) };
+        let all = YOffers { save: true, party_talks: 1, er_prompt: Some(Some("Talk".into())), gesture: None };
         assert_eq!(names(&all), vec![(Some(76), "Save".into()), (Some(KIND_TALK), "Talk".into()), (Some(KIND_TALK), "Talk".into())]);
+        // (EMOTE-PROMPTS) a gesture's command: the green bar alone, under Elden Ring's prompt when both are up
+        let gesture = YOffers { gesture: Some("Finger Snap".into()), ..YOffers::default() };
+        assert_eq!(names(&gesture), vec![(None, "Finger Snap".into())]);
+        let both = YOffers { er_prompt: Some(Some("Talk".into())), gesture: Some("May the Best Win".into()), ..YOffers::default() };
+        assert_eq!(names(&both), vec![(Some(KIND_TALK), "Talk".into()), (None, "May the Best Win".into())]);
         let er = YOffers { er_prompt: Some(Some("Pick up item".into())), ..YOffers::default() };
         assert_eq!(names(&er), vec![(None, "Pick Up".into())]);
         // a prompt whose text was not readable: KH3's Examine

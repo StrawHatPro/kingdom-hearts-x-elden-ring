@@ -193,9 +193,9 @@ impl Clip {
             let bone = json.get("nodes").at(node).get("name").as_str().ok_or("animated node without a name")?;
             let track = tracks.entry(node).or_insert_with(|| Track { bone: bone.to_string(), ..Track::default() });
             match path {
-                "translation" => track.translation = Channel { times, values: floats(output, 3)?.chunks_exact(3).map(|v| position_to_ue(Vec3::new(v[0], v[1], v[2]))).collect() },
-                "scale" => track.scale = Channel { times, values: floats(output, 3)?.chunks_exact(3).map(|v| scale_to_ue(Vec3::new(v[0], v[1], v[2]))).collect() },
-                "rotation" => track.rotation = Channel { times, values: floats(output, 4)?.chunks_exact(4).map(|v| rotation_to_ue(Quat::from_xyzw(v[0], v[1], v[2], v[3]).normalize())).collect() },
+                "translation" => track.translation = Channel { times, values: floats(output, 3)?.as_chunks::<3>().0.iter().map(|v| position_to_ue(Vec3::new(v[0], v[1], v[2]))).collect() },
+                "scale" => track.scale = Channel { times, values: floats(output, 3)?.as_chunks::<3>().0.iter().map(|v| scale_to_ue(Vec3::new(v[0], v[1], v[2]))).collect() },
+                "rotation" => track.rotation = Channel { times, values: floats(output, 4)?.as_chunks::<4>().0.iter().map(|v| rotation_to_ue(Quat::from_xyzw(v[0], v[1], v[2], v[3]).normalize())).collect() },
                 _ => {}
             }
         }
@@ -247,6 +247,9 @@ pub struct Pack {
     pub bonamik: Option<Json>,
     /// (party I2) `data/lookat.json` (a friend's TresAnimNode_ExLookAt + anim-instance look-at data), when the pack has it.
     pub look_at: Option<Json>,
+    /// (AUDIT-C) `face/face_extra.json`: face rows code plays that no body clip names (Rage Form's end, ANTI_01 / ANTI_02):
+    /// (row, clip) pairs added to the manifest's `runtime.face.rows`; their clips are loaded with the others.
+    pub face_rows_extra: Vec<(String, String)>,
 }
 
 impl Pack {
@@ -282,7 +285,7 @@ impl Pack {
                 }
             }
         }
-        let mut pack = Pack { skeleton, clips: BTreeMap::new(), lazy: BTreeMap::new(), info: BTreeMap::new(), leg_ik: data("legik.json")?, kine_driver: data("kinedriver.json")?, bonamik: data("bonamik.json")?, look_at: data("lookat.json")?, manifest };
+        let mut pack = Pack { skeleton, clips: BTreeMap::new(), lazy: BTreeMap::new(), info: BTreeMap::new(), leg_ik: data("legik.json")?, kine_driver: data("kinedriver.json")?, bonamik: data("bonamik.json")?, look_at: data("lookat.json")?, manifest, face_rows_extra: Vec::new() };
         let mut files: Vec<(String, String)> = Vec::new();
         for item in pack.manifest.get("items").items() {
             if !matches!(item.get("kind").as_str(), Some("animation") | Some("face-animation")) {
@@ -319,6 +322,7 @@ impl Pack {
             }
         }
         pack.merge_overlay(dir);
+        pack.face_extra(dir)?;
         Ok(pack)
     }
 
@@ -333,9 +337,40 @@ impl Pack {
         }
         // the staged copy beside the pack (build/sora_pack -> build/sora_tmp/xsi/pack), before the deploy
         roots.push(dir.join("..").join("sora_tmp").join("xsi").join("pack"));
-        for root in roots {
-            let Ok(text) = std::fs::read_to_string(root.join("xsi_manifest.json")) else { continue };
-            let Ok(overlay) = Json::parse(&text) else { continue };
+        if let Some(root) = roots.into_iter().find(|r| r.join("xsi_manifest.json").is_file()) {
+            self.merge_overlay_file(&root, &root.join("xsi_manifest.json"));
+        }
+        // (KEYBLADES) Sora's own clips of the keyblades' form anim sets (tools/sora_keyblades_pack.js): files relative to
+        // PACK/keyblades; read on first use like the XS overlay's
+        let keyblades = dir.join("keyblades");
+        self.merge_overlay_file(&keyblades, &keyblades.join("sora_forms_manifest.json"));
+    }
+
+    /// (AUDIT-C) `face/face_extra.json` (tools/audit_c/rage_face_clips.js): its face-animation items are loaded as the
+    /// manifest's, its rows join the face rows. A pack without the file changes nothing.
+    fn face_extra(&mut self, dir: &Path) -> Result<(), String> {
+        let Ok(text) = std::fs::read_to_string(dir.join("face").join("face_extra.json")) else { return Ok(()) };
+        let side = Json::parse(&text)?;
+        let stem = |file: &str| file.rsplit('/').next().unwrap_or(file).trim_end_matches(".glb").to_string();
+        for item in side.get("items").items() {
+            let (Some(name), Some(file)) = (item.get("animation_name").as_str(), item.get("file").as_str()) else { continue };
+            if self.clips.contains_key(name) {
+                continue;
+            }
+            let properties = item.get("sequence_properties");
+            self.info.insert(name.to_string(), ClipInfo { length: item.get("duration_s").as_f32().unwrap_or(0.0), root_motion_enabled: false, interpolation_time: properties.get("m_InterpolationTime").as_f32().unwrap_or(0.0), notifies: Vec::new() });
+            self.load_clip(dir, name, file)?;
+        }
+        self.face_rows_extra = side.get("rows").items().iter().filter_map(|r| Some((r.get("name").as_str()?.to_string(), stem(r.get("file").as_str()?)))).collect();
+        Ok(())
+    }
+
+    /// The animation items of one overlay manifest (`file` relative to `root`), registered as lazy clips; a clip already
+    /// known stays as it is. A missing or unreadable file changes nothing.
+    fn merge_overlay_file(&mut self, root: &Path, manifest: &Path) {
+        {
+            let Ok(text) = std::fs::read_to_string(manifest) else { return };
+            let Ok(overlay) = Json::parse(&text) else { return };
             for item in overlay.get("items").items() {
                 if item.get("kind").as_str() != Some("animation") {
                     continue;
@@ -361,7 +396,6 @@ impl Pack {
                 );
                 self.lazy.insert(name.to_string(), root.join(file));
             }
-            return;
         }
     }
 

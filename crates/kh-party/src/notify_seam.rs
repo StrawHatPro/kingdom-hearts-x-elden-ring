@@ -13,19 +13,15 @@ use kh_core::anim::NotifyPhase;
 use kh_core::host::party::{PartyNotifyEvent, SeamNotify};
 
 #[cfg(kh_party_anim_full)]
-#[allow(dead_code, clippy::all)]
-pub(crate) mod full {
+pub mod full {
     pub mod types {
-        #![allow(dead_code, clippy::all)]
         include!(concat!(env!("KH_PARTY_GEN_DIR"), "/party_anim_types.rs"));
     }
     pub mod ex001 {
-        #![allow(dead_code, unused_imports, clippy::all)]
         use super::types::*;
         include!(concat!(env!("KH_PARTY_GEN_DIR"), "/party_anim_n_ex001.rs"));
     }
     pub mod ex002 {
-        #![allow(dead_code, unused_imports, clippy::all)]
         use super::types::*;
         include!(concat!(env!("KH_PARTY_GEN_DIR"), "/party_anim_n_ex002.rs"));
     }
@@ -50,7 +46,9 @@ pub fn seam_of(chara: Chara, sequence: &str, fired: &FiredNotify, ordinal: usize
         NotifyData::WeaponSe { alias, socket, follow, volume, pitch, fade_out, .. } => vec![SeamNotify::WeaponSe { alias, socket, follow, volume, pitch, fade_out }],
         NotifyData::AutoSe { motion, source, fade_out } => vec![SeamNotify::AutoSe { name: motion.or(source).unwrap_or(""), fade_out }],
         NotifyData::Voice { group, asset, random, fade_out } => vec![SeamNotify::Voice { name: asset.or(group).or(random.first().map(|r| r.0)).unwrap_or(""), fade_out }],
-        NotifyData::Effect { entries } => entries.iter().filter_map(|e| Some(SeamNotify::Effect { effect: e.effect?, socket: e.socket, group_id: e.group_id })).collect(),
+        // (THE USER 2026-11-02: "this effect is not aligned properly") each row keeps its own place on its socket (KH3's
+        // LocationOffset / RotationOffset / ScaleOffset): the shield bash's VN_slg_bsh0 is a metre ahead of vfx_root
+        NotifyData::Effect { entries } => entries.iter().filter_map(|e| Some(SeamNotify::Effect { effect: e.effect?, socket: e.socket, group_id: e.group_id, offset: e.offset.into(), rotation: e.rotation.into(), scale: e.scale[0] })).collect(),
         NotifyData::None if n.class == "TresAnimNotify_PlayActorVoice" => def
             .props
             .iter()
@@ -102,5 +100,44 @@ pub fn events_of(chara: Chara, sequence: &str, clip_notifies: &[crate::anim::Cli
         for data in seam {
             out.push(PartyNotifyEvent { sequence: key, index: f.index, state: f.notify.is_state(), phase: f.phase, data });
         }
+    }
+}
+
+#[cfg(all(test, kh_party_anim_full))]
+mod tests {
+    use super::*;
+    use glam::Vec3;
+
+    /// The effect rows (name tail, socket, offset, rotation, scale) a clip's AttachEffect notifies hand the seam.
+    fn rows(clip: &str) -> Vec<(&'static str, &'static str, Vec3, Vec3, f32)> {
+        let c = crate::tables::clip(Chara::Goofy, clip);
+        let fired: Vec<FiredNotify> = c.notifies.iter().enumerate().filter(|(_, n)| n.class.contains("AttachEffect")).map(|(i, n)| FiredNotify { index: i as u16, phase: NotifyPhase::Begin, notify: n }).collect();
+        let mut out = Vec::new();
+        events_of(Chara::Goofy, c.sequence, c.notifies, &fired, &mut out);
+        out.iter()
+            .filter_map(|e| match e.data {
+                SeamNotify::Effect { effect, socket, offset, rotation, scale, .. } => Some((effect.rsplit('.').next().unwrap_or(effect), socket, offset, rotation, scale)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// (THE USER 2026-11-02, Goofy's lunge: "this effect is not aligned properly") KH3 puts the shield bash's hexagon
+    /// VN_slg_bsh0 on vfx_root at LocationOffset (100, 0, 80): a metre ahead of his feet at shield height. The seam got
+    /// the socket only, so it sat on his root, low and behind the lunge. Every row keeps its own place now: the ground
+    /// and the air bash (the combo's Shove 3 and Counter Bash play the ground one), and the heavy bash's weapon rows.
+    #[test]
+    fn the_shield_bash_hexagon_keeps_its_place_a_metre_ahead_of_his_root() {
+        for clip in ["SGuardShieldBash", "SGuardAirShieldBash"] {
+            let r = rows(clip);
+            assert!(r.contains(&("VN_slg_bsh0", "vfx_root", Vec3::new(100.0, 0.0, 80.0), Vec3::ZERO, 1.0)), "{clip}: {r:?}");
+        }
+        let heavy = rows("SGuardHeavyBash");
+        assert!(heavy.contains(&("VN_bsh_inl1", "vfx_top", Vec3::ZERO, Vec3::new(180.0, 0.0, 0.0), 1.0)), "{heavy:?}");
+        assert!(heavy.contains(&("VN_slg_hvy01", "vfx_top", Vec3::new(0.0, 0.0, -85.0), Vec3::new(90.0, 0.0, 0.0), 1.0)), "{heavy:?}");
+        // the counter Shield Shove's OWNER row names "vfx_top", a socket only his shield has: KH3 puts it on his mesh
+        // (+Y ahead), so (0, 180, 80) yaw 90 is 1.8 m ahead, 80 cm up, facing ahead; on no socket in his own frame
+        let shove = rows("SGuardShieldBash2");
+        assert!(shove.contains(&("VN_slg_hvy00", "None", Vec3::new(180.0, 0.0, 80.0), Vec3::ZERO, 1.0)), "{shove:?}");
     }
 }

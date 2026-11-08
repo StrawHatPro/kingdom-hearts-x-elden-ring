@@ -39,6 +39,24 @@ struct Job {
     defines: BTreeSet<String>,
     /// For the count: "pixel", "vertex", "distort", "host".
     kind: &'static str,
+    /// (PARTY-NATIVE-LIGHT) built from the lit text (`lit_text`: the forward lighting's global rows read from the harness's per-pixel copy)
+    lit: bool,
+}
+
+/// (PARTY-NATIVE-LIGHT) The text a lit variant is built from (pure, tested): the material reads the forward lighting's global rows
+/// from the harness's per-pixel copy `kh_fwdg` (er_vfx.wgsl KH_FXLIT sets it from Elden Ring's own light) instead of the frame's.
+fn lit_text(spliced: &str) -> String {
+    spliced.replace("er.fwd_g[", "kh_fwdg[")
+}
+
+/// (PARTY-NATIVE-LIGHT) Whether the owner's translated block `KH_S<id>_<tag>` reads the forward lighting's inputs or the scene colours
+/// (pure, tested): only such an owner gets a lit variant `l<letter><id>`.
+fn reads_forward_light(generated: &str, id: u64, tag: &str) -> bool {
+    let marker = format!("#ifdef KH_S{id}_{tag}\n");
+    let Some(at) = generated.find(&marker).map(|a| a + marker.len()) else { return false };
+    let block = &generated[at..];
+    let block = &block[..block.find("\n#endif").unwrap_or(block.len())];
+    ["er.fwd_", "kh_fwd_", "i.fbright", "i.fdark", "i.pbright", "i.pdark"].iter().any(|k| block.contains(k))
 }
 
 fn defines(list: &[&str]) -> BTreeSet<String> {
@@ -57,46 +75,51 @@ pub fn run(project: &Path, pack: &Path, dxc: &Path, only: Option<&str>, jobs: Op
     std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&hlsl_dir).map_err(|e| e.to_string())?;
     let spliced = VFX_HARNESS.replace("//KH_GENERATED", &generated);
+    // (PARTY-NATIVE-LIGHT) the lit variants' text, and the owners' blocks with LF line ends (reads_forward_light)
+    let spliced_lit = lit_text(&spliced);
+    let generated_lf = generated.replace("\r\n", "\n");
 
     // ---- what to build
     let mut list: Vec<Job> = vec![
-        Job { name: "quad".into(), stage: naga::ShaderStage::Vertex, entry: "vs_quad", defines: defines(&["ER_QUAD", "KH_GENERIC"]), kind: "host" },
-        Job { name: "plain".into(), stage: naga::ShaderStage::Vertex, entry: "vs_plain", defines: defines(&["ER_PLAIN", "KH_GENERIC"]), kind: "host" },
-        Job { name: "mesh".into(), stage: naga::ShaderStage::Vertex, entry: "vs_mesh", defines: defines(&["ER_MESH", "KH_GENERIC"]), kind: "host" },
-        Job { name: "generic".into(), stage: naga::ShaderStage::Fragment, entry: "fs_main", defines: defines(&["ER_FRAGMENT", "KH_GENERIC"]), kind: "host" },
-        Job { name: "screen".into(), stage: naga::ShaderStage::Vertex, entry: "vs_screen", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host" },
-        Job { name: "tone".into(), stage: naga::ShaderStage::Fragment, entry: "fs_tone", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host" },
-        Job { name: "floor".into(), stage: naga::ShaderStage::Fragment, entry: "fs_floor", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host" },
+        Job { name: "quad".into(), stage: naga::ShaderStage::Vertex, entry: "vs_quad", defines: defines(&["ER_QUAD", "KH_GENERIC"]), kind: "host", lit: false },
+        Job { name: "plain".into(), stage: naga::ShaderStage::Vertex, entry: "vs_plain", defines: defines(&["ER_PLAIN", "KH_GENERIC"]), kind: "host", lit: false },
+        Job { name: "mesh".into(), stage: naga::ShaderStage::Vertex, entry: "vs_mesh", defines: defines(&["ER_MESH", "KH_GENERIC"]), kind: "host", lit: false },
+        Job { name: "generic".into(), stage: naga::ShaderStage::Fragment, entry: "fs_main", defines: defines(&["ER_FRAGMENT", "KH_GENERIC"]), kind: "host", lit: false },
+        // (PARTY-NATIVE) the generic variant with the game's fog (a NEW file)
+        Job { name: "fgeneric".into(), stage: naga::ShaderStage::Fragment, entry: "fs_main", defines: defines(&["ER_FRAGMENT", "KH_GENERIC", "KH_FXNAT", "KH_FXFOG"]), kind: "fog", lit: false },
+        Job { name: "screen".into(), stage: naga::ShaderStage::Vertex, entry: "vs_screen", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host", lit: false },
+        Job { name: "tone".into(), stage: naga::ShaderStage::Fragment, entry: "fs_tone", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host", lit: false },
+        Job { name: "floor".into(), stage: naga::ShaderStage::Fragment, entry: "fs_floor", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host", lit: false },
         // (IMPL_ER53) the harness's forward-stage stand-in (a glow decal from a depth copy, effect panels): a NEW file
-        Job { name: "fxtest".into(), stage: naga::ShaderStage::Fragment, entry: "fs_fxtest", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host" },
+        Job { name: "fxtest".into(), stage: naga::ShaderStage::Fragment, entry: "fs_fxtest", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host", lit: false },
         // (IMPL_ER56) the same with the stencil-masked sky glow: a NEW file
         // (IMPL_ER65) + the sky glow masked by an early depth copy: a NEW file
-        Job { name: "fxtest3".into(), stage: naga::ShaderStage::Fragment, entry: "fs_fxtest", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host" },
-        Job { name: "fxtest2".into(), stage: naga::ShaderStage::Fragment, entry: "fs_fxtest", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host" },
+        Job { name: "fxtest3".into(), stage: naga::ShaderStage::Fragment, entry: "fs_fxtest", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host", lit: false },
+        Job { name: "fxtest2".into(), stage: naga::ShaderStage::Fragment, entry: "fs_fxtest", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host", lit: false },
         // (IMPL_ER78) the harness's light-pass stand-in for the hybrid (the diffuse light of the G-buffer's normals): a NEW file
-        Job { name: "hylight".into(), stage: naga::ShaderStage::Fragment, entry: "fs_hylight", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host" },
+        Job { name: "hylight".into(), stage: naga::ShaderStage::Fragment, entry: "fs_hylight", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host", lit: false },
         // (IMPL_ER80) the harness's glow source (the composite's second target), glow chain and TAA stand-ins: NEW files
-        Job { name: "glowsrc".into(), stage: naga::ShaderStage::Fragment, entry: "fs_glowsrc", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host" },
-        Job { name: "glowcomp".into(), stage: naga::ShaderStage::Fragment, entry: "fs_glowcomp", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host" },
-        Job { name: "taa".into(), stage: naga::ShaderStage::Fragment, entry: "fs_taa", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host" },
+        Job { name: "glowsrc".into(), stage: naga::ShaderStage::Fragment, entry: "fs_glowsrc", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host", lit: false },
+        Job { name: "glowcomp".into(), stage: naga::ShaderStage::Fragment, entry: "fs_glowcomp", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host", lit: false },
+        Job { name: "taa".into(), stage: naga::ShaderStage::Fragment, entry: "fs_taa", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host", lit: false },
         // (IMPL_ER80b) the harness's light-shaft source stand-in (the game's own composite shader draws it): a NEW file
-        Job { name: "shaftsrc".into(), stage: naga::ShaderStage::Fragment, entry: "fs_shaftsrc", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host" },
-        Job { name: "upadd".into(), stage: naga::ShaderStage::Fragment, entry: "fs_upadd", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host" },
+        Job { name: "shaftsrc".into(), stage: naga::ShaderStage::Fragment, entry: "fs_shaftsrc", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host", lit: false },
+        Job { name: "upadd".into(), stage: naga::ShaderStage::Fragment, entry: "fs_upadd", defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host", lit: false },
     ];
     // (VFXR) the effect layer's post passes (kh-er-render vfxpost.rs): NEW files fxp_*.ps.dxil
     for entry in ["fs_fxp_bsrc", "fs_fxp_down", "fs_fxp_blur", "fs_fxp_bloom", "fs_fxp_radial", "fs_fxp_rcomp", "fs_fxp_sblur", "fs_fxp_filter", "fs_fxp_fringe"] {
-        list.push(Job { name: entry.trim_start_matches("fs_").into(), stage: naga::ShaderStage::Fragment, entry, defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host" });
+        list.push(Job { name: entry.trim_start_matches("fs_").into(), stage: naga::ShaderStage::Fragment, entry, defines: defines(&["ER_SCREEN", "KH_GENERIC"]), kind: "host", lit: false });
     }
     // (HY) the harness's scene of Elden Ring's kind for the hybrid's proof (er_vfx.wgsl HY_SCENE): NEW files, built only with
     // `--only hylight2` / `--only hyfog` (never part of a whole build: the pack's files stay as they are)
     if matches!(only, Some("hylight2") | Some("hyfog")) {
-        list.push(Job { name: "hylight2".into(), stage: naga::ShaderStage::Fragment, entry: "fs_hylight2", defines: defines(&["ER_SCREEN", "KH_GENERIC", "HY_SCENE"]), kind: "host" });
-        list.push(Job { name: "hyfog".into(), stage: naga::ShaderStage::Fragment, entry: "fs_hyfog", defines: defines(&["ER_SCREEN", "KH_GENERIC", "HY_SCENE"]), kind: "host" });
+        list.push(Job { name: "hylight2".into(), stage: naga::ShaderStage::Fragment, entry: "fs_hylight2", defines: defines(&["ER_SCREEN", "KH_GENERIC", "HY_SCENE"]), kind: "host", lit: false });
+        list.push(Job { name: "hyfog".into(), stage: naga::ShaderStage::Fragment, entry: "fs_hyfog", defines: defines(&["ER_SCREEN", "KH_GENERIC", "HY_SCENE"]), kind: "host", lit: false });
     }
     // (ZFIN) the harness's stand-in for Elden Ring's characters (er_vfx.wgsl ER_CHARS, examples/effects.rs `--erchars`): a NEW
     // file, built only with `--only erchr`
     if only == Some("erchr") {
-        list.push(Job { name: "erchr".into(), stage: naga::ShaderStage::Fragment, entry: "fs_erchr", defines: defines(&["ER_SCREEN", "KH_GENERIC", "ER_CHARS"]), kind: "host" });
+        list.push(Job { name: "erchr".into(), stage: naga::ShaderStage::Fragment, entry: "fs_erchr", defines: defines(&["ER_SCREEN", "KH_GENERIC", "ER_CHARS"]), kind: "host", lit: false });
     }
     let owners = shading.get("owners").and_then(Value::as_object).ok_or("shading.json: no owners")?;
     for (owner_name, owner) in owners.iter() {
@@ -122,24 +145,52 @@ pub fn run(project: &Path, pack: &Path, dxc: &Path, only: Option<&str>, jobs: Op
             if flag("mask") {
                 d.insert("KH_MASK".into());
             }
-            list.push(Job { name: format!("{letter}{id}"), stage: naga::ShaderStage::Fragment, entry: "fs_main", defines: d.clone(), kind: "pixel" });
+            list.push(Job { name: format!("{letter}{id}"), stage: naga::ShaderStage::Fragment, entry: "fs_main", defines: d.clone(), kind: "pixel", lit: false });
+            // (PARTY-NATIVE) a lit (deferred) material's native pair: `n<letter><id>` the colour pass from the game's light,
+            // `g<letter><id>` its G-buffer twin (er_vfx.wgsl KH_FXNAT / KH_FX_GB): NEW files, read by kh-er-render when present
+            // (PARTY-NATIVE) its fog variant `f<letter><id>`: the game's fog at the effect pixel's depth (er_vfx.wgsl KH_FXFOG; with
+            // KH_FXNAT for the frame layout): drawn in the late stage (blended / additive / modulate); NEW files
+            if class != "decal" {
+                let mut fog = d.clone();
+                fog.insert("KH_FXNAT".into());
+                fog.insert("KH_FXFOG".into());
+                list.push(Job { name: format!("f{letter}{id}"), stage: naga::ShaderStage::Fragment, entry: "fs_main", defines: fog, kind: "fog", lit: false });
+            }
+            // (PARTY-NATIVE-LIGHT) a forward-lit owner's lit variant `l<letter><id>`: Elden Ring's own light at the effect pixel in place of
+            // the forward lighting's inputs (er_vfx.wgsl KH_FXLIT, with the native frame layout and the fog): NEW files
+            if class != "decal" && reads_forward_light(&generated_lf, id, tag) {
+                let mut lit = d.clone();
+                lit.extend(["KH_FXNAT", "KH_FXFOG", "KH_FXLIT"].map(str::to_string));
+                list.push(Job { name: format!("l{letter}{id}"), stage: naga::ShaderStage::Fragment, entry: "fs_main", defines: lit, kind: "lit", lit: true });
+            }
+            if d.contains("KH_DEFERRED") && class != "decal" {
+                for (prefix, extra) in [("n", None), ("g", Some("KH_FX_GB"))] {
+                    let mut nat = d.clone();
+                    nat.insert("KH_FXNAT".into());
+                    nat.extend(extra.map(str::to_string));
+                    list.push(Job { name: format!("{prefix}{letter}{id}"), stage: naga::ShaderStage::Fragment, entry: "fs_main", defines: nat, kind: "native", lit: false });
+                }
+            }
             if flag("distort") && class != "decal" {
                 let mut x = d.clone();
                 x.insert("KH_DISTORT".into());
                 x.remove("KH_MASK");
                 x.remove("KH_DEFERRED");
-                list.push(Job { name: format!("x{letter}{id}"), stage: naga::ShaderStage::Fragment, entry: "fs_main", defines: x, kind: "distort" });
+                list.push(Job { name: format!("x{letter}{id}"), stage: naga::ShaderStage::Fragment, entry: "fs_main", defines: x, kind: "distort", lit: false });
             }
             if class == "mesh" && flag("vs") {
                 let mut v = defines(&["ER_MESH", "KH_VS", "KH_MESH"]);
                 v.insert(format!("KH_S{id}_{tag}"));
-                list.push(Job { name: format!("v{id}"), stage: naga::ShaderStage::Vertex, entry: "vs_mesh", defines: v, kind: "vertex" });
+                list.push(Job { name: format!("v{id}"), stage: naga::ShaderStage::Vertex, entry: "vs_mesh", defines: v, kind: "vertex", lit: false });
             }
         }
     }
     if let Some(only) = only {
         // (VFXR) `--only fxp`: every post pass of the effect layer (fxp_*)
-        list.retain(|j| j.name == only || (only == "fxp" && j.name.starts_with("fxp_")));
+        // (PARTY-NATIVE) `--only fxnat`: every native pair of the lit effects (n* / g*)
+        // (PARTY-NATIVE) `--only fxfogvars`: every fog variant (f*, fgeneric)
+        // (PARTY-NATIVE-LIGHT) `--only fxlitvars`: every lit variant (l*)
+        list.retain(|j| j.name == only || (only == "fxp" && j.name.starts_with("fxp_")) || (only == "fxnat" && j.kind == "native") || (only == "fxfogvars" && j.kind == "fog") || (only == "fxlitvars" && j.kind == "lit") /* (PARTY-NATIVE-LIGHT) */);
     }
     let total = list.len();
     let threads = jobs.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get())).clamp(1, 16);
@@ -148,7 +199,8 @@ pub fn run(project: &Path, pack: &Path, dxc: &Path, only: Option<&str>, jobs: Op
     // ---- build, several at a time
     let started = std::time::Instant::now();
     let queue = Mutex::new(list.into_iter().collect::<Vec<_>>());
-    let results: Mutex<Vec<(String, &'static str, &'static str, Result<(String, u64), String>)>> = Mutex::new(Vec::new());
+    type Built = (String, &'static str, &'static str, Result<(String, u64), String>);
+    let results: Mutex<Vec<Built>> = Mutex::new(Vec::new());
     std::thread::scope(|scope| {
         for _ in 0..threads {
             scope.spawn(|| loop {
@@ -156,7 +208,7 @@ pub fn run(project: &Path, pack: &Path, dxc: &Path, only: Option<&str>, jobs: Op
                 let (profile, extension) = if job.stage == naga::ShaderStage::Vertex { ("vs_6_0", "vs") } else { ("ps_6_0", "ps") };
                 let file = format!("{}.{extension}.dxil", job.name);
                 let hlsl_file = hlsl_dir.join(format!("{}.{extension}.hlsl", job.name));
-                let built = preprocess(&spliced, &job.defines).and_then(|wgsl| to_hlsl(&wgsl, job.stage, job.entry)).and_then(|(text, hlsl_entry)| {
+                let built = preprocess(if job.lit { &spliced_lit } else { &spliced }, &job.defines).and_then(|wgsl| to_hlsl(&wgsl, job.stage, job.entry)).and_then(|(text, hlsl_entry)| {
                     std::fs::write(&hlsl_file, &text).map_err(|e| e.to_string())?;
                     run_dxc(dxc, profile, &hlsl_entry, &hlsl_file, &out_dir.join(&file))?;
                     Ok((hlsl_entry, std::fs::metadata(out_dir.join(&file)).map(|m| m.len()).unwrap_or(0)))
@@ -218,4 +270,25 @@ pub fn run(project: &Path, pack: &Path, dxc: &Path, only: Option<&str>, jobs: Op
         println!("kh-shaderc --vfx: wrote {}", out_dir.join("shaders.json").display());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// (PARTY-NATIVE-LIGHT) only an owner whose block reads the forward lighting or the scene colours gets a lit variant, and the
+    /// lit text reads the global rows from the harness's per-pixel copy
+    #[test]
+    fn party_native_light_only_forward_lit_owners_get_a_lit_variant() {
+        let generated = "#ifdef KH_S1_SPRITE\nfn kh_material(i: KhIn) -> KhOut {\n    r0.x = er.fwd_g[7].x;\n}\n#endif\n#ifdef KH_S2_SPRITE\nfn kh_material(i: KhIn) -> KhOut {\n    r0 = i.tc0;\n}\n#endif\n#ifdef KH_S3_MESH\n    r0 = i.pdark;\n#endif\n";
+        assert!(reads_forward_light(generated, 1, "SPRITE"));
+        assert!(!reads_forward_light(generated, 2, "SPRITE"), "an unlit owner");
+        assert!(reads_forward_light(generated, 3, "MESH"), "the scene colours");
+        assert!(!reads_forward_light(generated, 1, "MESH"), "no such block");
+        assert!(!reads_forward_light(generated, 12, "SPRITE"));
+        assert_eq!(lit_text("a = er.fwd_g[4].xyz; kh_fwdg = er.fwd_g; b = er.fwd_env[2];"), "a = kh_fwdg[4].xyz; kh_fwdg = er.fwd_g; b = er.fwd_env[2];");
+        // the harness declares the copy only in a lit variant and copies the frame's rows into it first
+        let harness = crate::VFX_HARNESS;
+        assert!(harness.contains("var<private> kh_fwdg: array<vec4<f32>, 8>;") && harness.contains("kh_fwdg = er.fwd_g;"));
+    }
 }

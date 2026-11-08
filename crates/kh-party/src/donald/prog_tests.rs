@@ -12,6 +12,7 @@ use crate::ids::{Chara, MemberId};
 use crate::status::FriendStatus;
 use glam::Vec3;
 use kh_core::enums::ETresAbilityKind as A;
+use kh_core::host::TargetId;
 
 fn donald_at(level: u32) -> FriendStatus {
     let exp = crate::tables::PARTY_LEVELS.iter().find(|r| r.0 == Chara::Donald.uid() && r.1 == level).map(|r| r.2).unwrap();
@@ -114,8 +115,11 @@ fn he_learns_by_level_in_level_order_and_a_late_join_wears_the_early_ones() {
     assert_eq!((j.don_tree_gate("DONALD_FIRE"), j.don_tree_gate("DONALD_CURE"), j.don_tree_gate("GOOFY_TURBO")), (Some(true), Some(true), None));
     assert_eq!(j.don_has_ability(fire), Some(true));
     let mut k = donald_at(1);
+    // (THE USER 2026-11-02) the party's MP rule (crate::mp_rule): 9 MP pays the 10-MP Fire too (the last MP into MP Charge)
     k.mp = 9;
-    assert_eq!((k.don_tree_gate("DONALD_FIRE"), k.don_tree_gate("DONALD_CURE")), (Some(false), Some(true)));
+    assert_eq!((k.don_tree_gate("DONALD_FIRE"), k.don_tree_gate("DONALD_CURE")), (Some(true), Some(true)));
+    k.mp = 0;
+    assert_eq!(k.don_tree_gate("DONALD_FIRE"), Some(false), "0 MP");
     k.mp = 0;
     k.mp_charge_left = 5.0;
     assert_eq!(k.don_tree_gate("DONALD_CURE"), Some(false), "recharging MP");
@@ -374,11 +378,11 @@ fn enemy(id: u32, x: f32) -> AiEnemy {
 }
 
 fn ally(m: u8, x: f32, hp: i32) -> AiAlly {
-    AiAlly { member: MemberId(m), pos: Vec3::new(x, 300.0, 0.0), hp, hp_max: 100, ko: false, melee: m == 1, attacked: false, barrier_left: 0.0, orbs: 0, thunder: false }
+    AiAlly { member: MemberId(m), pos: Vec3::new(x, 300.0, 0.0), hp, hp_max: 100, ko: false, melee: m == 1, attacked: false, barrier_left: 0.0, orbs: 0, orbs_left: 0.0, orbs_since: f32::MAX, thunder: false }
 }
 
 fn input<'a>(me: &'a DonaldState, enemies: &'a [AiEnemy], allies: &'a [AiAlly]) -> AiInput<'a> {
-    AiInput { me, id: MemberId(0), pos: Vec3::ZERO, hp: 100, hp_max: 100, mp: 300, mp_max: 300, mp_charging: false, in_battle: true, barrier_left: 30.0, orbs: 3, enemies, allies, refused: &[] }
+    AiInput { me, id: MemberId(0), pos: Vec3::ZERO, hp: 100, hp_max: 100, mp: 300, mp_max: 300, mp_charging: false, in_battle: true, barrier_left: 30.0, orbs: 3, orbs_left: 0.0, orbs_since: f32::MAX, enemies, allies, refused: &[] }
 }
 
 fn cast_of(c: Option<AiChoice>) -> Option<(SpellRef, CastTarget)> {
@@ -471,6 +475,43 @@ fn ai_ball_lightning_on_himself_when_cornered_else_on_the_melee_friend() {
     let sora = [AiAlly { member: SORA_MEMBER, melee: true, ..ally(3, 1500.0, 90) }];
     let i = input(&me, &foes, &sora);
     assert_eq!(cast_of(ai::decide(&i, AiAsk::Attack(Some(9)))).map(|c| c.1), Some(CastTarget::Member(SORA_MEMBER)));
+}
+
+/// (PARTY-AI 2026-11-03, the in-game round: with Sora in melee the balls were spent within a second and every turn of Donald's
+/// tree became a new Ball Lightning on him, so no attack spell ever came) a set that still runs (a Lv 2+ set recharges its
+/// balls) or one put on him within `ai.orbs_gap` s is no reason for another: the turn goes to the attack.
+#[test]
+fn ai_ball_lightning_is_not_recast_on_a_fighter_whose_balls_are_spent_while_the_set_runs_or_lately() {
+    let me = attuned(&[(Element::Fire, 1.0)]);
+    let foes = [enemy(9, 1700.0)];
+    let gap = super::ability_info::prog().value("ai.orbs_gap");
+    assert!(gap > 0.0, "the sheet row ai.orbs_gap");
+    let orbs = |c: Option<AiChoice>| cast_of(c).is_some_and(|c| c.0 == SpellRef::Line2(Element::Thunder, 3));
+    let attack = |c: Option<AiChoice>| cast_of(c).is_some_and(|c| c.1 == CastTarget::Enemy(TargetId(9)) && c.0.element() == Some(Element::Fire));
+    // no set, never put on him: the orbs (as before)
+    let fresh = [ally(1, 1500.0, 90)];
+    assert!(orbs(ai::decide(&input(&me, &foes, &fresh), AiAsk::Attack(Some(9)))));
+    // every ball spent, the Lv 3 set still running (it recharges): the attack
+    let running = [AiAlly { orbs: 0, orbs_left: 12.0, ..ally(1, 1500.0, 90) }];
+    let c = ai::decide(&input(&me, &foes, &running), AiAsk::Attack(Some(9)));
+    assert!(attack(c), "{c:?}");
+    // the set is over, but he put one on him a moment ago (a Lv 1 set is gone with its last ball): the attack
+    let lately = [AiAlly { orbs: 0, orbs_left: 0.0, orbs_since: gap * 0.5, ..ally(1, 1500.0, 90) }];
+    let c = ai::decide(&input(&me, &foes, &lately), AiAsk::Attack(Some(9)));
+    assert!(attack(c), "{c:?}");
+    // past the gap with no set: the orbs again
+    let later = [AiAlly { orbs: 0, orbs_left: 0.0, orbs_since: gap + 0.1, ..ally(1, 1500.0, 90) }];
+    assert!(orbs(ai::decide(&input(&me, &foes, &later), AiAsk::Attack(Some(9)))));
+    // the same rule for himself when cornered
+    let two = [enemy(8, 300.0), enemy(9, 350.0)];
+    let own = AiInput { orbs: 0, orbs_left: 15.0, barrier_left: 0.0, ..input(&me, &two, &[]) };
+    assert!(!orbs(ai::decide(&own, AiAsk::Attack(Some(9)))));
+    // the party's memory: seconds since the last set an AI Donald put on a wearer
+    let mut st = ai::DonProgState::default();
+    assert_eq!(st.orbs_since(MemberId(1)), f32::MAX);
+    st.orbs_put.push((MemberId(1), 0.0));
+    st.clock = 3.0;
+    assert_eq!(st.orbs_since(MemberId(1)), 3.0);
 }
 
 #[test]

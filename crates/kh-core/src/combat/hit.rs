@@ -42,7 +42,7 @@
 
 use glam::Vec3;
 
-use super::classify::{classify, MapResponse, Shape};
+use super::classify::{classify, DamageClass, MapResponse, Shape};
 use super::tables::{attack_row, group_shapes, AttackDataRow, P};
 use crate::anim::{NotifyData, NotifyPhase, Notifies, SEQUENCES, SOCKET_VFX_CURE, SOCKET_VFX_CURE_PLUS_200};
 use crate::enums::{ETresDamageAttribute, ETresDamageKind};
@@ -50,6 +50,7 @@ use crate::host::{Attach, AttackShape, EffectId, EffectSpawn, EventKind, HitInfo
 use crate::notify::{notify_asset_id, NOTIFY_ID_NONE};
 use crate::pawn::Ctx;
 use crate::status::{compute_damage, Attacker, DamageAttack, DamageContext, Defender, Side};
+use crate::status::keyblade::HitSource; // (P2 hitfx)
 
 /// What the Attack state's pre-processor (0x141343800; C 8.2.1) puts into an activation. The
 /// state keeps it current on the pawn while it runs; without an attack state the activation
@@ -112,6 +113,9 @@ pub struct Window {
     /// The level geometry is "in the hit list": one map hit per activation (the null actor).
     map_hit: bool,
     clash_list: [TargetId; 4],
+    /// (P2 hitfx) Where the chooser takes its effects from: the m_HitEffects entry of the weapon (or pawn) component of a
+    /// notify window, none for a component without that entry, or the former default (status/keyblade.rs `HitSource`).
+    pub source: HitSource,
 }
 
 /// A shot an attack spawned (`TresAnimNotify_Shot` / the dive's landing -> the Attack state's
@@ -150,15 +154,99 @@ pub struct Shot {
     /// attaches it to Goofy's mesh keeping its world transform, FUN_143E8FC60 with the rules
     /// DAT_148750ED0 = KeepWorldTransform, socket None): it follows his actor transform.
     pub attach: Option<ShotAttach>,
+    /// (F-STAFF) A CAPSULE1 shape: the half axis (world) from the centre to each end (zero: a sphere).
+    pub axis: Vec3,
+    /// (F-SHAPES) A CONVEX shape that follows a per-frame track in the actor's frame (combat/hull.rs): replaces the sphere
+    /// and `convex`.
+    pub hull: Option<super::hull::HullShot>,
+    /// (F-POLISH) `m_bAttachToHitActor` (TresProjectileBase +0x5F0 bit 3; TresProjHL_Spear sets it): None = an ordinary
+    /// shot; Some = it sticks in the first actor it hits and moves with it from then on ([`ShotStick`]).
+    pub stick: Option<ShotStick>,
 }
+
+/// (F-POLISH) A shot with `m_bAttachToHitActor`: `target` NONE until its first hit, then that actor and the shape centre's
+/// place in its frame (`m_AttachToHitActorOffset` +0x5F4: the blueprints leave it (0, 0, 0), so the place of the hit).
+/// Generic: any target the host lists (every ER enemy) carries it; a target that is gone leaves it where it was.
+/// (AUDIT-B W-FIN) `bone`: the hit's bone when the host has bones (KH3 0x141473E30 attaches to the hit component's
+/// FHitResult.BoneName, KeepWorldTransform: [`StuckBone`]); `None` = it follows the actor's origin and yaw (`local`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShotStick {
+    pub target: TargetId,
+    pub local: Vec3,
+    pub bone: Option<StuckBone>,
+}
+
+/// (AUDIT-B W-FIN) A stuck shot on the bone the hit touched: its place and its rotation in that bone's frame as they were at
+/// the hit (FUN_143E8FC60 with DAT_148750ED0 = KeepWorldTransform: the world transform kept, made relative to the socket).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StuckBone {
+    pub bone: crate::host::TargetBone,
+    pub local: Vec3,
+    pub turn: glam::Quat,
+}
+
+impl ShotStick {
+    /// Not stuck yet.
+    pub const ARMED: ShotStick = ShotStick { target: TargetId::NONE, local: Vec3::ZERO, bone: None };
+
+    /// True once it sticks in an actor.
+    pub fn stuck(&self) -> bool {
+        self.target != TargetId::NONE
+    }
+
+    /// (AUDIT-B W-FIN) THE STICK AT A HIT (ATresProjectileBase 0x141473E30, slot 537): the shot at `at` turned `yaw` sticks
+    /// in `t`. KH3 attaches it to the hit's component (a skeletal mesh's master-pose component when it has one, +0x988) at
+    /// the hit's BoneName (FHitResult +0x78) with KeepWorldTransform, then adds m_AttachToHitActorOffset (0 in every
+    /// blueprint). Here: the host's [`Targets::hit_bone`](crate::host::Targets::hit_bone) and `bone_pose` (generic: every
+    /// target of a host with bones); a host without bones: the actor's origin and yaw, as before.
+    pub fn at_hit(targets: &dyn crate::host::Targets, t: &TargetInfo, at: Vec3, yaw: f32) -> ShotStick {
+        let bone = targets.hit_bone(t.id, at).and_then(|b| targets.bone_pose(t.id, b).map(|p| (b, p))).map(|(bone, p)| {
+            let inv = p.rotation.inverse();
+            StuckBone { bone, local: inv * (at - p.position), turn: inv * glam::Quat::from_rotation_z(yaw.to_radians()) }
+        });
+        ShotStick { target: t.id, local: yawed(at - t.position, -t.yaw), bone }
+    }
+
+    /// (AUDIT-B W-FIN) Where the stuck shot is now: (its place, its yaw while it rides on a bone). On its bone when the host
+    /// reads that bone this step; else on the actor's origin and yaw (the shot's yaw unchanged); `None`: the actor is gone
+    /// (the shot stays where it was).
+    pub fn follow(&self, targets: &dyn crate::host::Targets) -> Option<(Vec3, Option<f32>)> {
+        if let Some(b) = self.bone {
+            if let Some(p) = targets.bone_pose(self.target, b.bone) {
+                let forward = (p.rotation * b.turn) * Vec3::X;
+                return Some((p.position + p.rotation * b.local, Some(forward.y.atan2(forward.x).to_degrees())));
+            }
+        }
+        targets.info(self.target).map(|t| (t.position + yawed(self.local, t.yaw), None))
+    }
+}
+
+/// (F-POLISH) One contact counted in `PawnCombat::hit_count` (pawn+0xE24): its count after it, the actor touched (NONE: the
+/// level) and that actor as it was at the contact. The state's on-contact handlers (iface slot 15) run on it with the real
+/// victim, as KH3 passes it to them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Contact {
+    pub count: i32,
+    pub victim: TargetId,
+    pub info: Option<TargetInfo>,
+}
+
+/// (F-POLISH) The latest contacts kept (a step's hits; the handlers read the ones after the count they last saw).
+pub(crate) const CONTACTS_KEPT: usize = 16;
 
 /// (party stream D6b) A shot carried by a friend: its location and yaw in the friend's frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShotAttach {
-    /// `ETresChrUniqueID` of the friend (12 Goofy).
+    /// `ETresChrUniqueID` of the friend (12 Goofy); [`ShotAttach::SELF`]: Sora himself (a team shot on the link pawn that
+    /// carries him).
     pub uid: u8,
     pub local: Vec3,
     pub yaw: f32,
+}
+
+impl ShotAttach {
+    /// (COMBAT-FIX) The shot follows Sora's own root and yaw (a team attack's shape on the link pawn he rides).
+    pub const SELF: u8 = 0;
 }
 
 /// Turns `v` by `yaw` degrees about Z.
@@ -332,7 +420,8 @@ pub(crate) fn spawn_shot(cx: &mut Ctx, name: &'static str, at: Vec3, info: Attac
     // The shot is not the Attack state's own primitive: no recoil record, no clash, no map hit.
     let info = AttackCtx { state: false, aerial: false, ..info };
     // (row, life, size, particle, particle offset) of the Kingdom Key's base move set.
-    let base: Option<(&'static str, f32, (f32, f32, f32), &'static str, Vec3)> = match name {
+    type BaseShot = (&'static str, f32, (f32, f32, f32), &'static str, Vec3);
+    let base: Option<BaseShot> = match name {
         "DOWNIMPACT" => Some(("KB_DOWN_BOMB", 0.5, (50.0, 800.0, 200.0), "vp_hit_zmn0", Vec3::new(0.0, 0.0, -75.0))),
         // `TresProj_SonicJumpEx` [A]: `m_MainLife` 0.5, not destroyed by a hit, one SPHERE row
         // `FF_SONIC_BOMB`, radius 100 growing by 800 a second to 350; particle `vp_snc_hit0` at
@@ -343,11 +432,11 @@ pub(crate) fn spawn_shot(cx: &mut Ctx, name: &'static str, at: Vec3, info: Attac
     };
     if let Some((row, life, size, particle, offset)) = base {
         let (index, row_name) = attack_row(row).map_or((u32::MAX, row), |(i, r)| (i as u32, r.id));
-        let window = Window { key: (u16::MAX, u16::MAX), group: name, row: index, row_name, hit_se: None, hit_se_asset: None, hit_effect: None, hit_effect_offset: 0.0, interval: 0.0, timer: 0.0, time: 0.0, initialised: true, previous: [at; 2], frozen: true, info, hit_list: Vec::new(), hits: 0, no_clash: true, clashed: false, map_hit: true, clash_list: [TargetId::NONE; 4] };
+        let window = Window { key: (u16::MAX, u16::MAX), group: name, row: index, row_name, hit_se: None, hit_se_asset: None, hit_effect: None, hit_effect_offset: 0.0, interval: 0.0, timer: 0.0, time: 0.0, initialised: true, previous: [at; 2], frozen: true, info, hit_list: Vec::new(), hits: 0, no_clash: true, clashed: false, map_hit: true, clash_list: [TargetId::NONE; 4], source: HitSource::Default };
         cx.spawn_effect(EffectSpawn { id: EffectId(notify_asset_id(particle)), name: particle, at: Attach::World(at + offset), rotation: Vec3::ZERO, scale: 1.0, persistent: false });
         let yaw = cx.pawn.yaw;
         let combat = &mut cx.pawn.combat;
-        combat.shots.push(Shot { name, position: at, yaw, life, size, curve: &[], window, offset: Vec3::ZERO, convex: None, attach: None });
+        combat.shots.push(Shot { name, position: at, yaw, life, size, curve: &[], window, offset: Vec3::ZERO, convex: None, attach: None, axis: Vec3::ZERO, hull: None /* (F-SHAPES) */, stick: None /* (F-POLISH) */ });
         combat.shots_spawned += 1;
         return;
     }
@@ -393,7 +482,7 @@ pub(crate) fn spawn_shot(cx: &mut Ctx, name: &'static str, at: Vec3, info: Attac
         let (index, row_name) = attack_row(row.row).map_or((u32::MAX, row.row), |(i, r)| (i as u32, r.id));
         let opt = |s: &'static str| (!s.is_empty()).then_some(s);
         let offset = v3(row.loc);
-        let window = Window { key: (u16::MAX, u16::MAX), group, row: index, row_name, hit_se: None, hit_se_asset: opt(row.hit_se), hit_effect: opt(row.hit_effect), hit_effect_offset: row.hit_offset, interval: row.interval, timer: 0.0, time: 0.0, initialised: true, previous: [position + yawed(offset, yaw); 2], frozen: true, info, hit_list: Vec::new(), hits: 0, no_clash: true, clashed: false, map_hit: true, clash_list: [TargetId::NONE; 4] };
+        let window = Window { key: (u16::MAX, u16::MAX), group, row: index, row_name, hit_se: None, hit_se_asset: opt(row.hit_se), hit_effect: opt(row.hit_effect), hit_effect_offset: row.hit_offset, interval: row.interval, timer: 0.0, time: 0.0, initialised: true, previous: [position + yawed(offset, yaw); 2], frozen: true, info, hit_list: Vec::new(), hits: 0, no_clash: true, clashed: false, map_hit: true, clash_list: [TargetId::NONE; 4], source: HitSource::Default };
         let convex = match (row.shape, row.mesh) {
             ("SPHERE", _) => None,
             ("CONVEX", "tres_colltest01") => Some(Convex { scale: v3(row.scale), inc_scale: v3(row.inc_scale), max_scale: v3(row.max_scale), yaw }),
@@ -403,7 +492,7 @@ pub(crate) fn spawn_shot(cx: &mut Ctx, name: &'static str, at: Vec3, info: Attac
             }
         };
         let combat = &mut cx.pawn.combat;
-        combat.shots.push(Shot { name: group, position, yaw, life: row.life, size: (row.size[0], row.inc_size[0], row.max_size[0]), curve: row.size_curve, window, offset, convex, attach });
+        combat.shots.push(Shot { name: group, position, yaw, life: row.life, size: (row.size[0], row.inc_size[0], row.max_size[0]), curve: row.size_curve, window, offset, convex, attach, axis: Vec3::ZERO, hull: None /* (F-SHAPES) */, stick: None /* (F-POLISH) */ });
         combat.shots_spawned += 1;
     }
 }
@@ -425,12 +514,17 @@ fn team_shot_hit_effect(row: &str) -> Option<&'static str> {
 pub(crate) fn spawn_team_shot(cx: &mut Ctx, shot: &crate::host::TeamShot) {
     let (index, row_name) = attack_row(shot.row).map_or((u32::MAX, shot.row), |(i, r)| (i as u32, r.id));
     let info = AttackCtx { state: false, aerial: false, ..AttackCtx::default() };
-    let window = Window { key: (u16::MAX, u16::MAX), group: shot.row, row: index, row_name, hit_se: None, hit_se_asset: None, hit_effect: team_shot_hit_effect(shot.row), hit_effect_offset: 0.0, interval: 0.0, timer: 0.0, time: 0.0, initialised: true, previous: [shot.position; 2], frozen: true, info, hit_list: Vec::new(), hits: 0, no_clash: true, clashed: false, map_hit: true, clash_list: [TargetId::NONE; 4] };
+    let window = Window { key: (u16::MAX, u16::MAX), group: shot.row, row: index, row_name, hit_se: None, hit_se_asset: None, hit_effect: team_shot_hit_effect(shot.row), hit_effect_offset: 0.0, interval: 0.0, timer: 0.0, time: 0.0, initialised: true, previous: [shot.position; 2], frozen: true, info, hit_list: Vec::new(), hits: 0, no_clash: true, clashed: false, map_hit: true, clash_list: [TargetId::NONE; 4], source: HitSource::Default };
     if !shot.effect.is_empty() {
         cx.spawn_effect(EffectSpawn { id: EffectId(notify_asset_id(shot.effect)), name: shot.effect, at: Attach::World(shot.position), rotation: Vec3::ZERO, scale: 1.0, persistent: false });
     }
+    // (COMBAT-FIX) a shape on the link pawn rides it: Sora's root and yaw, the shape's relative location as the offset
+    let (position, yaw, offset, attach) = match shot.follow {
+        Some(local) => (cx.pawn.cmc.location, cx.pawn.yaw, local, Some(ShotAttach { uid: ShotAttach::SELF, local: Vec3::ZERO, yaw: 0.0 })),
+        None => (shot.position, 0.0, Vec3::ZERO, None),
+    };
     let combat = &mut cx.pawn.combat;
-    combat.shots.push(Shot { name: shot.row, position: shot.position, yaw: 0.0, life: shot.life, size: (shot.radius, shot.grow, shot.max), curve: &[], window, offset: Vec3::ZERO, convex: None, attach: None });
+    combat.shots.push(Shot { name: shot.row, position, yaw, life: shot.life, size: (shot.radius, shot.grow, shot.max), curve: &[], window, offset, convex: None, attach, axis: Vec3::ZERO, hull: None /* (F-SHAPES) */, stick: None /* (F-POLISH) */ });
     combat.shots_spawned += 1;
 }
 
@@ -440,10 +534,60 @@ pub(crate) fn spawn_team_shot(cx: &mut Ctx, shot: &crate::host::TeamShot) {
 pub(crate) fn spawn_xs_shot(cx: &mut Ctx, group: &'static str, row: &'static str, position: Vec3, radius: f32, life: f32, hit_effect: Option<&'static str>) {
     let (index, row_name) = attack_row(row).map_or((u32::MAX, row), |(i, r)| (i as u32, r.id));
     let info = AttackCtx { state: false, aerial: false, ..cx.pawn.combat.attack_ctx };
-    let window = Window { key: (u16::MAX, u16::MAX), group, row: index, row_name, hit_se: None, hit_se_asset: None, hit_effect, hit_effect_offset: 0.0, interval: 0.0, timer: 0.0, time: 0.0, initialised: true, previous: [position; 2], frozen: true, info, hit_list: Vec::new(), hits: 0, no_clash: true, clashed: false, map_hit: true, clash_list: [TargetId::NONE; 4] };
+    let window = Window { key: (u16::MAX, u16::MAX), group, row: index, row_name, hit_se: None, hit_se_asset: None, hit_effect, hit_effect_offset: 0.0, interval: 0.0, timer: 0.0, time: 0.0, initialised: true, previous: [position; 2], frozen: true, info, hit_list: Vec::new(), hits: 0, no_clash: true, clashed: false, map_hit: true, clash_list: [TargetId::NONE; 4], source: HitSource::Default };
     let combat = &mut cx.pawn.combat;
-    combat.shots.push(Shot { name: group, position, yaw: cx.pawn.yaw, life, size: (radius, 0.0, radius), curve: &[], window, offset: Vec3::ZERO, convex: None, attach: None });
+    combat.shots.push(Shot { name: group, position, yaw: cx.pawn.yaw, life, size: (radius, 0.0, radius), curve: &[], window, offset: Vec3::ZERO, convex: None, attach: None, axis: Vec3::ZERO, hull: None /* (F-SHAPES) */, stick: None /* (F-POLISH) */ });
     cx.pawn.combat.shots_spawned += 1;
+}
+
+/// (weapons F-ARROWGUN) A form package's projectile as one of Sora's shots (combat/forms/arrowgun.rs: the gun bullets of
+/// TresProjSS_* / TresProjPO_*, which the package moves): its attack shape `m_Size` / `m_IncSize` / `m_IncMaxSize`, the row of
+/// `p_ex001_AttackData`, the hit effect / SE of its `m_HitEffects`, the counters of the attack that fired it, and the hit
+/// list it takes over from the actor it respawned from (`m_bReSpawnTakeOverAtkCollHitList`). `key` tags the shot
+/// (`Window::key` = (0xFFFE, key)) so the package finds it again.
+pub(crate) struct FormShot {
+    pub key: u16,
+    pub group: &'static str,
+    pub row: &'static str,
+    pub position: Vec3,
+    pub yaw: f32,
+    pub size: (f32, f32, f32),
+    pub life: f32,
+    pub hit_effect: Option<&'static str>,
+    pub hit_se: Option<&'static str>,
+    pub info: AttackCtx,
+    pub hit_list: Vec<TargetId>,
+}
+
+/// (weapons F-ARROWGUN) The window key of a form package's shot.
+pub(crate) const FORM_SHOT_SEQUENCE: u16 = 0xFFFE;
+
+/// (weapons F-ARROWGUN) Spawns a [`FormShot`]: it hits through the shots' pass of [`tick`] (the classification, the
+/// reactions and the damage of every other shot); the package moves it (`Shot::position`) and removes it.
+pub(crate) fn spawn_form_shot(cx: &mut Ctx, s: FormShot) {
+    let (index, row_name) = attack_row(s.row).map_or((u32::MAX, s.row), |(i, r)| (i as u32, r.id));
+    let info = AttackCtx { state: false, aerial: false, ..s.info };
+    let window = Window { key: (FORM_SHOT_SEQUENCE, s.key), group: s.group, row: index, row_name, hit_se: None, hit_se_asset: s.hit_se, hit_effect: s.hit_effect, hit_effect_offset: 0.0, interval: 0.0, timer: 0.0, time: 0.0, initialised: true, previous: [s.position; 2], frozen: true, info, hit_list: s.hit_list, hits: 0, no_clash: true, clashed: false, map_hit: true, clash_list: [TargetId::NONE; 4], source: HitSource::Default };
+    let combat = &mut cx.pawn.combat;
+    combat.shots.push(Shot { name: s.group, position: s.position, yaw: s.yaw, life: s.life, size: s.size, curve: &[], window, offset: Vec3::ZERO, convex: None, attach: None, axis: Vec3::ZERO, hull: None /* (F-SHAPES) */, stick: None /* (F-POLISH) */ });
+    combat.shots_spawned += 1;
+}
+
+impl Window {
+    /// (weapons F-ARROWGUN) The targets this window (or the actor it took over from) has hit.
+    pub(crate) fn hit_list(&self) -> &[TargetId] {
+        &self.hit_list
+    }
+
+    /// (F-LIGHTDARK) One actor's several shapes share its activation's hit list (TresAtkColl0 with two CollisionShapesSrc of
+    /// one group: Brave Shoot's two pillars): the targets another shape of it has hit count as hit here too.
+    pub(crate) fn share_hits(&mut self, other: &[TargetId]) {
+        for t in other {
+            if !self.hit_list.contains(t) {
+                self.hit_list.push(*t);
+            }
+        }
+    }
 }
 
 /// Where a shot of the running attack starts: pawn vt+0x1410(index) 0x1405AA790 -> equipment
@@ -494,6 +638,8 @@ pub(crate) fn on_notifies(cx: &mut Ctx, notifies: &Notifies) {
         // component answers for the keyblade's SphereM is [I] (sheet sora-effects). Other groups: not ported.
         let group_effect = match (override_hit_effect, hit_effect_group) {
             (true, Some("FUSION_ROCKET")) => Some("vn_ex002_frt_hit0"),
+            // (SHOT-A laser) ReflecLaser of w_so072_Wep while Spectral Rays' weapon form 10 is on (magic/shotlocks/laser.rs).
+            (true, Some(g)) => crate::magic::shotlocks::laser::hit_effect(cx, g),
             _ => None,
         };
         let key = (event.sequence, event.index);
@@ -502,19 +648,49 @@ pub(crate) fn on_notifies(cx: &mut Ctx, notifies: &Notifies) {
                 let info = cx.pawn.combat.attack_ctx;
                 // The pre-processor's row rename: kind 0x0E turns KB_DOWN into KB_DOWN_FIN.
                 let name = if info.kind == 0x0E && row.eq_ignore_ascii_case("KB_DOWN") { "KB_DOWN_FIN" } else { row };
+                // (F-HAMMER) the kind-bound rename of ComboHM's TresAtk begin 0x141357320 (kind 0x5F: SCHM_UPPER -> SCHM_RISE / HM2_RISE).
+                let name = crate::combat::forms::hammer::row_rename_bound(cx.pawn.combat.form.cmd, info.kind, name).unwrap_or(name);
+                // (F-SHIELD) the held form's own renames (0x141357590: SCSH_* -> SH2_* in Frying Pan ...).
+                let name = crate::combat::forms::row_rename(cx.pawn.combat.form.cmd, name).unwrap_or(name);
                 let (index, row_name) = attack_row(name).map_or((u32::MAX, name), |(i, r)| (i as u32, r.id));
                 // `m_bDisableLocation1Attach`: the position is frozen after the first tick.
-                let frozen = matches!(group, "KB_FixRangeS" | "KB_FixPillar" | "SpreadS" | "ImpactLL" | "ImpactM");
+                let frozen = matches!(group, "KB_FixRangeS" | "KB_FixPillar" | "SpreadS" | "ImpactLL" | "ImpactM")
+                    // (F-HAMMER) the hammer / drill weapons' frozen groups (their TresAtkColl0)
+                    || crate::combat::forms::hammer::group_frozen(cx.pawn.combat.form.cmd, group)
+                    // (F-NANO) Nano Arms' weapon's frozen groups (w_so172_Wep TresAtkColl0: StampL, SwingM ...)
+                    || crate::combat::forms::nano::fixed_group(cx.pawn.combat.form.cmd, group)
+                    // (F-SECOND) Second Form S's Starlight weapon group L2_Dark (w_so150_Wep TresAtkColl0)
+                    || crate::combat::forms::second::fixed_group(cx.pawn.combat.form.cmd, group)
+                    // (COMBAT-FIX) Rage Form's FINISH_AN groups AN_Finish / AN_FinishEnd (p_ex001_Pawn TresAtkColl0)
+                    || crate::combat::forms::rage::fixed_group(cx.pawn.combat.form.cmd, group);
                 // Row -> primitive (slot 327): bit 7 = reflect level <= 0; the activation's S+0x5C
                 // bit 1 (combo >= 1) sets it again and zeroes the level.
                 let level = super::tables::ATTACK_DATA.get(index as usize).map_or(0, |r| r.reflect_level);
                 let no_clash = level <= 0 || info.counters[0] >= 1;
-                let window = Window { key, group, row: index, row_name, hit_se, hit_se_asset, hit_effect: group_effect, hit_effect_offset: 0.0, interval: interval.unwrap_or(0.0), timer: 0.0, time: 0.0, initialised: false, previous: [Vec3::ZERO; 2], frozen, info, hit_list: Vec::new(), hits: 0, no_clash, clashed: false, map_hit: false, clash_list: [TargetId::NONE; 4] };
+                // (P2 hitfx) the component's m_HitEffects entry (chooser 0x140628960): the pawn's for its own shape groups,
+                // else the hand weapon's (the held form's unit, else the held Keyblade's own blueprint); the notify's
+                // override group (m_bOverrideHitEffect + m_HitEffectGrpName) in whichever of them has it.
+                let units = cx.pawn.combat.form.weapon_units();
+                let weapons = crate::status::keyblade::attack_weapons(&units, cx.pawn.status.current_keyblade());
+                let pawn_shape = group_shapes(group).next().is_some_and(|r| r.owner == "p_ex001_Pawn");
+                let override_group = if override_hit_effect { hit_effect_group } else { None };
+                // The pawn's own shapes without an override group (StyleChange's LM_CHANGE blast, Rage Form's AN_*): KH3's pawn
+                // component (p_ex001_PawnBase) has no "None" entry: no spark (the window's own hit sound still plays). Golden
+                // trace re-recorded for this on purpose, 2026-11-03 (build/sora_tmp/weapons/P2/STATE.md).
+                let source = crate::status::keyblade::hit_source(&weapons, pawn_shape, override_group);
+                let window = Window { key, group, row: index, row_name, hit_se, hit_se_asset, hit_effect: group_effect, hit_effect_offset: source.random_offset(), interval: interval.unwrap_or(0.0), timer: 0.0, time: 0.0, initialised: false, previous: [Vec3::ZERO; 2], frozen, info, hit_list: Vec::new(), hits: 0, no_clash, clashed: false, map_hit: false, clash_list: [TargetId::NONE; 4], source };
                 // An activation of a group replaces its record (the lists are cleared).
                 cx.pawn.combat.windows.retain(|w| w.group != group);
+                // (F-LIGHTDARK) the group on the held form's second weapon component too (Double Form: Oblivion's w_so210_Wep has
+                // the same KB_* groups as Oathkeeper's): its own activation, key (sequence, notify | 0x8000).
+                let twin = crate::combat::forms::lightdark::both_weapons(cx.pawn.combat.form.cmd, group).then(|| Window { key: (key.0, key.1 | 0x8000), hit_list: Vec::new(), source: weapons.get(1).map_or(window.source, |_| crate::status::keyblade::hit_source(&weapons[1..], pawn_shape, override_group)) /* (P2 hitfx) the second weapon's own entry */, ..window.clone() });
                 cx.pawn.combat.windows.push(window);
+                if let Some(twin) = twin {
+                    cx.pawn.combat.windows.push(twin);
+                }
             }
-            NotifyPhase::End => cx.pawn.combat.windows.retain(|w| w.key != key),
+            // (F-LIGHTDARK) ... and its second weapon's activation.
+            NotifyPhase::End => cx.pawn.combat.windows.retain(|w| w.key != key && w.key != (key.0, key.1 | 0x8000)),
             _ => {}
         }
     }
@@ -558,6 +734,49 @@ fn closest(p1: Vec3, q1: Vec3, p2: Vec3, q2: Vec3) -> (Vec3, Vec3) {
 /// The shape of a window now: (end point 1, end point 2, radius), world. `None`: the group has
 /// no keyblade shape this port knows how to place.
 fn shape(cx: &Ctx, window: &Window) -> Option<(Vec3, Vec3, f32)> {
+    // (SHOT-C) a shotlock's weapon form's own groups (Infinity Circle: SF_Range of w_so192, magic/shotlocks/ultima.rs).
+    if let Some(s) = crate::magic::shotlocks::ultima::hit_shape(cx, window.group) {
+        return Some(s);
+    }
+    // (SHOT-C) ... and Stellar Inception: R_Finish of w_so200, growing with the window time (magic/shotlocks/inception.rs).
+    if let Some(s) = crate::magic::shotlocks::inception::hit_shape(cx, window.group, window.time) {
+        return Some(s);
+    }
+    // (SHOT-B) ... and the vacuum waves: Storm Flag's KB_StickL tracked over F481; Blizzard Blades have no KB_Stick* (None:
+    // no hit) (magic/shotlocks/vacuum.rs).
+    if let Some(s) = crate::magic::shotlocks::vacuum::hit_shape(cx, window.group, window.key.0 as usize) {
+        return s;
+    }
+    // (SHOT-A pellet) ... and Atomic Deluge: SphereL of the transform unit w_so031_wep (magic/shotlocks/pellet.rs).
+    if let Some(s) = crate::magic::shotlocks::pellet::hit_shape(cx, window.group) {
+        return Some(s);
+    }
+    // (SHOT-A laser) ... and Spectral Rays: SF_Range of Mirage Staff's w_so072_Wep (magic/shotlocks/laser.rs).
+    if let Some(s) = crate::magic::shotlocks::laser::hit_shape(cx, window.group) {
+        return Some(s);
+    }
+    // (SHOT-A rush) ... and Drill Dive / Noise Flux: StickL of the drill weapon w_so053 / w_so113 over M_6482 (magic/shotlocks/rush.rs).
+    if let Some(s) = crate::magic::shotlocks::rush::hit_shape(cx, window.group, window.key.0 as usize) {
+        return Some(s);
+    }
+    // (AUDIT-A THROW) A THROWN form part's own TresAtkColl0 group flies with it (the raid's shield / pan, the flag): KH3
+    // activates the group on every equipped weapon's component, whose shapes hang on the weapon mesh (combat/forms/placement.rs
+    // `thrown_shape`); the in-hand tracks below are its place before the throw.
+    if let Some(s) = crate::combat::forms::placement::thrown_shape(&cx.pawn.combat.thrown, window.group) {
+        return Some(s);
+    }
+    // (F-SHIELD) The held form's weapon (its own TresAtkColl0 groups, tracked per clip frame): combat/forms `hit_shape`.
+    if let Some(seq) = SEQUENCES.get(window.key.0 as usize) {
+        let playing = cx.pawn.anim.name.data().samples.iter().any(|&(_, s)| s == window.key.0 as usize);
+        let time = if playing { cx.pawn.anim.time } else { seq.length };
+        // (F-LIGHTDARK) the second weapon's activation of a group (see `on_notifies`).
+        if window.key.1 & 0x8000 != 0 {
+            return crate::combat::forms::lightdark::second_weapon_shape(cx, window.group, window.key.0 as usize, time);
+        }
+        if let Some(s) = crate::combat::forms::hit_shape(cx, window.group, window.key.0 as usize, time) {
+            return Some(s);
+        }
+    }
     // (XSI) The XS abilities' groups that the Kingdom Key's component lacks (abilities/xs: Ancient Light's pillars).
     let Some(row) = group_shapes(window.group).next() else { return crate::abilities::xs::group_shape(cx, window.group, window.info.target) };
     let pawn = &*cx.pawn;
@@ -592,6 +811,12 @@ fn shape(cx: &Ctx, window: &Window) -> Option<(Vec3, Vec3, f32)> {
         // The body mesh's `center` socket (hip height): without a track of its own the capsule
         // centre stands in (TODO(combat): tracks for center, R_te, kh_sk ...).
         "center" => Some(Vec3::new(0.0, 0.0, 91.0)),
+        // (COMBAT-FIX) the body socket L_wep_skt (p_ex001_Pawn's AN_LHAND, Rage's clips) per frame of the clips that have its
+        // track (sora-form-rage `sock.L.*`, combat/forms/rage.rs `left_hand`)
+        "L_wep_skt" => {
+            let playing = pawn.anim.name.data().samples.iter().any(|&(_, s)| s == window.key.0 as usize);
+            crate::combat::forms::rage::left_hand(sequence.name, if playing { pawn.anim.time } else { sequence.length })
+        }
         _ => None,
     };
     match (row.shape, row.socket1) {
@@ -662,6 +887,9 @@ pub(crate) fn tick(cx: &mut Ctx, dt: f32) {
                 cx.pawn.combat.windows.remove(k);
                 continue;
             }
+        } else if let Some(volumes) = window_volumes(cx, &window) {
+            // (F-SHAPES) a group of several shapes / CONVEX hulls: each shape swept, one hit list.
+            sweep_volumes(cx, &mut window, volumes);
         } else if let Some((a, b, radius)) = shape(cx, &window) {
             let (a, b) = if window.frozen && window.initialised { (window.previous[0], window.previous[1]) } else { (a, b) };
             // The first tick of an activation tests the shape in place (C 8.2.3).
@@ -690,6 +918,10 @@ pub(crate) fn tick(cx: &mut Ctx, dt: f32) {
         cx.pawn.combat.windows[k] = window;
         k += 1;
     }
+    // (F-SHAPES) forget the places of windows that are gone.
+    let combat = &mut cx.pawn.combat;
+    let open: Vec<(u16, u16)> = combat.windows.iter().map(|w| w.key).collect();
+    combat.placed.0.retain(|(key, _)| open.contains(key));
     // The shots: each a stationary growing sphere (or, D6, a CONVEX prism) at the actor + the
     // shape's relative location for its life; every target once.
     let mut k = 0;
@@ -697,22 +929,72 @@ pub(crate) fn tick(cx: &mut Ctx, dt: f32) {
         let mut shot = cx.pawn.combat.shots[k].clone();
         shot.window.time += dt;
         shot.life -= dt;
+        // (F-SHIP) a form package's own projectile moves (combat/forms `shot_motion`: Highwind's falling spears).
+        crate::combat::forms::shot_motion(cx, &mut shot);
         // (D6b) An attached actor follows its friend's actor transform (KeepWorldTransform at the spawn).
-        if let Some(a) = shot.attach {
+        if let Some(a) = shot.attach.filter(|a| a.uid == ShotAttach::SELF) {
+            // (COMBAT-FIX) a team shot on the link pawn: Sora's root and yaw (he rides the pawn)
+            shot.position = cx.pawn.cmc.location + yawed(a.local, cx.pawn.yaw);
+            shot.yaw = cx.pawn.yaw + a.yaw;
+        } else if let Some(a) = shot.attach {
             if let Some(f) = cx.pawn.combat.friend.friend(a.uid) {
                 shot.position = f.position + yawed(a.local, f.yaw);
                 shot.yaw = f.yaw + a.yaw;
             }
         }
+        // (F-POLISH) m_bAttachToHitActor: a stuck shot moves with the actor it hit (its origin and facing).
+        // (AUDIT-B W-FIN) on the hit's bone when the host has bones (`ShotStick::follow`)
+        if let Some(st) = shot.stick.filter(ShotStick::stuck) {
+            if let Some((at, yaw)) = st.follow(&*cx.host.targets) {
+                shot.position = at;
+                if let Some(yaw) = yaw {
+                    shot.yaw = yaw;
+                }
+            }
+        }
         let centre = shot.centre();
-        if let Some(prism) = shot.prism() {
+        if let Some(mut h) = shot.hull {
+            // (F-SHAPES) a tracked CONVEX hull: placed by its track at the clip time, swept from its last place.
+            if let super::hull::Volume::Hull(hull) = h.track.placed(h.t0 + shot.window.time, centre, shot.yaw) {
+                let from = h.last.unwrap_or(hull.centre);
+                h.last = Some(hull.centre);
+                shot.hull = Some(h);
+                sweep_hull(cx, &mut shot.window, from, &hull);
+            }
+        } else if let Some(prism) = shot.prism() {
             let axis = [centre - Vec3::Z * prism.half_height, centre + Vec3::Z * prism.half_height];
             sweep_shape(cx, &mut shot.window, axis, axis, prism.radius.x.max(prism.radius.y), Some(&prism));
         } else {
             // Swept from the shape's previous centre (a moving, attached shot); a static one tests in place.
-            let (from, radius) = (shot.window.previous[0], shot.radius());
-            shot.window.previous = [centre; 2];
-            sweep(cx, &mut shot.window, [from; 2], [centre; 2], radius);
+            // (F-STAFF) a capsule shot sweeps its two ends ( zero: the sphere as before).
+            let (from, radius) = (shot.window.previous, shot.radius());
+            let ends = [centre - shot.axis, centre + shot.axis];
+            shot.window.previous = ends;
+            sweep(cx, &mut shot.window, from, ends, radius);
+        }
+        // (F-POLISH) m_bAttachToHitActor: at its first hit the shot sticks in that actor where its shape is now (the
+        // offset +0x5F4 is zero): its own motion ends (the shape's offset folded into its location).
+        if shot.stick.is_some_and(|s| !s.stuck()) {
+            let hit = shot.window.hit_list.first().copied().and_then(|id| cx.target(id));
+            if let Some(t) = hit {
+                let centre = shot.centre();
+                shot.position = centre;
+                shot.offset = Vec3::ZERO;
+                shot.stick = Some(ShotStick::at_hit(&*cx.host.targets, &t, centre, shot.yaw)); // (AUDIT-B W-FIN) the hit's bone
+            }
+        }
+        // (F-SHIP) a form package's shot with an interval (the Kraken's FinishFL2, `AttackInterval` 0.6): TimerTick
+        // (0x14062CFC0), as the windows' above.
+        if shot.window.key.0 == FORM_SHOT_SEQUENCE && shot.window.interval > 0.0 {
+            if shot.window.hit_list.is_empty() {
+                shot.window.timer = 0.0;
+            } else {
+                shot.window.timer += dt;
+                if shot.window.timer >= shot.window.interval {
+                    shot.window.hit_list.clear();
+                    shot.window.timer = 0.0;
+                }
+            }
         }
         if shot.life <= 0.0 {
             cx.pawn.combat.shots.remove(k);
@@ -736,6 +1018,16 @@ pub const EFFECT_NO_DAMAGE: &str = "vs_com_mtk0";
 
 /// The clash pass (C 8.2.4): only when the prim may clash. Returns true when it clashed.
 fn clash_pass(cx: &mut Ctx, window: &mut Window, to: [Vec3; 2], radius: f32) -> bool {
+    // (F-SHAPES) the capsule's overlap test; `clash_pass_by` is the pass for any shape.
+    clash_pass_by(cx, window, &|other| {
+        let (p, q) = closest(to[0], to[1], other.a, other.b);
+        ((p - q).length() <= radius + other.radius).then_some((p, q))
+    })
+}
+
+/// (F-SHAPES) The clash pass with any shape's overlap test: `touch(other)` = (the point on my shape, the point on the other's
+/// axis) when they meet.
+fn clash_pass_by(cx: &mut Ctx, window: &mut Window, touch: &dyn Fn(&AttackShape) -> Option<(Vec3, Vec3)>) -> bool {
     if window.no_clash {
         return false;
     }
@@ -748,10 +1040,7 @@ fn clash_pass(cx: &mut Ctx, window: &mut Window, to: [Vec3; 2], radius: f32) -> 
         if other.reflect_level <= 0 || window.clash_list.contains(&other.owner) || window.hit_list.contains(&other.owner) {
             continue;
         }
-        let (p, q) = closest(to[0], to[1], other.a, other.b);
-        if (p - q).length() > radius + other.radius {
-            continue;
-        }
+        let Some((p, q)) = touch(&other) else { continue };
         // 0x14061920E - 0x1406192F2: REFLECT when the other's level is higher, else GUARD_REFLECT;
         // then my row's m_ReflectReaction.
         let mut result = if other.reflect_level as i32 - own_level > 0 { ReactionResult::Reflect } else { ReactionResult::GuardReflect };
@@ -797,7 +1086,7 @@ fn map_pass(cx: &mut Ctx, window: &mut Window, from: [Vec3; 2], to: [Vec3; 2], r
         let f = k as f32 * 0.5;
         let (start, end) = (from[0].lerp(from[1], f), to[0].lerp(to[1], f));
         if let Some(hit) = cx.world.sweep_capsule(start, end, radius, radius) {
-            if best.map_or(true, |b| hit.time < b.time) {
+            if best.is_none_or(|b| hit.time < b.time) {
                 best = Some(hit);
             }
         }
@@ -831,7 +1120,16 @@ fn map_pass(cx: &mut Ctx, window: &mut Window, from: [Vec3; 2], to: [Vec3; 2], r
         cx.pawn.combat.wall_hits += 1;
         // The chooser on a map hit: `VW_SO010_WHT0` (`m_bChangeMapHit`), no sound. (Not for the
         // repeated hit of the reflect window: `reflectMap`.)
-        cx.spawn_effect(EffectSpawn { id: EffectId(NOTIFY_ID_NONE), name: "VW_SO010_WHT0", at: Attach::World(hit.position), rotation: normal_rotation(hit.impact_normal) /* (vfx implementer 2) */, scale: 1.0, persistent: false });
+        // (P2 hitfx) the component entry's map effect (`m_bChangeMapHit`), else its attribute / default effect; the Kingdom
+        // Key's for a window that is no weapon's.
+        let attribute = row_of(window).map_or(0, |r| r.attribute.value().clamp(0, 8) as usize);
+        let effect = match window.source {
+            HitSource::Default => Some("VW_SO010_WHT0"),
+            source => source.effect(attribute, true),
+        };
+        if let Some(name) = effect {
+            cx.spawn_effect(EffectSpawn { id: EffectId(NOTIFY_ID_NONE), name, at: Attach::World(hit.position), rotation: normal_rotation(hit.impact_normal) /* (vfx implementer 2) */, scale: 1.0, persistent: false });
+        }
         cx.pawn.event(EventKind::WallHit { position: hit.position, normal: hit.impact_normal });
     } else if attacker != ReactionResult::Reflect {
         return;
@@ -872,6 +1170,14 @@ fn on_contact(cx: &mut Ctx, window: &Window, result: ReactionResult, victim: Tar
         combat.hit_count += 1;
         combat.hit_flag = true;
         combat.swing_hit = true;
+        // (F-POLISH) the contact for the states' on-contact handlers (iface slot 15, e.g. ComboYO 0x1413561B0): which actor
+        // was touched (NONE: the level) and how it stood at the contact.
+        let info = if victim == TargetId::NONE { None } else { cx.target(victim) };
+        let combat = &mut cx.pawn.combat;
+        if combat.contacts.len() >= CONTACTS_KEPT {
+            combat.contacts.remove(0);
+        }
+        combat.contacts.push(Contact { count: combat.hit_count, victim, info });
         // Final Blow (0x141341F5F - 0x14134208A, decompiled C; spec 5.6.4): a guard counter (kinds
         // 0x21, 0x23, 0x24) that hits the state's target pawn, with REVENGE_EX (7):
         // m_pRevengePawn = it; the chase is armed while its reaction (its request interface
@@ -1015,13 +1321,88 @@ fn sweep_shape(cx: &mut Ctx, window: &mut Window, from: [Vec3; 2], to: [Vec3; 2]
     // reference by the row's knockback type: ATK_COLLISION / VELOCITY the shape's path (previous
     // centre -> centre), INSTIGATOR_PAWN and NORMAL the instigator's location (Sora's root).
     // (Attack-shape components sort first: the clash pass above has taken them already.)
+    // (F-SHAPES) the sort and the hits: `apply_in_order` (shared with the hulls' sweep).
+    apply_in_order(cx, window, hits, ((from[0] + from[1]) * 0.5, (to[0] + to[1]) * 0.5));
+}
+
+/// (F-SHAPES) `Apply`'s sort (see above: by time, ties by the distance from the row's reference point; `path` = the shape's
+/// previous centre and centre) and the hits in that order.
+fn apply_in_order(cx: &mut Ctx, window: &mut Window, mut hits: Vec<(f32, TargetInfo, u32, Vec3, Vec3)>, path: (Vec3, Vec3)) {
     let by_path = matches!(row_of(window).map_or("NORMAL", |r| r.knockback), "ATK_COLLISION" | "VELOCITY");
-    let (ref1, ref2) = if by_path { ((from[0] + from[1]) * 0.5, (to[0] + to[1]) * 0.5) } else { (cx.pawn.cmc.location, cx.pawn.cmc.location) };
+    let (ref1, ref2) = if by_path { path } else { (cx.pawn.cmc.location, cx.pawn.cmc.location) };
     let key = |h: &(f32, TargetInfo, u32, Vec3, Vec3)| (h.3 - ref1.lerp(ref2, h.0)).length_squared();
     hits.sort_by(|x, y| x.0.total_cmp(&y.0).then(key(x).total_cmp(&key(y))));
     for (time, target, part, point, normal) in hits {
         apply(cx, window, &target, part, point, normal, time);
     }
+}
+
+/// (F-SHAPES) The shapes of a window from the held form's `hit_volumes` hook (a group of CONVEX hulls / several shapes) at
+/// the clip time (the clip's end when the window's clip is no longer playing, as `shape`).
+fn window_volumes(cx: &Ctx, window: &Window) -> Option<Vec<super::hull::Volume>> {
+    let sequence = SEQUENCES.get(window.key.0 as usize)?;
+    let playing = cx.pawn.anim.name.data().samples.iter().any(|&(_, s)| s == window.key.0 as usize);
+    crate::combat::forms::hit_volumes(cx, window.group, window.key.0 as usize, if playing { cx.pawn.anim.time } else { sequence.length })
+}
+
+/// (F-SHAPES) One tick of a window made of several shapes (combat/hull.rs): KH3 makes each shape of the group its own
+/// primitive, all on the group's one record (one hit list, one interval). Each is updated (m_bDisableLocation1Attach: its
+/// place kept after the first tick, its size still growing) and swept from where it was the previous tick (the first tick in
+/// place, C 8.2.3), in the group's order; a capsule as `sweep`, a hull as `sweep_hull`.
+fn sweep_volumes(cx: &mut Ctx, window: &mut Window, now: Vec<super::hull::Volume>) {
+    use super::hull::Volume;
+    let before = if window.initialised { cx.pawn.combat.placed.take(window.key).filter(|b| b.len() == now.len()) } else { None };
+    let mut placed = Vec::with_capacity(now.len());
+    for (k, shape) in now.into_iter().enumerate() {
+        let last = before.as_ref().map(|b| b[k]);
+        let shape = match last {
+            Some(last) if window.frozen => shape.kept_at(&last),
+            _ => shape,
+        };
+        match shape {
+            Volume::Capsule { a, b, radius } => {
+                let from = if let Some(Volume::Capsule { a: was_a, b: was_b, .. }) = last { [was_a, was_b] } else { [a, b] };
+                sweep(cx, window, from, [a, b], radius);
+            }
+            Volume::Hull(hull) => sweep_hull(cx, window, last.map_or(hull.centre, |l| l.centre()), &hull),
+        }
+        placed.push(shape);
+    }
+    if let Some(first) = placed.first() {
+        window.previous = [first.centre(); 2];
+    }
+    window.initialised = true;
+    cx.pawn.combat.placed.put(window.key, placed);
+}
+
+/// (F-SHAPES) A CONVEX hull's tick (Sweep 0x14062A920 case 6 / 8): its current place `hull`, swept from where its centre
+/// was (`from`) with its current rotation and scale; the clash pass with the host's attack capsules (the hull as it is now,
+/// as a capsule's pass takes the shape's end), then every hurt capsule of every target the host offers: the exact first
+/// contact (combat/hull.rs `capsule_contact`). No map pass: the host's `World` sweeps upright capsules only, and none of the
+/// form groups that are hulls has a Kingdom Key shape row (`map_pass` reads those; KH3's own m_MapHitType of them: STATE.md).
+fn sweep_hull(cx: &mut Ctx, window: &mut Window, from: Vec3, hull: &super::hull::Hull) {
+    let now = *hull;
+    clash_pass_by(cx, window, &|other| {
+        let (on_hull, on_axis, d) = now.closest_to_segment(Vec3::ZERO, other.a, other.b);
+        (d <= other.radius).then_some((on_hull, on_axis))
+    });
+    let mut targets: Vec<TargetInfo> = Vec::new();
+    cx.targets(&mut targets);
+    let mut hits: Vec<(f32, TargetInfo, u32, Vec3, Vec3)> = Vec::new();
+    let mut shapes: Vec<HurtShape> = Vec::new();
+    for target in &targets {
+        if !target.flags.has(TargetFlags::ALIVE | TargetFlags::HITTABLE) || window.hit_list.contains(&target.id) {
+            continue;
+        }
+        shapes.clear();
+        cx.hurt_shapes(target.id, &mut shapes);
+        // The earliest contact of the target's hurt shapes along the sweep.
+        let first = shapes.iter().filter_map(|s| super::hull::capsule_contact(hull, from, s.a, s.b, s.radius).map(|c| (c, s.part))).min_by(|x, y| x.0.time.total_cmp(&y.0.time));
+        if let Some((c, part)) = first {
+            hits.push((c.time, *target, part, c.point, c.normal));
+        }
+    }
+    apply_in_order(cx, window, hits, (from, hull.centre));
 }
 
 /// (vfx implementer 2) The rotation of a hit effect: the rotator whose X axis is the hit normal
@@ -1093,11 +1474,14 @@ fn apply(cx: &mut Ctx, window: &mut Window, target: &TargetInfo, part: u32, poin
     let attribute = row.map_or(ETresDamageAttribute::Physical, |r| r.attribute);
     let kind = row.map_or(ETresDamageKind::Small, |r| r.damage_kind);
     // Classify (0x14061FE20; C 8.2.6): the victim's answers come from the host.
-    let body = cx.host.targets.body(target.id, part);
+    // (THE USER 2026-11-02: "Shields don't count as guarding") a host's shield guards only the blow from inside its arc: his
+    // own swing comes from where he stands, a shot from the side its shape touched (the impact normal points at it)
+    let side = if window.info.state { cx.pawn.cmc.location } else { point + normal * 100.0 };
+    let body = cx.host.targets.body(target.id, part).seen_from(side, target.position);
     let shape_flags = Shape { no_clash: window.no_clash, victim_may_refuse: false, reflect_window: false, p7: false };
     let id = target.id;
     let (mut armor, mut endurance) = (None, None);
-    let c = classify(&body, MapResponse::Other, &shape_flags, kind, attribute, &mut info, &mut |power, weak| {
+    let c = classify(&body, MapResponse::Other, &shape_flags, DamageClass { kind, attribute }, &mut info, &mut |power, weak| {
         armor = Some((power, weak));
         // (Answered below: the closure cannot reach the host while `info` is borrowed.)
         i32::MIN
@@ -1110,7 +1494,7 @@ fn apply(cx: &mut Ctx, window: &mut Window, target: &TargetInfo, part: u32, poin
         let armor_left = armor.map(|(power, weak)| cx.host.targets.take_armor(id, power, weak));
         let endurance_left = endurance.map(|power| cx.host.targets.take_reaction_power(id, power));
         info.flags50 &= !HitInfo::FLAG50_ARMOR_DAMAGE;
-        classify(&body, MapResponse::Other, &shape_flags, kind, attribute, &mut info, &mut |_, _| armor_left.unwrap_or(0), &mut |_| endurance_left.unwrap_or(0))
+        classify(&body, MapResponse::Other, &shape_flags, DamageClass { kind, attribute }, &mut info, &mut |_, _| armor_left.unwrap_or(0), &mut |_| endurance_left.unwrap_or(0))
     } else {
         c
     };
@@ -1129,17 +1513,29 @@ fn apply(cx: &mut Ctx, window: &mut Window, target: &TargetInfo, part: u32, poin
     window.hits += 1;
     // Step 20: effect and sound (`HitEffects` 0x1406294F0, chooser 0x140628960; C 8.6, the
     // Kingdom Key's `m_HitEffects` entry `None`).
-    let phys = group_shapes(window.group).next().is_some_and(|s| s.phys);
-    let effect = if let Some(own) = window.hit_effect { own } else { match attribute {
-        ETresDamageAttribute::Physical => "vw_so010_hit0",
-        ETresDamageAttribute::Fire => "vs_fir_hit0",
-        ETresDamageAttribute::Blizzard => "vs_blz_hit0",
-        ETresDamageAttribute::Thunder => "vs_thd_hit0",
-        ETresDamageAttribute::Water => "vs_wat_hit0",
-        ETresDamageAttribute::Aero => "vs_win_hit0",
-        ETresDamageAttribute::Dark => "vs_dak_hit1",
-        _ => "VS_non_HIT0",
+    let phys = group_shapes(window.group).next().is_some_and(|s| s.phys)
+        // (AUDIT-B F-HAMMER) the hammer / drill weapons' and the Clock's phys shapes (their own TresAtkColl0)
+        || crate::combat::forms::hammer::group_phys(cx.pawn.combat.form.cmd, window.group);
+    // (P2 hitfx) the window's component entry (the held Keyblade's / form weapon's own m_HitEffects); the Kingdom Key's
+    // table only for a window that is no weapon's (`HitSource::Default`); none for a component without the entry.
+    let attribute_index = attribute.value().clamp(0, 8) as usize;
+    let effect: Option<&'static str> = if let Some(own) = window.hit_effect { Some(own) } else { match window.source {
+        HitSource::Default => Some(match attribute {
+            ETresDamageAttribute::Physical => "vw_so010_hit0",
+            ETresDamageAttribute::Fire => "vs_fir_hit0",
+            ETresDamageAttribute::Blizzard => "vs_blz_hit0",
+            ETresDamageAttribute::Thunder => "vs_thd_hit0",
+            ETresDamageAttribute::Water => "vs_wat_hit0",
+            ETresDamageAttribute::Aero => "vs_win_hit0",
+            ETresDamageAttribute::Dark => "vs_dak_hit1",
+            _ => "VS_non_HIT0",
+        }),
+        source => source.effect(attribute_index, false),
     } };
+    let direct = match window.source {
+        HitSource::Default => Some("vw_so010_str0"),
+        source => source.direct(),
+    };
     // (vfx implementer 2) `rot = Rotation(hit.Normal)` (chooser 0x140628960, docs/sora-vfx-spec.md 2.6).
     let rotation = normal_rotation(normal);
     let spawn_at = |cx: &mut Ctx, name: &'static str, at: Vec3| {
@@ -1175,14 +1571,21 @@ fn apply(cx: &mut Ctx, window: &mut Window, target: &TargetInfo, part: u32, poin
         } else {
             point
         };
-        spawn_at(cx, effect, point);
-        if phys {
-            spawn_at(cx, "vw_so010_str0", point);
+        if let Some(effect) = effect {
+            spawn_at(cx, effect, point);
         }
-        // The window's hit sound: the notify's asset, else the weapon's alias (HIT1 - 7), else
+        if let Some(direct) = direct.filter(|_| phys) {
+            spawn_at(cx, direct, point);
+        }
+        // The window's hit sound: (P2 hitfx) the entry's own SE first (none on any Sora weapon), then the notify's asset,
+        // else the weapon's alias (HIT1 - 7: the host plays it from the hit set of the weapon the window is on), else
         // none; no sound when the attacker's result is REFLECT.
         if c.attacker != ReactionResult::Reflect {
-            if let Some(name) = window.hit_se_asset.or(window.hit_se) {
+            // (AUDIT-C TF) a window on Double Form's LEFT weapon (Oblivion: an L_* group or the second activation of a group both
+            // weapons carry) plays the alias from Oblivion's hit set: the collision is on that weapon actor
+            let left = crate::combat::forms::lightdark::on_left_weapon(cx.pawn.combat.form.cmd, window.group, window.key);
+            let alias = window.hit_se.map(|a| if left { crate::notify::left_hand_alias(a).unwrap_or(a) } else { a });
+            if let Some(name) = window.source.sound(attribute_index, false).or(window.hit_se_asset).or(alias) {
                 cx.play_sound(SoundPlay { id: SoundId(notify_asset_id(name)), name, at: Attach::World(point), volume: 1.0, pitch: 1.0, looping: false, spatial: true });
             }
         }
@@ -1204,6 +1607,7 @@ fn apply(cx: &mut Ctx, window: &mut Window, target: &TargetInfo, part: u32, poin
         // (XSI) the XS abilities' marks for the victim's side (abilities/xs: Break Boost)
         flags: crate::abilities::xs::record_flags(cx, window, &body, &info),
         info,
+        attack_info: Default::default(), // (GOOFY)
     };
     // `TakeDamage` when there is an amount and the hit was not blocked; else the victim's
     // notify slot 28 (a hit without damage).
@@ -1229,11 +1633,11 @@ mod d3_tests {
     #[test]
     fn unison_blizzard_end_grows_by_its_size_curve() {
         // TresProj_UnionBlizzardSize1: nothing until 0.4 s, 800 cm from 0.4333 s.
-        let window = Window { key: (u16::MAX, u16::MAX), group: "UNISON_BLIZZARD_END", row: 0, row_name: "UNISON_BLIZZARD_END", hit_se: None, hit_se_asset: None, hit_effect: None, hit_effect_offset: 0.0, interval: 0.4, timer: 0.0, time: 0.0, initialised: true, previous: [Vec3::ZERO; 2], frozen: true, info: AttackCtx::default(), hit_list: Vec::new(), hits: 0, no_clash: true, clashed: false, map_hit: true, clash_list: [TargetId::NONE; 4] };
+        let window = Window { key: (u16::MAX, u16::MAX), group: "UNISON_BLIZZARD_END", row: 0, row_name: "UNISON_BLIZZARD_END", hit_se: None, hit_se_asset: None, hit_effect: None, hit_effect_offset: 0.0, interval: 0.4, timer: 0.0, time: 0.0, initialised: true, previous: [Vec3::ZERO; 2], frozen: true, info: AttackCtx::default(), hit_list: Vec::new(), hits: 0, no_clash: true, clashed: false, map_hit: true, clash_list: [TargetId::NONE; 4], source: HitSource::Default };
         // (D6b) The curve's keys from the sheet (sora-combat-shots UNISON_BLIZZARD#1), not a line.
         let row = super::super::tables::SHOT_SHAPES.iter().find(|r| r.id == "UNISON_BLIZZARD#1").expect("the row");
         assert_eq!(row.size_curve.len(), 6);
-        let mut s = Shot { name: "UNISON_BLIZZARD_END", position: Vec3::ZERO, yaw: 0.0, life: 0.8, size: (150.0, 2000.0, 800.0), curve: row.size_curve, window, offset: Vec3::ZERO, convex: None, attach: None };
+        let mut s = Shot { name: "UNISON_BLIZZARD_END", position: Vec3::ZERO, yaw: 0.0, life: 0.8, size: (150.0, 2000.0, 800.0), curve: row.size_curve, window, offset: Vec3::ZERO, convex: None, attach: None, axis: Vec3::ZERO, hull: None /* (F-SHAPES) */, stick: None /* (F-POLISH) */ };
         for (t, r) in [(0.0, 0.0), (0.2, 0.0), (0.4, 0.0), (0.4167, 400.0), (0.4333, 800.0), (0.7, 800.0)] {
             s.window.time = t;
             assert!((s.radius() - r).abs() < 1.0, "{t}: {}", s.radius());

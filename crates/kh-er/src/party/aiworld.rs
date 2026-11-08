@@ -21,6 +21,8 @@ pub struct ErPartyTargets<'a> {
     /// (party AIX) ErTargets' engaged count measured round the LEADER (the party's battle flag while a friend leads,
     /// kh-partyhost `Leadership::battle_step`); ErTargets measures round `targets.sora` = Sora's feet, which is AI Sora
     /// (or, with Sora out of the party, where he was left) while a friend leads. The same count while Sora leads.
+    /// (HUD-REVIVE-COMBAT) The count is the WHOLE PARTY'S (`ErTargets::engages_the_party`: every party place, the hit memory, the
+    /// enemies' own AI targets on a member), so this is the same number Sora's own flag reads, whoever leads.
     pub engaged: u32,
 }
 
@@ -117,8 +119,18 @@ impl Targets for ErPartyTargets<'_> {
     fn size_class(&self, id: TargetId) -> u8 {
         self.targets.size_class(id)
     }
+    fn stagger_ask(&mut self, id: TargetId, ask: kh_core::host::StaggerAsk) -> bool {
+        self.targets.stagger_ask(id, ask) // (GF-BREAK) the Stagger book's break, on the real character
+    }
     fn element_affinity(&self, id: TargetId) -> Option<[i32; 8]> {
         self.targets.element_affinity(id)
+    }
+    // (AUDIT-B) forwarded: the hit's bone and its pose are the wrapped host's
+    fn hit_bone(&self, id: kh_core::TargetId, at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        self.targets.hit_bone(id, at)
+    }
+    fn bone_pose(&self, id: kh_core::TargetId, bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        self.targets.bone_pose(id, bone)
     }
 }
 

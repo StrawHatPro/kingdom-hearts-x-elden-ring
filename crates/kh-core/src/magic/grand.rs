@@ -356,6 +356,13 @@ mod tests {
                 out.push(Friend { uid: 11 + i as u8, ko: i < self.ko, ..Friend::default() });
             }
         }
+        // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+        fn hit_bone(&self, _id: crate::host::TargetId, _at: glam::Vec3) -> Option<crate::host::TargetBone> {
+            None
+        }
+        fn bone_pose(&self, _id: crate::host::TargetId, _bone: crate::host::TargetBone) -> Option<crate::host::BonePose> {
+            None
+        }
     }
 
     fn pawn() -> Pawn {

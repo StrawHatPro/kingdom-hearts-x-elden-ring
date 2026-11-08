@@ -48,40 +48,43 @@ pub struct FriendStatus {
     /// Weapon key (`WEP_DONALD_00` ...).
     pub weapon: &'static str,
     pub abilities: AbilitySet,
+    /// KH3's victory-bonus counts of an old save, kept in the record and read by nothing: (GF-STATS) `growth` replaced them.
     pub bonuses: BonusCounts,
-    pub items: [ItemSlot; 4],
+    pub items: [ItemSlot; MAX_SLOTS],
     /// Item slots owned: TresChrInitData m_FriendDonald m_InitItemSlot 2; Goofy does not serialize it -> the
-    /// UTresChrInitData ctor 0x140571C00 default 3; +1 per ITEM_SLOT_UP1.
+    /// UTresChrInitData ctor 0x140571C00 default 3; (GF-STATS) + his boss rewards (`growth`).
     pub item_slots: u8,
     /// Armour (protector) and accessory slots: equipment row ids of kh-core's EQUIPMENT table.
-    pub armour: [Option<&'static str>; 4],
-    pub accessories: [Option<&'static str>; 4],
+    pub armour: [Option<&'static str>; MAX_SLOTS],
+    pub accessories: [Option<&'static str>; MAX_SLOTS],
     /// Slots owned: `TresChrInitEquip` m_InitProtectorSlot / m_InitAccessorySlot (Donald accessory 2, Goofy protector 2)
-    /// + DEF_SLOT_UP1 / ACC_SLOT_UP1 bonuses. A count the record does not serialize is the struct default,
-    /// `INIT_SLOT_DEFAULT` 1 (0x140570AC0).
+    /// + (GF-STATS) his boss rewards (`growth`). A count the record does not serialize is the struct default,
+    ///   `INIT_SLOT_DEFAULT` 1 (0x140570AC0).
     pub armour_slots: u8,
     pub accessory_slots: u8,
     pub ai: AiSettings,
     pub game_level: GameLevel,
     /// (party X3D) the port's own abilities of the playable kit (Donald's: crate::pad::donald_kit); empty for Goofy.
     pub kit: crate::pad::donald_kit::KitAbilities,
-    /// (party X3G) Goofy's own abilities of the playable kit (crate::pad::goofy_kit); empty for Donald.
-    pub goofy_kit: crate::pad::goofy_kit::GoofyKit,
     /// (GOOFY-GG) Goofy's GUARD gauge (crate::guard): `Some` for Goofy only (Donald has none; Sora keeps his Focus). Its
     /// max follows `level` (synced in `tick`).
     pub guard: Option<crate::guard::Guard>,
     /// (IT) the roster's permanent stat boosts (crate::boosts; the party host copies its one total onto every friend):
     /// added on top of the stat tables by the getters below.
     pub roster: crate::boosts::RosterBoosts,
-    /// (GOOFY-BAL) leading or not, and Sora's max HP / MP the leader's are measured against (crate::balance).
-    pub bal: crate::balance::LeadBalance,
+    /// (GF-STATS) what the bosses gave him, raw amounts (crate::growth; the party host keeps the roster's copy): max HP, max MP
+    /// and the slots are derived from it.
+    pub growth: crate::growth::Growth,
     /// (EQ) AUTO-RELOAD per item slot (Sora's pouch flag bit 2, kh-core magic/items.rs `PouchSlot::auto_reload`): a used
     /// slot with it keeps its item (`present` false, "used, waiting for refill") and the camp menu's close refills it
     /// from the shared stock; without it the slot is emptied on use (J 7.1). Off at the start (no slot refilled before).
-    pub item_reload: [bool; 4],
+    pub item_reload: [bool; MAX_SLOTS],
     /// (DON1) the Donald overhaul's state (crate::donald): Some for Donald (his combat core, his copy of the roster's
     /// learned magic, his abilities), None for Goofy.
     pub donald: Option<crate::donald::DonaldState>,
+    /// (GOOFY) the Goofy overhaul's state (crate::goofy): Some for Goofy, pad or AI (his parry rules, his copy of the roster's
+    /// ranks, his abilities, his running moves), None for Donald.
+    pub goofy: Option<crate::goofy::GoofyState>,
 }
 
 /// The FTresChrInitEquip default protector / accessory slot count: 1 (struct ctor 0x140570AC0 via
@@ -89,6 +92,23 @@ pub struct FriendStatus {
 /// the item slot default is 3 (`INIT_ITEM_SLOT_DEFAULT`). Sheet rows `init.*`.
 pub const INIT_SLOT_DEFAULT: u8 = 1;
 pub const INIT_ITEM_SLOT_DEFAULT: u8 = 3;
+
+/// (GF-STATS) The party's limit of each slot kind (KH3's friends stop at 4; GOOFY_OVERHAUL.md 2, DONALD_OVERHAUL.md 2).
+pub const MAX_SLOTS: usize = 5;
+
+/// (GF-UI) THE AP OF A KH3 ABILITY ON A FRIEND: the party's row, else KH3's own table, the number the Abilities page shows. (Goofy's
+/// Item Boost has no party row: it took no AP while the page counted 2, and his page read 28 / 26.)
+pub fn kh3_ability_ap(k: kh_core::enums::ETresAbilityKind) -> i32 {
+    tables::ability_cost(k.game_name().trim_start_matches("ETresAbilityKind::")).map(|c| c.0).or_else(|| kh_core::status::tables::ABILITIES.iter().find(|r| r.kind == k).and_then(|r| r.ap)).unwrap_or(0)
+}
+
+/// (GF-STATS) The (item, armour, accessory) slots a friend starts with: TresChrInitData, as the fields above say.
+pub const fn start_slots(chara: Chara) -> (u8, u8, u8) {
+    match chara {
+        Chara::Donald => (2, INIT_SLOT_DEFAULT, 2),
+        Chara::Goofy => (INIT_ITEM_SLOT_DEFAULT, 2, INIT_SLOT_DEFAULT),
+    }
+}
 
 fn uid_kind(name: &str) -> Option<ETresAbilityKind> {
     ETresAbilityKind::from_game_name(name)
@@ -114,7 +134,7 @@ impl FriendStatus {
     pub fn new(chara: Chara, total_exp: i32) -> FriendStatus {
         let (weapon, abilities, items): (&str, &[&str], [ItemKind; 2]) = match chara {
             Chara::Donald => ("WEP_DONALD_00", &["PRIZE_DRAW"] /* (DON-PROG) KH3's DONALD_FIRE .. CURE are gone: the overhaul's magic replaced them (donald::ability_info::KH3_SPELLS) */, [ItemKind::Potion, ItemKind::Ether]),
-            Chara::Goofy => ("WEP_GOOFY_00", &["GOOFY_TORNADE", "GOOFY_TURBO", "GOOFY_FLIP", "DEFENDER", "HARVEST", "PRIZE_DRAW"], [ItemKind::Potion, ItemKind::Potion]),
+            Chara::Goofy => ("WEP_GOOFY_00", &["PRIZE_DRAW"] /* (GOOFY, R11) KH3's GOOFY_* seeds are gone: goofy::abilities::KH3_SEEDS */, [ItemKind::Potion, ItemKind::Potion]),
         };
         let mut set = AbilitySet::EMPTY;
         for a in abilities {
@@ -122,33 +142,27 @@ impl FriendStatus {
                 set.set(k, 1, 1);
             }
         }
-        let mut items_arr = [ItemSlot::default(); 4];
+        let mut items_arr = [ItemSlot::default(); MAX_SLOTS];
+        let (item_slots, armour_slots, accessory_slots) = start_slots(chara);
         for (i, it) in items.iter().enumerate() {
             items_arr[i] = ItemSlot { item: Some(*it), present: true };
         }
-        let mut s = FriendStatus { chara, level: 1, total_exp: 0, hp: 0, mp: 0, mp_charge_left: 0.0, weapon: tables::weapon(weapon).map(|w| w.1).unwrap_or("WEP_DONALD_00"), abilities: set, bonuses: BonusCounts::NONE, items: items_arr, item_slots: if chara == Chara::Donald { 2 } else { INIT_ITEM_SLOT_DEFAULT }, armour: [None; 4], accessories: [None; 4], armour_slots: if chara == Chara::Goofy { 2 } else { INIT_SLOT_DEFAULT }, accessory_slots: if chara == Chara::Donald { 2 } else { INIT_SLOT_DEFAULT }, ai: AiSettings::default(), game_level: GameLevel::Standard, kit: Default::default() /* (party X3D) */, goofy_kit: Default::default() /* (party X3G) */, guard: (chara == Chara::Goofy).then(crate::guard::Guard::default) /* (GOOFY-GG) */, roster: crate::boosts::RosterBoosts::NONE /* (IT) */, bal: Default::default() /* (GOOFY-BAL) */, item_reload: [false; 4] /* (EQ) */, donald: (chara == Chara::Donald).then(crate::donald::DonaldState::new) /* (DON1) */ };
+        let mut s = FriendStatus { chara, level: 1, total_exp: 0, hp: 0, mp: 0, mp_charge_left: 0.0, weapon: tables::weapon(weapon).map(|w| w.1).unwrap_or("WEP_DONALD_00"), abilities: set, bonuses: BonusCounts::NONE, items: items_arr, item_slots, armour: [None; MAX_SLOTS], accessories: [None; MAX_SLOTS], armour_slots, accessory_slots, ai: AiSettings::default(), game_level: GameLevel::Standard, kit: Default::default() /* (party X3D) */, guard: (chara == Chara::Goofy).then(crate::guard::Guard::default) /* (GOOFY-GG) */, roster: crate::boosts::RosterBoosts::NONE /* (IT) */, growth: Default::default() /* (GF-STATS) */, item_reload: [false; MAX_SLOTS] /* (EQ) */, donald: (chara == Chara::Donald).then(crate::donald::DonaldState::new) /* (DON1) */, goofy: (chara == Chara::Goofy).then(crate::goofy::GoofyState::new) /* (GOOFY) */ };
         s.level = tables::level_for_exp(chara, total_exp);
         s.total_exp = total_exp;
         s.hp = s.max_hp();
         s.mp = s.max_mp();
         s.guard = s.guard.map(|_| crate::guard::Guard::for_level(s.level)); // (GOOFY-GG) full at his level
         s.don_sync_level(); // (DON-PROG) Donald's start (Scan, doc 10) and the abilities of his level, worn while his AP allows
+        s.gof_sync_level(); // (GOOFY) the abilities of his level, worn while his AP allows
         s
     }
 
-    /// Plan N2: the level-99 test loadout: all nine victory bonuses of `TresVBonusData` (HP_UP10
-    /// x6, ITEM / DEF / ACC slot +1) with their abilities granted and equipped while AP allows.
+    /// Plan N2: the level-99 test loadout: (GF-STATS) every boss reward of the docs with their abilities granted and
+    /// equipped while AP allows.
     pub fn test_level99(chara: Chara) -> FriendStatus {
         let mut s = FriendStatus::new(chara, 1_527_640);
-        for _ in 0..6 {
-            s.bonuses.add(BonusCounts::HP_UP10);
-        }
-        s.bonuses.add(BonusCounts::ITEM_SLOT_UP1);
-        s.bonuses.add(BonusCounts::DEF_SLOT_UP1);
-        s.bonuses.add(BonusCounts::ACC_SLOT_UP1);
-        s.item_slots += 1;
-        s.armour_slots += 1;
-        s.accessory_slots += 1;
+        s.set_growth(crate::growth::Growth::full(chara));
         let bonus_abilities: &[&str] = match chara {
             Chara::Donald => &["MP_HASTE", "FIRE_UP", "BLIZZARD_UP", "THUNDER_UP", "AERO_UP", "COMBI_TIME", "COMBI_UP", "DAMAGE_ASPIR", "HYPER_HEALING"],
             Chara::Goofy => &["LUCK_UP", "COMBI_TIME", "COMBI_UP", "LAST_LEAVE", "SHARE_PRIZE", "HYPER_HEALING", "CRITICAL_HALF", "COMBO_LEAVE"],
@@ -169,9 +183,9 @@ impl FriendStatus {
             s.kit_test_loadout(bonus_abilities);
             s.don_test_loadout(bonus_abilities); // (DON-PROG) the overhaul's abilities within his AP (the X3D kit migrated: pad/donald_kit.rs)
         }
-        // (party X3G) the test loadout's kit: every one of Goofy's port abilities (pad/goofy_kit.rs `test_all`)
+        // (GOOFY) the test loadout: every ability, every rank
         if chara == Chara::Goofy {
-            s.goofy_kit = crate::pad::goofy_kit::GoofyKit::test_all();
+            s.goofy = Some(crate::goofy::GoofyState::test_loadout());
         }
         s.hp = s.max_hp();
         s.mp = s.max_mp();
@@ -188,59 +202,37 @@ impl FriendStatus {
         crate::balance::base_stats(self.chara, self.level)
     }
 
-    /// (GOOFY-BAL) He starts / stops leading (`Party::set_pad`): the leader's stats apply; HP and MP keep their share of
-    /// the max (full stays full).
-    pub fn set_leading(&mut self, on: bool) {
-        if self.bal.leading == on {
-            return;
+    /// (GF-STATS) What the bosses have given him now (the party host's copy of the roster's record, a catch-up, the test
+    /// loadout): max HP and MP follow, a full bar stays full and a gain is added to the gauges (a KO stays a KO). Slots are
+    /// derived and never added to: an old save's saved count stands only until the record reaches it, so nothing counts twice.
+    pub fn set_growth(&mut self, growth: crate::growth::Growth) {
+        let (hp0, mp0) = (self.max_hp(), self.max_mp());
+        self.growth = growth;
+        let (item, armour, accessory) = start_slots(self.chara);
+        let limit = |n: u8| n.min(MAX_SLOTS as u8);
+        self.item_slots = limit(self.item_slots.max(item + growth.item_slots));
+        self.armour_slots = limit(self.armour_slots.max(armour + growth.armour_slots));
+        self.accessory_slots = limit(self.accessory_slots.max(accessory + growth.accessory_slots));
+        let (hp1, mp1) = (self.max_hp(), self.max_mp());
+        if self.hp > 0 {
+            self.hp = (self.hp + (hp1 - hp0).max(0)).min(hp1);
         }
-        let share = |v: i32, max: i32| if v >= max { None } else { Some(v.max(0) as f32 / max.max(1) as f32) };
-        let (hp, mp) = (share(self.hp, self.max_hp()), share(self.mp, self.max_mp()));
-        self.bal.leading = on;
-        let (mh, mm) = (self.max_hp(), self.max_mp());
-        self.hp = match hp { None => mh, Some(f) if self.hp > 0 => ((f * mh as f32).round() as i32).clamp(1, mh), Some(_) => 0 };
-        self.mp = match mp { None => mm, Some(f) => ((f * mm as f32).round() as i32).clamp(0, mm) };
-    }
-
-    /// (GOOFY-BAL) Sora's max HP / MP now (the host's feed; None = no feed): a leader's HP / MP follow it; HP / MP above
-    /// a smaller max are cut, a full bar stays full.
-    pub fn set_sora_reference(&mut self, sora: Option<(i32, i32)>) {
-        if self.bal.sora == sora {
-            return;
-        }
-        let (full_hp, full_mp) = (self.hp >= self.max_hp(), self.mp >= self.max_mp());
-        self.bal.sora = sora;
-        let (mh, mm) = (self.max_hp(), self.max_mp());
-        self.hp = if full_hp && self.hp > 0 { mh } else { self.hp.min(mh) };
-        self.mp = if full_mp { mm } else { self.mp.min(mm) };
+        self.mp = if self.mp_charge_left > 0.0 { self.mp } else { (self.mp + (mp1 - mp0).max(0)).min(mp1) };
     }
 
     fn weapon_stats(&self) -> (i32, i32, i32) {
         tables::weapon(self.weapon).map(|w| (w.3, w.4, w.5)).unwrap_or((0, 0, 0))
     }
 
-    /// Max HP = base row + HP_UP bonuses (stats spec 8; plan 2.3: 200 / 220 with all bonuses).
+    /// (GF-STATS) Max HP = his fixed start (Critical halves it) + what the bosses gave him (`growth`) + the roster's steps.
+    /// (ONESTAT) leading or not. KH3's `bonuses` of an old save count for nothing here: the catch-up rebuilds them as `growth`.
     pub fn max_hp(&self) -> i32 {
-        // (ONESTAT, the user 2026-10-27: "there should be no party ally/leader seperation, their stats should be their stats same for Goofy and every KH character added later"): the balanced max HP leading or not
-        {
-            if let Some(hp) = crate::balance::max_hp(self) {
-                return hp + self.roster.hp_mp(self.game_level).0; // (GOOFY-BAL) a leader: hp_ratio x Sora's max HP + his bonuses; (IT) + the roster's steps
-            }
-        }
-        let base = tables::cparam(self.chara, "base.max_hp") as i32;
-        critical_base(base, self.game_level) + self.bonuses.totals(self.game_level).0 // (DF) Critical halves the base
+        critical_base(crate::balance::start_pools(self.chara).0, self.game_level) + self.growth.hp // (DF) Critical halves the start
             + self.roster.hp_mp(self.game_level).0 // (IT) the roster's max-HP steps
     }
 
     pub fn max_mp(&self) -> i32 {
-        // (ONESTAT) the balanced max MP leading or not
-        {
-            if let Some(mp) = crate::balance::max_mp(self) {
-                return mp + self.roster.hp_mp(self.game_level).1 // (GOOFY-BAL) a leader: mp_ratio x Sora's max MP + his bonuses; (IT) + the roster's steps
-                    + crate::pad::donald::mp_bonus(self); // (DON-KIT) doc 2: Donald's Max MP +3 steps (DonLearned::mp_bonus)
-            }
-        }
-        critical_base(tables::cparam(self.chara, "base.max_mp") as i32, self.game_level) + self.bonuses.totals(self.game_level).1 // (DF)
+        critical_base(crate::balance::start_pools(self.chara).1, self.game_level) + self.growth.mp // (DF)
             + self.roster.hp_mp(self.game_level).1 // (IT) the roster's max-MP steps
             + crate::pad::donald::mp_bonus(self) // (DON-KIT) doc 2: Donald's Max MP +3 steps
     }
@@ -248,22 +240,25 @@ impl FriendStatus {
     /// Strength = level row + weapon [D].
     pub fn strength(&self) -> i32 {
         // (2026-10-27, the user: "lower Donald's physical damage as well, it should be something like 10 at level 1", "I mean
-        // the KH3 attack stat in the status screen": Donald's ratio 0.667, 10 at level 1 with his starting staff; ONESTAT)
+        // the KH3 attack stat in the status screen": ONESTAT; 2026-10-30, the user: Donald's ratio 0.3, 5 at level 1 with his starting staff)
         self.lead_row().0 + self.weapon_stats().0 // (GOOFY-BAL) his row of party-balance-levels
             + self.roster.strength as i32 // (IT) the roster's Strength Boosts
+            + self.growth.boosts[0] as i32 // (weapons P11) the Strength Boosts used on him from the camp menu
     }
 
     pub fn magic(&self) -> i32 {
         if crate::balance::base_stats(self.chara, self.level).1 == 0 /* (ONESTAT) leading or not */ {
-            return self.roster.magic as i32; // (GOOFY-BAL) a leader without magic (Goofy): no table / weapon magic; (IT) the roster's boosts stay on top
+            return self.roster.magic as i32 + self.growth.boosts[1] as i32; // (GOOFY-BAL) a leader without magic (Goofy): no table / weapon magic; (IT) the roster's boosts stay on top; (weapons P11) and his own Magic Boosts
         }
         self.lead_row().1 + self.weapon_stats().1 // (GOOFY-BAL)
             + self.roster.magic as i32 // (IT) the roster's Magic Boosts
+            + self.growth.boosts[1] as i32 // (weapons P11) the Magic Boosts used on him from the camp menu
     }
 
     pub fn defense(&self) -> i32 {
         self.lead_row().2 + self.weapon_stats().2 + self.worn().map(|r| r.defense).sum::<i32>() // (GOOFY-BAL) lead_row
             + self.roster.defense as i32 // (IT) the roster's Defense Boosts
+            + self.growth.boosts[2] as i32 // (weapons P11) the Defense Boosts used on him from the camp menu
     }
 
     /// The worn armour and accessory rows.
@@ -293,7 +288,7 @@ impl FriendStatus {
 
     fn set_gear(&mut self, slot: usize, id: Option<&str>, armour: bool) -> bool {
         let max = if armour { self.armour_slots } else { self.accessory_slots } as usize;
-        if slot >= max.min(4) {
+        if slot >= max.min(MAX_SLOTS) {
             return false;
         }
         let row = match id {
@@ -315,10 +310,11 @@ impl FriendStatus {
     pub fn max_ap(&self) -> i32 {
         self.row().4
             + self.roster.ap as i32 // (IT) the roster's AP Boosts
+            + self.growth.boosts[3] as i32 // (weapons P11) the AP Boosts used on him from the camp menu
     }
 
     pub fn ap_in_use(&self) -> i32 {
-        self.abilities.iter_equipped().filter(|(k, _)| !self.don_free_kh3(*k)) /* (DON-PROG) his KH3 spell gates take no AP */ .map(|(k, n)| tables::ability_cost(k.game_name().trim_start_matches("ETresAbilityKind::")).map(|c| c.0).unwrap_or(0) * n as i32).sum::<i32>() + self.kit.ap_in_use() + self.goofy_kit.ap_in_use() + self.don_ap_in_use() /* (DON-PROG) Donald's overhaul abilities */ // (party X3D) + the kit's; (party X3G) + Goofy's kit
+        self.abilities.iter_equipped().filter(|(k, _)| !self.don_free_kh3(*k)) /* (DON-PROG) his KH3 spell gates take no AP */ .map(|(k, n)| kh3_ability_ap(k) * n as i32).sum::<i32>() + self.kit.ap_in_use() + self.gof_ap_in_use() /* (GOOFY) */ + self.don_ap_in_use() /* (DON-PROG) Donald's overhaul abilities */ // (party X3D) + the kit's; (party X3G) + Goofy's kit
     }
 
     pub fn count(&self, kind: ETresAbilityKind) -> u32 {
@@ -381,7 +377,7 @@ impl FriendStatus {
     /// MP cost of an ability (`m_UseMP`; -1 = all MP); `None` when the ability is not equipped.
     pub fn mp_cost(&self, key: &str) -> Option<i32> {
         let kind = ETresAbilityKind::from_game_name(key)?;
-        if self.abilities.equipped(kind) == 0 {
+        if self.abilities.equipped(kind) == 0 && self.gof_tree_gate(key) != Some(true) /* (GOOFY) his old tree's Tornado, Turbo, Discus: the Art is learned */ {
             return None;
         }
         let (_, mp) = tables::ability_cost(key)?;
@@ -392,14 +388,13 @@ impl FriendStatus {
     /// (charging, not enough MP, not equipped). `FUN_1405A4EA0(pawn, kind, 1)` is the game's gate
     /// (Tornado / Turbo Begin 0x1411C2130 / 0x1411C2530) [C].
     /// `pay` without spending: whether the gate would let the ability start now.
+    /// (THE USER 2026-11-02: "let Goofy use his last MP and go into MP reserve") the party's MP rule (crate::mp_rule): any MP
+    /// above 0 pays, a dearer ability takes the last of it into MP Charge; never while the charge runs.
     pub fn can_pay(&self, key: &str) -> bool {
         if self.mp_charge_left > 0.0 {
             return false;
         }
-        match self.mp_cost(key) {
-            Some(cost) => !(self.mp < cost && cost > 0),
-            None => false,
-        }
+        self.mp_cost(key).is_some_and(|cost| crate::mp_rule::may_pay(self, cost))
     }
 
     pub fn pay(&mut self, key: &str) -> bool {
@@ -407,14 +402,7 @@ impl FriendStatus {
             return false;
         }
         let Some(cost) = self.mp_cost(key) else { return false };
-        if self.mp < cost && cost > 0 {
-            return false;
-        }
-        self.mp = (self.mp - cost).max(0);
-        if self.mp == 0 {
-            self.mp_charge_left = tables::cparam(self.chara, "mp_charge_time");
-        }
-        true
+        crate::mp_rule::spend(self, cost).is_some() // (THE USER 2026-11-02) the party's MP rule: 0 starts MP Charge
     }
 
     /// Advances the MP charge; MP refills when it ends.
@@ -464,7 +452,7 @@ impl FriendStatus {
         use kh_core::status::math::round_half_up;
         use kh_core::status::runtime::{ETHER_CHARGE_FRACTION, ETHER_MP, HI_POTION_HP, POTION_HP};
         let before = self.hp.max(0);
-        let total = tables::cparam(self.chara, "mp_charge_time");
+        let total = crate::mp_rule::charge_time(self); // (THE USER 2026-11-02) his own charge length (Donald's R7 one)
         let charge = |s: &mut FriendStatus, seconds: f32| {
             s.mp_charge_left -= seconds;
             if s.mp_charge_left <= 0.0 {
@@ -512,13 +500,18 @@ impl FriendStatus {
     /// The revive amount (0x141264140): max(1, RoundToInt(maxHP x (n + 1) x 25 x 0.01)),
     /// n = min(count HYPER_HEALING, 3).
     pub fn revive_hp(&self) -> i32 {
-        let n = self.count(ETresAbilityKind::HyperHealing).min(tables::param("revive.hyper_healing_cap") as u32) as f32;
-        let x = (self.max_hp() as f32 * (n + 1.0) * tables::param("revive.hp_percent")) * 0.01;
-        ((x + 0.5).floor() as i32).max(1)
+        revive_amount(self.max_hp(), self.count(ETresAbilityKind::HyperHealing))
     }
 
-    /// The KO timer (Die Begin 0x1412413C0): 40 / 35 s divided by 1 + min(count HYPER_HEALING, 3).
+    /// The KO timer IN PARTY COMBAT: (HUD-REVIVE, THE USER 2026-11-07: "They revive in combat after 60 seconds as a baseline")
+    /// row `revive.in_combat_time` (60 s) divided by 1 + min(count HYPER_HEALING, 3) as KH3 divides its own (Die Begin
+    /// 0x1412413C0: 30 s, Donald 40 s, Goofy 35 s: rows `n_ex00x.revive_time`, kept as the record of KH3's numbers).
     pub fn revive_time(&self) -> f32 {
+        revive_time_in_combat(self.count(ETresAbilityKind::HyperHealing))
+    }
+
+    /// (HUD-REVIVE) KH3's own Die timer of this friend (row `n_ex00x.revive_time` / (1 + n)): the record, not the rule.
+    pub fn kh3_revive_time(&self) -> f32 {
         let n = self.count(ETresAbilityKind::HyperHealing).min(tables::param("revive.hyper_healing_cap") as u32) as f32;
         tables::cparam(self.chara, "revive_time") / (n + 1.0)
     }
@@ -535,11 +528,11 @@ impl FriendStatus {
     }
 
     /// The weapon row (row, key, uid, strength, magic, defense, abilities, model).
-    pub fn weapon_row(id: &str) -> Option<&'static (&'static str, &'static str, u8, i32, i32, i32, &'static [&'static str], &'static str)> {
+    pub fn weapon_row(id: &str) -> Option<&'static tables::PartyWeaponRow> {
         tables::weapon(id)
     }
 
-    /// Camp menu: sets item slot `slot` (0..4) to `item` (None = empty).
+    /// Camp menu: sets item slot `slot` (0..MAX_SLOTS) to `item` (None = empty).
     pub fn set_item_slot(&mut self, slot: usize, item: Option<ItemKind>) {
         if let Some(s) = self.items.get_mut(slot) {
             *s = ItemSlot { item, present: item.is_some() };
@@ -578,13 +571,13 @@ impl FriendStatus {
     /// refill of a used auto-reload slot) keeps the slot's auto-reload; another item takes the setting of the other
     /// slots that hold it; empty clears it.
     pub fn set_item_slot_kh3(&mut self, slot: usize, item: Option<ItemKind>) {
-        if slot >= 4 {
+        if slot >= MAX_SLOTS {
             return;
         }
         let same = item.is_some() && self.items[slot].item == item;
         let reload = match item {
             _ if same => self.item_reload[slot],
-            Some(new) => (0..4).any(|k| k != slot && self.items[k].item == Some(new) && self.item_reload[k]),
+            Some(new) => (0..MAX_SLOTS).any(|k| k != slot && self.items[k].item == Some(new) && self.item_reload[k]),
             None => false,
         };
         self.items[slot] = ItemSlot { item, present: item.is_some() };
@@ -595,7 +588,7 @@ impl FriendStatus {
     /// holds it (used or not); turning it off empties a used slot. False when no slot holds the item.
     pub fn set_auto_reload(&mut self, item: ItemKind, on: bool) -> bool {
         let mut any = false;
-        for k in 0..4 {
+        for k in 0..MAX_SLOTS {
             if self.items[k].item == Some(item) {
                 any = true;
                 self.item_reload[k] = on;
@@ -617,6 +610,21 @@ impl FriendStatus {
     }
 }
 
+/// (HUD-REVIVE) THE KO TIMER IN PARTY COMBAT for any member (a friend, AI Sora, any later one): row `revive.in_combat_time`
+/// (60 s, the user's baseline) / (1 + min(`hyper_healing`, revive.hyper_healing_cap)), KH3's divisor (Die Begin 0x1412413C0).
+pub fn revive_time_in_combat(hyper_healing: u32) -> f32 {
+    let n = hyper_healing.min(tables::param("revive.hyper_healing_cap") as u32) as f32;
+    tables::param("revive.in_combat_time") / (n + 1.0)
+}
+
+/// (HUD-REVIVE) KH3'S REVIVE AMOUNT for any member (0x141264140): max(1, RoundToInt(maxHP x (n + 1) x 25 x 0.01)),
+/// n = min(`hyper_healing`, 3). The timer's revive and the party combat's end both give it; the save point gives full HP.
+pub fn revive_amount(max_hp: i32, hyper_healing: u32) -> i32 {
+    let n = hyper_healing.min(tables::param("revive.hyper_healing_cap") as u32) as f32;
+    let x = (max_hp as f32 * (n + 1.0) * tables::param("revive.hp_percent")) * 0.01;
+    ((x + 0.5).floor() as i32).max(1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -626,8 +634,9 @@ mod tests {
         let d = FriendStatus::test_level99(Chara::Donald);
         let g = FriendStatus::test_level99(Chara::Goofy);
         assert_eq!((d.level, g.level), (99, 99));
-        // (ONESTAT) the balanced rows, leading or not (KH3's AI rows were 200 / 220 HP, Strength 63 + 3, Magic 67 + 4)
-        assert!(d.max_hp() > 0 && g.max_hp() > d.max_hp(), "{} / {}", d.max_hp(), g.max_hp());
+        // (GF-STATS) every reward of the docs
+        assert_eq!((d.max_hp(), d.max_mp(), g.max_hp(), g.max_mp()), (232, 218, 376, 136));
+        assert_eq!((d.item_slots, d.armour_slots, d.accessory_slots, g.item_slots, g.armour_slots, g.accessory_slots), (5, 2, 5, 5, 5, 3));
         assert_eq!(d.strength(), crate::balance::base_stats(Chara::Donald, 99).0 + 3);
         assert_eq!(d.magic(), crate::balance::base_stats(Chara::Donald, 99).1 + 4);
         assert_eq!(g.strength(), crate::balance::base_stats(Chara::Goofy, 99).0 + 4);
@@ -639,12 +648,15 @@ mod tests {
     fn ko_revive_numbers() {
         let mut d = FriendStatus::new(Chara::Donald, 0);
         let g = FriendStatus::new(Chara::Goofy, 0);
-        assert_eq!(d.revive_time(), 40.0);
-        assert_eq!(g.revive_time(), 35.0);
+        // (HUD-REVIVE) the user's 60 s in party combat for every member; KH3's own 40 / 35 s stay on record
+        assert_eq!(d.revive_time(), 60.0);
+        assert_eq!(g.revive_time(), 60.0);
+        assert_eq!((d.kh3_revive_time(), g.kh3_revive_time()), (40.0, 35.0));
         let quarter = ((d.max_hp() as f32 * 0.25 + 0.5).floor() as i32).max(1);
         assert_eq!(d.revive_hp(), quarter); // max HP x 25 % (ONESTAT: his balanced max HP)
         d.abilities.set(ETresAbilityKind::HyperHealing, 1, 1);
-        assert_eq!(d.revive_time(), 20.0);
+        assert_eq!(d.revive_time(), 30.0);
+        assert_eq!(d.kh3_revive_time(), 20.0);
         assert_eq!(d.revive_hp(), ((d.max_hp() as f32 * 0.5 + 0.5).floor() as i32).max(1));
         d.hp = 0;
         assert_eq!(d.heal(9), 5); // halved, rounded up, while KO'd
@@ -662,7 +674,8 @@ mod tests {
         assert_eq!(d.mp, full - 10);
         assert!(d.pay("DONALD_CURE")); // all MP
         assert_eq!(d.mp, 0);
-        assert_eq!(d.mp_charge_left, 30.0);
+        assert_eq!(d.mp_charge_left, crate::mp_rule::charge_time(&d)); // (THE USER 2026-11-02) his own length (R7), at once
+        assert!(d.mp_charge_left > 0.0 && d.mp_charge_left <= 30.0);
         assert!(!d.pay("DONALD_FIRE"));
         for _ in 0..(30 * 60 + 1) {
             d.tick(1.0 / 60.0);
@@ -717,7 +730,8 @@ mod gear_tests {
         assert!(d.set_armour(0, Some(armour.id)));
         assert_eq!(d.defense(), def0 + armour.defense);
         assert_eq!(d.as_defender().resist[..armour.resist.len().min(8)], armour.resist[..armour.resist.len().min(8)]);
-        assert!(!d.set_armour(5, Some(armour.id)));
+        assert!(!d.set_armour(MAX_SLOTS, Some(armour.id)));
+        assert!(!d.set_armour(1, Some(armour.id)), "only his one armour slot is open");
         assert!(!d.set_accessory(0, Some(armour.id)), "an armour row is not an accessory");
         let ai = AiSettings::default();
         assert_eq!(ai.cure_targets, 0b111);

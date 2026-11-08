@@ -16,6 +16,7 @@
 //! | `ability_set.rs` | owned / equipped / worn / meal copies and the count query | 5.1 |
 //! | `mod.rs` (here) | `Status`, `rebuild`, the stat getters, the AP budget | 1, 2, 5.2 |
 //! | `loadout.rs` | the initial save data (`sheets/port/sora-loadout-99.json`) | 8, 9 |
+//! | `keyblade.rs` | (weapons P2) the 17 Keyblades, their Forge levels, the 3 slots and the switch (`sheets/port/sora-keyblades`) | 2.5 |
 //! | `exp.rs` | `give_exp`: reward, award caps, level-up | 4 |
 //! | `damage.rs` | `compute_damage`: the damage function 0x140632240 | 7 |
 //! | `runtime.rs` | HP / MP / focus rules: damage to Sora, heals, MP use and charge, prizes, items | 6, magic spec C, D, E |
@@ -34,6 +35,8 @@
 pub mod ability_set;
 pub mod damage;
 pub mod exp;
+// (weapons P2) the Keyblades, their Forge levels, the three slots and the switch
+pub mod keyblade;
 pub mod loadout;
 pub mod math;
 // (new game) the two choices of the opening
@@ -47,6 +50,7 @@ pub mod tables;
 pub use ability_set::{AbilitySet, ABILITY_SLOTS};
 pub use damage::{compute_damage, Attacker, DamageAttack, DamageContext, DamageResult, Defender, DefenderKind, Side};
 pub use exp::{ExpAward, ExpPlayer, LevelUp}; // (party P2) ExpPlayer
+pub use keyblade::{KeybladeId, KeybladeStats, KeybladeSwitch, Keyblades, SlotForm}; // (weapons P2)
 pub use loadout::{Loadout, LoadoutValue};
 pub use newgame::{OpeningChoice, Power};
 pub use reward::{BonusLine, Reward, RewardOutcome};
@@ -291,8 +295,26 @@ pub struct Status {
     /// The active meal (stub input).
     pub meal: Option<Meal>,
     /// The keyblade's name in the equipment sheet ("WEP_KEYBLADE_SO_00") and its upgrade level.
+    /// (weapons P2) THE CURRENT KEYBLADE: the key and Forge level of the active slot of `keyblades`. Writing them still
+    /// works (a host, a save of version 5, a test): `rebuild` takes a new `weapon` into the active slot (with that
+    /// Keyblade's own level) and a new `weapon_upgrade` as the current Keyblade's level (keyblade.rs).
     pub weapon: String,
     pub weapon_upgrade: u8,
+    /// (weapons P2) The three Keyblade slots, the active slot and every Keyblade's level (`Status::keyblades`).
+    keyblades: Keyblades,
+    /// (weapons P2) The latest Keyblade switch and how many there were (a host compares the count with what it saw):
+    /// the host draws the new weapon and plays the Attack-slot text change (keyblade.rs `KeybladeSwitch`).
+    pub keyblade_switch: Option<KeybladeSwitch>,
+    pub keyblade_switches: u32,
+    /// (weapons P2) pawn+0x1460 bit 0, set by the WEAPONCHANGE tick: Idle / Glide Begin resume after a switch
+    /// (states/weapon_change.rs).
+    pub(crate) glide_resume: bool,
+    /// (P2 hitfx) The weapon model his attacks hit with (`w_so052`: the held form's hand unit, else the held Keyblade's own;
+    /// "" until the first step): the host plays the hit / swing aliases from THIS model's sound sets (states/weapon_change.rs).
+    pub attack_model: &'static str,
+    /// (AUDIT-C TF) The weapon model in his LEFT hand (the held form's LEFT_HAND unit: Double Form's w_so210; "" none): the
+    /// host plays the LH_WEAPON aliases (`notify::left_hand_alias`) from THIS model's sets (states/weapon_change.rs).
+    pub left_attack_model: &'static str,
     pub armour: Vec<String>,
     pub accessories: Vec<String>,
     /// Owned / equipped / worn copies. `rebuild` recounts the owned copies (base + level grants)
@@ -395,6 +417,12 @@ impl Default for Status {
             meal: None,
             weapon: String::new(),
             weapon_upgrade: 0,
+            keyblades: Keyblades::default(),
+            keyblade_switch: None,
+            keyblade_switches: 0,
+            glide_resume: false,
+            attack_model: "",
+            left_attack_model: "", // (AUDIT-C TF)
             armour: Vec::new(),
             accessories: Vec::new(),
             abilities: AbilitySet::EMPTY,
@@ -502,6 +530,14 @@ impl Status {
         // 4. Equipment, magic, items.
         status.weapon = loadout.weapon.clone();
         status.weapon_upgrade = loadout.weapon_upgrade;
+        // (weapons P2) the Keyblade slots: the loadout's `keyblades` rows, else its weapon alone in slot 0
+        let (keyblades, keyblade_notes) = loadout.keyblades();
+        notes.extend(keyblade_notes);
+        if let Some(current) = keyblades.current() {
+            status.weapon = current.key().to_string();
+            status.weapon_upgrade = keyblades.level(current);
+        }
+        status.keyblades = keyblades;
         status.armour = loadout.armour.clone();
         status.accessories = loadout.accessories.clone();
         status.magic = loadout.magic.clone();
@@ -539,6 +575,7 @@ impl Status {
         if self.placeholder {
             return;
         }
+        self.sync_keyblades();
         let difficulty = self.game_level.row();
         self.level = tables::level_from_exp(self.exp);
         let row = tables::level_row(self.level);
@@ -570,6 +607,12 @@ impl Status {
                 }
             }
         }
+        // (weapons P2) the current Keyblade's own abilities and those of its done Forge levels (keyblade.rs)
+        if let Some((id, level)) = self.current_keyblade_level() {
+            for kind in id.abilities(level) {
+                self.abilities.add_worn(kind);
+            }
+        }
         for name in unknown {
             let note = format!("equipment \"{name}\" is not a row of sheets/port/sora-equipment: it gives nothing");
             if !self.notes.contains(&note) {
@@ -598,7 +641,8 @@ impl Status {
     /// accessories (`bp+0x148[3..18]`). Names without a row are appended to `unknown`.
     fn equipment_rows(&self, unknown: &mut Vec<String>) -> Vec<&'static tables::EquipmentRow> {
         let mut rows = Vec::new();
-        if !self.weapon.is_empty() {
+        // (weapons P2) a Keyblade of sheets/port/sora-keyblades counts through `keyblade_stats`, not through a row here
+        if !self.weapon.is_empty() && KeybladeId::from_key(&self.weapon).is_none() {
             match tables::weapon_row(&self.weapon, self.weapon_upgrade) {
                 Some(row) => rows.push(row),
                 None => unknown.push(if self.weapon_upgrade == 0 { self.weapon.clone() } else { format!("{} upgrade {}", self.weapon, self.weapon_upgrade) }),
@@ -672,7 +716,7 @@ impl Status {
     pub fn strength(&self) -> i32 {
         let mut s = self.base.strength;
         s += self.boosts.strength as i32;
-        s += self.equipment_sum(|row| row.attack);
+        s += self.equipment_sum(|row| row.attack) + self.keyblade_stats().strength;
         s += self.meal_term(|m| m.strength);
         if self.abilities.count(ETresAbilityKind::ChargeBerserk) > 0 && self.mp_charging {
             s += 1;
@@ -682,7 +726,7 @@ impl Status {
 
     /// MAGIC 0x1405836E0: the same shape without the Berserk and buff terms (sheet row `stat.magic`).
     pub fn magic(&self) -> i32 {
-        self.base.magic + self.boosts.magic as i32 + self.equipment_sum(|row| row.magic) + self.meal_term(|m| m.magic)
+        self.base.magic + self.boosts.magic as i32 + self.equipment_sum(|row| row.magic) + self.keyblade_stats().magic + self.meal_term(|m| m.magic)
     }
 
     /// DEFENSE 0x140581830 (sheet row `stat.defense`): level value + boost + meal + weapon and
@@ -857,6 +901,140 @@ impl Status {
             bio_type: 0,
             critical_half: self.abilities.count(ETresAbilityKind::CriticalHalf),
         }
+    }
+}
+
+// ------------------------------------------------------------------ (weapons P2) the Keyblades (keyblade.rs)
+impl Status {
+    /// RECONCILES `weapon` / `weapon_upgrade` (the current Keyblade as every older reader and writer sees it) with the
+    /// slots (`rebuild` calls it first):
+    /// - `weapon` names a Keyblade other than the active slot's: it goes into the active slot (one already in another
+    ///   slot changes places), with its OWN level (`weapon_upgrade` follows it);
+    /// - `weapon` names the active slot's Keyblade: `weapon_upgrade` is taken as its level (clamped into
+    ///   `init ..= max`; a level below a Keyblade's init level is never held);
+    /// - `weapon` is empty: the active slot is emptied (unarmed, as the magic tests set him);
+    /// - anything else (no Keyblade key): the slots stay; the weapon counts through `sora-equipment` as before.
+    fn sync_keyblades(&mut self) {
+        if self.weapon.is_empty() {
+            let slot = self.keyblades.current_slot();
+            self.keyblades.clear_slot(slot);
+            return;
+        }
+        let Some(id) = KeybladeId::from_key(&self.weapon) else { return };
+        if self.keyblades.current() != Some(id) {
+            let slot = self.keyblades.current_slot();
+            let _ = self.keyblades.set_slot(slot, Some(id));
+            self.weapon_upgrade = self.keyblades.level(id);
+        } else {
+            self.weapon_upgrade = self.keyblades.set_level(id, self.weapon_upgrade);
+        }
+    }
+
+    /// The current Keyblade (by `weapon`) and its level as it counts (`weapon_upgrade` clamped into the Keyblade's range).
+    fn current_keyblade_level(&self) -> Option<(KeybladeId, u8)> {
+        KeybladeId::from_key(&self.weapon).map(|id| (id, id.clamp_level(self.weapon_upgrade)))
+    }
+
+    /// The current Keyblade's Strength / Magic terms (0 / 0 unarmed or for a weapon that is no Keyblade).
+    fn keyblade_stats(&self) -> KeybladeStats {
+        self.current_keyblade_level().map_or_else(KeybladeStats::default, |(id, level)| id.stats(level))
+    }
+
+    /// The Keyblade slots, the active slot and every Keyblade's level.
+    pub fn keyblades(&self) -> &Keyblades {
+        &self.keyblades
+    }
+
+    /// The Keyblade of the active slot (what the form framework reads: `id.forms()`).
+    pub fn current_keyblade(&self) -> Option<KeybladeId> {
+        KeybladeId::from_key(&self.weapon)
+    }
+
+    /// REPLACES THE KEYBLADE STATE (a loaded save, the equip menu): `weapon` / `weapon_upgrade` follow the active slot
+    /// and the status is rebuilt (stats, abilities).
+    pub fn set_keyblades(&mut self, keyblades: Keyblades) {
+        self.keyblades = keyblades;
+        match keyblades.current() {
+            Some(id) => {
+                self.weapon = id.key().to_string();
+                self.weapon_upgrade = keyblades.level(id);
+            }
+            None => {
+                if KeybladeId::from_key(&self.weapon).is_some() {
+                    self.weapon.clear();
+                    self.weapon_upgrade = 0;
+                }
+            }
+        }
+        self.rebuild();
+    }
+
+    /// A Keyblade's level (at least its init level).
+    pub fn keyblade_level(&self, id: KeybladeId) -> u8 {
+        self.keyblades.level(id)
+    }
+
+    /// Sets a Keyblade's Forge level (clamped into `init ..= max`); the current one's stats and abilities change at
+    /// once (KH3 rebuilds the status after a Forge step). Returns the level held.
+    pub fn set_keyblade_level(&mut self, id: KeybladeId, level: u8) -> u8 {
+        let mut keyblades = self.keyblades;
+        let held = keyblades.set_level(id, level);
+        self.set_keyblades(keyblades);
+        held
+    }
+
+    /// Puts a Keyblade into a slot (`None` empties it; the active slot cannot be emptied): keyblade.rs `set_slot`.
+    pub fn set_keyblade_slot(&mut self, slot: usize, id: Option<KeybladeId>) -> Result<(), &'static str> {
+        let mut keyblades = self.keyblades;
+        keyblades.set_slot(slot, id)?;
+        if keyblades.current().is_none() {
+            // The active slot was empty (unarmed): the new Keyblade becomes the current one.
+            if let Some(filled) = (0..keyblade::SLOTS).find(|&s| keyblades.slot(s).is_some()) {
+                let _ = keyblades.set_current(filled);
+            }
+        }
+        self.set_keyblades(keyblades);
+        Ok(())
+    }
+
+    /// THE KEYBLADE SWITCH (request-interface slots 234 / 235; keyblade.rs `request_switch` is the command): the next
+    /// filled slot after the active one (`forward`) or the previous one becomes active; stats and abilities are rebuilt
+    /// (the old Keyblade's abilities leave the ability set, the new one's enter it). `None` with one Keyblade.
+    /// INSTANT, for hosts and tests (no state, no effects, no combo or form rule): the in-game switch is the state
+    /// WEAPONCHANGE (states/weapon_change.rs), which calls [`Self::change_keyblade_slot`].
+    pub fn switch_keyblade(&mut self, forward: bool) -> Option<KeybladeSwitch> {
+        let to_slot = self.keyblades.next_slot(forward)?;
+        self.change_keyblade_slot(to_slot)
+    }
+
+    /// The status part of `ChangeWeapon` (pawn vt+0x13C8): the Keyblade of `slot` becomes the current one, stats and
+    /// abilities are rebuilt, the switch is recorded for the host. `None` for an empty slot or the current one.
+    pub fn change_keyblade_slot(&mut self, to_slot: usize) -> Option<KeybladeSwitch> {
+        if self.placeholder || to_slot == self.keyblades.current_slot() {
+            return None;
+        }
+        let from_slot = self.keyblades.current_slot();
+        let from = self.keyblades.current();
+        let mut keyblades = self.keyblades;
+        keyblades.set_current(to_slot).ok()?;
+        let to = keyblades.current()?;
+        self.set_keyblades(keyblades);
+        let switch = KeybladeSwitch { from, to, from_slot: from_slot as u8, to_slot: to_slot as u8 };
+        self.keyblade_switch = Some(switch);
+        self.keyblade_switches = self.keyblade_switches.wrapping_add(1);
+        Some(switch)
+    }
+
+    /// The form a slot keeps while another Keyblade is in hand (states/weapon_change.rs).
+    pub(crate) fn store_slot_form(&mut self, slot: usize, form: Option<keyblade::SlotForm>) {
+        self.keyblades.set_slot_form(slot, form);
+    }
+
+    /// The form a slot kept, taken back (the slot is current again).
+    pub(crate) fn take_slot_form(&mut self, slot: usize) -> Option<keyblade::SlotForm> {
+        let form = self.keyblades.slot_form(slot);
+        self.keyblades.set_slot_form(slot, None);
+        form
     }
 }
 

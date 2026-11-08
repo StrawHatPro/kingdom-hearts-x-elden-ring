@@ -26,18 +26,15 @@ use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
-use windows_sys::Win32::UI::Input::XboxController::{XInputGetState, XINPUT_CAPABILITIES, XINPUT_STATE};
+use windows_sys::Win32::UI::Input::XboxController::{XInputGetState, XINPUT_CAPABILITIES, XINPUT_GAMEPAD, XINPUT_STATE, XINPUT_VIBRATION};
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 
 use crate::erlog;
 
 // ---------------------------------------------------------------- the XInput mask
 
-pub const XI_DPAD: u16 = 0x000F;
 pub const XI_START: u16 = 0x0010;
 pub const XI_BACK: u16 = 0x0020;
-pub const XI_L3: u16 = 0x0040;
-pub const XI_R3: u16 = 0x0080;
 pub const XI_Y: u16 = 0x8000;
 /// Everything but Menu (Start) and View (Back).
 pub const XI_GAMEPLAY: u16 = !(XI_START | XI_BACK);
@@ -90,33 +87,16 @@ unsafe extern "system" fn get_caps_hook(index: u32, flags: u32, caps: *mut XINPU
     let now = GetTickCount64();
     if result != 0 && index == 0 && !caps.is_null() && now < VPAD_UNTIL.load(Ordering::Relaxed) && now >= REAL_PAD_UNTIL.load(Ordering::Relaxed) {
         // (an Xbox pad: type 1 = gamepad, subtype 1 = gamepad, every button and axis)
-        let mut c = XINPUT_CAPABILITIES::default();
-        c.Type = 1;
-        c.SubType = 1;
-        c.Gamepad.wButtons = 0xf3ff;
-        c.Gamepad.bLeftTrigger = 255;
-        c.Gamepad.bRightTrigger = 255;
-        c.Gamepad.sThumbLX = -64;
-        c.Gamepad.sThumbLY = -64;
-        c.Gamepad.sThumbRX = -64;
-        c.Gamepad.sThumbRY = -64;
-        c.Vibration.wLeftMotorSpeed = 255;
-        c.Vibration.wRightMotorSpeed = 255;
-        *caps = c;
+        *caps = XINPUT_CAPABILITIES {
+            Type: 1,
+            SubType: 1,
+            Gamepad: XINPUT_GAMEPAD { wButtons: 0xf3ff, bLeftTrigger: 255, bRightTrigger: 255, sThumbLX: -64, sThumbLY: -64, sThumbRX: -64, sThumbRY: -64 },
+            Vibration: XINPUT_VIBRATION { wLeftMotorSpeed: 255, wRightMotorSpeed: 255 },
+            ..Default::default()
+        };
         return 0;
     }
     result
-}
-
-/// (PORT30) The input script's held pad buttons (XInput `wButtons` bits) while it runs, else 0.
-pub fn virtual_buttons() -> u16 {
-    // SAFETY: plain getter.
-    let now = unsafe { GetTickCount64() };
-    if now < VIRT_UNTIL.load(Ordering::Relaxed) {
-        (VIRT.load(Ordering::Relaxed) & 0xffff) as u16
-    } else {
-        0
-    }
 }
 
 /// The frame task saw a real pad (renewed every frame it does).
@@ -342,22 +322,8 @@ pub fn xinput_state(index: u32) -> Option<XINPUT_STATE> {
 
 // ---------------------------------------------------------------- the keyboard path
 
-const KEY_BUTTONS: [(i32, PadButton); 14] = [
-    (0x4A, PadButton::FaceBottom),    // J
-    (0x4B, PadButton::FaceRight),     // K
-    (0x4C, PadButton::FaceLeft),      // L
-    (0x49, PadButton::FaceTop),       // I
-    (0x55, PadButton::LeftShoulder),  // U
-    (0x4F, PadButton::RightShoulder), // O
-    (0x50, PadButton::RightTrigger),  // P
-    (0x59, PadButton::LeftTrigger),   // Y
-    (0x48, PadButton::RightThumb),    // H
-    (0x54, PadButton::LeftThumb),     // T
-    (0x26, PadButton::DPadUp),
-    (0x28, PadButton::DPadDown),
-    (0x25, PadButton::DPadLeft),
-    (0x27, PadButton::DPadRight),
-];
+// (CAMP-OPTIONS) the keys and mouse buttons: KH3 PC's own defaults through the keyboard and mouse table (remap_er.rs);
+// the port's earlier keys (J K L I U O P Y H T) only with `in.keys_legacy = 1`
 
 /// The game's window is the foreground window.
 pub fn game_in_foreground() -> bool {
@@ -392,19 +358,21 @@ pub fn foreground_text() -> String {
 
 /// The keyboard as Sora's pad: (left stick, buttons held). Nothing while the game is in the background.
 pub fn keyboard() -> (Vec2, PadButtons) {
-    let mut buttons = PadButtons::NONE;
     if !game_in_foreground() {
-        return (Vec2::ZERO, buttons);
+        return (Vec2::ZERO, PadButtons::NONE);
+    }
+    crate::remap_er::keyboard() // (CAMP-OPTIONS)
+}
+
+/// (THE USER 2026-11-03: "right stick scroll") The keyboard's right stick for the descriptions that run past their box:
+/// Page Up = up (+1), Page Down = down (-1) (keys no menu of ours uses), 0 with neither or with the game in the background.
+pub fn scroll_keys() -> f32 {
+    if !game_in_foreground() {
+        return 0.0;
     }
     // SAFETY: plain getter.
     let down = |vk: i32| unsafe { GetAsyncKeyState(vk) } as u16 & 0x8000 != 0;
-    for (vk, button) in KEY_BUTTONS {
-        if down(vk) {
-            buttons.set(button, true);
-        }
-    }
-    let axis = |plus: i32, minus: i32| f32::from(u8::from(down(plus))) - f32::from(u8::from(down(minus)));
-    (Vec2::new(axis(0x44, 0x41), axis(0x57, 0x53)), buttons)
+    f32::from(u8::from(down(0x21))) - f32::from(u8::from(down(0x22)))
 }
 
 // ---------------------------------------------------------------- Elden Ring's interface
@@ -526,7 +494,9 @@ pub fn run_key_script() {
 
 // ---------------------------------------------------------------- what Elden Ring would read (testing aid)
 
-static PROBE_LAST: std::sync::Mutex<Option<(u32, u16, [i8; 4], [u8; 2])>> = std::sync::Mutex::new(None);
+/// What the pad probe last saw: (result, buttons, the thumbs' high bytes, the triggers).
+type ProbeRead = (u32, u16, [i8; 4], [u8; 2]);
+static PROBE_LAST: std::sync::Mutex<Option<ProbeRead>> = std::sync::Mutex::new(None);
 
 /// `dbg.padprobe = 1` (IMPL_ER8, testing aid): reads slot 0 THROUGH THE HOOKED FUNCTION, as the game's own call
 /// does, and logs every change of what comes back: the pad as Elden Ring is shown it (after the script's
@@ -587,7 +557,7 @@ pub fn press_for_er_try(buttons: u16, scan: u16, attempt: u8) -> Option<&'static
     // SAFETY: plain getter.
     let now = unsafe { GetTickCount64() };
     let keyboard = scan != 0 && game_in_foreground();
-    if er_reads_pad() && (attempt % 2 == 0 || !keyboard) {
+    if er_reads_pad() && (attempt.is_multiple_of(2) || !keyboard) {
         FORCE.store(u32::from(buttons), Ordering::Relaxed);
         FORCE_UNTIL.store(now + PRESS_MS, Ordering::Relaxed);
         return Some("pad hook");
@@ -595,6 +565,7 @@ pub fn press_for_er_try(buttons: u16, scan: u16, attempt: u8) -> Option<&'static
     if keyboard {
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE};
         let key = |up: bool| INPUT { r#type: INPUT_KEYBOARD, Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: 0, wScan: scan, dwFlags: KEYEVENTF_SCANCODE | if up { KEYEVENTF_KEYUP } else { 0 }, time: 0, dwExtraInfo: 0 } } };
+        crate::dinput_mask::allow_press(&[scan]); // (CC-MUTE) our own press passes the game's keyboard hold (ngquiet.rs)
         // SAFETY: one well-formed INPUT each; the key is released by the thread below 80 ms later.
         unsafe { SendInput(1, &key(false), std::mem::size_of::<INPUT>() as i32) };
         let up = key(true);

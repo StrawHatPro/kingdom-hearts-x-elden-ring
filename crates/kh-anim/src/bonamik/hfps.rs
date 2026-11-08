@@ -99,7 +99,7 @@ pub fn dot4(a: Q4, b: Q4) -> f32 {
 /// VectorNormalizeSafe(q, default (0,0,0,1)) with threshold thr
 pub fn qnorm_safe(q: Q4, thr: f32) -> Q4 {
     let sq = dot4(q, q);
-    if !(thr <= sq) {
+    if thr.partial_cmp(&sq).is_none_or(std::cmp::Ordering::is_gt) {
         return [0.0, 0.0, 0.0, 1.0]; // cmpleps thr,sq
     }
     let r = rsqrt(sq);
@@ -157,7 +157,7 @@ pub fn fn_142d90ca0(a: Q4, b: Q4, t: f32) -> Q4 {
         s0 = ((((ONE - t) * omega) as f64).sin() as f32) * inv;
         s1 = (((omega * t) as f64).sin() as f32) * inv;
     }
-    if !(raw >= 0.0) {
+    if raw.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_lt) {
         s1 = -s1; // 142d90da8 comiss raw,0 ; jae skips the xorps
     }
     [(s1 * b[0]) + (s0 * a[0]), (s1 * b[1]) + (s0 * a[1]), (s1 * b[2]) + (s0 * a[2]), (s1 * b[3]) + (s0 * a[3])]
@@ -188,24 +188,20 @@ pub fn xf_mul_inline(a: &Xf, b: &Xf, at: &str) -> Xf {
 
 /// inlined weight blend of a new transform N into the buffer entry `old` (143b5a0ec..143b5a2fc, 143b5aef8..143b5b11f)
 pub fn blend_into_inline(old: &mut Xf, n: &Xf, w: f32) {
-    if !(w.abs() > K_1E5) {
+    if w.abs().partial_cmp(&K_1E5).is_none_or(std::cmp::Ordering::is_le) {
         return; // buffer entry copied onto itself
     }
-    if !((w - ONE).abs() > K_1E5) {
+    if ((w - ONE).abs()).partial_cmp(&K_1E5).is_none_or(std::cmp::Ordering::is_le) {
         *old = *n;
         return;
     }
-    let mut t = [0.0f32; 3];
-    let mut s = [0.0f32; 3];
-    for i in 0..3 {
-        t[i] = (w * (n.t[i] - old.t[i])) + old.t[i];
-    }
-    for i in 0..3 {
+    let t: [f32; 3] = std::array::from_fn(|i| (w * (n.t[i] - old.t[i])) + old.t[i]);
+    let s: [f32; 3] = std::array::from_fn(|i| {
         // CRT logf / expf
         let lo = (old.s[i] as f64).ln() as f32;
         let ln = (n.s[i] as f64).ln() as f32;
-        s[i] = ((((ln - lo) * w) + lo) as f64).exp() as f32;
-    }
+        ((((ln - lo) * w) + lo) as f64).exp() as f32
+    });
     let d = dot4(old.q, n.q);
     let sel = if 0.0 <= d { old.q } else { [0.0 - old.q[0], 0.0 - old.q[1], 0.0 - old.q[2], 0.0 - old.q[3]] };
     let om = ONE - w;
@@ -224,7 +220,7 @@ pub fn fn_143b5b990(comp: &mut Comp, dt: f32, n: usize) {
         // cmp dword [comp+0x4B8],0
         comp.f4b0 = vec![DeltaRec::IDENT; n];
         let mut iv = comp.f49c;
-        if !(iv > K_SMALL) {
+        if iv.partial_cmp(&K_SMALL).is_none_or(std::cmp::Ordering::is_le) {
             iv = K_DT30;
             comp.f49c = K_DT30;
         }
@@ -236,7 +232,7 @@ pub fn fn_143b5b990(comp: &mut Comp, dt: f32, n: usize) {
     }
     let mut r = comp.f4a4;
     if r > 0.0 {
-        r = r - dt;
+        r -= dt;
         comp.f4a4 = r;
     }
     if r > K_SMALL && comp.f4ad == 0 {
@@ -292,25 +288,21 @@ pub fn fn_143aefb30(core: &mut Core) {
             continue;
         }
         let b = &mut bones[p.f248];
-        if !(w >= K_1E4) || !(w.abs() > K_1E5) {
+        if w.partial_cmp(&K_1E4).is_none_or(std::cmp::Ordering::is_lt) || w.abs().partial_cmp(&K_1E5).is_none_or(std::cmp::Ordering::is_le) {
             b.q = p.f120;
             b.t = p.f130;
             b.s = p.f140;
             continue;
         }
-        if !((w - ONE).abs() > K_1E5) {
+        if ((w - ONE).abs()).partial_cmp(&K_1E5).is_none_or(std::cmp::Ordering::is_le) {
             continue; // stores B onto itself
         }
-        let mut t = [0.0f32; 3];
-        let mut s = [0.0f32; 3];
-        for k in 0..3 {
-            t[k] = ((b.t[k] - p.f130[k]) * w) + p.f130[k];
-        }
-        for k in 0..3 {
+        let t: [f32; 3] = std::array::from_fn(|k| ((b.t[k] - p.f130[k]) * w) + p.f130[k]);
+        let s: [f32; 3] = std::array::from_fn(|k| {
             let la = (p.f140[k] as f64).ln() as f32;
             let lb = (b.s[k] as f64).ln() as f32;
-            s[k] = ((((lb - la) * w) + la) as f64).exp() as f32;
-        }
+            ((((lb - la) * w) + la) as f64).exp() as f32
+        });
         let a = p.f120;
         let d = dot4(a, b.q);
         let sel = if 0.0 <= d { a } else { [0.0 - a[0], 0.0 - a[1], 0.0 - a[2], 0.0 - a[3]] };
@@ -424,10 +416,9 @@ pub fn fn_143b590d0(comp: &mut Comp, core: &mut Core, cfg: &Cfg, rng: &mut Rng, 
     let mut max_w = vec![0.0f32; n];
     fn_143b11a20(core, dt);
     fn_143b02170(core);
-    for i in 0..core.f3818 {
-        let w = core.f3810[i];
-        if w > max_w[i] {
-            max_w[i] = w;
+    for (max, &w) in max_w[..core.f3818].iter_mut().zip(&core.f3810[..core.f3818]) {
+        if w > *max {
+            *max = w;
         }
     }
     let interp = |rec: &DeltaRec| -> Xf {
@@ -438,7 +429,7 @@ pub fn fn_143b590d0(comp: &mut Comp, core: &mut Core, cfg: &Cfg, rng: &mut Rng, 
     };
     let bones = &mut core.f3848.bones;
     let parents = &core.f3848.parents;
-    if n > 0 && !(K_SMALL >= max_w[0]) {
+    if n > 0 && K_SMALL.partial_cmp(&max_w[0]).is_none_or(std::cmp::Ordering::is_lt) {
         // bone 0
         let a0 = interp(&comp.f4b0[0]);
         let mut nn = xf_mul_inline(&a0, &local[0], "143b59bac");

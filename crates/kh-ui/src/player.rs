@@ -170,7 +170,19 @@ pub struct Sprite {
     pub number: Option<Box<NumberProps>>,
     /// (loot) `tres.controls.Icon`: its default size and clip rectangle (`controls::icon_init`).
     pub icon: Option<crate::controls::IconProps>,
+    /// (ASH-ROWS) Drawn WIDER than authored ([`Stretch`], [`crate::render`]): None = as authored.
+    pub stretch: Option<Stretch>,
     next_z: i32,
+}
+
+/// (ASH-ROWS) A sprite drawn wider than authored, as a horizontal scaling grid draws it: what lies left of `from` as it
+/// is, `from .. to` stretched by `by` more units, what lies right of `to` moved right by `by` (its own units, on whole
+/// device pixels at the joints). The command menu's spirit-ash rows widen their plates with it, the end caps unchanged.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stretch {
+    pub from: f32,
+    pub to: f32,
+    pub by: f32,
 }
 
 fn make_node(movie: &Arc<MovieDef>, op: &Op, ch: u32, frame: u32, ctx: &mut Ctx) -> Node {
@@ -234,7 +246,7 @@ struct Placed {
 
 impl Sprite {
     pub fn new(movie: Arc<MovieDef>, def: Arc<SpriteDef>, ctx: &mut Ctx) -> Sprite {
-        let mut s = Sprite { movie, playing: def.frames > 1, def, frame: 0, serial: ctx.serial, children: Vec::new(), extra: Vec::new(), gfx: Vec::new(), emptied: false, text_adjust: None, number: None, icon: None, next_z: 1 };
+        let mut s = Sprite { movie, playing: def.frames > 1, def, frame: 0, serial: ctx.serial, children: Vec::new(), extra: Vec::new(), gfx: Vec::new(), emptied: false, text_adjust: None, number: None, icon: None, stretch: None, next_z: 1 };
         s.apply_frame_ops(1, ctx);
         s.frame = 1;
         // The class constructor (the `tres.controls` base classes), then the frame script.
@@ -501,7 +513,8 @@ impl Sprite {
     pub fn child(&self, name: &str) -> Option<&Node> {
         let by_depth = name.strip_prefix('@').and_then(|d| d.parse::<i32>().ok());
         self.children.iter().chain(&self.extra).find(|n| match by_depth {
-            Some(d) => n.name.is_none() && n.depth == d,
+            // (F-HUD fix) an attached Loader child without an instance name is NAMED "@depth" (attach_first_child)
+            Some(d) => (n.name.is_none() || n.name.as_deref() == Some(name)) && n.depth == d,
             None => n.name.as_deref() == Some(name),
         })
     }
@@ -509,7 +522,8 @@ impl Sprite {
     pub fn child_mut(&mut self, name: &str) -> Option<&mut Node> {
         let by_depth = name.strip_prefix('@').and_then(|d| d.parse::<i32>().ok());
         self.children.iter_mut().chain(&mut self.extra).find(|n| match by_depth {
-            Some(d) => n.name.is_none() && n.depth == d,
+            // (F-HUD fix) an attached Loader child without an instance name is NAMED "@depth" (attach_first_child)
+            Some(d) => (n.name.is_none() || n.name.as_deref() == Some(name)) && n.depth == d,
             None => n.name.as_deref() == Some(name),
         })
     }
@@ -558,7 +572,44 @@ pub struct Movie {
     /// Path lookups that found nothing (a port asked for a clip that is not on the display
     /// list): the newest few, for diagnosis.
     pub misses: Vec<String>,
+    /// (fit) The description fields set by [`Movie::set_text_fit`] whose text is shrunk or scrolls.
+    fits: Vec<FitField>,
 }
+
+/// (THE USER 2026-11-03: "...never cut off") One description field under the shared fit rule ([`crate::render::fit_box`]):
+/// the field's own definition, the shrunk one it is drawn with, the whole text and its fit, and the first line its
+/// window shows (a text longer than the field at the smallest size: [`Movie::scroll_fits`]).
+#[derive(Clone, Debug)]
+struct FitField {
+    path: String,
+    base: Arc<TextDef>,
+    drawn: Arc<TextDef>,
+    source: String,
+    fit: crate::render::BoxFit,
+    top: usize,
+}
+
+impl FitField {
+    /// What the field shows: the whole text, or the window from `top`.
+    fn shown(&self) -> String {
+        if self.fit.whole() {
+            self.source.clone()
+        } else {
+            self.fit.window(self.top)
+        }
+    }
+}
+
+/// (fit, THE USER 2026-11-03: "right stick scroll") THE MORE-ABOVE / MORE-BELOW MARKS of a scrolling field: KH3's own pad
+/// icons `RstickUp` / `RstickDown` (IconText, the pad set the menus' guides use), each in a box of this size at the field's
+/// right edge (top / bottom), where [`crate::render::fit_box`] keeps the lines away ([`crate::render::FIT_MARK_W`]). KH3
+/// has no scroll mark on a help text (it has no help scroll); COMPOSED placement, KH3's icons.
+const FIT_MARK_H: f32 = 24.0;
+/// The marks' names, after the field's own, in the field's parent clip (script children).
+const FIT_MARK_UP: &str = "~fitMoreUp";
+const FIT_MARK_DOWN: &str = "~fitMoreDown";
+/// A character number for the marks (no character of a movie has it; it only tells them apart in the dirty rectangles).
+const FIT_MARK_CH: u32 = 0x7F60_0000;
 
 fn split(path: &str) -> Vec<&str> {
     path.split('.').filter(|p| !p.is_empty()).collect()
@@ -568,7 +619,7 @@ impl Movie {
     pub fn new(def: Arc<MovieDef>) -> Movie {
         let mut ctx = Ctx { serial: 1, events: Vec::new(), path: Vec::new(), language: Arc::from("none"), world: Arc::from("zz"), nesting: 0 };
         let root = Sprite::new(def.clone(), def.root.clone(), &mut ctx);
-        Movie { def, root, ctx, frames: 0, misses: Vec::new() }
+        Movie { def, root, ctx, frames: 0, misses: Vec::new(), fits: Vec::new() }
     }
 
     /// One frame of the stage (1/60 s).
@@ -577,6 +628,145 @@ impl Movie {
         self.root.tick(&mut self.ctx);
         self.ctx.serial += 1;
         self.frames += 1;
+        self.tick_fits();
+    }
+
+    /// (fit) The fitted fields after a frame: a field the timeline placed again (a pane's `off` / `in`) gets its fitted
+    /// size, its text (the window where it was) and its marks back.
+    fn tick_fits(&mut self) {
+        let fits = std::mem::take(&mut self.fits);
+        for f in &fits {
+            self.show_fit(f);
+        }
+        self.fits = fits;
+    }
+
+    /// (fit) A fitted field as it must look: the shrunk definition, the text or the window from `top`, and the marks of a
+    /// scrolling text (up: lines above the window; down: lines below it).
+    fn show_fit(&mut self, f: &FitField) {
+        let want = f.shown();
+        let Some(Node { kind: Kind::Text(t), matrix, .. }) = self.node_mut(&f.path) else { return };
+        if !Arc::ptr_eq(&t.def, &f.drawn) {
+            t.def = f.drawn.clone();
+        }
+        if t.text.as_deref() != Some(want.as_str()) {
+            t.text = Some(want);
+        }
+        let at = *matrix;
+        let marks = [(FIT_MARK_UP, "<icon(RstickUp)>", f.top > 0, true), (FIT_MARK_DOWN, "<icon(RstickDown)>", f.top < f.fit.scroll_max(), false)];
+        let parts = split(&f.path);
+        let Some((name, parents)) = parts.split_last() else { return };
+        let Some(parent) = self.root.descend_mut(parents) else { return };
+        for (mark, icon, shown, top) in marks {
+            let mark_name = format!("{name}{mark}");
+            let present = parent.extra.iter().position(|n| n.name.as_deref() == Some(mark_name.as_str()));
+            match (shown, present) {
+                (false, Some(i)) => {
+                    parent.extra.remove(i);
+                }
+                (true, Some(i)) => parent.extra[i].matrix = at,
+                (true, None) => {
+                    let b = f.drawn.bounds;
+                    let (y0, y1) = if top { (b.y0, b.y0 + FIT_MARK_H) } else { (b.y1 - FIT_MARK_H, b.y1) };
+                    let def = Arc::new(TextDef {
+                        id: 0,
+                        bounds: crate::def::Rect0 { x0: b.x1 - crate::render::FIT_MARK_W, y0, x1: b.x1 - 2.0, y1 },
+                        font_class: f.drawn.font_class.clone(),
+                        size: f.drawn.size,
+                        color: f.drawn.color,
+                        align: crate::def::Align::Center,
+                        initial: String::new(),
+                        word_wrap: false,
+                        leading: 0.0,
+                    });
+                    let kind = Kind::Text(TextNode { def, text: Some(icon.to_string()), adjust: None, icon_native: false });
+                    parent.extra.push(Node { ch: FIT_MARK_CH, depth: 0, born: 1, z: None, name: Some(Arc::from(mark_name.as_str())), matrix: at, cx: Cx::IDENTITY, clip: 0, blend: 0, visible: true, script_visible: None, script_matrix: true, ratio: 0.0, kind });
+                }
+                (false, None) => {}
+            }
+        }
+    }
+
+    /// (THE USER 2026-11-03: "the textbox for item descriptions in our KH camp menu needs to accommodate text so that it is
+    /// never cut off") `.text = value` on a DESCRIPTION / HELP field through the shared fit rule ([`crate::render::fit_box`]):
+    /// a text that fits is set as it is; a longer one is drawn smaller, down to the readable minimum; one still longer
+    /// shows a window of its lines from the top, which the right stick moves ([`Movie::scroll_fits`]). Setting the same
+    /// text again changes nothing (the window stays where it is). A `TextFieldAdjust` clip or a field without word wrap: as
+    /// [`Movie::set_text`].
+    pub fn set_text_fit(&mut self, path: &str, text: &str, fonts: &crate::render::Fonts) -> bool {
+        if let Some(f) = self.fits.iter().find(|f| f.path == path) {
+            if f.source == text {
+                return true;
+            }
+        }
+        let base = match self.node(path) {
+            Some(Node { kind: Kind::Text(t), .. }) => self.fits.iter().find(|f| f.path == path).map_or_else(|| t.def.clone(), |f| f.base.clone()),
+            _ => return self.set_text(path, text, fonts),
+        };
+        let fit = crate::render::fit_box(fonts, &base, text);
+        self.unfit(path);
+        if fit.size == base.size && fit.whole() {
+            return self.set_text(path, text, fonts);
+        }
+        let drawn = Arc::new(TextDef { size: fit.size, leading: fit.leading, ..(*base).clone() });
+        // (THE USER 2026-11-03: "right stick scroll") a new text starts at its top
+        let field = FitField { path: path.to_string(), base, drawn, source: text.to_string(), fit, top: 0 };
+        self.show_fit(&field);
+        self.fits.push(field);
+        true
+    }
+
+    /// (THE USER 2026-11-03: "right stick scroll") THE RIGHT STICK ON THE DESCRIPTIONS: every fitted field whose text runs
+    /// past it at the smallest size moves its window `lines` lines (negative: up), kept between the top and the last
+    /// line; its marks follow. The host hands the stick's steps here (kh-host `MenuInput::take_scroll`: one line a
+    /// press, KH3's menu key repeat while held). True: a window moved.
+    pub fn scroll_fits(&mut self, lines: i32) -> bool {
+        if lines == 0 {
+            return false;
+        }
+        let mut fits = std::mem::take(&mut self.fits);
+        let mut moved = false;
+        for f in &mut fits {
+            let top = (f.top as i64 + i64::from(lines)).clamp(0, f.fit.scroll_max() as i64) as usize;
+            if top != f.top {
+                f.top = top;
+                moved = true;
+                self.show_fit(f);
+            }
+        }
+        self.fits = fits;
+        moved
+    }
+
+    /// (fit) The first line a scrolling field's window shows (0 for any other field).
+    pub fn fit_top(&self, path: &str) -> usize {
+        self.fits.iter().find(|f| f.path == path).map_or(0, |f| f.top)
+    }
+
+    /// (fit) What the shared fit rule made of a field's text, when it is shrunk or scrolls (`None`: drawn as authored).
+    pub fn text_fit(&self, path: &str) -> Option<&crate::render::BoxFit> {
+        self.fits.iter().find(|f| f.path == path).map(|f| &f.fit)
+    }
+
+    /// (fit) The whole text of a field (a scrolling one shows a window of it).
+    pub fn text_whole(&self, path: &str) -> Option<String> {
+        self.fits.iter().find(|f| f.path == path).map(|f| f.source.clone()).or_else(|| self.text(path))
+    }
+
+    /// (fit) A field leaves the fit rule: its own definition again, no marks.
+    fn unfit(&mut self, path: &str) {
+        let Some(at) = self.fits.iter().position(|f| f.path == path) else { return };
+        let f = self.fits.remove(at);
+        if let Some(Node { kind: Kind::Text(t), .. }) = self.node_mut(path) {
+            t.def = f.base;
+        }
+        let parts = split(path);
+        if let Some((name, parents)) = parts.split_last() {
+            if let Some(parent) = self.root.descend_mut(parents) {
+                let marks = [format!("{name}{FIT_MARK_UP}"), format!("{name}{FIT_MARK_DOWN}")];
+                parent.extra.retain(|n| !n.name.as_deref().is_some_and(|m| marks.iter().any(|k| k == m)));
+            }
+        }
     }
 
     /// The `AnimEvent.END` events dispatched since the last call.
@@ -705,6 +895,7 @@ impl Movie {
     /// `.text = value` on a text field, or on a `TextFieldAdjust` clip (then its `textField`
     /// child gets the text, squeezed as `updateText` does). `fonts` gives the advance widths.
     pub fn set_text(&mut self, path: &str, text: &str, fonts: &crate::render::Fonts) -> bool {
+        self.unfit(path); // (fit) a plain text: the field's own size again
         let found = match self.node_mut(path) {
             Some(Node { kind: Kind::Text(t), .. }) => {
                 t.text = Some(text.to_string());
@@ -794,6 +985,50 @@ impl Movie {
                 None => return false,
             },
         };
+        self.ctx.path = parts.iter().map(|p| Arc::from(*p)).collect();
+        let op = Op { depth: 0, ch: Some(ch), name: Some(Arc::from(name)), ..Op::default() };
+        let mut node = make_node(&movie, &op, ch, 1, &mut self.ctx);
+        self.ctx.path.clear();
+        node.name = Some(Arc::from(name));
+        node.script_matrix = true;
+        let Some(host) = self.root.descend_mut(&parts) else { return false };
+        host.extra.retain(|n| n.name.as_deref() != Some(name));
+        host.extra.push(node);
+        true
+    }
+
+    /// (CAMP-OPTIONS) A new instance of character `ch` of ANOTHER movie (`def`: e.g. KH3's PC SettingMenu's category icons in
+    /// the camp menu's tab bar) as the script child `name` of the clip at `path`, at the origin. False when the clip is unknown.
+    pub fn add_foreign(&mut self, path: &str, def: &Arc<MovieDef>, ch: u32, name: &str) -> bool {
+        let parts = split(path);
+        if self.root.descend(&parts).is_none() || def.sprite(ch).is_none() {
+            return false;
+        }
+        self.ctx.path = parts.iter().map(|p| Arc::from(*p)).collect();
+        let op = Op { depth: 0, ch: Some(ch), name: Some(Arc::from(name)), ..Op::default() };
+        let mut node = make_node(def, &op, ch, 1, &mut self.ctx);
+        self.ctx.path.clear();
+        node.name = Some(Arc::from(name));
+        node.script_matrix = true;
+        let Some(host) = self.root.descend_mut(&parts) else { return false };
+        host.extra.retain(|n| n.name.as_deref() != Some(name));
+        host.extra.push(node);
+        true
+    }
+
+    /// (CAMP-OPTIONS) A new instance of the character of the node at `source` (a full path anywhere in the movie: a library
+    /// symbol another page placed, e.g. the Items screen's `ListTabCamp`) as the script child `name` of the clip at `path`,
+    /// at the origin. False when either is unknown.
+    pub fn add_copy_of(&mut self, path: &str, source: &str, name: &str) -> bool {
+        let source_parts = split(source);
+        let Some((last, parent)) = source_parts.split_last() else { return false };
+        let Some(source_host) = self.root.descend(parent) else { return false };
+        let Some(child) = source_host.children.iter().chain(&source_host.extra).find(|n| n.name.as_deref() == Some(*last)) else { return false };
+        let (movie, ch) = (source_host.movie.clone(), child.ch);
+        let parts = split(path);
+        if self.root.descend(&parts).is_none() {
+            return false;
+        }
         self.ctx.path = parts.iter().map(|p| Arc::from(*p)).collect();
         let op = Op { depth: 0, ch: Some(ch), name: Some(Arc::from(name)), ..Op::default() };
         let mut node = make_node(&movie, &op, ch, 1, &mut self.ctx);

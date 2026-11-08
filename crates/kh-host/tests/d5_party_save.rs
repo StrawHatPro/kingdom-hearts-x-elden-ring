@@ -31,7 +31,7 @@ fn scratch(name: &str) -> PathBuf {
 
 #[test]
 fn d5_the_party_record_survives_the_save_file() {
-    assert_eq!((VERSION, save::VERSION_WITHOUT_FRIENDS), (5, 4)); // (ER party S6) the code reads v5; a record without the friends is still written as 4
+    assert_eq!((VERSION, save::VERSION_WITHOUT_FRIENDS, save::VERSION_WITHOUT_WEAPONS), (6, 4, 5)); // (weapons P1) the code reads v6; without the weapons block a file is still written as 5 / 4
     // Donald leading Goofy (Sora out), and settings off the defaults for all three.
     let formation = Formation::new(&[PartyChara::Donald, PartyChara::Goofy], PartyChara::Donald).unwrap();
     let ai = [

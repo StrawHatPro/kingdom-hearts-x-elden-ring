@@ -32,7 +32,7 @@ needs from them, on your PC.
 - **KINGDOM HEARTS III + Re Mind** on PC (STEAM ONLY).
 - **me3 (Mod Engine 3)**, version **0.13.0 or newer**: the tool that loads the mod. Get it from
   [its releases page](https://github.com/garyttierney/me3/releases).
-- About **80 GB of free disk space** while the setup runs.
+- About **85 GB of free disk space** while the setup runs.
 - A **controller** is strongly recommended.
 
 You don't need to install anything else. The setup has everything it needs built in.
@@ -103,10 +103,16 @@ To back up your mod game, or move it to another PC, copy both.
 2. Unzip the new version to the same place as before, so its `kingdom-hearts-x-elden-ring` folder lands on top of
    your mod folder. Say yes when Windows asks to replace files. Your saves (`er\saves`), your settings and the files the
    setup built are kept, because they aren't in the zip.
-3. Double-click `setup.exe` again.
+3. Double-click `setup.exe` again. **Always do this after updating**, even for a small update: the mod won't work
+   properly until the setup has finished.
 
-The setup reuses the files it built before and only rebuilds what the new version changed. For most updates that takes
-a few minutes, not the full first-time build.
+**Do I have to rebuild the assets?** The setup decides for you. It checks what the new version changed and rebuilds only
+that. For most updates that takes a few minutes. When an update changes how the mod's files are made, the setup rebuilds
+all of them, just like the first install: it takes as long as the first install and needs about 85 GB of free disk space
+while it runs. Each release's notes say which kind of update it is.
+
+**Updating to 0.1.3 from an earlier version is a full rebuild.** Running `setup.exe` rebuilds all the mod's asset files
+from your KH3 install, like the first install did.
 
 ## Uninstalling
 
@@ -140,8 +146,9 @@ but can't build the mod's files there, and tells you to use the Linux version).
 5. **Play:** run `er/play.sh`. Steam must be running. me3 starts Elden Ring with the same Proton version Steam uses for it.
 
 **Updating on Linux:** unpack the new version's tarball into the same place, so it lands on top of your mod folder (your
-saves, settings and the files the setup built are kept), then run `./setup-linux` again. As on Windows, it only rebuilds
-what the new version changed, usually in a few minutes.
+saves, settings and the files the setup built are kept), then run `./setup-linux` again. Always do this after updating.
+As on Windows, it rebuilds only what the new version changed, usually in a few minutes; when an update changes how the
+mod's files are made, it rebuilds all of them like the first install. **Updating to 0.1.3 is a full rebuild.**
 
 The mod's save file `KHSora.sl2` is in Elden Ring's Proton folder:
 `steamapps/compatdata/1245620/pfx/drive_c/users/steamuser/AppData/Roaming/EldenRing/<your id>/`.

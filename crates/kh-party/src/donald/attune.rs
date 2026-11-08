@@ -95,9 +95,7 @@ impl Attunement {
             return None;
         }
         if dual {
-            if self.slots[1].is_none() {
-                return None;
-            }
+            self.slots[1]?;
             self.slots[1].map(|s| s.element)
         } else {
             self.slots[0].map(|s| s.element)

@@ -254,6 +254,27 @@ pub struct OwnerCb {
     /// (IMPL_ER59) A RENUMBERED owner (an outfit's material that reads rows past MAX_CB, tools/sora_material_pack.js
     /// `cb_rows`): row k of the block the shader reads is row `cb_rows[k]` of the shader map's buffer. Empty = as is.
     pub rows: Vec<usize>,
+    /// (FREEZE-FX) A material without KH3's "Ice" parameter (an NPC base material, a visor, a DLC face: [`needs_ice_extra`]):
+    /// the slot's "Ice" drive goes to row [`ICE_EXTRA_ROW`].w, read by the host's ice term (er_char.wgsl KH_ICE_EXTRA).
+    pub ice_extra: bool,
+}
+
+/// (FREEZE-FX) The row of the material buffer that carries a material's "Ice" drive when the material has no Ice parameter of
+/// its own (.w). Rows 158 / 159 are Rage Form's (er_char.wgsl F-RAGE).
+pub const ICE_EXTRA_ROW: usize = MAX_CB - 3;
+
+/// (FREEZE-FX, the user 2026-11-07: "make sure frozen effects are applied to anything that gets frozen by blizzard") Does this
+/// owner (materials.json `owners.<name>`) need the host's ice term: it has no "Ice" scalar of its own (KH3's character
+/// materials have one, which their own shader reads), and its buffer leaves [`ICE_EXTRA_ROW`] free.
+pub fn needs_ice_extra(owner: &Value) -> bool {
+    let list = |key: &str| owner.get(key).and_then(Value::as_array).cloned().unwrap_or_default();
+    let (vec, sca) = (list("vec"), list("sca"));
+    if sca.iter().any(|e| e.get("s").and_then(Value::as_str) == Some("Ice")) {
+        return false;
+    }
+    let rows = list("cb_rows");
+    let used = if rows.is_empty() { vec.len() + sca.len().div_ceil(4) } else { rows.len() };
+    used <= ICE_EXTRA_ROW
 }
 
 impl OwnerCb {
@@ -262,10 +283,18 @@ impl OwnerCb {
         let (vec, sca) = (list("vec"), list("sca"));
         let timed = vec.iter().chain(&sca).any(Expr::uses_time);
         let rows = owner.get("cb_rows").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_u64).map(|r| r as usize).collect();
-        OwnerCb { vec, sca, timed, rows }
+        OwnerCb { vec, sca, timed, rows, ice_extra: needs_ice_extra(owner) }
     }
 
     pub fn eval(&self, scalars: &HashMap<String, f32>, vectors: &HashMap<String, [f32; 4]>, time: f32, out: &mut [Vec4; MAX_CB]) {
+        self.eval_rows(scalars, vectors, time, out);
+        // (FREEZE-FX) the "Ice" drive of a material without its own Ice parameter
+        if self.ice_extra {
+            out[ICE_EXTRA_ROW].w = scalars.get("Ice").copied().unwrap_or(0.0);
+        }
+    }
+
+    fn eval_rows(&self, scalars: &HashMap<String, f32>, vectors: &HashMap<String, [f32; 4]>, time: f32, out: &mut [Vec4; MAX_CB]) {
         if !self.rows.is_empty() {
             // (IMPL_ER59) the whole buffer, then the rows the shader reads into their new places
             let mut full = vec![Vec4::ZERO; self.vec.len() + self.sca.len().div_ceil(4) + 1];
@@ -600,8 +629,8 @@ impl Rig {
         // DotSH3 against CalcDiffuseTransferSH3(normal): band 0 weighs 0.886228, the z term of
         // band 1 is 1.023328 * normal.z (PrecomputedLightingBuffer rows 8..10 = SH0 R, G, B).
         let mut sh = [Vec4::ZERO; 8];
-        for c in 0..3 {
-            sh[c] = Vec4::new(self.ambient[c] / 0.886_228, 0.0, self.ambient[c] * self.sky_gradient / 1.023_328, 0.0);
+        for (c, row) in sh.iter_mut().enumerate().take(3) {
+            *row = Vec4::new(self.ambient[c] / 0.886_228, 0.0, self.ambient[c] * self.sky_gradient / 1.023_328, 0.0);
         }
         sh
     }
@@ -777,6 +806,26 @@ mod tests {
         cb.eval(&s, &v, 0.0, &mut out);
         assert_eq!((out[0], out[1], out[2].x), (Vec4::new(0.5, 0.25, 1.0, 1.0), Vec4::new(1.0, 2.0, 3.0, 4.0), 5.0));
         assert!(!cb.timed);
+    }
+
+    /// (FREEZE-FX) A material without KH3's "Ice" parameter gets the slot's Ice drive in row ICE_EXTRA_ROW.w (the host's ice
+    /// term reads it); a material with its own Ice keeps its buffer as it is.
+    #[test]
+    fn freeze_fx_a_material_without_ice_carries_the_drive_in_its_extra_row() {
+        let s: HashMap<String, f32> = [("Ice".to_string(), 0.8)].into();
+        let v = HashMap::new();
+        let without: Value = serde_json::from_str(r#"{"vec":[],"sca":[{"s":"Other","d":0}]}"#).unwrap();
+        let with: Value = serde_json::from_str(r#"{"vec":[],"sca":[{"s":"Ice","d":0}]}"#).unwrap();
+        assert!(needs_ice_extra(&without) && !needs_ice_extra(&with));
+        let mut out = [Vec4::ZERO; MAX_CB];
+        OwnerCb::parse(&without).eval(&s, &v, 0.0, &mut out);
+        assert_eq!(out[ICE_EXTRA_ROW].w, 0.8);
+        let mut out = [Vec4::ZERO; MAX_CB];
+        OwnerCb::parse(&with).eval(&s, &v, 0.0, &mut out);
+        assert_eq!((out[0].x, out[ICE_EXTRA_ROW].w), (0.8, 0.0));
+        // a buffer that reaches the row: none
+        let full: Value = serde_json::json!({ "vec": vec![serde_json::json!({"c":[0,0,0,0]}); ICE_EXTRA_ROW + 1], "sca": [] });
+        assert!(!needs_ice_extra(&full));
     }
 
     #[test]

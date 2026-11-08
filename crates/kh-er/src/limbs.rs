@@ -51,7 +51,7 @@ pub fn two_bone(a: Vec3, b: Vec3, c: Vec3, t: Vec3) -> Option<(Quat, Quat)> {
 }
 
 /// One limb of SORA'S OWN skeleton (KH3's look) to `target` (component space, cm), as far as it reaches.
-#[cfg_attr(not(feature = "party"), allow(dead_code))]
+#[cfg(any(test, feature = "party"))]
 pub fn reach_sora(skeleton: &kh_anim::Skeleton, local: &mut [Trs], limb: usize, target: Vec3, weight: f32) {
     let names = LIMBS[limb];
     let (Some(u), Some(l), Some(e)) = (skeleton.index_of(names[0]), skeleton.index_of(names[1]), skeleton.index_of(names[2])) else { return };

@@ -62,6 +62,146 @@ struct ErFrame {
     // [2k] one end + radius, [2k + 1] the other end + the part's tint (0 = none: the list ends)
     ec: array<vec4<f32>, 48>,
 #endif
+    // (VFX-2 lit) ELDEN RING'S LIGHT FOR THE FORWARD-LIT EFFECTS (kh-er-render fwdlight.rs; KH3 units): UE's
+    // ForwardGlobalLightData rows 0..6 (the sun as its directional light, one light-grid cell) + [7] (the sun's visibility = the
+    // primitive's precomputed shadowing, the number of lights); the reflection environment (zenith, horizon, ground) and the
+    // scene colours (bright, dark; w = 0: the harness's own); the cell's lights, UE's ForwardLocalLightBuffer (4 rows each)
+    fwd_g: array<vec4<f32>, 8>,
+    fwd_env: array<vec4<f32>, 5>,
+    fwd_l: array<vec4<f32>, 64>,
+#ifdef KH_FXNAT
+    // (PARTY-NATIVE) THE NATIVE ROUTE OF THE LIT (DEFERRED) EFFECTS (vfx.rs `FXN_FLOATS`, appended after the forward rows):
+    // x 1 = the capture of the game's light (gfx.rs hycap2, the native layout with its specular) is bound at t14 / t15 this
+    // frame; y the light-set mark of the KH G-buffer white (G-buffer 2 .a, hybrid.rs row 3.w); z the normal match (cos,
+    // r.hybrid_match); w -
+    fxn: vec4<f32>,
+#endif
+#ifdef KH_FXFOG
+    // (PARTY-NATIVE) THE GAME'S FOG (vfx.rs `FXF_FLOATS`, after the native row): x 1 = this frame's copy of the fog composite's
+    // buffer and volume is bound at t16 / t17 (vfx.rs `fog_copy`); yzw -
+    fxf: vec4<f32>,
+#endif
+#ifdef KH_FXLIT
+    // (PARTY-NATIVE-LIGHT) ELDEN RING'S OWN LIGHT for the lit translucent effects (vfxlight.rs `fxl_row`, after the fog row): [0] (1 =
+    // this frame's copy is bound at t18..t27, the volumes' source (1 the particle pass, 2 the regions), the volume mask, 1 = the light
+    // buffers copied), [1] the sun's colour as read (FC_DirLight Col_0, w 1 = a sun), [2] (1 = the cascades bound at t28 / t29, the
+    // regions, the lists' width, (round 3) 1 = a two-volume region), [3..9) the cascades' rows (hybrid.rs sun_rows), [9..13) the game
+    // -> host matrix (columns)
+    fxl: array<vec4<f32>, 13>,
+#endif
+}
+
+// (VFX-2 lit) THE FORWARD LIGHTING'S INPUTS of a translated forward-lit shader (tools/sora_vfx_shaders.js, its `fwd` owners),
+// integer values held as floats (the translator's convention). The light grid is ONE cell (fwdlight.rs: every pixel in cell 0):
+// NumCulledLightsGrid = (lights, start 0) for cell 0 and (1 capture, start = lights) for the captures' cell 1;
+// CulledLightDataGrid = the light indices, then capture 0.
+fn kh_fwd_grid(i: f32) -> vec4<f32> {
+    let k = i32(round(i));
+    let n = er.fwd_g[7].y;
+    var v = 0.0;
+    if (k == 0) {
+        v = n;
+    } else if (k == 2) {
+        v = 1.0;
+    } else if (k == 3) {
+        v = n;
+    }
+    return vec4<f32>(v, 0.0, 0.0, 0.0);
+}
+
+fn kh_fwd_data(i: f32) -> vec4<f32> {
+    let n = er.fwd_g[7].y;
+    return vec4<f32>(select(0.0, round(i), i < n - 0.5), 0.0, 0.0, 0.0);
+}
+
+fn kh_fwd_light(i: f32) -> vec4<f32> {
+    let k = i32(round(i));
+    if (k < 0 || k >= 64) {
+        return vec4<f32>(0.0);
+    }
+    return er.fwd_l[k];
+}
+
+// ReflectionCapture's arrays (rows of 341 captures): capture 0 is an infinite sphere around the camera (brightness 1, cube 0,
+// shape 0 = sphere); no other capture, no offset, no box.
+fn kh_fwd_capture(row: f32) -> vec4<f32> {
+    let r = i32(round(row));
+    if (r == 0) {
+        return vec4<f32>(er.camera.xyz, 1.0e7);
+    }
+    if (r == 341) {
+        return vec4<f32>(1.0, 0.0, 0.0, 0.0);
+    }
+    return vec4<f32>(0.0);
+}
+
+// The capture cube at a direction and mip: kh-look's sky cube (Env::Sky::sample: ground below a soft horizon, horizon to
+// zenith above, blurred by the roughness the mip stands for: UE's mip = MaxMip - 1 - (1 - 1.2 log2 roughness), MaxMip =
+// fwdlight.rs CUBE_MAX_MIP) in the game's reflection environment (fwd_env 0..2); alpha 1 (it covers).
+#ifdef KH_FXLIT
+// (PARTY-NATIVE-LIGHT) a lit variant: the capture = Elden Ring's light arriving from d at this pixel (the SH, KH units: kh_lit_e)
+fn kh_fwd_env(d: vec3<f32>, lod: f32) -> vec4<f32> {
+    let n = select(vec3<f32>(0.0, 0.0, 1.0), normalize(d), dot(d, d) > 1.0e-20);
+    return vec4<f32>(kh_lit_e(kh_fx_host_dir(n)), 1.0);
+}
+#else
+fn kh_fwd_env(d: vec3<f32>, lod: f32) -> vec4<f32> {
+    let n = select(vec3<f32>(0.0, 0.0, 1.0), normalize(d), dot(d, d) > 1.0e-20);
+    let rough = clamp(exp2((lod - 7.0 + 2.0) / 1.2), 0.0, 1.0);
+    let blur = clamp(rough * rough, 0.0, 1.0);
+    let width = 0.04 + 0.9 * blur;
+    var up = clamp((n.z / width) * 0.5 + 0.5, 0.0, 1.0);
+    up = up * up * (3.0 - 2.0 * up);
+    let sky = mix(er.fwd_env[1].xyz, er.fwd_env[0].xyz, pow(max(n.z, 0.0), 0.6 + blur));
+    return vec4<f32>(mix(er.fwd_env[2].xyz, sky, up), 1.0);
+}
+#endif
+
+// (PARTY-NATIVE) THE INDIRECT LIGHTING CACHE of a lit translucent translated from its ILC permutation (tools/sora_vfx_shaders.js
+// --fwl: PrecomputedLightingBuffer[8..14] -> kh_fwd_ilc(k)): rows 8..10 = IndirectLightingSHCoefficients0[R, G, B] = (V0, V1, V2,
+// V3), 11..13 = Coefficients1 (V4..V7), 14 = Coefficients2 (V8). The material evaluates them as UE does: 0.886228 V0 +
+// 1.023328 (-V1 n.y + V2 n.z - V3 n.x) (+ band 2), n its own world normal; a non-directional mode reads only 0.886228 V0.
+#ifdef KH_FXLIT
+// A lit variant: Elden Ring's SH at this pixel (kh_lit_sh, KH units, host axes) in that layout, so the material's sum is
+// kh_lit_e(kh_fx_host_dir(n)) = W + n.y S.x + n.z S.y + n.x S.z (and W, the SH's constant term, for a non-directional mode);
+// band 2 = 0 (Elden Ring's SH is L1)
+fn kh_fwd_ilc(k: i32) -> vec4<f32> {
+    if (k < 8 || k > 10) {
+        return vec4<f32>(0.0);
+    }
+    let s = kh_lit_sh[k - 8];
+    return vec4<f32>(s.w / 0.886228, -s.x / 1.023328, s.y / 1.023328, -s.z / 1.023328);
+}
+#else
+// The other variants: no cache sample (the light the NoLightMap translation had; the Kingdom Hearts 3 style is unchanged)
+fn kh_fwd_ilc(k: i32) -> vec4<f32> {
+    return vec4<f32>(0.0);
+}
+#endif
+
+// The integer operations on values held as floats (D3D's and / ushr / ubfe / bfi / f16tof32).
+fn kh_iand(a: f32, b: f32) -> f32 {
+    return f32(u32(max(a, 0.0)) & u32(max(b, 0.0)));
+}
+
+fn kh_ushr(a: f32, b: f32) -> f32 {
+    return f32(u32(max(a, 0.0)) >> (u32(max(b, 0.0)) & 31u));
+}
+
+fn kh_ubfe(w: f32, o: f32, s: f32) -> f32 {
+    let width = u32(max(w, 0.0)) & 31u;
+    return f32((u32(max(s, 0.0)) >> (u32(max(o, 0.0)) & 31u)) & ((1u << width) - 1u));
+}
+
+fn kh_bfi(w: f32, o: f32, s: f32, b: f32) -> f32 {
+    let width = u32(max(w, 0.0)) & 31u;
+    let offset = u32(max(o, 0.0)) & 31u;
+    let mask = ((1u << width) - 1u) << offset;
+    return f32((u32(max(b, 0.0)) & ~mask) | ((u32(max(s, 0.0)) << offset) & mask));
+}
+
+fn kh_f16lo(a: f32) -> f32 {
+    return unpack2x16float(bitcast<u32>(a)).x;
 }
 
 struct KhParams {
@@ -70,6 +210,11 @@ struct KhParams {
     misc: vec4<f32>,
     // x: 1 = drawn with depth write (no scene depth is read)
     er: vec4<f32>,
+#ifdef KH_FXFOG
+    // (PARTY-NATIVE) x: the game's fog mode for this material's pass (vfx.rs `fog_mode`): 0 blended (attenuated + in-scatter),
+    // 1 additive (attenuated only), 2 modulate (toward no effect), 3 none (a distortion / an opaque pass)
+    fx: vec4<f32>,
+#endif
 }
 
 @group(0) @binding(0) var<uniform> er: ErFrame;
@@ -88,6 +233,40 @@ struct KhParams {
 @group(1) @binding(11) var kh_tclamp: texture_2d<f32>;
 @group(1) @binding(12) var er_depth: texture_2d<f32>;
 @group(1) @binding(13) var er_scene: texture_2d<f32>;
+#ifdef KH_FXNAT
+// (PARTY-NATIVE) the capture of the game's light (gfx.rs `HyCapture`, the characters' own: hycap2's native layout): t14 the light
+// a white surface got at the texel (rgb, scene units) + the game's specular .b; t15 the octahedral normal + 2 (xy) and the
+// specular .rg
+@group(1) @binding(14) var er_hy_light: texture_2d<f32>;
+@group(1) @binding(15) var er_hy_geo: texture_2d<f32>;
+#endif
+#ifdef KH_FXFOG
+// (PARTY-NATIVE) the game's fog, this frame's copy (vfx.rs `fog_copy`): t16 the fog composite's g_InScatterTex (rgb in-scatter,
+// a transmittance, texel for texel), t17 its CB_SHADER_COMMON_PARAM as raw words (texels 0..75; texel 76 the volume's size)
+@group(1) @binding(16) var er_fog_vol: texture_3d<f32>;
+@group(1) @binding(17) var er_fog_rows: texture_2d<u32>;
+#endif
+#ifdef KH_FXLIT
+// (PARTY-NATIVE-LIGHT) this frame's copy of the game's light inputs (vfxlight.rs `write_views`): t18 the rows (raw words), t19..t26 the
+// irradiance volumes (A: X Y Z W, B: X Y Z W; or two regions), t27 the light buffers, t28 the game's cascade atlas (16-bit, reversed
+// depth), t29 the cascades' constants (gfx.rs SunKit)
+@group(1) @binding(18) var er_lit_rows: texture_2d<u32>;
+@group(1) @binding(19) var er_iv0: texture_3d<f32>;
+@group(1) @binding(20) var er_iv1: texture_3d<f32>;
+@group(1) @binding(21) var er_iv2: texture_3d<f32>;
+@group(1) @binding(22) var er_iv3: texture_3d<f32>;
+@group(1) @binding(23) var er_iv4: texture_3d<f32>;
+@group(1) @binding(24) var er_iv5: texture_3d<f32>;
+@group(1) @binding(25) var er_iv6: texture_3d<f32>;
+@group(1) @binding(26) var er_iv7: texture_3d<f32>;
+@group(1) @binding(27) var er_lit_lists: texture_2d<u32>;
+@group(1) @binding(28) var er_sun_atlas: texture_2d<f32>;
+@group(1) @binding(29) var er_sun_casc: texture_2d<f32>;
+// the forward lighting's global rows as the material reads them (kh-shaderc writes `kh_fwdg[` for `er.fwd_g[` in a lit variant) and
+// the SH at this pixel (KH units), set in fs_main before the material runs
+var<private> kh_fwdg: array<vec4<f32>, 8>;
+var<private> kh_lit_sh: array<vec4<f32>, 3>;
+#endif
 @group(2) @binding(0) var kh_s0: sampler;
 @group(2) @binding(1) var kh_s1: sampler;
 @group(2) @binding(2) var kh_s2: sampler;
@@ -146,6 +325,8 @@ struct KhIn {
     // 1 / (scene depth behind this pixel, cm); 0 when nothing is there.
     inv_scene_depth: f32,
     v8: vec4<f32>, v9: vec4<f32>, v10: vec4<f32>, v53: vec4<f32>, v54: vec4<f32>, v55: vec4<f32>, v58: vec4<f32>,
+    // (VFX-2 cube) View[16..19] TranslatedWorldToCameraView (the matcap's view-space normal)
+    v16: vec4<f32>, v17: vec4<f32>, v18: vec4<f32>, v19: vec4<f32>,
     v117: vec4<f32>, v118: vec4<f32>, v119: vec4<f32>, v122: vec4<f32>, v123: vec4<f32>, v124: vec4<f32>, v125: vec4<f32>,
     v126: vec4<f32>, v127: vec4<f32>, v128: vec4<f32>, v130: vec4<f32>, v137: vec4<f32>, v161: vec4<f32>,
     p8: vec4<f32>, p9: vec4<f32>, p11: vec4<f32>, p17: vec4<f32>, p18: vec4<f32>,
@@ -155,6 +336,44 @@ struct KhIn {
     // world -> tangent transforms read (the shader's own table: tools/sora_vfx_shaders.js decalRowsOf, --xsi)
     drot0: vec4<f32>, drot1: vec4<f32>, drot2: vec4<f32>, drot3: vec4<f32>,
     dist12: vec4<f32>,
+    // (VFX-XLATE) the scene's particle colours of the lit materials (SceneBaseColor / SceneBrightColor / SceneDarkColor /
+    // SceneColorSynthesis of the particle vertex factories; tools/sora_vfx_shaders.js --root)
+    pbase: vec4<f32>, pbright: vec4<f32>, pdark: vec4<f32>, psynth: vec4<f32>,
+    // (VFX-2 lit) the same two of the forward-lit owners: Elden Ring's light on a white surface facing up, lit / in the shade
+    // (the rig: fwdlight.rs), else the two above
+    fbright: vec4<f32>, fdark: vec4<f32>,
+}
+
+// (VFX-2 cube) A material cube map (TextureCube), packed by tools/vfx_cube_pack.js as six faces side by side (+X -X +Y -Y +Z
+// -Z, each N x N) in RGBM (linear = rgb x a x 8): the face and uv of the direction as D3D picks them (major axis; +X: (-z, -y),
+// -X: (z, -y), +Y: (x, z), -Y: (x, -z), +Z: (x, -y), -Z: (-x, -y) over |major|), half a texel inside the face, top mip.
+fn kh_cube(t: texture_2d<f32>, s: sampler, d: vec3<f32>) -> vec4<f32> {
+    let a = abs(d);
+    var face = 0.0;
+    var st = vec2<f32>(0.0);
+    var ma = 1.0;
+    if (a.x >= a.y && a.x >= a.z) {
+        ma = a.x;
+        if (d.x >= 0.0) { face = 0.0; st = vec2<f32>(-d.z, -d.y); } else { face = 1.0; st = vec2<f32>(d.z, -d.y); }
+    } else if (a.y >= a.z) {
+        ma = a.y;
+        if (d.y >= 0.0) { face = 2.0; st = vec2<f32>(d.x, d.z); } else { face = 3.0; st = vec2<f32>(d.x, -d.z); }
+    } else {
+        ma = a.z;
+        if (d.z >= 0.0) { face = 4.0; st = vec2<f32>(d.x, -d.y); } else { face = 5.0; st = vec2<f32>(-d.x, -d.y); }
+    }
+    let n = f32(textureDimensions(t).y);
+    let uv = clamp(st / max(ma, 1.0e-6) * 0.5 + vec2<f32>(0.5), vec2<f32>(0.5 / n), vec2<f32>(1.0 - 0.5 / n));
+    let c = textureSampleLevel(t, s, vec2<f32>((face + uv.x) / 6.0, uv.y), 0.0);
+    return vec4<f32>(c.xyz * c.w * 8.0, 1.0);
+}
+
+// (VFX-XLATE) A scene-colour read of a translated material (the blur / warp materials: tools/sora_vfx_shaders.js --root): the
+// frame behind the effects at that screen uv, from the copy kh-er-render vfx.rs makes before the translucent passes (t13), in
+// KH3's units (the copy holds the host's: the material's output is scaled back by out_scale.x).
+fn kh_scene_color(uv: vec2<f32>) -> vec4<f32> {
+    let c = textureSampleLevel(er_scene, er_sscene, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)), 0.0).xyz;
+    return vec4<f32>(c / max(er.out_scale.x, 1.0e-9), 1.0);
 }
 
 // (ZA) The mesh sub-UV coordinates of UE's FMeshParticleVertexFactory from kh_vfx::sub_image_code (as the test app's
@@ -469,12 +688,545 @@ fn kh_orb_shade(o: KhOut, n: vec3<f32>, l: vec3<f32>, v: vec3<f32>, white: vec3<
 #endif
 
 #ifdef ER_FRAGMENT
+#ifdef KH_FXNAT
+// (PARTY-NATIVE, the user 2026-11-05: "Donald and Goofy need to be rendering how Sora is rendering as well, as well as all of their
+// effects"; 2026-11-03: "no estimating, it MUST be Elden Ring's lighting"; "and not just Sora, all of KH objects") THE LIT
+// (DEFERRED) EFFECT MATERIALS ON THE CHARACTERS' NATIVE ROUTE. In KH3 these materials (the lit ice of Blizzard, the rocks, stones,
+// sand, pots, keys, prize orbs ... : outputs o1..o3 = GBufferA..C) are drawn into the G-buffer and lit by the engine's own light
+// passes. Here the same: their `*_gb` twin (KH_FX_GB, below) writes the KH G-buffer surface into the game's G-buffer in the early
+// list beside the characters' (vfx.rs `gbuffer_replay`), the game's light passes light it, the characters' capture takes the light
+// a white surface got at each texel, and the colour pass composes KH3's deferred result from it: emissive + base x (1 -
+// metallic) x the game's diffuse light + the game's specular for the material's F0 (as er_char.wgsl kh_native_light / hy_f0_ratio).
+// No fixed key light, no ambient constant. A pixel whose texel is not its own (no capture this frame, another surface there:
+// the normal does not match) keeps the earlier shading for that pixel.
+struct FxTap {
+    // the game's diffuse light on white, and its specular for the G-buffer's F0, KH units; ok = 1 when the texel is this surface's
+    diffuse: vec3<f32>,
+    spec: vec3<f32>,
+    ok: f32,
+}
+
+fn er_oct_decode_fx(e: vec2<f32>) -> vec3<f32> {
+    var n = vec3<f32>(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    let t = max(-n.z, 0.0);
+    n.x += select(t, -t, n.x >= 0.0);
+    n.y += select(t, -t, n.y >= 0.0);
+    return normalize(n);
+}
+
+// game axes -> the host's (math.rs host_from_game: host = (game.y, game.z, game.x))
+fn kh_fx_host_dir(n: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(n.y, n.z, n.x);
+}
+
+// a texel of the capture in the native layout (the octahedral normal + 2, any light colour): its normal match, -2 = not usable
+fn kh_fx_tap_ok(a: vec4<f32>, b: vec4<f32>, n_host: vec3<f32>, cos_min: f32) -> f32 {
+    if (b.x < 0.5 || b.y < 0.5 || !(a.x >= 0.0) || !(a.y >= 0.0) || !(a.z >= 0.0)) {
+        return -2.0;
+    }
+    let c = dot(er_oct_decode_fx(b.xy - vec2<f32>(2.0)), n_host);
+    return select(-2.0, c, c >= cos_min);
+}
+
+fn kh_fx_tap(n_game: vec3<f32>, pixel: vec2<i32>) -> FxTap {
+    var out: FxTap;
+    out.diffuse = vec3<f32>(0.0);
+    out.spec = vec3<f32>(0.0);
+    out.ok = 0.0;
+    if (er.fxn.x < 0.5) {
+        return out;
+    }
+    let size = vec2<i32>(textureDimensions(er_hy_light));
+    let n_host = kh_fx_host_dir(n_game);
+    // THE CHARACTERS' TEXEL RULE (er_char.wgsl hy_tap): its own texel, else the best of its 1 and 2 px neighbours with the normal
+    // match relaxed by 0.15 (a masked edge whose G-buffer pixel fell beside it); none: not this route for the pixel
+    var a = textureLoad(er_hy_light, clamp(pixel, vec2<i32>(0), size - vec2<i32>(1)), 0);
+    var b = textureLoad(er_hy_geo, clamp(pixel, vec2<i32>(0), size - vec2<i32>(1)), 0);
+    if (kh_fx_tap_ok(a, b, n_host, er.fxn.z) < -1.5) {
+        var best = -1.5;
+        for (var r = 1; r <= 2; r++) {
+            for (var q = 0; q < 8; q++) {
+                let o = vec2<i32>(select(select(0, -r, q == 3 || q == 5 || q == 6), r, q == 0 || q == 4 || q == 7), select(select(0, -r, q == 2 || q == 6 || q == 7), r, q == 1 || q == 4 || q == 5));
+                let p = clamp(pixel + o, vec2<i32>(0), size - vec2<i32>(1));
+                let a1 = textureLoad(er_hy_light, p, 0);
+                let b1 = textureLoad(er_hy_geo, p, 0);
+                let c = kh_fx_tap_ok(a1, b1, n_host, er.fxn.z - 0.15);
+                if (c > best) {
+                    best = c;
+                    a = a1;
+                    b = b1;
+                }
+            }
+            if (best > -1.5) {
+                break;
+            }
+        }
+        if (best < -1.5) {
+            return out;
+        }
+    }
+    // scene units -> KH units: this harness hands its colour over x out_scale.x
+    let k = 1.0 / max(er.out_scale.x, 1.0e-9);
+    out.diffuse = min(a.xyz, vec3<f32>(6.0e4)) * k;
+    out.spec = min(max(vec3<f32>(b.z, b.w, a.w), vec3<f32>(0.0)), vec3<f32>(6.0e4)) * k;
+    out.ok = 1.0;
+    return out;
+}
+
+// The game's specular was worked out for the G-buffer's F0 (lerp(0.04, white, metalness at most 0.85)); the material's own F0
+// (UE 4.17: lerp(0.08 x specular, base colour, metallic)) over it (er_char.wgsl hy_f0_ratio)
+fn kh_fx_f0_ratio(o: KhOut, base: vec3<f32>) -> vec3<f32> {
+    let metal = clamp(o.o2.x, 0.0, 1.0);
+    let f0_kh = mix(vec3<f32>(0.08 * saturate(o.o2.y)), base, metal);
+    let f0_gb = mix(vec3<f32>(0.04), vec3<f32>(1.0), min(metal, 0.85));
+    return max(f0_kh, vec3<f32>(0.0)) / f0_gb;
+}
+#endif
+
+#ifdef KH_FX_GB
+// (PARTY-NATIVE) the G-buffer twin's three targets (er_char.wgsl ErGbuf, gb_main's native rows): the world normal (host axes),
+// (metalness at most 0.85, gloss, translucency 0, 1), the KH white with the light-set mark
+struct FxGbuf {
+    @location(0) normal: vec4<f32>,
+    @location(1) params: vec4<f32>,
+    @location(2) albedo: vec4<f32>,
+}
+
+fn kh_fx_gbuffer(o: KhOut) -> FxGbuf {
+    var g: FxGbuf;
+    let raw = o.o1.xyz * 2.0 - vec3<f32>(1.0);
+    let len = length(raw);
+    let n = select(vec3<f32>(0.0, 0.0, 1.0), raw / max(len, 1.0e-6), len > 1.0e-6 && len < 1.0e6);
+    g.normal = vec4<f32>(kh_fx_host_dir(n) * 0.5 + vec3<f32>(0.5), 0.0);
+    let rough = clamp(o.o2.z, 0.0, 1.0);
+    let gloss = clamp((1.0 - rough) / 0.95, 0.0, 1.0);
+    g.params = vec4<f32>(clamp(o.o2.x, 0.0, 0.85), gloss * gloss, 0.0, 1.0);
+    g.albedo = vec4<f32>(1.0, 1.0, 1.0, er.fxn.y);
+    return g;
+}
+#endif
+
+#ifdef KH_FXFOG
+// (PARTY-NATIVE, the user 2026-11-05: "literally the lighting code needs to work for ALL KH objects") THE GAME'S OWN FOG ON A KH
+// TRANSLUCENT EFFECT, at the effect pixel's own view depth: GXVolumetricFog_SceneComposite's function, line for line
+// (er78/dis/rend/GXVolumetricFog_SceneComposite.ppo.txt: the slice of the log-depth volume, the analytic height fog beyond it,
+// the per-channel extinction), with the effect's depth in place of the scene's. Its rows are CB_SHADER_COMMON_PARAM's (row =
+// offset / 16): 2 DepthRangeInfo, 3 LogDepthRangeInfo, 4 PreComputed, 5..8 ViewMatrix (columns), 9 (ViewTangent,
+// DepthComputeParam), 10 g_HeightFactor, 11 Global, 13 g_HeightFogParam, 35 (ExtinctionScale, PreExposure), 36 (ScaledSceneSize,
+// EnableAnalyticalFog, AnalyticalFogEndDepth). Returns (in-scatter rgb in the scene target's units, transmittance per channel).
+fn fx_fog_row(k: i32) -> vec4<f32> {
+    return bitcast<vec4<f32>>(textureLoad(er_fog_rows, vec2<i32>(k, 0), 0));
+}
+
+struct FxFog {
+    inscatter: vec3<f32>,
+    transmit: vec3<f32>,
+}
+
+fn kh_fx_fog(uv: vec2<f32>, view_z: f32) -> FxFog {
+    var f: FxFog;
+    f.inscatter = vec3<f32>(0.0);
+    f.transmit = vec3<f32>(1.0);
+    if (er.fxf.x < 0.5) {
+        return f;
+    }
+    let r2 = fx_fog_row(2);
+    let r3 = fx_fog_row(3);
+    let r4 = fx_fog_row(4);
+    let r9 = fx_fog_row(9);
+    let r35 = fx_fog_row(35);
+    let r36 = fx_fog_row(36);
+    let analytic = textureLoad(er_fog_rows, vec2<i32>(36, 0), 0).z != 0u;
+    let z = view_z;
+    // the volume's slice (log2 of the depth, as the composite)
+    let slice = ((log2(r3.y + min(z, r2.y)) - r3.x) * r3.w + r4.y) * r4.z;
+    let s = textureSampleLevel(er_fog_vol, kh_sclamp, vec3<f32>(uv, slice), 0.0);
+    var inscatter = s.xyz;
+    var t_vol = s.w;
+    var t_od = 1.0;
+    if (z > r2.y && analytic) {
+        let zz = min(r36.w, z);
+        let px = zz * (uv.x * 2.0 - 1.0) * r9.x;
+        let py = zz * (1.0 - uv.y * 2.0) * r9.y;
+        let r10 = fx_fog_row(10);
+        let start = vec4<f32>(px * r2.y / zz, py * r2.y / zz, r2.y, 1.0);
+        let h0 = dot(start, r10);
+        let h1 = dot(vec4<f32>(px, py, zz, 1.0), r10);
+        let global = fx_fog_row(11).x;
+        let hf = fx_fog_row(13).x;
+        let hd = fx_fog_row(13).y;
+        let len = sqrt(px * px + py * py + zz * zz);
+        let seg = (1.0 - r2.y / zz) * len;
+        var od = 0.0;
+        if (abs(hf * (h1 - h0)) < 1.0e-4) {
+            let e = select(2.0 - exp(h0 * hf), exp(-h0 * hf), h0 > 0.0);
+            od = (e * hd + global) * seg;
+        } else {
+            let w = fma(zz, fx_fog_row(7).y, fma(py, fx_fog_row(6).y, fx_fog_row(5).y * px));
+            let k = abs(len / w);
+            let mx = max(h0, h1);
+            let mn = min(h0, h1);
+            let a = (exp(-hf * max(mx, 0.0)) - exp(-hf * max(mn, 0.0))) / hf;
+            let b = (min(mx, 0.0) - min(mn, 0.0)) * 2.0;
+            let c = (exp(hf * min(mx, 0.0)) - exp(hf * min(mn, 0.0))) / hf;
+            od = k * hd * (b - a - c) + seg * global;
+        }
+        let far = textureSampleLevel(er_fog_vol, kh_sclamp, vec3<f32>(uv, 1.0), 0.0).xyz;
+        t_od = exp(-od);
+        let ext = max(r35.xyz, vec3<f32>(1.0e-6));
+        inscatter += pow(vec3<f32>(max(t_vol, 1.0e-12)), ext) * ((vec3<f32>(1.0) - pow(vec3<f32>(max(t_od, 1.0e-12)), ext)) * far / ext);
+    }
+    f.inscatter = max(inscatter, vec3<f32>(0.0));
+    f.transmit = pow(vec3<f32>(clamp(t_vol * t_od, 1.0e-12, 1.0)), max(r35.xyz, vec3<f32>(1.0e-6)));
+    return f;
+}
+#endif
+
+#ifdef KH_FXLIT
+// (PARTY-NATIVE-LIGHT, the user 2026-11-05: "literally the lighting code needs to work for ALL KH objects"; "no estimating, it
+// MUST be Elden Ring's lighting") ELDEN RING'S OWN LIGHT ON A KH LIT TRANSLUCENT EFFECT, as Elden Ring lights its own lit
+// particles (build/sora_tmp/weapons/PARTY-NATIVE/ffx/FFX_FINDINGS.md 4; ffx/dis/GS_VFX_StandardParticleBumpLight.gpo.txt = G,
+// er78/dis/rend/GXEnvMapRegion[Box][Diff].ppo.txt = R), at the effect pixel: the L1 SH of the irradiance volumes + the
+// tile-clustered point / spot lights, and the sun x its cascade shadow. The inputs are this frame's copies (vfxlight.rs LitKit):
+// t18 the rows (raw words: the tile lighting's cbSceneParam from LIT_ROW_SCENE and cbLightAccParam from LIT_ROW_LACC, the light
+// buffers' counts, the particle pass's gcbSceneParam from LIT_ROW_PASS, the regions' CB_ENVMAP_REGION from LIT_ROW_REGION),
+// t19..t26 the volumes, t27 the light buffers, t28 / t29 the game's cascade atlas and the cascades' constants.
+const LIT_ROW_SCENE: i32 = 0;
+const LIT_ROW_LACC: i32 = 126;
+const LIT_ROW_COUNTS: i32 = 150;
+const LIT_ROW_PASS: i32 = 160;
+const LIT_ROW_REGION: i32 = 230;
+const LIT_REGION_STRIDE: i32 = 42;
+const LIT_LISTS_W: u32 = 1024u;
+
+struct LitSh {
+    r: vec4<f32>,
+    g: vec4<f32>,
+    b: vec4<f32>,
+}
+
+fn lit_row(k: i32) -> vec4<f32> {
+    return bitcast<vec4<f32>>(textureLoad(er_lit_rows, vec2<i32>(k, 0), 0));
+}
+
+fn lit_rowu(k: i32) -> vec4<u32> {
+    return textureLoad(er_lit_rows, vec2<i32>(k, 0), 0);
+}
+
+// three rows of one of the game's matrices as its shaders read them (out_k = dot(register base + k, v))
+fn lit_m3(base: i32, v: vec4<f32>) -> vec3<f32> {
+    return vec3<f32>(dot(lit_row(base), v), dot(lit_row(base + 1), v), dot(lit_row(base + 2), v));
+}
+
+fn lit_zero() -> LitSh {
+    return LitSh(vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0));
+}
+
+fn lit_scaled(s: LitSh, k: f32) -> LitSh {
+    return LitSh(s.r * k, s.g * k, s.b * k);
+}
+
+fn lit_iv_tap(k: i32, uv: vec3<f32>) -> vec4<f32> {
+    var t = vec4<f32>(0.5);
+    switch k {
+        case 0: { t = textureSampleLevel(er_iv0, kh_sclamp, uv, 0.0); }
+        case 1: { t = textureSampleLevel(er_iv1, kh_sclamp, uv, 0.0); }
+        case 2: { t = textureSampleLevel(er_iv2, kh_sclamp, uv, 0.0); }
+        case 3: { t = textureSampleLevel(er_iv3, kh_sclamp, uv, 0.0); }
+        case 4: { t = textureSampleLevel(er_iv4, kh_sclamp, uv, 0.0); }
+        case 5: { t = textureSampleLevel(er_iv5, kh_sclamp, uv, 0.0); }
+        case 6: { t = textureSampleLevel(er_iv6, kh_sclamp, uv, 0.0); }
+        case 7: { t = textureSampleLevel(er_iv7, kh_sclamp, uv, 0.0); }
+        default: {}
+    }
+    return t;
+}
+
+// one basis of a volume: (rgb - 0.5) x 2 x exp((a - 0.5) x 20) (G:860-898, R: the same)
+fn lit_decode(t: vec4<f32>) -> vec3<f32> {
+    return (t.xyz - vec3<f32>(0.5)) * 2.0 * exp((t.w - 0.5) * 20.0);
+}
+
+// ONE IRRADIANCE VOLUME's SH at p (G:773-933; R): q = M_q (p, 1); uv = ((q + 1) / 2 - 0.5) x safe voxel + 0.5; + normalize(M_o (p
+// + n, 1) - q) / sampling; the four bases X Y Z W decoded, each through the colour convert (channel c = row conv + c . rgb):
+// SH_c = (X'_c, Y'_c, Z'_c, W'_c)
+fn lit_iv(vol: i32, qb: i32, ob: i32, p: vec3<f32>, n: vec3<f32>, safe: vec3<f32>, samp: vec3<f32>, conv: i32) -> LitSh {
+    let q = lit_m3(qb, vec4<f32>(p, 1.0));
+    var uv = ((q + vec3<f32>(1.0)) * 0.5 - vec3<f32>(0.5)) * safe + vec3<f32>(0.5);
+    let o = lit_m3(ob, vec4<f32>(p + n, 1.0)) - q;
+    let ol = dot(o, o);
+    if (ol > 1.0e-20) {
+        uv += (o * inverseSqrt(ol)) / select(samp, vec3<f32>(1.0), abs(samp) < vec3<f32>(1.0e-12));
+    }
+    let x = lit_decode(lit_iv_tap(vol, uv));
+    let y = lit_decode(lit_iv_tap(vol + 1, uv));
+    let z = lit_decode(lit_iv_tap(vol + 2, uv));
+    let w = lit_decode(lit_iv_tap(vol + 3, uv));
+    let c0 = lit_row(conv).xyz;
+    let c1 = lit_row(conv + 1).xyz;
+    let c2 = lit_row(conv + 2).xyz;
+    return LitSh(vec4<f32>(dot(x, c0), dot(y, c0), dot(z, c0), dot(w, c0)), vec4<f32>(dot(x, c1), dot(y, c1), dot(z, c1), dot(w, c1)), vec4<f32>(dot(x, c2), dot(y, c2), dot(z, c2), dot(w, c2)));
+}
+
+// THE PARTICLE PASS's two volumes (gcbSceneParam rows 29..31 / 33..35 the inverse matrices A / B, 37 (interp, -, scale A, scale
+// B), 38 (enable A, enable B), 39 / 40 sampling, 41 / 42 safe voxel, 52..54 the colour convert): SH = lerp(A x scale A, B x scale
+// B, interp) (G:1115-1170); nb = the billboard normal (toward the camera, G:529-531)
+fn lit_pass_sh(p: vec3<f32>, nb: vec3<f32>, mask: u32) -> LitSh {
+    let g = LIT_ROW_PASS;
+    let blend = lit_row(g + 37);
+    let ab_on = lit_row(g + 38);
+    var a = lit_zero();
+    var b = lit_zero();
+    if (ab_on.x > 0.0 && (mask & 0x0fu) == 0x0fu) {
+        a = lit_iv(0, g + 29, g + 29, p, nb, lit_row(g + 41).xyz, lit_row(g + 39).xyz, g + 52);
+    }
+    if (ab_on.y > 0.0 && (mask & 0xf0u) == 0xf0u) {
+        b = lit_iv(4, g + 33, g + 33, p, nb, lit_row(g + 42).xyz, lit_row(g + 40).xyz, g + 52);
+    }
+    a = lit_scaled(a, blend.z);
+    b = lit_scaled(b, blend.w);
+    return LitSh(mix(a.r, b.r, blend.x), mix(a.g, b.g, blend.x), mix(a.b, b.b, blend.x));
+}
+
+// THE DEFERRED REGIONS (a frame without a particle draw: R): each region's box (CB_ENVMAP_REGION rows 4..6 the inverse world,
+// 8 the extents, 9.z the inverse fade distance, 20 (fade rate, diffuse scale), 21..23 the volume's inverse matrix, 25 sampling,
+// 32 safe voxel; the colour convert = cbSceneParam SC_EnvColorConvert 89..91), blended over the one before in draw order with
+// its fade x fade rate (R: outside the box nothing)
+fn lit_region_sh(p: vec3<f32>, n: vec3<f32>, mask: u32, regions: i32) -> LitSh {
+    var s = lit_zero();
+    for (var r = 0; r < 2; r++) {
+        if (r >= regions || ((mask >> u32(4 * r)) & 0x0fu) != 0x0fu) {
+            continue;
+        }
+        let b = LIT_ROW_REGION + LIT_REGION_STRIDE * r;
+        let q = lit_m3(b + 4, vec4<f32>(p, 1.0));
+        let e = lit_row(b + 8).xyz * (vec3<f32>(1.0) - abs(q));
+        let m = min(e.x, min(e.y, e.z));
+        if (m < 0.0) {
+            continue;
+        }
+        let t = saturate(lit_row(b + 9).z * m);
+        let a = t * t * (3.0 - 2.0 * t) * lit_row(b + 20).x;
+        var v = lit_iv(4 * r, b + 4, b + 21, p, n, lit_row(b + 32).xyz, lit_row(b + 25).xyz, LIT_ROW_SCENE + 89);
+        // (PARTY-NATIVE-LIGHT round 3) a two-volume region (GXEnvMapRegion[Box][Diff][Lerp].ppo.txt:454-620): its second volume (the
+        // slots 4..7) at the same place with the safe voxel row 33, the two blended by row 26.x, then the diffuse scale
+        if (r == 0 && er.fxl[2].w > 0.5) {
+            if ((mask & 0xf0u) != 0xf0u) {
+                continue;
+            }
+            let v2 = lit_iv(4, b + 4, b + 21, p, n, lit_row(b + 33).xyz, lit_row(b + 25).xyz, LIT_ROW_SCENE + 89);
+            let w = lit_row(b + 26).x;
+            v = LitSh(mix(v.r, v2.r, w), mix(v.g, v2.g, w), mix(v.b, v2.b, w));
+        }
+        v = lit_scaled(v, lit_row(b + 20).y);
+        s = LitSh(mix(s.r, v.r, a), mix(s.g, v.g, a), mix(s.b, v.b, a));
+    }
+    return s;
+}
+
+fn lit_list(t: u32) -> vec4<u32> {
+    return textureLoad(er_lit_lists, vec2<i32>(i32(t % LIT_LISTS_W), i32(t / LIT_LISTS_W)), 0);
+}
+
+fn lit_listf(t: u32) -> vec4<f32> {
+    return bitcast<vec4<f32>>(lit_list(t));
+}
+
+// ONE LOCAL LIGHT's SH without its colour (G:1316-1380 / 1423-1606): d = the point - the light (view space); att = window / (1 +
+// 0.7 (|d| x DiffColor.w)^2); near = (1.4 / (|d| x DiffColor.w + 1.4))^2: (0.25 Ldir (1 - near), 0.25 + 0.75 near) x att
+fn lit_light(d: vec3<f32>, window: f32, col: vec4<f32>) -> vec4<f32> {
+    let dd = dot(d, d);
+    let x = sqrt(dd) * col.w;
+    let att = window / (1.0 + 0.7 * x * x);
+    let k = 1.4 / (x + 1.4);
+    let near = k * k;
+    let inv = select(inverseSqrt(dd), 3.4e38, dd == 0.0);
+    return vec4<f32>(-d * inv * 0.25 * (1.0 - near), 0.75 * near + 0.25) * att;
+}
+
+fn lit_add(s: LitSh, v: vec4<f32>, col: vec3<f32>) -> LitSh {
+    return LitSh(s.r + v * col.x, s.g + v * col.y, s.b + v * col.z);
+}
+
+// THE TILE-CLUSTERED LOCAL LIGHTS at view-space pv and pixel px (G:1180-1660; the cell of the deferred tile lighting: cbSceneParam
+// 66 (FC_LightTile_Width, NumCellX), 65 (FC_FrustumNear, SliceScale, SliceBias)): the cell's (start, point count | spot count
+// << 16), each index's slice mask against the point's depth slice; linear parts in view space
+fn lit_lights(pv: vec3<f32>, px: vec2<f32>) -> LitSh {
+    var s = lit_zero();
+    let c = lit_rowu(LIT_ROW_COUNTS);
+    let tile = lit_rowu(LIT_ROW_SCENE + 66);
+    if (er.fxl[0].w < 0.5 || tile.x == 0u || c.y == 0u) {
+        return s;
+    }
+    let o1 = (c.x + 3u) / 4u;
+    let o2 = o1 + c.y;
+    let o3 = o2 + 13u * c.z;
+    let p = vec2<u32>(max(px, vec2<f32>(0.0)));
+    let cell = p.x / tile.x + (p.y / tile.x) * tile.y;
+    if (cell >= c.y) {
+        return s;
+    }
+    let look = lit_list(o1 + cell);
+    let f = lit_row(LIT_ROW_SCENE + 65);
+    let slice = clamp((log2(max(pv.z - f.x, 1.0e-6)) - f.z) / select(f.y, 1.0, f.y == 0.0), 0.0, 14.0);
+    let bit = 1u << (u32(slice) & 31u);
+    let points = min(look.y & 0xffffu, 256u);
+    let spots = min(look.y >> 16u, 256u);
+    let v4 = vec4<f32>(pv, 1.0);
+    for (var i = 0u; i < points + spots; i++) {
+        let at = look.x + i;
+        if (at >= c.x) {
+            break;
+        }
+        let e = lit_list(at / 4u)[at % 4u];
+        let li = e & 0xffffu;
+        if (((e >> 16u) & bit) == 0u) {
+            continue;
+        }
+        if (i < points) {
+            if (li >= c.z) {
+                continue;
+            }
+            let pos = lit_listf(o2 + 13u * li);
+            let col = lit_listf(o2 + 13u * li + 1u);
+            let d = pv - pos.xyz;
+            s = lit_add(s, lit_light(d, saturate(1.0 - dot(d, d) * pos.w), col), col.xyz);
+        } else {
+            if (li >= c.w) {
+                continue;
+            }
+            let base = o3 + 12u * li;
+            let pos = lit_listf(base);
+            let col = lit_listf(base + 1u);
+            let z = dot(lit_listf(base + 6u), v4);
+            if (!(z > 0.0)) {
+                continue;
+            }
+            let w = dot(lit_listf(base + 7u), v4);
+            let u = dot(lit_listf(base + 4u), v4) / w;
+            let v = dot(lit_listf(base + 5u), v4) / w;
+            let cone = saturate(1.0 - (u * u + v * v));
+            let d = pv - pos.xyz;
+            let window = saturate(1.0 - dot(d, d) / max(pos.w * pos.w, 1.0e-12));
+            s = lit_add(s, lit_light(d, window, col) * cone, col.xyz);
+        }
+    }
+    return s;
+}
+
+// a linear part from view space into the world (G:1608-1643: the view rotation transposed = cbSceneParam FC_MatrixInvView 20..22)
+fn lit_to_world(v: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(lit_m3(LIT_ROW_SCENE + 20, vec4<f32>(v.xyz, 0.0)), v.w);
+}
+
+// THE SH AT THIS EFFECT PIXEL (KH units, into kh_lit_sh): its world position from the device depth through the tile lighting's
+// FC_MatrixInvViewProj (cbSceneParam 8..11, as R), its view position through cbLightAccParam g_InvProjMatrix (0..3, as
+// GXRend_TileBasedLighting); the volumes (the particle pass's, else the regions') + the local lights; x SC_PreExposure (72.z) /
+// this harness's out scale
+fn kh_lit_at(pos: vec4<f32>) {
+    let uv = pos.xy * er.size.zw;
+    let ndc = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, pos.z, 1.0);
+    let wp = vec4<f32>(lit_m3(LIT_ROW_SCENE + 8, ndc), dot(lit_row(LIT_ROW_SCENE + 11), ndc));
+    let p = wp.xyz / select(wp.w, 1.0, wp.w == 0.0);
+    let lv = vec4<f32>(lit_m3(LIT_ROW_LACC, ndc), dot(lit_row(LIT_ROW_LACC + 3), ndc));
+    let pv = lv.xyz / select(lv.w, 1.0, lv.w == 0.0);
+    let cw = lit_row(LIT_ROW_SCENE + 23).w;
+    let cam = vec3<f32>(lit_row(LIT_ROW_SCENE + 20).w, lit_row(LIT_ROW_SCENE + 21).w, lit_row(LIT_ROW_SCENE + 22).w) / select(cw, 1.0, cw == 0.0);
+    let to_cam = cam - p;
+    let nb = select(vec3<f32>(0.0, 0.0, 1.0), normalize(to_cam), dot(to_cam, to_cam) > 1.0e-12);
+    let mask = u32(er.fxl[0].z + 0.5);
+    var s = lit_zero();
+    if (er.fxl[0].y > 0.5 && er.fxl[0].y < 1.5) {
+        s = lit_pass_sh(p, nb, mask);
+    } else if (er.fxl[0].y > 1.5) {
+        s = lit_region_sh(p, nb, mask, i32(er.fxl[2].y + 0.5));
+    }
+    let l = lit_lights(pv, pos.xy);
+    let k = lit_row(LIT_ROW_SCENE + 72).z / max(er.out_scale.x, 1.0e-9);
+    kh_lit_sh[0] = (s.r + lit_to_world(l.r)) * k;
+    kh_lit_sh[1] = (s.g + lit_to_world(l.g)) * k;
+    kh_lit_sh[2] = (s.b + lit_to_world(l.b)) * k;
+}
+
+// the light on a white surface facing n (world axes) from the SH: max(dot((n, 1), SH_c), 0) (the particle's pixel shader,
+// FFX_FINDINGS.md 4.2)
+fn kh_lit_e(n: vec3<f32>) -> vec3<f32> {
+    let v = vec4<f32>(n, 1.0);
+    return max(vec3<f32>(dot(v, kh_lit_sh[0]), dot(v, kh_lit_sh[1]), dot(v, kh_lit_sh[2])), vec3<f32>(0.0));
+}
+
+// THE SUN'S SHADOW at the effect pixel from the game's own cascades (hybrid.rs csm_visibility, er_char.wgsl hc_sun_vis without
+// the KH maps' owner rule: every caster in the atlas shades an effect): of the cascades holding the point, the finest; a
+// bilinear PCF over 3 x 3 texels; 1 = no cascade bound or none holds it
+fn kh_lit_sun_vis(game_pos: vec3<f32>) -> f32 {
+    let rows = i32(er.fxl[3].x + 0.5);
+    if (rows < 1 || er.fxl[2].x < 0.5) {
+        return 1.0;
+    }
+    let m = mat4x4<f32>(er.fxl[9], er.fxl[10], er.fxl[11], er.fxl[12]);
+    let host = (m * vec4<f32>(game_pos, 1.0)).xyz;
+    var best_r = -1;
+    var best_texel = 1.0e30;
+    var best_s = vec3<f32>(0.0);
+    for (var r = 0; r < 5; r++) {
+        if (r >= rows) {
+            break;
+        }
+        let rel = vec4<f32>(host - textureLoad(er_sun_casc, vec2<i32>(3, r), 0).xyz, 1.0);
+        let row0 = textureLoad(er_sun_casc, vec2<i32>(24, r), 0);
+        let c = vec4<f32>(dot(row0, rel), dot(textureLoad(er_sun_casc, vec2<i32>(25, r), 0), rel), dot(textureLoad(er_sun_casc, vec2<i32>(26, r), 0), rel), dot(textureLoad(er_sun_casc, vec2<i32>(27, r), 0), rel));
+        if (!(c.w > 1.0e-6)) {
+            continue;
+        }
+        let s = c.xyz / c.w;
+        if (abs(s.x) > 0.97 || abs(s.y) > 0.97 || s.z <= 0.0 || s.z >= 1.0) {
+            continue;
+        }
+        let texel = 2.0 / max(length(row0.xyz) * er.fxl[4 + r].z, 1.0e-9);
+        if (texel < best_texel) {
+            best_texel = texel;
+            best_r = r;
+            best_s = s;
+        }
+    }
+    if (best_r < 0) {
+        return 1.0;
+    }
+    let vp = er.fxl[4 + best_r];
+    let px = vp.xy + vec2<f32>(best_s.x * 0.5 + 0.5, 0.5 - best_s.y * 0.5) * vp.zw;
+    let step = max(er.fxl[3].y, 0.0);
+    let bias = er.fxl[3].z / 65535.0;
+    if (step <= 0.0) {
+        return select(0.0, 1.0, textureLoad(er_sun_atlas, vec2<i32>(floor(px)), 0).x <= best_s.z + bias);
+    }
+    let g = (px - vec2<f32>(0.5 * step)) / step;
+    let b = floor(g);
+    let f = g - b;
+    let wx = vec4<f32>(1.0 - f.x, 1.0, 1.0, f.x);
+    let wy = vec4<f32>(1.0 - f.y, 1.0, 1.0, f.y);
+    var lit = 0.0;
+    for (var j = 0; j < 4; j++) {
+        for (var i = 0; i < 4; i++) {
+            let at = (b + vec2<f32>(f32(i) - 1.0, f32(j) - 1.0)) * step + vec2<f32>(0.5 * step);
+            if (textureLoad(er_sun_atlas, vec2<i32>(floor(at)), 0).x <= best_s.z + bias) {
+                lit += wx[i] * wy[j];
+            }
+        }
+    }
+    return lit / 9.0;
+}
+#endif
+
 @fragment
+#ifdef KH_FX_GB
+fn fs_main(in: KhVaryings) -> FxGbuf {
+#else
 fn fs_main(in: KhVaryings) -> @location(0) vec4<f32> {
     if (er.out_scale.y != 0.0) {
         // Diagnosis: what the geometry covers, whatever its shader would draw.
         return vec4<f32>(2.0 * er.out_scale.x, 0.0, 2.0 * er.out_scale.x, 1.0);
     }
+#endif
     var i: KhIn;
     let time = in.misc.x;
     let camera = er.camera.xyz;
@@ -561,6 +1313,10 @@ fn fs_main(in: KhVaryings) -> @location(0) vec4<f32> {
     i.v8 = vec4<f32>(right.x, up.x, forward.x, 0.0);
     i.v9 = vec4<f32>(right.y, up.y, forward.y, 0.0);
     i.v10 = vec4<f32>(right.z, up.z, forward.z, 0.0);
+    i.v16 = i.v8; // (VFX-2 cube)
+    i.v17 = i.v9;
+    i.v18 = i.v10;
+    i.v19 = vec4<f32>(0.0, 0.0, 0.0, 1.0);
     i.v53 = vec4<f32>(0.0, 0.0, 1.0, 0.0);
     i.v54 = vec4<f32>(0.5, -0.5, 0.5, 0.5);
     i.v55 = vec4<f32>(camera, 0.0);
@@ -589,6 +1345,42 @@ fn fs_main(in: KhVaryings) -> @location(0) vec4<f32> {
     i.ptr1 = vec4<f32>(0.0, 1.0, 0.0, 0.0);
     i.ptr2 = vec4<f32>(0.0, 0.0, 1.0, 0.0);
     i.dist12 = vec4<f32>(er.depth.w, er.size.x / er.size.y, 1920.0, 1920.0 * er.size.y / er.size.x);
+    // (VFX-XLATE) no level tint (base 1, synthesis 0); the lit side white, the shadowed side the ambient share of the lit rule
+    // above (0.45) [A: Elden Ring has no KH3 level colour table]
+    i.pbase = vec4<f32>(1.0);
+    i.pbright = vec4<f32>(1.0);
+    i.pdark = vec4<f32>(0.45, 0.45, 0.45, 1.0);
+    i.psynth = vec4<f32>(0.0);
+    // (VFX-2 lit) Elden Ring's light for the forward-lit owners' scene colours
+    i.fbright = select(i.pbright, vec4<f32>(er.fwd_env[3].xyz, 1.0), er.fwd_env[3].w > 0.5);
+    i.fdark = select(i.pdark, vec4<f32>(er.fwd_env[4].xyz, 1.0), er.fwd_env[4].w > 0.5);
+#ifdef KH_FXLIT
+    // (PARTY-NATIVE-LIGHT) ELDEN RING'S OWN LIGHT in place of the forward lighting's inputs, at this pixel (kh_lit_at): the directional
+    // light = the sun as read (Col_0 x SC_PreExposure, KH units) x its cascade shadow here (the material does its own N.L and
+    // BRDF); no light-grid light (the game's local lights are in the SH, with its own falloff); the capture = the SH (kh_fwd_env);
+    // the scene colours = the light a white surface facing the effect's normal gets as Elden Ring lights its particles: shaded =
+    // the SH, lit = the SH + the sun x shadow x N.L / pi
+    kh_fwdg = er.fwd_g;
+    kh_lit_sh = array<vec4<f32>, 3>(vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0));
+    if (er.fxl[0].x > 0.5) {
+        kh_lit_at(in.position);
+        let k = lit_row(LIT_ROW_SCENE + 72).z / max(er.out_scale.x, 1.0e-9);
+        let has_sun = er.fxl[1].w > 0.5 && kh_fwdg[0].z > 0.5;
+        let sun = select(vec3<f32>(0.0), er.fxl[1].xyz * k, has_sun);
+        let vis = kh_lit_sun_vis(in.world_position);
+        let to_sun = kh_fwdg[4].xyz;
+        kh_fwdg[0] = vec4<f32>(0.0, kh_fwdg[0].y, select(0.0, 1.0, has_sun), kh_fwdg[0].w);
+        kh_fwdg[5] = vec4<f32>(sun, kh_fwdg[5].w);
+        kh_fwdg[7] = vec4<f32>(vis, 0.0, kh_fwdg[7].z, kh_fwdg[7].w);
+        let ng = select(vec3<f32>(0.0, 0.0, 1.0), normalize(in.normal), dot(in.normal, in.normal) > 1.0e-12);
+        let dark = kh_lit_e(kh_fx_host_dir(ng));
+        let bright = dark + sun * vis * saturate(dot(ng, to_sun)) / 3.14159265;
+        i.fbright = vec4<f32>(bright, 1.0);
+        i.fdark = vec4<f32>(dark, 1.0);
+        i.pbright = i.fbright;
+        i.pdark = i.fdark;
+    }
+#endif
 
 #ifdef KH_MASK
     // The opacity mask of a masked material (the game clips in its depth-only pass).
@@ -603,6 +1395,10 @@ fn fs_main(in: KhVaryings) -> @location(0) vec4<f32> {
     return vec4<f32>(textureSampleLevel(er_scene, er_sscene, scene_uv, 0.0).xyz, 1.0);
 #else
     let o = kh_material(i);
+#ifdef KH_FX_GB
+    // (PARTY-NATIVE) the G-buffer twin: the material's surface into the game's G-buffer (its opacity mask clipped above)
+    return kh_fx_gbuffer(o);
+#else
     var color = o.o0;
 #ifdef KH_DEFERRED
     // A lit (deferred) material: its emissive plus its base colour under a key light and an
@@ -615,6 +1411,25 @@ fn fs_main(in: KhVaryings) -> @location(0) vec4<f32> {
     color = vec4<f32>(kh_orb_shade(o, normal, light, normalize(-i.twp), er.lit.xyz), 1.0);
 #else
     color = vec4<f32>(o.o0.xyz + o.o3.xyz * diffuse * er.lit.xyz, 1.0);
+#endif
+#ifdef KH_FXNAT
+    // (PARTY-NATIVE) the game's light at this texel, when it is this surface's (kh_fx_tap): KH3's deferred result in place of
+    // the stand-in above
+    let fx = kh_fx_tap(normal, pixel);
+    if (fx.ok > 0.5) {
+#ifdef KH_ORB
+        // (ORBS) the orbs' own base colour and soft clip of the emissive kept (kh_orb_shade), the game's light in place of the
+        // key, sky and highlight of ours
+        let e = max(o.o0.xyz, vec3<f32>(0.0));
+        let peak = max(e.x, max(e.y, e.z));
+        let base = select(saturate(o.o3.xyz), e / max(peak, 1.0e-6), peak > 1.0);
+        let w = max(dot(er.lit.xyz, vec3<f32>(0.2126, 0.7152, 0.0722)), 1.0e-4);
+        color = vec4<f32>(kh_orb_soft(e + base * (1.0 - saturate(o.o2.x)) * fx.diffuse, w) + fx.spec * kh_fx_f0_ratio(o, base), 1.0);
+#else
+        let base = o.o3.xyz;
+        color = vec4<f32>(o.o0.xyz + base * (1.0 - saturate(o.o2.x)) * fx.diffuse + fx.spec * kh_fx_f0_ratio(o, base), 1.0);
+#endif
+    }
 #endif
 #endif
     // The emitter's blend type against the shader's own (ParticleModuleRequired.EmitterBlendType).
@@ -630,7 +1445,26 @@ fn fs_main(in: KhVaryings) -> @location(0) vec4<f32> {
         color = vec4<f32>(max(color.x, max(color.y, color.z)) * kh.er.yzw, color.w);
     }
     // Scene-linear colour in the host's units: the host's own tone mapping follows.
+#ifdef KH_FXFOG
+    // (PARTY-NATIVE) the game's fog at this effect pixel's own depth (kh_fx_fog), as its own particles take it: blended = colour x
+    // transmittance + in-scatter (FogMultMode 0); additive = colour x transmittance (FogMultMode 1: many layers do not add the
+    // fog colour many times); modulate = toward no change
+    var scene = min(max(color.xyz, vec3<f32>(0.0)), vec3<f32>(1000.0)) * er.out_scale.x;
+    if (kh.fx.x < 2.5) {
+        let fog = kh_fx_fog(in.position.xy * er.size.zw, in.position.w);
+        if (kh.fx.x < 0.5) {
+            scene = scene * fog.transmit + fog.inscatter;
+        } else if (kh.fx.x < 1.5) {
+            scene = scene * fog.transmit;
+        } else {
+            scene = vec3<f32>(1.0) - (vec3<f32>(1.0) - scene) * fog.transmit;
+        }
+    }
+    return vec4<f32>(scene, max(color.w, 0.0));
+#else
     return vec4<f32>(min(max(color.xyz, vec3<f32>(0.0)), vec3<f32>(1000.0)) * er.out_scale.x, max(color.w, 0.0));
+#endif
+#endif
 #endif
 }
 #endif
@@ -1334,11 +2168,83 @@ fn fs_fxp_filter(in: ScreenOut) -> @location(0) vec4<f32> {
     if (mode < 1.5) {
         return vec4<f32>(kh.m[2].xyz * white, saturate(kh.m[2].w));
     }
+    // (AUDIT-B W-VFX) mode 4: KH3's GRAY, mode 5: its NPR (TPostProcessSqexEffectFilterPS; kh-vfx screen.rs): m[2] = the summed
+    // (FilterColor, FilterAlpha) = cb0[22] (x spares object class 5 [(AUDIT-B W-VFX2) by vfxpost.rs's stencil test on the
+    // player mask, not in this shader], y the edge colour k, z the EDGE
+    // amount, w the GREY amount) / cb0[21] (w the NEGATIVE amount); m[3].w = 1: the depth (t12) is readable. Modes 2 / 3 stay
+    // the earlier reading (the deployed build sends 2).
+    // (AUDIT-B W-VFX2) mode 6: GRAY's EDGE alone (vfxpost.rs draws it after mode 4 with m[3].w = 0, with the pipeline's stencil
+    // test keeping KH3's object class 0 = no character; the DSV is read-only, the depth t12 readable): (k, 1.01 k, k) x white
+    // with alpha = the edge amount where the mean |depth step| to the 8 neighbours 2 px away is >= 1e-4, so the blend gives
+    // KH3's g + (edge colour - g) x z; a pixel with nothing drawn (depth 0: the sky, KH3's SQEX_MD_Sky class 2) gets none.
+    if (mode > 5.5) {
+        let last6 = vec2<i32>(textureDimensions(er_depth)) - vec2<i32>(1);
+        let p6 = clamp(vec2<i32>(in.uv * vec2<f32>(textureDimensions(er_depth))), vec2<i32>(0), last6);
+        let d6 = textureLoad(er_depth, p6, 0).x;
+        if (kh.m[2].z <= 0.0 || d6 <= 0.0) {
+            return vec4<f32>(0.0);
+        }
+        var sum6 = 0.0;
+        var taps6 = array<vec2<i32>, 8>(vec2<i32>(-2, 0), vec2<i32>(2, 0), vec2<i32>(0, -2), vec2<i32>(0, 2), vec2<i32>(-2, 2), vec2<i32>(2, -2), vec2<i32>(2, 2), vec2<i32>(-2, -2));
+        for (var k6 = 0; k6 < 8; k6 = k6 + 1) {
+            sum6 = sum6 + abs(textureLoad(er_depth, clamp(p6 + taps6[k6], vec2<i32>(0), last6), 0).x - d6);
+        }
+        if (min(sum6 * 0.125, 1.0) < 0.0001) {
+            return vec4<f32>(0.0);
+        }
+        return vec4<f32>(vec3<f32>(kh.m[2].y, kh.m[2].y * 1.01, kh.m[2].y) * white, saturate(kh.m[2].z));
+    }
+    if (mode > 3.5) {
+        let c4 = textureSampleLevel(kh_t0, kh_s0, in.uv, 0.0).xyz / max(white, 1.0e-9);
+        let w4 = kh.m[2].w;
+        if (mode > 4.5) {
+            var n4 = c4;
+            if (w4 > 0.0) {
+                n4 = c4 + (vec3<f32>(1.0) - 2.0 * c4) * w4;
+            }
+            return vec4<f32>(max(n4, vec3<f32>(0.0)) * white, 1.0);
+        }
+        if (w4 <= 0.0) {
+            return vec4<f32>(max(c4, vec3<f32>(0.0)) * white, 1.0);
+        }
+        var g4 = c4 + (vec3<f32>((c4.x + c4.y + c4.z) / 3.0) - c4) * w4;
+        if (kh.m[2].z > 0.0 && kh.m[3].w > 0.5) {
+            let last4 = vec2<i32>(textureDimensions(er_depth)) - vec2<i32>(1);
+            let p4 = clamp(vec2<i32>(in.uv * vec2<f32>(textureDimensions(er_depth))), vec2<i32>(0), last4);
+            let d4 = textureLoad(er_depth, p4, 0).x;
+            var sum4 = 0.0;
+            var taps4 = array<vec2<i32>, 8>(vec2<i32>(-2, 0), vec2<i32>(2, 0), vec2<i32>(0, -2), vec2<i32>(0, 2), vec2<i32>(-2, 2), vec2<i32>(2, -2), vec2<i32>(2, 2), vec2<i32>(-2, -2));
+            for (var k4 = 0; k4 < 8; k4 = k4 + 1) {
+                sum4 = sum4 + abs(textureLoad(er_depth, clamp(p4 + taps4[k4], vec2<i32>(0), last4), 0).x - d4);
+            }
+            if (min(sum4 * 0.125, 1.0) >= 0.0001) {
+                g4 = g4 + (vec3<f32>(kh.m[2].y, kh.m[2].y * 1.01, kh.m[2].y) - g4) * kh.m[2].z;
+            }
+        }
+        return vec4<f32>(max(g4, vec3<f32>(0.0)) * white, 1.0);
+    }
     let c = textureSampleLevel(kh_t0, kh_s0, in.uv, 0.0).xyz / max(white, 1.0e-9);
     let neg = saturate(kh.m[2].x * kh.m[2].w);
     let n = c + (vec3<f32>(1.0) - 2.0 * c) * neg;
     let grey = saturate(kh.m[2].y * kh.m[2].w);
-    let g = mix(n, vec3<f32>((n.x + n.y + n.z) / 3.0), grey);
+    var g = mix(n, vec3<f32>((n.x + n.y + n.z) / 3.0), grey);
+    // (VFX-XLATE) the EDGE amount (FilterColor.z x alpha; KH3's shader: the mean |depth step| to the 8 neighbours 2 px away
+    // >= 0.0001 marks an edge, which goes toward (k, 1.01 k, k), k = m[3].z [A: 0, black]); m[3].w = 1: the depth (t12) is
+    // readable in this pass
+    let edge = saturate(kh.m[2].z * kh.m[2].w);
+    if (edge > 0.0 && kh.m[3].w > 0.5) {
+        let last = vec2<i32>(textureDimensions(er_depth)) - vec2<i32>(1);
+        let p = clamp(vec2<i32>(in.uv * vec2<f32>(textureDimensions(er_depth))), vec2<i32>(0), last);
+        let c0 = textureLoad(er_depth, p, 0).x;
+        var sum = 0.0;
+        var taps = array<vec2<i32>, 8>(vec2<i32>(-2, 0), vec2<i32>(2, 0), vec2<i32>(0, -2), vec2<i32>(0, 2), vec2<i32>(-2, 2), vec2<i32>(2, -2), vec2<i32>(2, 2), vec2<i32>(-2, -2));
+        for (var k = 0; k < 8; k = k + 1) {
+            sum = sum + abs(textureLoad(er_depth, clamp(p + taps[k], vec2<i32>(0), last), 0).x - c0);
+        }
+        if (min(sum * 0.125, 1.0) >= 0.0001) {
+            g = mix(g, vec3<f32>(kh.m[3].z, kh.m[3].z * 1.01, kh.m[3].z), edge);
+        }
+    }
     return vec4<f32>(max(g, vec3<f32>(0.0)) * white, 1.0);
 }
 

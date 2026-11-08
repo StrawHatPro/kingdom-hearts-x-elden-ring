@@ -101,7 +101,7 @@ pub enum PoiseClass {
 
 impl PoiseClass {
     pub fn of(rules: &PoiseRules, poise_max: f32) -> PoiseClass {
-        if !(poise_max > rules.low_max) {
+        if poise_max.partial_cmp(&rules.low_max).is_none_or(std::cmp::Ordering::is_le) {
             PoiseClass::Low
         } else if poise_max <= rules.mid_max {
             PoiseClass::Mid
@@ -149,6 +149,19 @@ pub enum Tick {
     WindowClosed,
     /// No poise damage for the refill time: the meter is full again.
     Recovered,
+}
+
+/// One hit on a meter. `poise_max` = the game's maximum of the body; `recover` = its refill time; `row_poise` = the poise
+/// number of the hit's kind (scaled by `damage.out.poise_scale`); `big` = a kind that throws (KH3's "big" kinds);
+/// `hyper` = the body is in its own hyper armour; `in_reaction` = a reaction of ours still runs on it.
+#[derive(Clone, Copy, Debug)]
+pub struct PoiseHit {
+    pub poise_max: f32,
+    pub recover: f32,
+    pub row_poise: f32,
+    pub big: bool,
+    pub hyper: bool,
+    pub in_reaction: bool,
 }
 
 /// ONE BODY'S POISE METER.
@@ -213,11 +226,8 @@ impl Meter {
         Tick::Nothing
     }
 
-    /// ONE HIT. `poise_max` = the game's maximum of the body; `recover` = its refill time; `row_poise` = the poise
-    /// number of the hit's kind (scaled by `damage.out.poise_scale`); `big` = a kind that throws (KH3's "big" kinds);
-    /// `hyper` = the body is in its own hyper armour; `in_reaction` = a reaction of ours still runs on it.
-    #[allow(clippy::too_many_arguments)]
-    pub fn hit(&mut self, rules: &PoiseRules, guard: &GuardRules, poise_max: f32, recover: f32, row_poise: f32, big: bool, hyper: bool, in_reaction: bool) -> Outcome {
+    /// ONE HIT (`PoiseHit`).
+    pub fn hit(&mut self, rules: &PoiseRules, guard: &GuardRules, PoiseHit { poise_max, recover, row_poise, big, hyper, in_reaction }: PoiseHit) -> Outcome {
         let class = PoiseClass::of(rules, poise_max);
         // the maximum follows the game's (a meter not hit yet, or full, starts full)
         if (poise_max - self.max).abs() > 0.01 {
@@ -271,7 +281,47 @@ impl Meter {
         };
         out
     }
+
+    /// (GF-BREAK, R6) GOOFY'S FULL STAGGER, THE ONE EXPLICIT EVENT FROM THAT BOOK INTO THIS METER (the two never count each other's
+    /// hits): the body breaks now, for `window` seconds. The limits of a poise break stand: a body in its recovery refuses, and the
+    /// chain cap counts this break with every other. Err: why it does not break; nothing changed but the count.
+    pub fn force_break(&mut self, rules: &PoiseRules, guard: &GuardRules, window: f32) -> Result<(), &'static str> {
+        if self.broken() {
+            return Ok(());
+        }
+        if self.clock < self.lock_until {
+            self.refused += 1;
+            return Err("it is recovering from its last break");
+        }
+        if self.chain.reaction(guard) != Verdict::Allow {
+            self.refused += 1;
+            return Err("the chain cap");
+        }
+        self.breaks += 1;
+        self.lockout = rules.lockout;
+        self.value = 0.0;
+        self.broken_until = self.clock + window.max(0.0);
+        Ok(())
+    }
+
+    /// (GF-BREAK) A Breaker runs: a window that is open lasts at least `seconds` more.
+    pub fn hold_break(&mut self, seconds: f32) {
+        if self.broken() {
+            self.broken_until = self.broken_until.max(self.clock + seconds);
+        }
+    }
+
+    /// (GF-BREAK) BROKEN is over. An open window closes, but for `juggle` seconds more, at most the sheet's own window (Launch
+    /// Breaker's juggle; the slam's own hit is always inside it). A closed one stays closed: this opens nothing.
+    pub fn release_break(&mut self, rules: &PoiseRules, juggle: f32) {
+        if self.broken() {
+            self.broken_until = self.clock + juggle.min(rules.window).max(RELEASE_GRACE);
+        }
+    }
 }
+
+/// (GF-BREAK) Seconds a released window stays open: the hit that released it lands in it.
+const RELEASE_GRACE: f32 = 0.1;
 
 /// KH3's "big" damage kinds (they throw a body; a STRONG body turns them into a flinch): mask 0x20000F9C of the
 /// enemy's reaction gate (kh-react `EnemyReaction::hit`).
@@ -395,9 +445,13 @@ mod tests {
         (0..(seconds * 60.0).round() as u32).map(|_| m.tick(1.0 / 60.0)).filter(|t| *t != Tick::Nothing).collect()
     }
 
+    fn blow(poise_max: f32, recover: f32, row_poise: f32, big: bool, hyper: bool, in_reaction: bool) -> PoiseHit {
+        PoiseHit { poise_max, recover, row_poise, big, hyper, in_reaction }
+    }
+
     /// A light hit on a standing body, out of hyper armour.
     fn light(m: &mut Meter, poise_max: f32) -> Outcome {
-        m.hit(&R, &G, poise_max, 5.0, LIGHT, false, false, false)
+        m.hit(&R, &G, blow(poise_max, 5.0, LIGHT, false, false, false))
     }
 
     #[test]
@@ -416,12 +470,12 @@ mod tests {
         for _ in 0..3 {
             assert_eq!(light(&mut knight, 65.0).gate, Gate::None);
         }
-        assert!(knight.hit(&R, &G, 65.0, 5.0, FINISHER, true, false, false).broke);
+        assert!(knight.hit(&R, &G, blow(65.0, 5.0, FINISHER, true, false, false)).broke);
         // a finisher on a fresh MID knight only flinches him; on a HIGH body (80) it does nothing
         let mut knight = Meter::new();
-        assert_eq!(knight.hit(&R, &G, 65.0, 5.0, FINISHER, true, false, false).gate, Gate::Flinch);
+        assert_eq!(knight.hit(&R, &G, blow(65.0, 5.0, FINISHER, true, false, false)).gate, Gate::Flinch);
         let mut plate = Meter::new();
-        let o = plate.hit(&R, &G, 80.0, 5.0, FINISHER, true, false, false);
+        let o = plate.hit(&R, &G, blow(80.0, 5.0, FINISHER, true, false, false));
         assert_eq!((o.gate, o.class), (Gate::None, PoiseClass::High));
         // c2500 (poise 80): eight light hits
         let mut plate = Meter::new();
@@ -432,25 +486,25 @@ mod tests {
             let o = light(&mut soldier, 30.0);
             assert_eq!((o.gate, o.class, o.damage), (Gate::Full, PoiseClass::Low, 0.0));
         }
-        assert_eq!(soldier.hit(&R, &G, 30.0, 5.0, FINISHER, true, false, true).gate, Gate::Full);
+        assert_eq!(soldier.hit(&R, &G, blow(30.0, 5.0, FINISHER, true, false, true)).gate, Gate::Full);
         // switched off: the knight reacts to everything, as before
         let mut knight = Meter::new();
-        assert_eq!(knight.hit(&PoiseRules::OFF, &G, 65.0, 5.0, LIGHT, false, false, false).gate, Gate::Full);
+        assert_eq!(knight.hit(&PoiseRules::OFF, &G, blow(65.0, 5.0, LIGHT, false, false, false)).gate, Gate::Full);
     }
 
     #[test]
     fn hyper_armour_halves_the_poise_damage_and_nothing_interrupts_it() {
         let mut knight = Meter::new();
         // 65 / 5 = 13 light hits while he attacks; even a finisher does not flinch him
-        assert_eq!(knight.hit(&R, &G, 65.0, 5.0, FINISHER, true, true, false).gate, Gate::None);
+        assert_eq!(knight.hit(&R, &G, blow(65.0, 5.0, FINISHER, true, true, false)).gate, Gate::None);
         assert_eq!(knight.value().0, 35.0);
         for _ in 0..6 {
-            assert_eq!(knight.hit(&R, &G, 65.0, 5.0, LIGHT, false, true, false).gate, Gate::None);
+            assert_eq!(knight.hit(&R, &G, blow(65.0, 5.0, LIGHT, false, true, false)).gate, Gate::None);
         }
-        let o = knight.hit(&R, &G, 65.0, 5.0, LIGHT, false, true, false);
+        let o = knight.hit(&R, &G, blow(65.0, 5.0, LIGHT, false, true, false));
         assert!(o.broke && o.gate == Gate::Full, "the break interrupts the attack: {o:?}");
         let mut fresh = Meter::new();
-        assert_eq!((1..=13).position(|_| fresh.hit(&R, &G, 65.0, 5.0, LIGHT, false, true, false).broke), Some(12));
+        assert_eq!((1..=13).position(|_| fresh.hit(&R, &G, blow(65.0, 5.0, LIGHT, false, true, false)).broke), Some(12));
     }
 
     #[test]
@@ -462,17 +516,17 @@ mod tests {
         assert!(knight.broken());
         // the juggle: every hit reacts in full for the window, also in the air
         run(&mut knight, 1.0);
-        let o = knight.hit(&R, &G, 65.0, 5.0, LIGHT, false, false, true);
+        let o = knight.hit(&R, &G, blow(65.0, 5.0, LIGHT, false, false, true));
         assert_eq!((o.gate, o.in_window, o.damage), (Gate::Full, true, 0.0));
         assert_eq!(run(&mut knight, 2.1), vec![Tick::WindowClosed]);
         assert_eq!(knight.value(), (65.0, 65.0));
         // he recovers: for 4 s nothing reacts and nothing takes poise (a body still in the air is not juggled on)
-        let o = knight.hit(&R, &G, 65.0, 5.0, FINISHER, true, false, true);
+        let o = knight.hit(&R, &G, blow(65.0, 5.0, FINISHER, true, false, true));
         assert_eq!((o.gate, o.recovering, o.damage), (Gate::None, true, 0.0));
-        assert_eq!(knight.hit(&R, &G, 65.0, 5.0, FINISHER, true, false, false).gate, Gate::None);
+        assert_eq!(knight.hit(&R, &G, blow(65.0, 5.0, FINISHER, true, false, false)).gate, Gate::None);
         run(&mut knight, 4.0);
         // then he must be broken again: a finisher flinches him on the spot (65 -> 5), a light hit after it breaks him
-        assert_eq!(knight.hit(&R, &G, 65.0, 5.0, FINISHER, true, false, false).gate, Gate::Flinch);
+        assert_eq!(knight.hit(&R, &G, blow(65.0, 5.0, FINISHER, true, false, false)).gate, Gate::Flinch);
         assert!(light(&mut knight, 65.0).broke);
         // THE GAME'S REFILL TIME: 3 light hits, then 5 s without poise damage: full again
         let mut knight = Meter::new();
@@ -499,7 +553,7 @@ mod tests {
         let mut calm = 0.0f32;
         for n in 0..240 {
             let finisher = n % 4 == 3;
-            let o = knight.hit(&R, &G, 65.0, 5.0, if finisher { FINISHER } else { LIGHT }, finisher, false, false);
+            let o = knight.hit(&R, &G, blow(65.0, 5.0, if finisher { FINISHER } else { LIGHT }, finisher, false, false));
             hits += 1;
             if o.gate != Gate::None {
                 full += 1;
@@ -518,7 +572,7 @@ mod tests {
         assert!(longest_calm >= 3.5, "a stretch of {longest_calm} s without any reaction");
         // a soldier under the same hail reacts every time (KH3's juggles stay)
         let mut soldier = Meter::new();
-        assert!((0..240).all(|n| soldier.hit(&R, &G, 30.0, 5.0, if n % 4 == 3 { FINISHER } else { LIGHT }, n % 4 == 3, false, false).gate == Gate::Full));
+        assert!((0..240).all(|n| soldier.hit(&R, &G, blow(30.0, 5.0, if n % 4 == 3 { FINISHER } else { LIGHT }, n % 4 == 3, false, false)).gate == Gate::Full));
     }
 
     /// THE CHAIN CAP (bossguard's react.chain rows) still holds when the sheet gives no window and no recovery.
@@ -528,16 +582,91 @@ mod tests {
         let mut knight = Meter::new();
         let mut breaks = 0;
         for _ in 0..40 {
-            breaks += knight.hit(&fast, &G, 65.0, 5.0, FINISHER, true, false, false).broke as u32;
-            breaks += knight.hit(&fast, &G, 65.0, 5.0, LIGHT, false, false, false).broke as u32;
+            breaks += knight.hit(&fast, &G, blow(65.0, 5.0, FINISHER, true, false, false)).broke as u32;
+            breaks += knight.hit(&fast, &G, blow(65.0, 5.0, LIGHT, false, false, false)).broke as u32;
             run(&mut knight, 0.6);
         }
         // 24 s of a break every 0.6 s: 3, the cool-down of 8 s, 3 more ...
         assert!((6..=9).contains(&breaks) && knight.refused > 0, "breaks {breaks}, refused {}", knight.refused);
         // react.guard = 0: no cap
         let mut knight = Meter::new();
-        let n: u32 = (0..40).map(|_| { let b = knight.hit(&fast, &GuardRules::OFF, 65.0, 5.0, FINISHER, true, false, false).broke as u32 + knight.hit(&fast, &GuardRules::OFF, 65.0, 5.0, LIGHT, false, false, false).broke as u32; run(&mut knight, 0.6); b }).sum();
+        let n: u32 = (0..40).map(|_| { let b = knight.hit(&fast, &GuardRules::OFF, blow(65.0, 5.0, FINISHER, true, false, false)).broke as u32 + knight.hit(&fast, &GuardRules::OFF, blow(65.0, 5.0, LIGHT, false, false, false)).broke as u32; run(&mut knight, 0.6); b }).sum();
         assert_eq!(n, 40);
+    }
+
+    /// (GF-BREAK, R6) Goofy's Stagger: one explicit break, inside every limit of a poise break.
+    #[test]
+    fn a_forced_break_opens_the_window_and_keeps_the_limits() {
+        let mut knight = Meter::new();
+        assert_eq!(light(&mut knight, 65.0).gate, Gate::None);
+        assert_eq!(knight.force_break(&R, &G, 2.5), Ok(()));
+        assert!(knight.broken());
+        assert_eq!(knight.breaks, 1);
+        // the window: a launch that a MID body refuses unbroken goes through
+        assert_eq!(knight.hit(&R, &G, blow(65.0, 5.0, FINISHER, true, false, false)).gate, Gate::Full);
+        assert_eq!(run(&mut knight, 2.6), vec![Tick::WindowClosed]);
+        assert_eq!(knight.value(), (65.0, 65.0));
+        // recovering: refused, and no reaction
+        assert!(knight.force_break(&R, &G, 2.5).is_err());
+        assert_eq!(knight.hit(&R, &G, blow(65.0, 5.0, FINISHER, true, false, false)).gate, Gate::None);
+        run(&mut knight, 4.1);
+        assert_eq!(knight.force_break(&R, &G, 2.5), Ok(()));
+        // again while it is broken: one break, not two
+        assert_eq!(knight.force_break(&R, &G, 2.5), Ok(()));
+        assert_eq!(knight.breaks, 2);
+    }
+
+    #[test]
+    fn forced_breaks_count_on_the_chain_cap() {
+        // no window and no recovery, so only the cap stands between them
+        let fast = PoiseRules { window: 0.0, lockout: 0.0, ..R };
+        let mut body = Meter::new();
+        let mut ok = 0;
+        let mut refused = 0;
+        for _ in 0..40 {
+            match body.force_break(&fast, &G, 0.0) {
+                Ok(()) => ok += 1,
+                Err(why) => {
+                    assert_eq!(why, "the chain cap");
+                    refused += 1;
+                }
+            }
+            run(&mut body, 0.6);
+        }
+        assert!((6..=9).contains(&ok) && refused > 0, "{ok} {refused}");
+        // ordinary breaks and forced breaks share the one cap
+        let mut knight = Meter::new();
+        for _ in 0..3 {
+            assert!(knight.force_break(&fast, &G, 0.0).is_ok());
+            run(&mut knight, 1.0);
+        }
+        assert!(knight.hit(&fast, &G, blow(65.0, 5.0, 100.0, true, false, false)).chain_refused);
+    }
+
+    #[test]
+    fn a_breaker_holds_the_window_then_releases_it() {
+        let mut knight = Meter::new();
+        knight.force_break(&R, &G, 1.5).unwrap();
+        run(&mut knight, 1.0);
+        knight.hold_break(3.0);
+        assert!((knight.window_left() - 3.0).abs() < 0.01, "{}", knight.window_left());
+        assert_eq!(run(&mut knight, 2.5), vec![]);
+        // the slam: its own hit is inside, then the window closes and it recovers
+        knight.release_break(&R, 0.0);
+        assert!(knight.broken());
+        assert_eq!(knight.hit(&R, &G, blow(65.0, 5.0, FINISHER, true, false, false)).gate, Gate::Full);
+        assert_eq!(run(&mut knight, 0.2), vec![Tick::WindowClosed]);
+        assert!(knight.recovery_left() > 3.0);
+        // Launch Breaker: the juggle, capped by the sheet's window
+        let mut knight = Meter::new();
+        knight.force_break(&R, &G, 2.5).unwrap();
+        knight.release_break(&R, 99.0);
+        assert!((knight.window_left() - R.window).abs() < 0.01);
+        // a body that was not broken stays so: nothing here opens a window
+        let mut soldier = Meter::new();
+        soldier.hold_break(5.0);
+        soldier.release_break(&R, 3.0);
+        assert!(!soldier.broken());
     }
 
     #[test]

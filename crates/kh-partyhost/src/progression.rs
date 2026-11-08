@@ -26,7 +26,7 @@
 //! record is re-applied at `spawn_one`). The test level never switches it on.
 
 use kh_core::enums::ETresAbilityKind as A;
-use kh_core::status::{BonusCounts, ExpPlayer, PrizeKind};
+use kh_core::status::{ExpPlayer, PrizeKind};
 use kh_core::{Sora, Vec3};
 use kh_host::formation::Formation;
 use kh_host::party::PartyChara;
@@ -60,11 +60,10 @@ pub enum ExpGiven {
     Direct(i32),
 }
 
-/// A victory bonus or an ability given to a friend (the friends' boss-reward rows, kh-er bossreward.rs).
+/// An ability given to a friend (the friends' boss-reward rows, kh-er bossreward.rs). (GF-STATS) HP, MP and slots are no longer
+/// here: they are raw amounts of the roster's record (crate::growth), so a `bonus:` token is not understood.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FriendReward {
-    /// `ETresVictoryBonusKind` by its `BonusCounts` index (HP_UP10, ITEM_SLOT_UP1 ...).
-    Bonus(usize),
     Ability(A),
     /// (party X3D) one of the playable kits' PORT abilities by its save name (`kit:AERO_FLOAT`: Donald's Aero Float,
     /// pad/donald_kit.rs); no AP for Aero Float, the others equipped while his AP allows.
@@ -75,48 +74,26 @@ pub enum FriendReward {
 }
 
 impl FriendReward {
-    /// `bonus:HP_UP10`, `bonus:ITEM_SLOT_UP1`, `ability:MP_HASTE` (the sheet's tokens).
+    /// `ability:MP_HASTE`, `don:AERO_FLOAT`, `kit:...` (the sheet's tokens).
     pub fn parse(text: &str) -> Option<FriendReward> {
         let (kind, name) = text.trim().split_once(':')?;
         match kind {
-            "bonus" => bonus_index(name).map(FriendReward::Bonus),
             "ability" => A::from_game_name(name).or_else(|| A::ALL.iter().copied().find(|k| k.name() == name)).filter(|k| *k != A::None).map(FriendReward::Ability),
             // (party X3D)
             "don" => kh_party::donald::DonAbility::from_name(name).map(FriendReward::Don), // (DON-PROG)
             "kit" if kh_party::pad::donald_kit::KitAbility::from_name(name).and_then(|k| k.to_don()).is_some() => kh_party::pad::donald_kit::KitAbility::from_name(name).and_then(|k| k.to_don()).map(FriendReward::Don), // (DON-PROG) the X3D kit migrated
-            "kit" => kh_party::pad::donald_kit::KitAbility::from_name(name).map(|k| FriendReward::Kit(k.name().to_string())).or_else(|| kh_party::pad::goofy_kit::GoofyAbility::from_name(name).map(|k| FriendReward::Kit(k.name().to_string()))), // (party X3G) Goofy's too
+            "kit" => kh_party::pad::donald_kit::KitAbility::from_name(name).map(|k| FriendReward::Kit(k.name().to_string())).or_else(|| kh_party::goofy::GoofyAbility::from_name(name).map(|k| FriendReward::Kit(k.name()))), // (party X3G) Goofy's too
             _ => None,
         }
     }
 
     pub fn label(&self) -> String {
         match self {
-            FriendReward::Bonus(i) => BONUS_NAMES.iter().find(|b| b.1 == *i).map_or_else(|| format!("bonus {i}"), |b| b.0.to_string()),
             FriendReward::Ability(k) => k.name().to_string(),
             FriendReward::Don(k) => k.label().to_string(), // (DON-PROG)
-            FriendReward::Kit(n) => kh_party::pad::donald_kit::KitAbility::from_name(n).map(|k| k.label().to_string()).or_else(|| kh_party::pad::goofy_kit::GoofyAbility::from_name(n).map(|k| k.label().to_string())).unwrap_or_else(|| n.clone()), // (party X3D) (party X3G)
+            FriendReward::Kit(n) => kh_party::pad::donald_kit::KitAbility::from_name(n).map(|k| k.label().to_string()).or_else(|| kh_party::goofy::GoofyAbility::from_name(n).map(|k| k.label().to_string())).unwrap_or_else(|| n.clone()), // (party X3D) (party X3G)
         }
     }
-}
-
-/// The friends' `ETresVictoryBonusKind` names the reward rows use (TresVBonusData: their rows give only these).
-const BONUS_NAMES: [(&str, usize); 11] = [
-    ("HP_UP3", BonusCounts::HP_UP3),
-    ("HP_UP5", BonusCounts::HP_UP5),
-    ("HP_UP10", BonusCounts::HP_UP10),
-    ("HP_UP15", BonusCounts::HP_UP15),
-    ("HP_UP30", BonusCounts::HP_UP30),
-    ("MP_UP3", BonusCounts::MP_UP3),
-    ("MP_UP5", BonusCounts::MP_UP5),
-    ("MP_UP10", BonusCounts::MP_UP10),
-    ("DEF_SLOT_UP1", BonusCounts::DEF_SLOT_UP1),
-    ("ACC_SLOT_UP1", BonusCounts::ACC_SLOT_UP1),
-    ("ITEM_SLOT_UP1", BonusCounts::ITEM_SLOT_UP1),
-];
-
-fn bonus_index(name: &str) -> Option<usize> {
-    let name = name.trim().trim_start_matches("ETresVictoryBonusKind::");
-    BONUS_NAMES.iter().find(|b| b.0.eq_ignore_ascii_case(name)).map(|b| b.1)
 }
 
 /// THE NEW GAME'S FORMATION: the chosen starter alone, leading (the others join when they are unlocked: kh-er's
@@ -379,10 +356,11 @@ impl PartyRuntime {
         if n <= 0 {
             return Vec::new();
         }
+        // (HUD-REVIVE) first every downed member up, at full HP (KH3 halves a heal on a KO'd friend: not the save point's)
+        let mut stood = self.savepoint_revive(sora);
         if self.lead.sora_active {
             sora.status_request(kh_core::StatusRequest::Recover { hp: n, mp: n, focus: n, kind: 1 });
         }
-        let mut stood = Vec::new();
         for (c, id) in self.members.clone() {
             let was_ko = self.party.view(id).is_some_and(|v| v.ko && v.hp < 1);
             self.party.heal(id, n, 1);
@@ -399,7 +377,7 @@ impl PartyRuntime {
                 if kh_party::guard::GP.guard_save_point_refills {
                     s.refill_guard(); // (GOOFY-GG) the save point / grace refills GUARD and clears a break
                 }
-                if was_ko && s.hp > 0 {
+                if was_ko && s.hp > 0 && !stood.contains(&c) {
                     stood.push(c);
                 }
             }
@@ -407,26 +385,65 @@ impl PartyRuntime {
         stood
     }
 
-    /// A FRIEND'S VICTORY BONUS OR ABILITY (the friends' boss-reward rows): a bonus counts in `BonusCounts` (the slot
-    /// bonuses also open the slot, at most 4, as `test_level99` does); an ability is one more copy (at most 3),
-    /// equipped when his AP allows. `None` = he is not in the party (the host keeps the reward for his join).
+    /// (HUD-REVIVE, THE USER 2026-11-07: "healing at a save point should be able to revive downed party members. If they revive
+    /// and are very far away they should teleport to you like they usually do when alive") THE SAVE POINT'S REVIVE: every
+    /// downed member but the leader (a friend: kh-party `revive_full`, his Die state's own get-up; AI Sora while a friend leads
+    /// and he is in the party: lead.rs `revive_ai_sora` with his maximum HP, his get-up) is up at FULL HP; once up, a member far
+    /// from the leader is warped by the rule a living member follows (a friend: kh-ai controller `warp_wanted`, 3000 cm of path,
+    /// out of the camera's view, checked every 2 s, KH3 0x141258790 / 0x14127B980; AI Sora: lead.rs `SoraAi::drive`'s far warp).
+    /// Called by the save point's Recover (`savepoint_recover`) and its rest (kh-er partyui.rs `savepoint_rest`: the leader in
+    /// the recovery area, the Roundtable Hold's included). Returns who stood up.
+    pub fn savepoint_revive(&mut self, sora: &mut Sora) -> Vec<PartyChara> {
+        let mut stood = Vec::new();
+        for (c, id) in self.members.clone() {
+            if Some(id) == self.leader {
+                continue;
+            }
+            if self.party.member_mut(id).is_some_and(kh_party::pawn::NpcPawn::revive_full) {
+                say!("party: (HUD-REVIVE) the save point revives {}: full HP, his get-up", c.name());
+                stood.push(c);
+            }
+        }
+        if self.lead.sora_active && self.ai_sora_down(sora) {
+            let max = sora.status().max_hp();
+            if self.revive_ai_sora(sora, max) {
+                stood.push(PartyChara::Sora);
+            }
+        }
+        if !stood.is_empty() {
+            self.sora_ko_left = None;
+        }
+        stood
+    }
+
+    /// (HUD-REVIVE, THE USER 2026-11-07: "allies revive when combat ends. They revive in combat after 60 seconds as a baseline")
+    /// AI SORA'S KO as the friends' (kh-party pawn.rs `die_tick`): in the party's combat (`party_combat`) his timer runs from
+    /// row `revive.in_combat_time` (60 s; kh-core's Sora equips no HYPER_HEALING, the friends' ability: n = 0); out of it the
+    /// timer is over at once; then KH3's revive amount (0x141264140: 25 % of his maximum HP) and his get-up (`revive_ai_sora`).
+    /// A kill plane's KO stays down (the friends' rule: the host stands him up, or a save point).
+    pub(crate) fn ai_sora_revive_step(&mut self, sora: &mut Sora, dt: f32) {
+        if !self.lead.sora_active || !self.ai_sora_down(sora) || sora.combat().kill_plane_held {
+            self.sora_ko_left = None;
+            return;
+        }
+        let combat = self.party_combat();
+        let left = self.sora_ko_left.get_or_insert_with(|| kh_party::status::revive_time_in_combat(0));
+        *left = if combat { *left - dt } else { 0.0 };
+        if *left <= 0.0 {
+            self.sora_ko_left = None;
+            let hp = kh_party::status::revive_amount(sora.status().max_hp(), 0);
+            if self.revive_ai_sora(sora, hp) {
+                say!("party: (HUD-REVIVE) AI Sora revives {}: {hp} HP (KH3's revive amount), his get-up", if combat { "after his KO time in combat" } else { "at the party combat's end" });
+            }
+        }
+    }
+
+    /// A FRIEND'S ABILITY (the friends' boss-reward rows): one more copy (at most 3), equipped when his AP allows. `None` = he is
+    /// not in the party (the host keeps the reward for his join).
     pub fn friend_reward(&mut self, c: PartyChara, reward: &FriendReward) -> Option<String> {
         let id = self.id(c)?;
         let s = self.party.status_mut(id)?;
         let text = match reward {
-            FriendReward::Bonus(kind) => {
-                s.bonuses.add(*kind);
-                match *kind {
-                    BonusCounts::ITEM_SLOT_UP1 => s.item_slots = (s.item_slots + 1).min(4),
-                    BonusCounts::DEF_SLOT_UP1 => s.armour_slots = (s.armour_slots + 1).min(4),
-                    BonusCounts::ACC_SLOT_UP1 => s.accessory_slots = (s.accessory_slots + 1).min(4),
-                    _ => {}
-                }
-                let (hp, mp) = (s.max_hp(), s.max_mp());
-                s.hp = hp;
-                s.mp = mp;
-                format!("{} (max HP {hp}, MP {mp}, slots item {} armour {} accessory {})", reward.label(), s.item_slots, s.armour_slots, s.accessory_slots)
-            }
             FriendReward::Ability(kind) => {
                 let owned = s.abilities.owned(*kind).saturating_add(1).min(3);
                 let equipped = s.abilities.equipped(*kind);
@@ -450,10 +467,10 @@ impl PartyRuntime {
                     format!("{} ({}, {})", k.label(), if new { "new" } else { "already owned" }, if on { "equipped" } else { "not equipped: no AP left" })
                 }
                 // (party X3G) one of Goofy's (a reward row may name kit:TORNADO_COPTER ...): owned, worn while the AP allows
-                _ => match kh_party::pad::goofy_kit::GoofyAbility::from_name(name) {
+                _ => match kh_party::goofy::GoofyAbility::from_name(name) {
                     Some(k) if s.chara == kh_party::Chara::Goofy => {
-                        let new = s.goofy_kit.give(k);
-                        let on = s.goofy_kit.equipped(k) || s.kit_goofy_equip(k, true);
+                        let new = s.goofy.as_mut().is_some_and(|g| g.abilities.give(k));
+                        let on = s.goofy.as_ref().is_some_and(|g| g.abilities.equipped(k)) || s.gof_equip(k, true);
                         format!("{} ({}, {})", k.label(), if new { "new" } else { "already owned" }, if on { "equipped" } else { "not equipped: no AP left" })
                     }
                     _ => format!("{name} (not this friend's)"),
@@ -476,6 +493,7 @@ impl PartyRuntime {
         v[crate::custom::RECORD_KEY] = self.custom_record(); // (party X2) the leaders' Customize blocks (additive)
         v[kh_party::boosts::RECORD_KEY] = crate::boosts::to_json(&self.roster_boosts); // (IT) the roster's boost total (additive)
         v[crate::donald::RECORD_KEY] = crate::donald::to_json(&self.don_learned); // (DON1) Donald's learned magic (additive)
+        v[kh_party::growth::RECORD_KEY] = self.growth_record(); // (GF-STATS) what the bosses gave the roster (additive)
         v
     }
 
@@ -513,6 +531,7 @@ impl PartyRuntime {
         self.load_custom_record(&v[crate::custom::RECORD_KEY]); // (party X2) none in an older save: the defaults
         self.load_roster_record(&v[kh_party::boosts::RECORD_KEY]); // (IT) none in an older save: seeded by the host
         self.load_don_record(&v[crate::donald::RECORD_KEY]); // (DON1) none in an older save: the start, flagged for the catch-up
+        self.load_growth_record(&v[kh_party::growth::RECORD_KEY]); // (GF-STATS) none in an older save: nothing yet, the catch-up rebuilds it
     }
 }
 
@@ -544,6 +563,13 @@ mod tests {
         fn hurt_shapes(&self, _id: TargetId, _out: &mut Vec<kh_core::host::HurtShape>) {}
         fn apply_hit(&mut self, _hit: &kh_core::HitRecord) -> kh_core::host::HitResult {
             kh_core::host::HitResult::default()
+        }
+        // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+        fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+            None
+        }
+        fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+            None
         }
     }
     impl PartyTargets for NoEnemies {
@@ -658,7 +684,7 @@ mod tests {
         assert!(rt.id(PartyChara::Goofy).is_none());
         // KH3's init data, not the test level's level-99 loadout
         let d = rt.party.status(rt.id(PartyChara::Donald).unwrap()).unwrap();
-        assert_eq!((d.weapon, d.bonuses, d.item_slots), ("WEP_DONALD_00", BonusCounts::NONE, 2));
+        assert_eq!((d.weapon, d.growth, d.item_slots), ("WEP_DONALD_00", kh_party::growth::Growth::default(), 2));
         // the party fights: 3,000 EXP into the shared total (Sora out of the party: straight in, no popups)
         for _ in 0..10 {
             assert!(matches!(rt.give_exp(&mut sora, 300, 1.0, None), ExpGiven::Direct(_)));
@@ -694,7 +720,8 @@ mod tests {
         let mut sora = new_game_sora();
         let mut rt = runtime(true);
         step(&mut rt, &mut sora, &world);
-        assert!(rt.friend_reward(PartyChara::Goofy, &FriendReward::parse("bonus:ITEM_SLOT_UP1").unwrap()).is_some());
+        let t = kh_host::bossrewards::Table::parse(kh_host::bossrewards::SHEET);
+        rt.gof_claim_due(&t, &mut vec!["boss:godfrey_shade".to_string()], &|_| false); // an item slot, from the roster's record
         assert!(rt.friend_reward(PartyChara::Goofy, &FriendReward::parse("ability:LUCK_UP").unwrap()).is_some());
         let before = FriendRecord::of(PartyChara::Goofy, rt.party.status(rt.id(PartyChara::Goofy).unwrap()).unwrap());
         assert_eq!(before.item_slots, 4);
@@ -711,7 +738,7 @@ mod tests {
         let mut sora2 = new_game_sora();
         step(&mut tl, &mut sora2, &world);
         let g = tl.party.status(tl.id(PartyChara::Goofy).unwrap()).unwrap();
-        assert_eq!(g.bonuses.0[BonusCounts::HP_UP10], 6, "the test level keeps its level-99 loadout (its levels come from Sora's test EXP)");
+        assert_eq!(g.growth, kh_party::growth::Growth::full(kh_party::Chara::Goofy), "the test level keeps its level-99 loadout (its levels come from Sora's test EXP)");
     }
 
     #[test]
@@ -720,7 +747,8 @@ mod tests {
         let mut sora = new_game_sora();
         let mut rt = runtime(true);
         step(&mut rt, &mut sora, &world);
-        rt.friend_reward(PartyChara::Donald, &FriendReward::Bonus(BonusCounts::HP_UP10));
+        let t = kh_host::bossrewards::Table::parse(kh_host::bossrewards::SHEET);
+        rt.don_stat_claim_due(&t.don, &mut vec!["boss:tree_sentinel".to_string()]); // Max HP +9, from the roster's record
         rt.set_ai_settings(PartyChara::Donald, kh_host::party::FriendAiSettings { battle: 3, ability: 2, cure: 0, cure_targets: 5 });
         rt.lead_word(&["leader", "donald"]);
         step(&mut rt, &mut sora, &world);
@@ -738,7 +766,7 @@ mod tests {
         assert_eq!(rt2.leader_chara(), PartyChara::Donald);
         assert_eq!(rt2.ai_settings(PartyChara::Donald).battle, 3);
         let d = rt2.party.status(rt2.id(PartyChara::Donald).unwrap()).unwrap();
-        assert_eq!(d.bonuses.0[BonusCounts::HP_UP10], 1);
+        assert_eq!(d.max_hp(), 98);
         // a v4 record (format 1 / 2 without friends) and none at all: KH3's init data
         for old in [json!({ "format": 1, "leader": "sora", "active": ["sora", "goofy"] }), Value::Null] {
             let save = read_party_record(&old);
@@ -750,14 +778,14 @@ mod tests {
                 step(&mut rt3, &mut sora3, &world);
             }
             let g = rt3.party.status(rt3.id(PartyChara::Goofy).unwrap()).unwrap();
-            assert_eq!((g.weapon, g.bonuses), ("WEP_GOOFY_00", BonusCounts::NONE));
+            assert_eq!((g.weapon, g.growth), ("WEP_GOOFY_00", kh_party::growth::Growth::default()));
         }
         // an odd record: unknown characters dropped, counts clamped
         let odd = json!({ "format": 2, "leader": "riku", "friends": [ { "chara": "riku" }, { "chara": "donald", "weapon": "WEP_NOPE", "slots": [9, 9, 9], "bonuses": [999], "abilities": [["MP_HASTE", 7, 255]] } ] });
         let save = read_party_record(&odd);
         assert_eq!(save.formation, Formation::default());
         assert_eq!(save.friends.len(), 1);
-        assert_eq!((save.friends[0].item_slots, save.friends[0].bonuses[0]), (4, 255));
+        assert_eq!((save.friends[0].item_slots, save.friends[0].bonuses[0]), (5, 255));
     }
 
     #[test]
@@ -769,14 +797,15 @@ mod tests {
         rt.friend_reward(PartyChara::Donald, &FriendReward::parse("ability:MP_HASTE").unwrap());
         let saved = rt.party_record();
         // after the save: another bonus and ability, then a death and the reload of that save
-        rt.friend_reward(PartyChara::Donald, &FriendReward::parse("bonus:HP_UP10").unwrap());
+        let t = kh_host::bossrewards::Table::parse(kh_host::bossrewards::SHEET);
+        rt.don_stat_claim_due(&t.don, &mut vec!["boss:tree_sentinel".to_string()]);
         rt.friend_reward(PartyChara::Donald, &FriendReward::parse("ability:FIRE_UP").unwrap());
         rt.reset_friends_for_load(sora.status().exp);
         rt.load_party_record(&saved);
         step(&mut rt, &mut sora, &world);
         let d = rt.party.status(rt.id(PartyChara::Donald).unwrap()).unwrap();
         assert_eq!(d.abilities.owned(A::MpHaste), 1, "what the save had");
-        assert_eq!((d.abilities.owned(A::FireUp), d.bonuses.0[BonusCounts::HP_UP10]), (0, 0), "what came after it is gone");
+        assert_eq!((d.abilities.owned(A::FireUp), d.max_hp()), (0, 89), "what came after it is gone");
         assert_eq!(FriendRecord::of(PartyChara::Donald, d), read_party_record(&saved).friends[0]);
     }
 

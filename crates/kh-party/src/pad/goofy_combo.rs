@@ -1,70 +1,58 @@
-//! (GOOFY-GK) GOOFY'S OWN GROUND AND AIR COMBO, the tank rework (build/sora_tmp/party/GK_GOOFY_DESIGN.md sections 2 / 3;
-//! the user 2026-10-16 23:40: "extremely stiff in combat with no combo potential ... he should have combo potential on the
-//! ground and his combos should be able to link into his abilities. He should feel weighty"). KH3 has no playable Goofy:
-//! the RULES are the port's (after Sora's attack state: a queued press, a link point, a move point, finishers chosen by
-//! ability), the PIECES are KH3's (his n_ex002 clips with their voice / swing / effect notifies, his shield's hit effect
-//! and hit / swing sound sets). Every number is a row of `sheets/port/party-kit-goofy.json` (`step.*`, `combo.*`).
+//! (GOOFY) HIS BASIC ATTACK, WEAK ON PURPOSE (documentation/GOOFY_OVERHAUL.md 3): three shoves at 0.6 / 0.6 / 0.9, short reach,
+//! one downward bonk in the air. The string never grows: its uses are poking, Taunt Hits (threat) and opening into a parry, so
+//! any step cancels into the guard at any time with no recovery. His third hit is the finisher that rolls Unison / Fusion (R13).
 //!
-//! The steps run in the pad states COMBO (ground) and AIR_COMBO (air): the clip copies have no Attack / Traction notify
-//! and no root motion (the hit is the kit's sphere, the step's lunge replaces the root), everything else of the clip
-//! plays as in KH3.
+//! The steps run in the pad states COMBO (ground) and AIR_COMBO (air): the clip copies have no Attack / Traction notify and no
+//! root motion (the hit is the kit's sphere), everything else of the clip plays as in KH3. Rows `step.*`, `combo.*`.
+//!
+//! THE FEEL (THE USER 2026-11-02: "Goofy's combat also feels EXTREMELY stilted, please fix this"; "His combo should move him a
+//! little bit"): each ground step carries him forward by `step.<id>.travel` along the clip's own KH3 root curve (ours, eased,
+//! for the bash that has none), never into an enemy body ahead and never over a drop; the clip's TurnToTarget windows keep him
+//! turning to his target; the wind-up before a hit plays at `combo.windup` x. The air bonk's hit rides the shield (KH3's
+//! sphere on the ATK_00 socket track) instead of a big sphere ahead of him (THE USER 2026-11-02: "His aerial hit's hitbox also
+//! extends way too far away from him").
+//!
+//! THE FINISHER'S END LAG (THE USER 2026-11-02: "He needs some end lag at the end of his combo so you can't spam it, like
+//! Sora."): the bash, the end of the string, holds him `combo.end_lag` after its hit, as Sora's finisher does (KH3's finishEnd
+//! attack: no attack, stick or jump until its clip ends, guard / dodge only from its TresEnableChange). No new string starts
+//! in that time, on the ground or in the air; the hop and the guard cancel it from `combo.end_lag_cancel`, the lag's clock
+//! running on. The two shoves before it keep their chain and their guard cancel at any time.
 
-use super::goofy::{self, Finisher};
-use super::goofy_kit::{GoofyAbility as GA, K};
+use super::goofy::{self, g, gp, leave_to_ground, stick};
 use super::goofy_shots::{self as shots, Area, SoloRow};
+use crate::goofy::K;
 use crate::host::PartyHost;
-use crate::pawn::{forward, horizontal, wrap180, yaw_of, NpcPawn, StepCtx};
+use crate::pawn::{forward, horizontal, turn_rate, yaw_of, NpcPawn, StepCtx, TurnKind};
 use crate::states::NpcStateId;
 use glam::{Vec2, Vec3};
 use kh_core::enums::ETresDamageKind as Kind;
-use kh_core::input::PadButton;
 
-/// The pad states of the combo (Goofy's range 40 .. 55).
+/// The pad states of the string.
 pub const COMBO: u8 = 53;
 pub const AIR_COMBO: u8 = 54;
 
-/// One step of his strings.
+/// One step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Step {
     #[default]
-    Push,
-    Dash,
-    Sweep,
-    Bash,
-    Shove,
-    Big,
-    Quake,
-    Upper,
-    Air1,
-    Air2,
-    Air3,
+    Shove1,
+    Shove2,
+    Shove3,
+    Bonk,
 }
 
 impl Step {
-    pub fn is_finisher(self) -> bool {
-        matches!(self, Step::Big | Step::Quake | Step::Upper)
-    }
-    pub fn is_air(self) -> bool {
-        matches!(self, Step::Air1 | Step::Air2 | Step::Air3)
-    }
     pub fn name(self) -> &'static str {
         match self {
-            Step::Push => "combo_push",
-            Step::Dash => "combo_dash",
-            Step::Sweep => "combo_sweep",
-            Step::Bash => "combo_bash",
-            Step::Shove => "combo_shove",
-            Step::Big => "fin_big_bash",
-            Step::Quake => "fin_shield_quake",
-            Step::Upper => "fin_shield_upper",
-            Step::Air1 => "air_strike",
-            Step::Air2 => "air_smash",
-            Step::Air3 => "air_shield_bash",
+            Step::Shove1 => "shove1",
+            Step::Shove2 => "shove2",
+            Step::Shove3 => "shove3",
+            Step::Bonk => "bonk",
         }
     }
 }
 
-/// A step's numbers (sheet rows `step.<id>.*`).
+/// A step's numbers (rows `step.<id>.*`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StepDef {
     pub clip: &'static str,
@@ -73,9 +61,6 @@ pub struct StepDef {
     pub active: f32,
     pub link: f32,
     pub r#move: f32,
-    pub lunge_from: f32,
-    pub lunge_to: f32,
-    pub lunge_max: f32,
     pub power: f32,
     pub kind: &'static str,
     pub hit_se: &'static str,
@@ -83,37 +68,111 @@ pub struct StepDef {
     pub radius: f32,
     /// The attack row whose shape the hit borrows (the record's name: the hosts' logs).
     pub row: &'static str,
-    /// The clip has no swing SE of its own (the bash clips were the link pawn's).
+    /// The clip has no swing SE of its own.
     pub swing: bool,
-}
-
-macro_rules! sd {
-    ($c:ident, $ra:ident, $h:ident, $a:ident, $l:ident, $m:ident, $lf:ident, $lt:ident, $lm:ident, $p:ident, $k:ident, $se:ident, $hs:ident, $rd:ident, $row:expr, $sw:expr) => {
-        StepDef { clip: K.$c, rate: K.$ra, hit: K.$h, active: K.$a, link: K.$l, r#move: K.$m, lunge_from: K.$lf, lunge_to: K.$lt, lunge_max: K.$lm, power: K.$p, kind: K.$k, hit_se: K.$se, hitstop: K.$hs, radius: K.$rd, row: $row, swing: $sw }
-    };
+    /// How far the step carries him forward (cm), given between these clip times (rows `step.<id>.travel*`; 0: none).
+    pub travel: f32,
+    pub travel_from: f32,
+    pub travel_to: f32,
+    /// The wind-up's play rate, x `rate` (`combo.windup` on the ground; the bonk's hit comes at once).
+    pub windup: f32,
 }
 
 pub fn def(s: Step) -> StepDef {
     match s {
-        Step::Push => sd!(step_push_clip, step_push_rate, step_push_hit, step_push_active, step_push_link, step_push_move, step_push_lunge_from, step_push_lunge_to, step_push_lunge_max, step_push_power, step_push_kind, step_push_hit_se, step_push_hitstop, step_push_radius, "Attack1_Push", false),
-        Step::Dash => sd!(step_dash_clip, step_dash_rate, step_dash_hit, step_dash_active, step_dash_link, step_dash_move, step_dash_lunge_from, step_dash_lunge_to, step_dash_lunge_max, step_dash_power, step_dash_kind, step_dash_hit_se, step_dash_hitstop, step_dash_radius, "FR_SHIELDGUARDIAN_SHIELDBASH", true),
-        Step::Sweep => sd!(step_sweep_clip, step_sweep_rate, step_sweep_hit, step_sweep_active, step_sweep_link, step_sweep_move, step_sweep_lunge_from, step_sweep_lunge_to, step_sweep_lunge_max, step_sweep_power, step_sweep_kind, step_sweep_hit_se, step_sweep_hitstop, step_sweep_radius, "Attack2_Sweep", false),
-        Step::Bash => sd!(step_bash_clip, step_bash_rate, step_bash_hit, step_bash_active, step_bash_link, step_bash_move, step_bash_lunge_from, step_bash_lunge_to, step_bash_lunge_max, step_bash_power, step_bash_kind, step_bash_hit_se, step_bash_hitstop, step_bash_radius, "FR_SHIELDGUARDIAN_SHIELDBASH", true),
-        Step::Shove => sd!(step_shove_clip, step_shove_rate, step_shove_hit, step_shove_active, step_shove_link, step_shove_move, step_shove_lunge_from, step_shove_lunge_to, step_shove_lunge_max, step_shove_power, step_shove_kind, step_shove_hit_se, step_shove_hitstop, step_shove_radius, "Attack1_Push", false),
-        Step::Big => sd!(step_big_clip, step_big_rate, step_big_hit, step_big_active, step_big_link, step_big_move, step_big_lunge_from, step_big_lunge_to, step_big_lunge_max, step_big_power, step_big_kind, step_big_hit_se, step_big_hitstop, step_big_radius, "FR_SHIELDGUARDIAN_SHIELDBASH2", true),
-        Step::Quake => sd!(step_quake_clip, step_quake_rate, step_quake_hit, step_quake_active, step_quake_link, step_quake_move, step_quake_lunge_from, step_quake_lunge_to, step_quake_lunge_max, step_quake_power, step_quake_kind, step_quake_hit_se, step_quake_hitstop, step_quake_radius, "FR_SHIELDGUARDIAN_HEAVYBASH", false),
-        Step::Upper => sd!(step_upper_clip, step_upper_rate, step_upper_hit, step_upper_active, step_upper_link, step_upper_move, step_upper_lunge_from, step_upper_lunge_to, step_upper_lunge_max, step_upper_power, step_upper_kind, step_upper_hit_se, step_upper_hitstop, step_upper_radius, "Attack3_JumpAscent", false),
-        Step::Air1 => sd!(step_air1_clip, step_air1_rate, step_air1_hit, step_air1_active, step_air1_link, step_air1_move, step_air1_lunge_from, step_air1_lunge_to, step_air1_lunge_max, step_air1_power, step_air1_kind, step_air1_hit_se, step_air1_hitstop, step_air1_radius, "Attack3_JumpAscent", false),
-        Step::Air2 => sd!(step_air2_clip, step_air2_rate, step_air2_hit, step_air2_active, step_air2_link, step_air2_move, step_air2_lunge_from, step_air2_lunge_to, step_air2_lunge_max, step_air2_power, step_air2_kind, step_air2_hit_se, step_air2_hitstop, step_air2_radius, "Attack3_JumpDescent", false),
-        Step::Air3 => sd!(step_air3_clip, step_air3_rate, step_air3_hit, step_air3_active, step_air3_link, step_air3_move, step_air3_lunge_from, step_air3_lunge_to, step_air3_lunge_max, step_air3_power, step_air3_kind, step_air3_hit_se, step_air3_hitstop, step_air3_radius, "FR_SHIELDGUARDIAN_SHIELDBASH", true),
+        Step::Shove1 => StepDef { clip: K.step_shove1_clip, rate: K.step_shove1_rate, hit: K.step_shove1_hit, active: K.step_shove1_active, link: K.step_shove1_link, r#move: K.step_shove1_move, power: K.step_shove1_power, kind: K.step_shove1_kind, hit_se: K.step_shove1_hit_se, hitstop: K.step_shove1_hitstop, radius: K.step_shove1_radius, row: "Attack1_Push", swing: false, travel: K.step_shove1_travel, travel_from: K.step_shove1_travel_from, travel_to: K.step_shove1_travel_to, windup: K.combo_windup },
+        Step::Shove2 => StepDef { clip: K.step_shove2_clip, rate: K.step_shove2_rate, hit: K.step_shove2_hit, active: K.step_shove2_active, link: K.step_shove2_link, r#move: K.step_shove2_move, power: K.step_shove2_power, kind: K.step_shove2_kind, hit_se: K.step_shove2_hit_se, hitstop: K.step_shove2_hitstop, radius: K.step_shove2_radius, row: "Attack2_Sweep", swing: false, travel: K.step_shove2_travel, travel_from: K.step_shove2_travel_from, travel_to: K.step_shove2_travel_to, windup: K.combo_windup },
+        Step::Shove3 => StepDef { clip: K.step_shove3_clip, rate: K.step_shove3_rate, hit: K.step_shove3_hit, active: K.step_shove3_active, link: K.step_shove3_link, r#move: K.step_shove3_move, power: K.step_shove3_power, kind: K.step_shove3_kind, hit_se: K.step_shove3_hit_se, hitstop: K.step_shove3_hitstop, radius: K.step_shove3_radius, row: "FR_SHIELDGUARDIAN_SHIELDBASH", swing: true, travel: K.step_shove3_travel, travel_from: K.step_shove3_travel_from, travel_to: K.step_shove3_travel_to, windup: K.combo_windup },
+        Step::Bonk => StepDef { clip: K.step_bonk_clip, rate: K.step_bonk_rate, hit: K.step_bonk_hit, active: K.step_bonk_active, link: K.step_bonk_link, r#move: K.step_bonk_move, power: K.step_bonk_power, kind: K.step_bonk_kind, hit_se: K.step_bonk_hit_se, hitstop: K.step_bonk_hitstop, radius: K.step_bonk_radius, row: "Attack3_JumpDescent", swing: false, travel: 0.0, travel_from: 0.0, travel_to: 0.0, windup: 1.0 },
     }
 }
 
-/// The running string (`GoofyPad::combo`).
+/// The play rate at clip time `t`: the wind-up before the hit at `windup` x the step's rate (THE USER 2026-11-02: "Goofy's
+/// combat also feels EXTREMELY stilted, please fix this": the 0.45 clip s wind-up made a press land 0.36 s late), the hit and
+/// its follow-through at the step's rate.
+pub fn rate_at(d: &StepDef, t: f32) -> f32 {
+    if t < d.hit { d.rate * d.windup } else { d.rate }
+}
+
+/// The part of a root track that moves: (the last key still at the start, the first key at the end, the forward cm).
+fn root_window(c: &crate::anim::ClipDef) -> Option<(f32, f32, f32)> {
+    let (first, last) = (c.root.first()?, c.root.last()?);
+    let total = last.x - first.x;
+    if total < 1.0 {
+        return None;
+    }
+    let from = c.root.iter().take_while(|k| k.x - first.x <= 0.005 * total).last().map_or(first.time, |k| k.time);
+    let to = c.root.iter().find(|k| k.x - first.x >= 0.995 * total).map_or(last.time, |k| k.time);
+    (to > from).then_some((from, to, total))
+}
+
+/// The share (0 .. 1) of a step's travel due by clip time `t` (THE USER 2026-11-02: "His combo should move him a little
+/// bit"): KH3's own root curve of the clip (M_1301 / M_1302) laid over the step's travel window, else (SGuardShieldBash has
+/// no root track) an ease in and out over it.
+pub fn travel_share(d: &StepDef, t: f32) -> f32 {
+    let u = ((t - d.travel_from) / (d.travel_to - d.travel_from).max(1e-4)).clamp(0.0, 1.0);
+    let base = shots::clip(d.clip);
+    match root_window(base) {
+        Some((from, to, total)) => ((base.root_at(from + u * (to - from)).x - base.root_at(0.0).x) / total).clamp(0.0, 1.0),
+        None => u * u * (3.0 - 2.0 * u),
+    }
+}
+
+/// How much of `want` cm ahead he may travel now: never into the body of an enemy ahead (its radius + his + `combo.travel_gap`,
+/// centre to centre, so a step stops at the body and never goes through it), and nothing at all when his front edge would be
+/// over a drop deeper than his step height (the floor finder's own: his walk could not step back up it).
+fn travel_room(p: &NpcPawn, host: &PartyHost, want: f32) -> f32 {
+    let me = p.position();
+    let f = forward(p.yaw);
+    let mine = p.params.capsule_radius;
+    let mut room = want;
+    for t in shots::enemies(host) {
+        if (t.center.z - p.capsule_centre().z).abs() > t.half_height + p.params.capsule_half_height {
+            continue; // above or below him: not in his way
+        }
+        let rel = horizontal(t.position - me);
+        let along = rel.dot(f);
+        let reach = mine + t.radius + K.combo_travel_gap;
+        let side = (rel - f * along).length();
+        if along <= 0.0 || side >= reach {
+            continue;
+        }
+        room = room.min((along - (reach * reach - side * side).sqrt()).max(0.0));
+    }
+    if room > 0.0 {
+        let edge = me + f * (room + mine);
+        let step = p.params.floor_max_step_height;
+        if host.world.line_trace(edge + Vec3::Z * step, edge - Vec3::Z * step).is_none() {
+            room = 0.0;
+        }
+    }
+    room
+}
+
+/// This step's share of the travel, as his velocity for the next movement (frame-rate independent: the distance due by the
+/// clip's time, less what was given, over the step's dt). What a body or a drop holds back is not owed later.
+fn travel(p: &mut NpcPawn, host: &PartyHost, d: &StepDef, t: f32, dt: f32) {
+    let due = d.travel * travel_share(d, t);
+    let want = due - g(p).combo.travelled;
+    let go = if want > 0.0 && dt > 0.0 && p.on_ground() { travel_room(p, host, want) } else { 0.0 };
+    let k = gp(p);
+    k.combo.travelled = k.combo.travelled.max(due);
+    let v = forward(p.yaw) * (go / dt.max(1e-4));
+    p.cmc.direct_xy = Some(Vec2::new(v.x, v.y));
+}
+
+/// The shield's sphere now (the clip's ATK_00 socket track: his frame, x forward, y right, z up from his feet), with KH3's
+/// socket-space offset turned by the socket (COMBAT-FIX: `actions::GOOFY_SHIELD_OFFSET`, group "None").
+fn shield_at(p: &NpcPawn) -> Option<Vec3> {
+    let keys = p.anim.clip.socket;
+    (!keys.is_empty()).then(|| crate::actions::socket_point_at(keys, p.anim.time, crate::actions::GOOFY_SHIELD_OFFSET))
+}
+
+/// The running string (`GoofyRun::combo`).
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct ComboRun {
     pub step: Step,
-    /// Ground steps done in this string (the finisher comes after `regular_steps`), air steps done this airtime.
+    /// Ground steps done in this string, bonks this airtime.
     pub n: u8,
     pub air_n: u8,
     /// An A press waits for the link point.
@@ -121,47 +180,47 @@ pub struct ComboRun {
     /// The hit sphere is out; the first landed hit's clip time.
     pub hit_out: bool,
     pub landed: Option<f32>,
-    /// The lunge (cm/s, world) and the lunge's clip window.
-    pub lunge: Vec2,
-    /// A held since the step's press (Shield Quake).
-    pub a_hold: f32,
-    /// Shield Upper's phase: 0 rising, 1 falling, 2 landed.
-    pub phase: u8,
-    /// Seconds the finisher still waits for the host's unison answer (0 = not waiting).
+    /// Seconds the third shove still waits for the host's unison answer.
     pub wait_answer: f32,
     pub asked: bool,
     /// The swing SE of a clip without one was played.
     pub swung: bool,
-}
-
-fn gp(p: &mut NpcPawn) -> &mut goofy::GoofyPad {
-    &mut p.pad.as_mut().expect("pad").goofy
-}
-
-fn g(p: &NpcPawn) -> &goofy::GoofyPad {
-    &p.pad.as_ref().expect("pad").goofy
-}
-
-fn has(p: &NpcPawn, k: GA) -> bool {
-    p.status.goofy_kit.has(k)
-}
-
-fn held(p: &NpcPawn, b: PadButton) -> bool {
-    p.pad.as_ref().is_some_and(|d| d.frame.pad.held.has(b))
+    /// The step's travel given out so far (cm; what a body or a drop held back counts as given).
+    pub travelled: f32,
+    /// Seconds the bash's end lag still runs (from its hit, its hit-stop not counted; `combo.end_lag`): no new string until 0,
+    /// whatever state he is in.
+    pub end_lag: f32,
 }
 
 fn in_combo(p: &NpcPawn) -> bool {
     matches!(p.state, NpcStateId::Pad(COMBO | AIR_COMBO))
 }
 
-/// Regular ground steps before the finisher (base + Combo Plus).
-pub fn regular_steps(p: &NpcPawn) -> u8 {
-    K.combo_count_base as u8 + has(p, GA::ComboPlus) as u8 + has(p, GA::ComboPlus2) as u8
+/// THE FINISHER'S END LAG holds him in the bash now (THE USER 2026-11-02: "He needs some end lag at the end of his combo so
+/// you can't spam it, like Sora."): no link, no stick, no jump, no Art or Breaker out of it.
+pub fn end_lag_holds(p: &NpcPawn) -> bool {
+    in_combo(p) && g(p).combo.end_lag > 0.0
 }
 
-/// Air steps (Air Combo Plus adds the Air Shield Bash).
-pub fn air_steps(p: &NpcPawn) -> u8 {
-    2 + has(p, GA::AirComboPlus) as u8
+/// A new string, ground or air, is refused now: the bash's end lag still runs (out of a hop or the guard that cancelled it too).
+pub fn restart_held(p: &NpcPawn) -> bool {
+    g(p).combo.end_lag > 0.0
+}
+
+/// X (the hop, the guard) may cancel the running step now: a shove at any time (section 3), the bash's end lag only from
+/// `combo.end_lag_cancel` after its hit (Sora's rule: his finishEnd attack lets the guard and the dodge in only at its
+/// TresEnableChange, 0.23 s after its hit; before that nothing cancels it).
+pub fn x_cancel_open(p: &NpcPawn) -> bool {
+    !end_lag_holds(p) || K.combo_end_lag - g(p).combo.end_lag >= K.combo_end_lag_cancel - 1e-4
+}
+
+/// The end lag's clock (pad/goofy.rs `pre_move`, every step): it stands still with the bash's hit-stop, as the clip does.
+pub fn run_end_lag(p: &mut NpcPawn, dt: f32) {
+    if in_combo(p) && g(p).hitstop > 0.0 {
+        return;
+    }
+    let k = gp(p);
+    k.combo.end_lag = (k.combo.end_lag - dt).max(0.0);
 }
 
 /// The running step's def.
@@ -169,266 +228,146 @@ pub fn current(p: &NpcPawn) -> Option<StepDef> {
     in_combo(p).then(|| def(g(p).combo.step))
 }
 
-/// The link point of the running step has come (next press, abilities, Y, B, X).
+/// The link point of the running step has come.
 pub fn link_open(p: &NpcPawn) -> bool {
     let Some(d) = current(p) else { return false };
-    let c = g(p).combo;
-    if c.step == Step::Upper {
-        return c.phase >= 2 && p.anim.time >= 0.0;
-    }
-    c.hit_out && p.anim.time >= d.link && g(p).hitstop <= 0.0
+    g(p).combo.hit_out && p.anim.time >= d.link && g(p).hitstop <= 0.0 && !end_lag_holds(p)
 }
 
-/// The hit confirm: X (guard / Hop) after the first landed hit.
+/// B out of a step: after its hit landed, or from the link point (never in the bash's end lag).
 pub fn confirm_open(p: &NpcPawn) -> bool {
-    if !in_combo(p) {
+    in_combo(p) && g(p).hitstop <= 0.0 && !end_lag_holds(p) && (link_open(p) || g(p).combo.landed.is_some())
+}
+
+/// The move point: the stick takes him out (once the bash's end lag is over).
+pub fn move_open(p: &NpcPawn) -> bool {
+    !end_lag_holds(p) && current(p).is_some_and(|d| p.anim.time >= d.r#move)
+}
+
+/// A on the ground: the first step, or the next one at its link point. Refused in the bash's end lag.
+pub fn press(p: &mut NpcPawn, host: &mut PartyHost) -> bool {
+    if restart_held(p) {
         return false;
     }
-    let c = g(p).combo;
-    link_open(p) || c.landed.is_some_and(|t| p.anim.time >= t + K.combo_confirm * def(c.step).rate) && g(p).hitstop <= 0.0
-}
-
-/// The move point: the stick takes him out.
-pub fn move_open(p: &NpcPawn) -> bool {
-    let Some(d) = current(p) else { return false };
-    let c = g(p).combo;
-    if c.step == Step::Upper {
-        return c.phase >= 2 && p.state_time >= 0.0 && p.anim.time >= d.r#move.min(p.anim.clip.length);
-    }
-    p.anim.time >= d.r#move
-}
-
-/// The target a step turns to and lunges at: the lock, else the soft target.
-fn target(p: &NpcPawn, host: &PartyHost) -> Option<kh_core::host::TargetInfo> {
-    match p.pad.as_ref()?.target() {
-        crate::command::TargetRef::Enemy(t) => host.targets.info(t),
-        _ => None,
-    }
-}
-
-fn stick(p: &NpcPawn) -> (f32, f32, bool) {
-    let d = p.pad.as_ref().expect("pad");
-    (d.stick_yaw, d.stick_magnitude, d.stick_magnitude >= kh_core::params::SORA_PARAMS.input_stick_active_min)
-}
-
-/// The gap from him to the target's surface less the reach (cm).
-fn gap(p: &NpcPawn, t: &kh_core::host::TargetInfo) -> f32 {
-    horizontal(t.position - p.position()).length() - t.radius - p.params.capsule_radius - K.combo_reach
-}
-
-/// A (decided in `goofy::decide`, run in pre-move): the first step / the next one. True = it acted.
-pub fn press(p: &mut NpcPawn, host: &mut PartyHost) -> bool {
     if in_combo(p) {
         gp(p).combo.queued = true;
         return true;
     }
-    let grounded = p.on_ground();
-    if grounded {
-        let first = match target(p, host) {
-            Some(t) => {
-                let d = horizontal(t.position - p.position()).length();
-                if d >= K.combo_dash_min && d <= K.combo_dash_max {
-                    Step::Dash
-                } else {
-                    Step::Push
-                }
-            }
-            None => Step::Push,
-        };
-        gp(p).combo.n = 0;
-        start(p, host, first);
-        return true;
-    }
-    if g(p).combo.air_n < air_steps(p) {
-        let s = match g(p).combo.air_n {
-            0 => Step::Air1,
-            1 => Step::Air2,
-            _ => Step::Air3,
-        };
-        start(p, host, s);
-        return true;
-    }
-    false
+    gp(p).combo.n = 0;
+    start(p, host, Step::Shove1);
+    true
 }
 
-/// Starts a step (also the Turbo Bash link: `start(.., Step::Big)`).
+/// A in the air: the one bonk of an airtime (none while the bash's end lag runs: a jump out of the guard that cancelled it).
+pub fn press_air(p: &mut NpcPawn, host: &mut PartyHost) -> bool {
+    if in_combo(p) || g(p).combo.air_n >= 1 || restart_held(p) {
+        return false;
+    }
+    start(p, host, Step::Bonk);
+    true
+}
+
+/// Starts a step.
 pub fn start(p: &mut NpcPawn, host: &mut PartyHost, s: Step) {
     let d = def(s);
-    let air = s.is_air();
+    let air = s == Step::Bonk;
     p.cmc.speed_limit_override = None;
     p.cmc.walk_mode = false;
     p.enter(NpcStateId::Pad(if air { AIR_COMBO } else { COMBO }));
-    if air || s == Step::Upper {
+    if air {
         p.cmc.velocity.z = 0.0;
         p.cmc.gravity_off = true;
         p.cmc.set_flying();
     }
     p.cmc.stop_movement();
-    // face the target (Sora's TurnToTarget, snapped at the start), else the stick
+    // face the target (Sora's TurnToTarget, snapped at the start), else the stick; the clip's TurnToTarget window and the
+    // step's travel go on from there (`tick`)
     let me = p.position();
-    let t = target(p, host);
-    // Shield Upper is chosen by pulling the stick AWAY: he keeps facing his string's line (a target ahead of him only),
-    // he must not turn round to the stick (test level run 4)
-    let t = if s == Step::Upper { t.filter(|t| wrap180(yaw_of(horizontal(t.position - me)) - p.yaw).abs() <= 90.0) } else { t };
-    let want = t.map(|t| horizontal(t.position - me)).filter(|v| v.length() > 1.0).map(yaw_of).or_else(|| {
+    let want = goofy::target_info(p, host).map(|t| horizontal(t.position - me)).filter(|v| v.length() > 1.0).map(yaw_of).or_else(|| {
         let (y, _, a) = stick(p);
-        (a && s != Step::Upper).then_some(y)
+        a.then_some(y)
     });
-    if let Some(w) = want {
-        let dd = wrap180(w - p.yaw);
-        p.yaw = wrap180(p.yaw + dd.clamp(-K.combo_turn, K.combo_turn));
-    }
-    // the lunge: toward the target by the gap (capped), else a short step ahead
-    let dist = match t {
-        Some(t) => gap(p, &t).clamp(0.0, d.lunge_max),
-        None => K.combo_lunge_free.min(d.lunge_max),
-    };
-    let window = ((d.lunge_to - d.lunge_from) / d.rate.max(0.01)).max(0.02);
-    let f = forward(p.yaw) * (dist / window);
-    let clip = goofy::clip_copy(d.clip, true, false, true);
+    goofy::face(p, want, K.combo_turn);
+    let clip = shots::clip_copy(d.clip, true, false, true);
     p.anim.play(clip, K.combo_blend);
-    p.anim.speed = d.rate;
+    p.anim.speed = rate_at(&d, 0.0);
     p.hit_list.clear();
     let mut c = g(p).combo;
     c.step = s;
     c.queued = false;
     c.hit_out = false;
     c.landed = None;
-    c.lunge = Vec2::new(f.x, f.y);
-    c.a_hold = 0.0;
-    c.phase = 0;
     c.wait_answer = 0.0;
     c.asked = false;
     c.swung = false;
+    c.travelled = 0.0;
     if air {
         c.air_n += 1;
-    } else if !s.is_finisher() {
+    } else {
         c.n += 1;
     }
     let k = gp(p);
     k.combo = c;
     k.hitstop = 0.0;
-    k.hit_at = None;
-    // finishers are invincible to their hit (Sora's Finish rule)
-    k.hold_invincible = s.is_finisher();
-    goofy::log_pub(p, s.name());
+    goofy::log(p, s.name());
 }
 
-/// The finisher the string ends with (design 2): Rocket (stick toward / target in band) / Upper (stick away) / Spin
-/// (crowded), each when worn; else Big Bash (Shield Quake by holding A). Fusions are `goofy::start_finisher`'s.
-pub enum Fin {
-    Step(Step),
-    Fusion(Finisher),
-}
-
-pub fn choose(p: &NpcPawn, host: &PartyHost) -> Fin {
-    let me = p.position();
-    let t = target(p, host);
-    let (yaw, _, active) = stick(p);
-    // the stick is read against HIS FACING (the string turned him to its target at every step): the soft target follows
-    // the stick (pad/mod.rs targeting), so measured against the target a pushed stick re-picked a dummy behind him and
-    // the "toward" rocket flew backwards (test run 3). The rocket's target must lie ahead of him.
-    let off = wrap180(yaw - p.yaw).abs();
-    let ahead = t.filter(|t| wrap180(yaw_of(horizontal(t.position - me)) - p.yaw).abs() <= K.combo_rocket_toward);
-    let t = ahead.or(t);
-    let dist = ahead.map(|t| horizontal(t.position - me).length());
-    let crowd = shots::enemies(host).iter().filter(|e| horizontal(e.position - me).length() <= K.fin_crowd_radius).count() >= K.fin_crowd_count as usize;
-    if has(p, GA::FusionRocket) && t.is_some() && active && off <= K.combo_rocket_toward && dist.is_some_and(|d| d >= K.fin_rocket_min && d <= K.fin_rocket_max) {
-        return Fin::Fusion(Finisher::Rocket);
-    }
-    if has(p, GA::ShieldUpper) && active && off >= K.combo_upper_away {
-        return Fin::Step(Step::Upper);
-    }
-    // A still held at the finisher's moment with Shield Quake worn: the player asked for the Quake (Big Bash turns
-    // into it while A stays held), over the crowd's Spin. The rocket needs the stick toward the target (no automatic
-    // rocket: it carried him off on its own in test run 2).
-    if has(p, GA::ShieldQuake) && held(p, PadButton::FaceBottom) {
-        return Fin::Step(Step::Big);
-    }
-    if has(p, GA::FusionSpin) && crowd {
-        return Fin::Fusion(Finisher::Spin);
-    }
-    Fin::Step(Step::Big)
-}
-
-/// Starts the finisher now (the queued press after the last step, the FX1 late "no", the Turbo Bash link).
+/// The third shove now (the queued press after the host's answer, the FX1 late "no").
 pub fn finisher(p: &mut NpcPawn, host: &mut PartyHost) {
-    match choose(p, host) {
-        Fin::Step(s) => {
-            start(p, host, s);
-        }
-        Fin::Fusion(f) => {
-            goofy::start_fusion(p, host, f);
-        }
-    }
+    gp(p).combo.n = 2;
+    start(p, host, Step::Shove3);
     if let Some(d) = p.pad.as_mut() {
         d.combo = 0;
     }
-    gp(p).combo.n = 0;
 }
 
-/// The next step after a link (the queued press).
+/// The next step after a link (the queued press). The third hit is the finisher: AI Sora's Unison / Fusion roll first (D.6,
+/// R13: the host answers next step).
 fn next(p: &mut NpcPawn, host: &mut PartyHost) {
     let c = g(p).combo;
-    if c.step.is_air() {
-        if c.air_n < air_steps(p) {
-            let s = if c.air_n == 1 { Step::Air2 } else { Step::Air3 };
-            start(p, host, s);
+    match c.step {
+        Step::Bonk => {}
+        Step::Shove3 => {
+            gp(p).combo.n = 0;
+            start(p, host, Step::Shove1);
         }
-        return;
-    }
-    if c.step.is_finisher() {
-        // a new string after the finisher's link
-        gp(p).combo.n = 0;
-        start(p, host, Step::Push);
-        return;
-    }
-    if c.n >= regular_steps(p) {
-        // the finisher: AI Sora's unison / fusion roll first (stream D's D.6: the host answers next step)
-        let answer = p.pad.as_ref().and_then(|d| d.finisher_answer);
-        match answer {
-            Some(true) => {
-                if let Some(d) = p.pad.as_mut() {
-                    (d.finisher_answer, d.finisher_pending, d.combo) = (None, false, 0);
+        Step::Shove1 => start(p, host, Step::Shove2),
+        Step::Shove2 => {
+            let answer = p.pad.as_ref().and_then(|d| d.finisher_answer);
+            match answer {
+                Some(true) => {
+                    if let Some(d) = p.pad.as_mut() {
+                        (d.finisher_answer, d.finisher_pending, d.combo) = (None, false, 0);
+                    }
+                    gp(p).combo = ComboRun::default();
+                    goofy::log(p, "team_finisher");
+                    leave_to_ground(p);
                 }
-                gp(p).combo = ComboRun::default();
-                goofy::log_pub(p, "team_finisher");
-                goofy::leave_pub(p);
-            }
-            Some(false) => {
-                if let Some(d) = p.pad.as_mut() {
-                    d.finisher_answer = None;
+                Some(false) => {
+                    if let Some(d) = p.pad.as_mut() {
+                        d.finisher_answer = None;
+                    }
+                    finisher(p, host);
                 }
-                finisher(p, host);
-            }
-            None if !c.asked => {
-                if let Some(d) = p.pad.as_mut() {
-                    d.finisher_pending = true;
+                None if !c.asked => {
+                    if let Some(d) = p.pad.as_mut() {
+                        d.finisher_pending = true;
+                    }
+                    let k = gp(p);
+                    k.combo.asked = true;
+                    k.combo.wait_answer = K.combo_answer_wait;
+                    k.combo.queued = true;
                 }
-                let k = gp(p);
-                k.combo.asked = true;
-                k.combo.wait_answer = K.combo_answer_wait;
-                k.combo.queued = true;
-            }
-            None => {
-                if g(p).combo.wait_answer <= 0.0 {
+                None if g(p).combo.wait_answer <= 0.0 || p.pad.is_none() => {
                     if let Some(d) = p.pad.as_mut() {
                         d.finisher_pending = false;
                     }
                     finisher(p, host);
-                } else {
-                    gp(p).combo.queued = true;
                 }
+                None => gp(p).combo.queued = true,
             }
         }
-        return;
     }
-    let s = match c.n {
-        1 => Step::Sweep,
-        2 => Step::Bash,
-        _ => Step::Shove,
-    };
-    start(p, host, s);
 }
 
 /// The step's MainProc (pad/goofy.rs `tick`).
@@ -440,10 +379,7 @@ pub fn tick(p: &mut NpcPawn, cx: &StepCtx, host: &mut PartyHost) {
         let k = gp(p);
         k.combo.wait_answer = (k.combo.wait_answer - dt).max(0.0);
     }
-    if held(p, PadButton::FaceBottom) {
-        gp(p).combo.a_hold += dt;
-    }
-    // HIT-STOP: his clip and his lunge stand still
+    // HIT-STOP: his clip stands still
     if g(p).hitstop > 0.0 {
         gp(p).hitstop -= dt;
         p.anim.speed = 0.0;
@@ -457,34 +393,30 @@ pub fn tick(p: &mut NpcPawn, cx: &StepCtx, host: &mut PartyHost) {
         }
         return;
     }
-    p.anim.speed = d.rate;
     let t = p.anim.time;
-    // Big Bash -> Shield Quake: A still held
-    if s == Step::Big && has(p, GA::ShieldQuake) && g(p).combo.a_hold >= K.combo_quake_hold && !g(p).combo.hit_out {
-        let left = t;
-        start(p, host, Step::Quake);
-        p.anim.time = left.min(def(Step::Quake).hit - 0.05);
-        return;
+    p.anim.speed = rate_at(&d, t);
+    // KH3's TurnToTarget windows of the clip (M_1301 0.26 - 0.51, M_1302 0.00 - 0.34, M_1311 0.00 - 0.39 clip s; the turn rate
+    // of the friends' attacks): he keeps turning to his target, so the step and its travel follow it (THE USER 2026-11-02:
+    // "Goofy's combat also feels EXTREMELY stilted, please fix this")
+    if p.anim.window_open("TurnToTarget") {
+        if let Some(at) = goofy::target_info(p, host).map(|i| i.position) {
+            p.turn_toward(at, dt, turn_rate(TurnKind::Attack));
+        }
     }
-    // the lunge
-    if s == Step::Upper {
-        upper_tick(p, dt);
-    } else if t >= d.lunge_from && t < d.lunge_to {
-        let l = g(p).combo.lunge;
-        p.cmc.direct_xy = Some(l);
-    } else if t >= d.lunge_to && t < d.lunge_to + 0.05 {
-        p.cmc.direct_xy = Some(Vec2::ZERO);
+    // the ground step's travel (THE USER 2026-11-02: "His combo should move him a little bit")
+    if s != Step::Bonk {
+        travel(p, host, &d, t, dt);
     }
-    // the hover of an air step until its move point (Sora's air attack: gravity off until EnableChange)
-    if s.is_air() && p.cmc.gravity_off {
+    // the bonk hovers to its link point, then drops (a downward bonk)
+    if s == Step::Bonk && p.cmc.gravity_off {
         p.cmc.direct_z = Some(0.0);
-        if t >= d.r#move || (s == Step::Air2 && t >= d.link) {
+        if t >= d.link {
             p.cmc.gravity_off = false;
             p.cmc.direct_z = None;
             p.cmc.set_falling();
         }
     }
-    // the swing SE of a bash clip (it has none of its own)
+    // the swing SE of a clip without one
     if d.swing && !g(p).combo.swung && t >= d.hit - K.combo_swing_lead {
         gp(p).combo.swung = true;
         let at = p.position() + Vec3::Z * K.combo_up;
@@ -493,36 +425,49 @@ pub fn tick(p: &mut NpcPawn, cx: &StepCtx, host: &mut PartyHost) {
     // the hit
     if !g(p).combo.hit_out && t >= d.hit {
         gp(p).combo.hit_out = true;
-        gp(p).hold_invincible = false;
         let kind = Kind::from_game_name(d.kind).unwrap_or(Kind::Small);
-        let base = SoloRow::any(d.row).unwrap_or(SoloRow { name: d.row, power: 1.0, kind, attribute: kh_core::enums::ETresDamageAttribute::Physical, power_scale: 1.0, parabola_angle: 0.0, move_length: 0.0, brake: 0.0, effect_time: 0.0, reaction_power: 0, armor_attack: 0, magic: false, invalid_guard: false });
+        let base = SoloRow::any(d.row).unwrap_or_else(|| SoloRow::plain(d.row, kind));
         let row = SoloRow { power: d.power, ..base }.with_kind(kind);
-        let off = Vec3::new(K.combo_forward, 0.0, K.combo_up);
-        let tag = if s.is_finisher() { "combo_fin" } else { "combo" };
+        // (COMBAT-FIX) every step's sphere is on the shield (THE USER 2026-11-06: "Goofy's ground combo hit box also extends
+        // out way too far"): the clip's ATK_00 track, else (SGuardShieldBash has none) KH3's own shape of the bash, the Trinity
+        // Guard pawn's FR_SHIELDGUARDIAN_SHIELDBASH sphere (80 ahead, 120 up, radius step.shove3.radius 100)
+        let off = shield_at(p).unwrap_or(Vec3::new(K.combo_forward, 0.0, K.combo_forward_up));
+        let tag = if s == Step::Shove3 { "combo_fin" } else { "combo" };
         let mut a = Area::new(row, shots::local(p, off), (d.active / d.rate.max(0.01)).max(0.05), d.radius, tag);
         a.follow = Some(off);
         a.hit_effect = K.combo_hit_effect;
         a.hit_se = d.hit_se;
-        if s == Step::Quake {
-            a.size = (d.radius, K.combo_quake_grow, K.combo_quake_cap);
-            a.follow = None;
-            shots::effect(p, host, K.combo_quake_effect, p.position(), 1.0);
-        }
-        if s == Step::Upper {
-            shots::effect(p, host, K.combo_upper_effect, a.centre, 1.0);
-        }
         shots::add(p, a);
+        // THE BASH'S END LAG starts with its hit (THE USER 2026-11-02: "He needs some end lag at the end of his combo so you
+        // can't spam it, like Sora."): a press made before it does not carry through it (Sora's CanAttack refuses the finishEnd
+        // attack's presses, nothing is queued)
+        if s == Step::Shove3 {
+            let k = gp(p);
+            k.combo.end_lag = K.combo_end_lag;
+            k.combo.queued = false;
+        }
+    }
+    // THE AIR BONK'S HIT RIDES THE SHIELD (THE USER 2026-11-02: "His aerial hit's hitbox also extends way too far away from
+    // him"): KH3's own shape, the SPHERE of w_gu_WepBase's group "None" on the ATK_00 socket, along M_1311's socket track (it
+    // swings from over his head to 82 cm ahead of his feet), not a 160 cm sphere 130 cm ahead of him. (COMBAT-FIX) The ground
+    // steps' too (THE USER 2026-11-06: "Goofy's ground combo hit box also extends out way too far"): M_1301's / M_1302's
+    // windows open the same group, so their 50 cm sphere rides the shield along those clips' tracks
+    if g(p).combo.hit_out {
+        if let Some(off) = shield_at(p) {
+            if let Some(a) = gp(p).shots.iter_mut().rev().find(|a| a.tag == "combo") {
+                a.follow = Some(off);
+            }
+        }
     }
     // the next press at the link point
-    let link = link_open(p);
-    if link && g(p).combo.queued {
+    if link_open(p) && g(p).combo.queued {
         gp(p).combo.queued = false;
         next(p, host);
         return;
     }
     // the stick at the move point
     let (yaw, mag, active) = stick(p);
-    if move_open(p) && active && !g(p).combo.queued {
+    if move_open(p) && active && !g(p).combo.queued && p.pad.is_some() {
         end(p);
         if p.on_ground() {
             p.to_idle();
@@ -535,69 +480,51 @@ pub fn tick(p: &mut NpcPawn, cx: &StepCtx, host: &mut PartyHost) {
         }
         return;
     }
-    // a ground step that ran off a ledge: the step ends, he falls (the air combo may follow)
-    if !s.is_air() && s != Step::Upper && !p.on_ground() && p.state_time > 0.05 && !p.cmc.gravity_off {
+    // a ground step that ran off a ledge: the step ends, he falls
+    if s != Step::Bonk && !p.on_ground() && p.state_time > 0.05 && !p.cmc.gravity_off {
         end(p);
         gp(p).combo.n = 0;
-        super::enter_jump(p, true);
+        leave_to_ground(p);
         return;
     }
-    // an air step that has landed
-    if s.is_air() && p.on_ground() && p.state_time > 0.05 {
+    // the bonk that has landed
+    if s == Step::Bonk && p.on_ground() && p.state_time > 0.05 {
         end(p);
         p.cmc.stop_movement();
-        p.play("Land", -1.0);
-        p.enter(NpcStateId::Pad(super::JUMP));
-        if let Some(dd) = p.pad.as_mut() {
-            dd.jump.sub = 10;
-            dd.jump.air_attacks = 0;
-        }
         gp(p).combo.air_n = 0;
+        if p.pad.is_some() {
+            p.play("Land", -1.0);
+            p.enter(NpcStateId::Pad(super::JUMP));
+            if let Some(dd) = p.pad.as_mut() {
+                dd.jump.sub = 10;
+                dd.jump.air_attacks = 0;
+            }
+        } else {
+            p.to_idle();
+        }
         return;
     }
-    if p.anim.finished && (s != Step::Upper || g(p).combo.phase >= 2) {
+    if p.anim.finished {
         end(p);
-        let pad_combo = p.pad.as_ref().map_or(0, |d| d.combo);
-        let _ = pad_combo;
-        gp(p).combo.n = 0;
-        if s.is_air() && !p.on_ground() {
-            super::enter_jump(p, true);
-        } else {
-            goofy::leave_pub(p);
-        }
+        let k = gp(p);
+        k.combo.n = 0;
+        k.combo.end_lag = 0.0; // the bash's clip ends its end lag at the latest
+        leave_to_ground(p);
     }
 }
 
-/// Shield Upper: a hop with the rising swing, the fall, the landing.
-fn upper_tick(p: &mut NpcPawn, dt: f32) {
-    let _ = dt;
-    let rise = (K.step_upper_hit / K.step_upper_rate.max(0.01)).max(0.05);
-    match g(p).combo.phase {
-        0 => {
-            p.cmc.direct_z = Some(K.combo_upper_hop / rise);
-            p.cmc.direct_xy = Some(g(p).combo.lunge);
-            if p.state_time >= rise {
-                gp(p).combo.phase = 1;
-                p.cmc.gravity_off = false;
-                p.cmc.direct_z = None;
-                // the hop's own rise ends here: no leftover climb speed (run 5: he floated 1.5 s)
-                p.cmc.velocity.z = 0.0;
-                p.cmc.direct_xy = Some(Vec2::ZERO);
-                p.cmc.set_falling();
-            }
-        }
-        1 => {
-            if p.on_ground() && p.state_time > rise + 0.05 {
-                gp(p).combo.phase = 2;
-                p.cmc.stop_movement();
-                p.play("Land", 0.05);
-            }
-        }
-        _ => {}
+/// The step's first landed hit: the hit-stop.
+pub fn on_landed(p: &mut NpcPawn) {
+    let t = p.anim.time;
+    let hs = def(g(p).combo.step).hitstop;
+    let k = gp(p);
+    if k.combo.landed.is_none() {
+        k.combo.landed = Some(t);
+        k.hitstop = hs;
     }
 }
 
-/// The step ends (whatever took him out): hover off, rate back, the lunge stops.
+/// The step ends (whatever took him out): hover off, rate back.
 pub fn end(p: &mut NpcPawn) {
     p.anim.speed = 1.0;
     p.cmc.direct_xy = None;
@@ -609,7 +536,7 @@ pub fn end(p: &mut NpcPawn) {
         }
     }
     let k = gp(p);
-    k.hold_invincible = false;
     k.hitstop = 0.0;
     k.combo.queued = false;
 }
+

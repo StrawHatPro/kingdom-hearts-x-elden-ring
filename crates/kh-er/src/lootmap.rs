@@ -407,6 +407,9 @@ pub struct LootRules {
     overrides: HashMap<(Cat, u32), String>,
     pools: HashMap<String, Vec<String>>,
     families: Vec<String>,
+    /// (P10 MATERIALS) row `material.weights`: each family's share of the stable pick (in `families`' order; 1 when the row
+    /// does not name it, so without the row the pick is the plain `id mod 13` as before).
+    family_weights: Vec<u32>,
     /// KH item key -> item id; (family, grade) -> key.
     items: HashMap<String, u32>,
     materials: HashMap<(String, u8), String>,
@@ -448,6 +451,9 @@ pub struct LootRules {
     name_files: HashMap<Cat, Vec<u32>>,
     /// (ONLINEITEMS fix) row `goods.hidden_types`: the goodsType values Elden Ring's inventory never lists.
     hidden_goods_types: Vec<u8>,
+    /// (KEYITEM-TUTORIALS) row `goods.tutorial`: Elden Ring's tutorial logs as (goodsType, sortGroupIds); `None` (no row):
+    /// none are told apart.
+    tutorial_goods: Option<(u8, Vec<u8>)>,
     /// (IMPL_ER42) row `msg.texts`: the message files holding an item's DESCRIPTION (tried in order).
     text_files: HashMap<Cat, Vec<u32>>,
     /// (er30) The base consumable drop: rows `base.*`.
@@ -531,6 +537,7 @@ impl LootRules {
             overrides: HashMap::new(),
             pools: HashMap::new(),
             families: Vec::new(),
+            family_weights: Vec::new(), // (P10)
             items: HashMap::new(),
             materials: HashMap::new(),
             buy: HashMap::new(),
@@ -565,6 +572,7 @@ impl LootRules {
             shop_tier_price: Vec::new(),
             name_files: HashMap::new(),
             hidden_goods_types: Vec::new(),
+            tutorial_goods: None, // (KEYITEM-TUTORIALS)
             // (IMPL_ER42) without the sheet row: GoodsCaption (the long text) 24, its DLC file 321, then GoodsInfo (the
             // short line) 20, its DLC file 320. FROM MEMORY of the public FMG lists (10 = GoodsName is proven by the log).
             text_files: HashMap::from([(Cat::Goods, vec![24, 321, 20, 320])]),
@@ -608,6 +616,7 @@ impl LootRules {
         let (mut acc_min, mut arm_min): (Vec<f32>, Vec<f32>) = (Vec::new(), Vec::new());
         let mut tier_over: HashMap<String, u8> = HashMap::new();
         let mut excluded: Vec<String> = Vec::new();
+        let mut family_weights: HashMap<String, f32> = HashMap::new(); // (P10)
         let (mut rules_1, mut rules_2) = (Vec::new(), Vec::new());
         for row in json["rows"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
             let (Some(id), value) = (row[0].as_str(), &row[1]) else { continue };
@@ -619,6 +628,7 @@ impl LootRules {
                 "armour.family_margin" => out.family_margin = number.unwrap_or(out.family_margin),
                 "nothing.munny_per_sell_value" => out.munny_per_sell = number.unwrap_or(out.munny_per_sell),
                 "material.families" => out.families = strings(value),
+                "material.weights" => map_f32(value, &mut family_weights), // (P10)
                 "lot.categories" | "shop.categories" => {
                     for (k, v) in value.as_object().into_iter().flatten() {
                         if let (Ok(k), Some(cat)) = (k.parse::<u32>(), v.as_str().and_then(Cat::from_name)) {
@@ -708,6 +718,11 @@ impl LootRules {
                     }
                 }
                 "goods.hidden_types" => out.hidden_goods_types = value.as_array().into_iter().flatten().filter_map(|x| x.as_u64().map(|n| n as u8)).collect(),
+                // (KEYITEM-TUTORIALS) {"goods_type": 12, "sort_groups": [20]}
+                "goods.tutorial" => match value["goods_type"].as_u64() {
+                    Some(t) => out.tutorial_goods = Some((t as u8, value["sort_groups"].as_array().into_iter().flatten().filter_map(|x| x.as_u64().map(|n| n as u8)).collect())),
+                    None => out.problems.push(format!("{id}: no goods_type")),
+                },
                 "msg.texts" => {
                     for (k, v) in value.as_object().into_iter().flatten() {
                         match Cat::from_name(k) {
@@ -787,6 +802,13 @@ impl LootRules {
                 _ => {}
             }
         }
+        // (P10 MATERIALS) the families' shares of the stable pick: a whole number of at least 1 each
+        for (name, w) in &family_weights {
+            if !out.families.contains(name) || *w < 1.0 || w.fract() != 0.0 {
+                out.problems.push(format!("material.weights: {name} = {w} is not a family of material.families with a whole weight of at least 1"));
+            }
+        }
+        out.family_weights = out.families.iter().map(|f| family_weights.get(f).copied().filter(|w| *w >= 1.0).map_or(1, |w| w as u32)).collect();
         out.generation = if rules_2.is_empty() { 1 } else { 2 };
         out.rules = if rules_2.is_empty() { rules_1 } else { rules_2 };
         out.rules.sort_by(|a, b| a.id.cmp(&b.id));
@@ -876,6 +898,13 @@ impl LootRules {
     /// EquipParamGoods: a type no named row uses; 13 = the internal row 166 every new character is given).
     pub fn goods_hidden(&self, goods_type: u8) -> bool {
         self.hidden_goods_types.contains(&goods_type)
+    }
+
+    /// (KEYITEM-TUTORIALS) One of Elden Ring's TUTORIAL LOGS (the "About ..." goods its inventory files under Info >
+    /// Tutorials): a goods row of the sheet row `goods.tutorial`'s goodsType (12, info items) and sort group (20). The
+    /// notes, maps, letters and paintings of the same type have other groups. Derived from the regulation.bin copy.
+    pub fn is_tutorial(&self, item: &ErItem) -> bool {
+        item.cat == Some(Cat::Goods) && item.known && self.tutorial_goods.as_ref().is_some_and(|(t, groups)| item.goods_type == *t && groups.contains(&item.sort_group))
     }
 
     /// The message files (FMG categories of the game's `MsgRepository`) that hold the names of a table's items.
@@ -1079,9 +1108,22 @@ impl LootRules {
         Res::Skip
     }
 
+    /// (P10 MATERIALS) THE FAMILY of an item's synthesis material: the stable pick (a goods id's remainder, another table's
+    /// hash) over the families' shares (`material.weights`: KH3's Forge eats Wellspring, so it holds more of the pick; every
+    /// other family one share, which is the plain `id mod 13` of before). The same Elden Ring item is always the same family.
+    pub fn family_of(&self, item: &ErItem) -> Option<&str> {
+        let total: u32 = self.family_weights.iter().sum::<u32>().max(1);
+        let roll = if item.cat == Some(Cat::Goods) { stable_pick(item.id, total as usize) } else { stable_hash(item.cat, item.base_id()) % total as usize } as u32;
+        let mut upto = 0;
+        self.families.iter().zip(&self.family_weights).find(|(_, w)| {
+            upto += **w;
+            roll < upto
+        })
+        .map(|(f, _)| f.as_str())
+    }
+
     fn material(&self, item: &ErItem, grade: u8) -> Res {
-        let pick = if item.cat == Some(Cat::Goods) { stable_pick(item.id, self.families.len()) } else { stable_hash(item.cat, item.base_id()) % self.families.len().max(1) };
-        match self.families.get(pick).and_then(|f| self.materials.get(&(f.clone(), grade.clamp(1, 4)))).and_then(|k| self.kh(k)) {
+        match self.family_of(item).and_then(|f| self.materials.get(&(f.to_string(), grade.clamp(1, 4)))).and_then(|k| self.kh(k)) {
             Some(give) => Res::Ok(give),
             None => Res::Bad,
         }
@@ -1489,6 +1531,35 @@ mod tests {
         assert_ne!(r.classify(&goods(1100, 0, 0), &Ctx { unit: 0.0, ..ENEMY }).rule, "r2.015.flask", "outside the range");
     }
 
+    /// (THE USER 2026-11-02: "Re-add Grave Gloveworts and Ghost Gloveworts into Elden Ring, and make them appear where they
+    /// usually would, but make them work completely with our KH3 systems. Treat them as upgrade materials") EVERY GLOVEWORT
+    /// IS ITS OWN KH MATERIAL from every source (a catacomb plant, a corpse, an enemy, a boss, a chest, a shop, unknown) and
+    /// whatever the roll: Grave Glovewort [n] (goods 10899 + n) -> MAT_GLOVE_GRAVE_0n, 10909 -> the Great one; Ghost the
+    /// same from 10910; never the ore line of the other reinforcement materials (r2.309), which the Smithing Stones keep;
+    /// a shop line sells it (the KH shop sells the merchant's own line at the game's price: spirittune.rs).
+    #[test]
+    fn gloveworts_are_their_own_kh_materials_from_every_source() {
+        let r = sheet();
+        for (base, family) in [(10_900u32, "GRAVE"), (10_910, "GHOST")] {
+            for g in 1..=10u32 {
+                let id = base + g - 1;
+                let key = if g == 10 { format!("MAT_GLOVE_{family}_GREAT") } else { format!("MAT_GLOVE_{family}_{g:02}") };
+                let item = ErItem { consumable: false, sell_value: 50 * g as i32, ..goods(id, 14, if g == 10 { 3 } else { 1 }) };
+                for source in Source::ALL {
+                    for unit in [0.0, 0.5, 0.999] {
+                        let d = r.classify(&item, &Ctx { unit, ..Ctx::of(source, 4) });
+                        assert_eq!((&d.give, d.rule.as_str()), (&Give::Kh { item_id: kh_host::items::by_key(&key).unwrap().item_id, key: key.clone() }, format!("id.goods.{id}").as_str()), "{id} from {}", source.name());
+                        assert_eq!(class_of(&r, &d), "material");
+                    }
+                }
+                assert!(matches!(r.shop_line(&item, 0).0, ShopLine::Sell { key: ref k, .. } if *k == key), "{id}: a shop line sells it");
+            }
+        }
+        // the Smithing Stones still become the ores (their own rows), an unknown reinforcement material the ore line
+        assert!(r.classify(&ErItem { consumable: false, ..goods(10_100, 14, 1) }, &Ctx::of(Source::World, 0)).rule.starts_with("r2.30"));
+        assert_eq!(r.classify(&ErItem { consumable: false, ..goods(10_950, 14, 1) }, &Ctx::of(Source::World, 0)).rule, "r2.309.reinforce_other");
+    }
+
     /// (PU, the user 2026-10-18: "anything that isn't a dead body or an enemy or chest should not drop usable items,
     /// equipment or accessories unless I've specifically allowed it") THE SOURCES: a crafting material (Rowa Fruit,
     /// Gold-Tinged Excrement: goods type 2), a consumable, a weapon, a shield, armour, a talisman, an Ash of War, a spirit
@@ -1505,7 +1576,14 @@ mod tests {
         let protector = ErItem { cat: Some(Cat::Protector), id: 40000, rarity: 1, sell_value: 100, known: true, ..ErItem::default() };
         let talisman = ErItem { cat: Some(Cat::Accessory), id: 1000, rarity: 2, sell_value: 100, known: true, ..ErItem::default() };
         let ash_of_war = ErItem { cat: Some(Cat::Gem), id: 11000, rarity: 1, sell_value: 100, known: true, ..ErItem::default() };
-        let items = [crafting, consumable, weapon(1000000, 1, WepKind::Melee), weapon(30000000, 1, WepKind::Shield), protector, talisman, ash_of_war, ErItem { consumable: false, ..goods(200000, 7, 1) }];
+        // (THE USER 2026-11-02: "Give Sora the ability to 'Summon' ... he uses Elden Ring's spirit ashes") a spirit ash is no
+        // longer converted (r2.510 passes, as the key items): it stays Elden Ring's from every source, the barred ones too
+        let spirit_ash = ErItem { consumable: false, ..goods(200000, 7, 1) };
+        for source in barred.iter().chain(allowed.iter()) {
+            let d = r.classify(&spirit_ash, &Ctx { unit: 0.5, ..Ctx::of(*source, 1) });
+            assert_eq!((d.give.clone(), d.rule.as_str()), (Give::Pass, "r2.510.spirit_ash"), "a spirit ash from {}", source.name());
+        }
+        let items = [crafting, consumable, weapon(1000000, 1, WepKind::Melee), weapon(30000000, 1, WepKind::Shield), protector, talisman, ash_of_war];
         for item in &items {
             for source in barred {
                 for k in 0..50 {
@@ -1567,10 +1645,11 @@ mod tests {
         assert_eq!(r.caller_source(&[0x563f6c, 0x6e4473, 0x6e41db]), None, "not named: the lot tables decide");
     }
 
-    /// The sheet as the deployed build 4B6C2CFEF72E reads it: without the rows it does not know.
+    /// The sheet as the deployed build 4B6C2CFEF72E reads it: without the rows it does not know (the `r2.*` rules, P10's
+    /// `material.weights`).
     fn legacy() -> LootRules {
         let mut json: serde_json::Value = serde_json::from_str(SHEET).unwrap();
-        json["rows"].as_array_mut().unwrap().retain(|r| !r[0].as_str().unwrap().starts_with("r2."));
+        json["rows"].as_array_mut().unwrap().retain(|r| !r[0].as_str().unwrap().starts_with("r2.") && r[0].as_str() != Some("material.weights"));
         let rules = LootRules::parse(&json.to_string(), &kh_items());
         assert!(rules.problems.is_empty(), "{:?}", rules.problems);
         assert_eq!(rules.generation, 1);
@@ -1639,6 +1718,12 @@ mod tests {
         assert_eq!([armour(Element::None, 0), armour(Element::Fire, 2), armour(Element::Magic, 3)], ["Shield Belt", "Firaga Bangle", "Blizzaza Choker"]);
         let heal = |effect: Effect, rarity: u8| name(&c(&ErItem { effect, ..goods(900, 0, rarity) }));
         assert_eq!([heal(Effect::Hp, 0), heal(Effect::Hp, 2), heal(Effect::Both, 3)], ["Potion", "Mega-Potion", "Megalixir"]);
+        // (THE USER 2026-11-02: "Give Sora the ability to 'Summon' ... he uses Elden Ring's spirit ashes") the one change: a
+        // spirit ash passes (rule.079) where rule.080 sold it; a sorcery is still sold
+        for goods_type in [7u8, 8] {
+            assert_eq!((c(&goods(200000, goods_type, 1)).give, c(&goods(200000, goods_type, 1)).rule), (Give::Pass, "rule.079.spirit_ash".to_string()));
+        }
+        assert_eq!(c(&ErItem { sell_value: 40, ..goods(4000, 5, 1) }).rule, "rule.080.spell_ash_tear");
     }
 
     /// KH3'S EQUIPMENT RANKED: all 52 armour pieces and 112 accessories have a tier; the cheap pieces are low, the
@@ -1745,25 +1830,29 @@ mod tests {
         };
         // Talisman Pouch: accessory slots first, then an armour slot, then a Megalixir
         assert_eq!([with(&key(10040), 0, 0), with(&key(10040), 1, 0), with(&key(10040), 2, 0), with(&key(10040), 2, 2)], ["reward acc_slot", "reward acc_slot", "reward def_slot", "Megalixir"]);
-        // Larval Tear: an armour slot first
-        assert_eq!([with(&key(8185), 2, 0), with(&key(8185), 0, 2), with(&key(8185), 2, 2)], ["reward def_slot", "reward acc_slot", "Orichalcum+"]);
+        // (ER-TWEAKS, the user 2026-11-06: "Remove larval tears ... replace them with rare synthesis materials") Larval Tear:
+        // a rare material whatever slots he holds (no slot reward any more; `larval_tear_tests`)
+        assert_eq!([with(&key(8185), 2, 0), with(&key(8185), 0, 2), with(&key(8185), 2, 2)], ["Mythril Crystal", "Mythril Crystal", "Mythril Crystal"]);
         assert_eq!(with(&key(10030), 0, 0), "reward max_mp:5", "Memory Stone");
         assert_eq!([with(&key(8590), 0, 0), with(&key(8972), 0, 0)], ["reward ap:1", "reward ap:1"], "Whetstone Knife, a Whetblade");
         assert!(with(&key(9300), 0, 0).ends_with(" Gem"), "a cookbook: {}", with(&key(9300), 0, 0));
         let c = |item: &ErItem| r.classify(item, &Ctx::of(Source::World, 0));
         let (heart, root, lost) = (c(&key(10060)), c(&key(2090)), c(&key(10070)));
-        assert!(heart.tier == 4 && tags(&r, &heart).contains(&"magic".to_string()), "{heart:?}");
+        // (P10, the user 2026-11-03: "Lost Ashes of War -> Evanescent, Dragon Heart -> Illusory") the two crystals KH3 only drops
+        assert_eq!((name(&heart), heart.rule.as_str()), ("Illusory Crystal".to_string(), "r2.025.dragon_heart"), "{heart:?}");
+        assert_eq!((name(&lost), lost.rule.as_str()), ("Evanescent Crystal".to_string(), "r2.027.lost_ashes"), "{lost:?}");
         assert!(root.tier == 4 && tags(&r, &root).contains(&"strength".to_string()), "{root:?}");
-        assert!(lost.tier == 3 && tags(&r, &lost).contains(&"ap".to_string()), "{lost:?}");
         assert_eq!([name(&c(&goods(11000, 10, 1))), name(&c(&goods(11000, 10, 3)))], ["Mega-Ether", "Elixir"], "a crystal tear by tier");
         assert_eq!(name(&c(&ErItem { consumable: false, ..goods(250, 9, 2) })), "Elixir", "the physick flask");
         assert_eq!(name(&c(&goods(10010, 11, 2))), "Megalixir");
         // switched off: they stay Elden Ring's (the key rule passes them)
         let off = LootRules::parse(&SHEET.replace("[\"progression.convert\",1,", "[\"progression.convert\",0,"), &kh_items());
         assert!(!off.convert_progression);
-        for id in [10040, 10030, 8590, 9300, 8185, 10060, 2090, 10070] {
+        for id in [10040, 10030, 8590, 9300, 10060, 2090, 10070] {
             assert_eq!(off.classify(&key(id), &Ctx::of(Source::World, 0)).give, Give::Pass, "{id}");
         }
+        // (ER-TWEAKS) the Larval Tear is the user's own decision, no proposal: converted all the same
+        assert_ne!(off.classify(&key(8185), &Ctx::of(Source::World, 0)).give, Give::Pass);
     }
 
     /// CONSUMABLES AND MATERIALS follow their rules with the tier applied.
@@ -1773,18 +1862,114 @@ mod tests {
         let at = |item: &ErItem, source: Source, depth: u8| name(&r.classify(item, &Ctx::of(source, depth)));
         // a Limgrave soldier's common material: a Shard; the same material from a chest: a Stone; late: a Gem / Crystal
         let material = goods(20650, 2, 0);
-        assert_eq!([at(&material, Source::Enemy, 0), at(&material, Source::Chest, 0), at(&material, Source::Chest, 2), at(&material, Source::Chest, 4), at(&material, Source::Boss, 4)], ["Betwixt Shard", "Betwixt Stone", "Betwixt Gem", "Betwixt Crystal", "Betwixt Crystal"]);
-        assert_eq!(at(&goods(20651, 2, 0), Source::Enemy, 0), "Twilight Shard", "one family per Elden Ring id");
+        assert_eq!([at(&material, Source::Enemy, 0), at(&material, Source::Chest, 0), at(&material, Source::Chest, 2), at(&material, Source::Chest, 4), at(&material, Source::Boss, 4)], ["Soothing Shard", "Soothing Stone", "Soothing Gem", "Soothing Crystal", "Soothing Crystal"]);
+        assert_eq!(at(&goods(20651, 2, 0), Source::Enemy, 0), "Wellspring Shard", "one family per Elden Ring id (P10: 20651 mod 16 = 11, a Wellspring share)");
         let heal = |effect: Effect, rarity: u8, source: Source| at(&ErItem { effect, ..goods(900, 0, rarity) }, source, 0);
         assert_eq!([heal(Effect::Hp, 0, Source::Enemy), heal(Effect::Hp, 1, Source::Enemy), heal(Effect::Hp, 0, Source::Chest), heal(Effect::Hp, 2, Source::Chest), heal(Effect::Hp, 3, Source::Boss)], ["Potion", "Potion", "Hi-Potion", "Mega-Potion", "Elixir"]);
         assert_eq!([heal(Effect::Fp, 0, Source::Enemy), heal(Effect::Fp, 1, Source::Enemy), heal(Effect::Fp, 2, Source::Enemy)], ["Ether", "Ether", "Hi-Ether"]);
         assert_eq!([heal(Effect::Both, 0, Source::Enemy), heal(Effect::Both, 3, Source::Boss)], ["Elixir", "Megalixir"]);
         assert_eq!(heal(Effect::Cure, 0, Source::Enemy), "Panacea");
         assert_eq!(r.classify(&ErItem { effect: Effect::Runes, soul: 800, ..goods(2903, 0, 0) }, &Ctx::of(Source::World, 0)).give, Give::Munny(800), "a rune item: its runes");
+        // (P10) a stone's own grade, whatever the source; the Ancient Dragon stones (10140, Somber 10168) from a fixed source
+        // only (a chest here), Somber [9] (10200) is Electrum
         let ore = |id: u32| at(&goods(id, 14, 0), Source::Chest, 4);
-        assert_eq!([ore(10100), ore(10103), ore(10105), ore(10107), ore(10140), ore(10200)], ["Fluorite", "Damascus", "Adamantite", "Electrum", "Orichalcum", "Orichalcum+"], "a stone's own grade, whatever the source");
-        assert_eq!([at(&goods(10900, 14, 0), Source::Enemy, 0), at(&goods(10900, 14, 1), Source::Chest, 0), at(&goods(10900, 14, 2), Source::Chest, 0)], ["Fluorite", "Damascus", "Adamantite"], "another reinforcement material: by tier");
+        assert_eq!([ore(10100), ore(10103), ore(10105), ore(10107), ore(10167), ore(10200), ore(10140), ore(10168)], ["Fluorite", "Damascus", "Adamantite", "Electrum", "Electrum", "Electrum", "Orichalcum", "Orichalcum+"]);
+        // (THE USER 2026-11-02: 10900 was a Grave Glovewort here; the gloveworts are their own KH materials now, see
+        // `gloveworts_are_their_own_kh_materials_from_every_source`) a reinforcement material no row names
+        assert_eq!([at(&goods(10950, 14, 0), Source::Enemy, 0), at(&goods(10950, 14, 1), Source::Chest, 0), at(&goods(10950, 14, 2), Source::Chest, 0), at(&goods(10950, 14, 3), Source::Boss, 4)], ["Fluorite", "Damascus", "Adamantite", "Electrum"], "another reinforcement material: by tier (the top tiers Electrum)");
         assert!(at(&goods(1100, 0, 0), Source::Enemy, 0).ends_with("Shard"), "another consumable");
+    }
+
+    /// (P10 MATERIALS, P13 ORE; the user 2026-11-03: "orichalcum must be a fixed item drop (never random)") ORICHALCUM AND
+    /// ORICHALCUM+ NEVER COME AT RANDOM: an Ancient Dragon / Somber Ancient Dragon stone gives them only from a fixed source
+    /// (Elden Ring's own flagged world pickups, chests, gifts, bosses: margin over the placements of sheet kh-ore-placements),
+    /// Electrum from an enemy, a gathered node, a shop, an unknown source; the ore line of the other reinforcement materials
+    /// tops out at Electrum; nothing else of the sheet gives them (whatever the item, the source, the tier, the roll, the
+    /// pools used up), the Larval Tear (a fixed source, after the slots) aside; the old generation neither.
+    #[test]
+    fn p10_orichalcum_is_never_random() {
+        let r = sheet();
+        let ores = ["MAT_ITEM56", "MAT_ITEM57"];
+        let key_of = |d: &Decision| match &d.give {
+            Give::Kh { key, .. } => key.clone(),
+            other => format!("{other:?}"),
+        };
+        let all_held = |_: &str| 99u32;
+        for (id, ore) in [(10_140u32, "MAT_ITEM56"), (10_168, "MAT_ITEM57")] {
+            for source in Source::ALL {
+                for (rarity, depth, unit) in [(0u8, 0u8, 0.0f32), (1, 2, 0.5), (3, 4, 0.999)] {
+                    let d = r.classify(&ErItem { consumable: false, ..goods(id, 14, rarity) }, &Ctx { unit, ..Ctx::of(source, depth) });
+                    let fixed = matches!(source, Source::World | Source::Chest | Source::Npc | Source::Boss);
+                    assert_eq!(key_of(&d), if fixed { ore } else { "MAT_ITEM58" }, "{id} from {} ({})", source.name(), d.rule);
+                }
+            }
+        }
+        let mut items: Vec<ErItem> = Vec::new();
+        for id in (10_000u32..10_300).filter(|i| *i != 10_140 && *i != 10_168) {
+            items.push(ErItem { consumable: false, ..goods(id, 14, (id % 4) as u8) });
+        }
+        for k in 0..400u32 {
+            let rarity = (k % 4) as u8;
+            items.push(ErItem { sell_value: (k * 37 % 6000) as i32, ..goods(15_000 + k, (k % 19) as u8, rarity) });
+            items.push(weapon(1_000_000 + k * 10_000, rarity, [WepKind::Melee, WepKind::Staff, WepKind::Seal, WepKind::Shield, WepKind::Bow][(k % 5) as usize]));
+            items.push(ErItem { cat: Some([Cat::Protector, Cat::Accessory, Cat::Gem][(k % 3) as usize]), id: 40_000 + k * 100, rarity, sell_value: 500, known: true, ..ErItem::default() });
+        }
+        for item in &items {
+            for source in Source::ALL {
+                for (depth, unit) in [(0u8, 0.0f32), (2, 0.3), (4, 0.7), (4, 0.999)] {
+                    for state in [&holds_nothing as &dyn Fn(&str) -> u32, &all_held] {
+                        let d = r.classify(item, &Ctx { source, depth, state, unit });
+                        assert!(!ores.contains(&key_of(&d).as_str()), "{:?} {} from {} at depth {depth}: {d:?}", item.cat, item.id, source.name());
+                    }
+                }
+            }
+        }
+        // the Larval Tear (ER-TWEAKS: a rare material by its value tier; a FIXED source: its lots are flagged; margin only):
+        // Orichalcum from tier 4, Orichalcum+ from tier 5, the same whatever is held or rolled
+        let tear = ErItem { consumable: false, ..goods(8185, 1, 2) };
+        let full = |k: &str| u32::from(k.starts_with('@')) * 9;
+        for (source, depth, ore) in [(Source::World, 2, "MAT_ITEM56"), (Source::World, 3, "MAT_ITEM57"), (Source::Npc, 2, "MAT_ITEM57")] {
+            for unit in [0.0, 0.999] {
+                assert_eq!(key_of(&r.classify(&tear, &Ctx { state: &full, unit, ..Ctx::of(source, depth) })), ore);
+            }
+        }
+        // the old generation: no Orichalcum by rarity, none from the Ancient Dragon stones
+        let old = legacy();
+        for id in [10_140u32, 10_168, 10_200, 10_950] {
+            for rarity in 0..4u8 {
+                let d = old.classify(&ErItem { consumable: false, ..goods(id, 14, rarity) }, &Ctx::of(Source::Chest, 4));
+                assert!(!ores.contains(&key_of(&d).as_str()), "old generation {id} rarity {rarity}: {d:?}");
+            }
+        }
+    }
+
+    /// (P10 MATERIALS, documentation/KH3_WEAPONS_PLAN.md 3: "a short family gets its hash share weighted (an economy rule, not
+    /// an enemy table)") THE FAMILIES' SHARES: row `material.weights` gives Wellspring 4 of 16 shares (KH3's Forge eats it;
+    /// tools/kh_material_budget.js), every other family 1; the same item is always the same family; without the row the pick
+    /// is `id mod 13` as before; a bad row is a problem. The two crystals KH3 only drops come from every source.
+    #[test]
+    fn p10_the_families_take_their_shares_and_the_crystals_come_from_every_source() {
+        let r = sheet();
+        let mut count: HashMap<String, u32> = HashMap::new();
+        for id in 20_000u32..36_000 {
+            let item = goods(id, 2, 0);
+            let family = r.family_of(&item).unwrap().to_string();
+            assert_eq!(r.family_of(&item), Some(family.as_str()), "stable");
+            *count.entry(family).or_default() += 1;
+        }
+        assert_eq!(count.len(), 13);
+        assert_eq!(count["Wellspring"], 4_000, "{count:?}");
+        assert!(count.iter().filter(|(f, _)| *f != "Wellspring").all(|(_, n)| *n == 1_000), "{count:?}");
+        let plain = model_of(&SHEET.replace("[\"material.weights\",{\"Wellspring\":4}", "[\"material.unused\",{\"Wellspring\":4}"));
+        assert_eq!(plain.family_of(&goods(20_650, 2, 0)), Some("Betwixt"), "without the row: id mod 13");
+        let bad = LootRules::parse(&SHEET.replace("[\"material.weights\",{\"Wellspring\":4}", "[\"material.weights\",{\"Nobody\":2}"), &kh_items());
+        assert!(bad.problems.iter().any(|p| p.contains("material.weights")), "{:?}", bad.problems);
+        for source in Source::ALL {
+            for unit in [0.0, 0.5, 0.999] {
+                let c = |id: u32| name(&r.classify(&ErItem { consumable: false, ..goods(id, 1, 1) }, &Ctx { unit, ..Ctx::of(source, 3) }));
+                assert_eq!((c(10_060), c(10_070)), ("Illusory Crystal".to_string(), "Evanescent Crystal".to_string()), "from {}", source.name());
+            }
+        }
     }
 
     /// WHAT SORA CANNOT USE BECOMES EQUIPMENT OF ITS TIER, by the kind of thing it is; always the same piece for the
@@ -1837,9 +2022,13 @@ mod tests {
         assert!(["Shield Belt", "Defense Belt"].contains(&robe(Element::None, 0, Source::Enemy, 0).as_str()));
         // (IMPL_ER61) in Limgrave the best of them is a tier-2 piece
         assert_eq!(name(&c(&ErItem { cat: Some(Cat::Protector), id: 40000, rarity: 3, element: Element::Fire, known: true, ..ErItem::default() }, Source::Chest, 0)), "Fire Bangle");
-        // ---- a spirit ash: a support accessory; an Ash of War: an AP accessory; a sorcery: a Magic accessory
+        // ---- a spirit ash (THE USER 2026-11-02: "Give Sora the ability to 'Summon' from the command menu, but he uses Elden
+        // Ring's spirit ashes"): it stays Elden Ring's (before: a support accessory); an Ash of War: an AP accessory; a
+        // sorcery: a Magic accessory
         let d = c(&ErItem { consumable: false, ..goods(200000, 7, 1) }, Source::World, 0);
-        assert!(d.rule == "r2.510.spirit_ash" && d.tier == 2 && has(&d, "support"), "{d:?} {:?}", tags(&r, &d));
+        assert!(d.rule == "r2.510.spirit_ash" && d.give == Give::Pass, "{d:?}");
+        let d = c(&ErItem { consumable: false, ..goods(207000, 8, 3) }, Source::Npc, 0);
+        assert!(d.rule == "r2.510.spirit_ash" && d.give == Give::Pass, "a renowned ash (goodsType 8, the Mimic Tear): {d:?}");
         let d = c(&ErItem { cat: Some(Cat::Gem), id: 10000, rarity: 1, known: true, ..ErItem::default() }, Source::Chest, 0);
         assert!(d.rule == "r2.800.gem" && d.tier == 2 && has(&d, "ap"), "{d:?} {:?}", tags(&r, &d));
         let d = c(&ErItem { consumable: false, ..goods(21, 5, 1) }, Source::Shop, 0); // (SHOP-4: real sorceries a teacher's talk counts stay Elden Ring's: a free id)
@@ -1912,7 +2101,7 @@ mod tests {
         };
         assert_eq!(price(&ErItem { effect: Effect::Hp, ..goods(900, 0, 0) }), ("Potion".to_string(), 40), "KH3's own price");
         assert_eq!(price(&goods(10100, 14, 0)).0, "Fluorite");
-        assert_eq!(price(&goods(20650, 2, 0)), ("Betwixt Shard".to_string(), 100), "KH3 sells its materials too");
+        assert_eq!(price(&goods(20650, 2, 0)), ("Soothing Shard".to_string(), 100), "KH3 sells its materials too");
         let (sold, cost) = price(&weapon(2000000, 1, WepKind::Melee));
         let item = kh_host::items::table().iter().find(|i| i.name == sold).unwrap();
         // (IMPL_ER61) a Limgrave shop's rarity-1 sword is tier 1 now: the tier-1 price
@@ -1960,9 +2149,9 @@ mod tests {
         let r = rules();
         let at = |item: &ErItem, unit: f32, source: Source, depth: u8| name(&r.classify(item, &Ctx { unit, ..Ctx::of(source, depth) }));
         let material = goods(15340, 2, 0);
-        assert_eq!([at(&material, 0.0, Source::Enemy, 0), at(&material, 0.249, Source::Enemy, 0), at(&material, 0.251, Source::Enemy, 0), at(&material, 0.369, Source::Enemy, 0), at(&material, 0.371, Source::Enemy, 0), at(&material, 0.999, Source::Enemy, 0)], ["Potion", "Potion", "Ether", "Ether", "Blazing Shard", "Blazing Shard"]);
+        assert_eq!([at(&material, 0.0, Source::Enemy, 0), at(&material, 0.249, Source::Enemy, 0), at(&material, 0.251, Source::Enemy, 0), at(&material, 0.369, Source::Enemy, 0), at(&material, 0.371, Source::Enemy, 0), at(&material, 0.999, Source::Enemy, 0)], ["Potion", "Potion", "Ether", "Ether", "Wellspring Shard", "Wellspring Shard"]);
         let sold = ErItem { sell_value: 10, ..material };
-        assert_eq!([at(&sold, 0.371, Source::Enemy, 0), at(&sold, 0.599, Source::Enemy, 0), at(&sold, 0.601, Source::Enemy, 0)], ["10 munny", "10 munny", "Blazing Shard"]);
+        assert_eq!([at(&sold, 0.371, Source::Enemy, 0), at(&sold, 0.599, Source::Enemy, 0), at(&sold, 0.601, Source::Enemy, 0)], ["10 munny", "10 munny", "Wellspring Shard"]);
         assert_eq!([at(&material, 0.1, Source::Chest, 0), at(&material, 0.3, Source::Chest, 0), at(&material, 0.1, Source::Chest, 2), at(&material, 0.3, Source::Chest, 4)], ["Hi-Potion", "Hi-Ether", "Mega-Potion", "Mega-Ether"], "by tier");
         let other = goods(1730, 0, 0);
         assert_eq!([at(&other, 0.299, Source::World, 0), at(&other, 0.301, Source::World, 0), at(&other, 0.449, Source::World, 0), at(&other, 0.451, Source::World, 0)].map(|n| n.ends_with("Shard")), [false, false, false, true]);
@@ -2201,12 +2390,35 @@ mod party_tests {
     use super::*;
     use kh_host::party::PartyChara;
 
+    /// The rule at the share it had before the user's 2026-11-03 decision (50 %): the rule itself is still tested.
     fn rules() -> LootRules {
-        LootRules::parse(SHEET, &kh_items())
+        let r = LootRules::parse(&SHEET.replace("\"shield\":\"goofy\"},\"share\":0,", "\"shield\":\"goofy\"},\"share\":50,"), &kh_items());
+        assert_eq!(r.party_weapons.as_ref().map(|p| p.share), Some(50));
+        r
     }
 
     fn staff(id: u32, rarity: u8) -> ErItem {
         ErItem { cat: Some(Cat::Weapon), id, rarity, known: true, wep_kind: WepKind::Staff, ..ErItem::default() }
+    }
+
+    /// (P10, the user 2026-11-03: "ER STAVES / SEALS / SHIELDS: stop turning them into friend weapons (weapons already held
+    /// are kept)") THE SHIPPED SHEET'S SHARE IS 0: no staff, seal or shield of any id, tier or source becomes a friend's
+    /// weapon; they stay what the model makes of them (no `party.weapons.*` rule decides). Nothing here takes a held one back.
+    #[test]
+    fn p10_no_elden_ring_armament_becomes_a_friends_weapon() {
+        let r = LootRules::parse(SHEET, &kh_items());
+        assert_eq!(r.party_weapons.as_ref().map(|p| p.share), Some(0), "the sheet row party.weapons");
+        let friends = [PartyChara::Donald, PartyChara::Goofy];
+        for kind in [WepKind::Staff, WepKind::Seal, WepKind::Shield] {
+            for k in 0..300u32 {
+                let item = ErItem { wep_kind: kind, ..staff(30_000_000 + k * 10_000, (k % 4) as u8) };
+                for source in [Source::Enemy, Source::Chest, Source::Boss, Source::World] {
+                    let ctx = Ctx::of(source, (k % 5) as u8);
+                    assert!(r.party_weapon(&item, &ctx, &friends).is_none(), "{kind:?} {}", item.id);
+                    assert!(!r.classify(&item, &ctx).rule.starts_with("party.weapons"), "{kind:?} {}", item.id);
+                }
+            }
+        }
     }
 
     #[test]
@@ -2295,8 +2507,90 @@ pub fn online_item(item: &ErItem, _ctx: &Ctx) -> Option<Decision> {
 
 /// (ONLINEITEMS fix) WHETHER A KH SCREEN LISTS AN ELDEN RING ITEM the mod leaves Elden Ring's (the KH3 Items screen's
 /// Key Items / All tabs, the OBTAINED popup): exactly what Elden Ring's own inventory would show, so never a hidden row.
+/// (ER-TWEAKS) Nor an item the mod removed from the game ([`removed_from_game`]: a Larval Tear a save still holds).
 pub fn listed_on_kh_screens(item: &ErItem) -> bool {
-    !item.hidden
+    !item.hidden && !removed_from_game(item)
+}
+
+/// (KEYITEM-TUTORIALS, the user 2026-11-06: "remove Elden Ring's tutorial logs from the key items section in the item
+/// menu") WHETHER THE KH3 ITEMS SCREEN'S KEY ITEMS TAB LISTS AN ELDEN RING ITEM: what the KH screens list, but never one of
+/// Elden Ring's tutorial logs (`LootRules::is_tutorial`, sheet row `goods.tutorial`). The goods stay in the save and
+/// Elden Ring's own tutorials are untouched: only this list leaves them out.
+pub fn in_key_items_tab(item: &ErItem, rules: &LootRules) -> bool {
+    listed_on_kh_screens(item) && !rules.is_tutorial(item)
+}
+
+#[cfg(test)]
+mod key_items_tab_tests {
+    use super::*;
+
+    /// (KEYITEM-TUTORIALS) Real EquipParamGoods rows (regulation.bin copy, build/sora_tmp/keyitem_tut/STATE.md): the
+    /// "About ..." logs (goodsType 12, sort group 20) are left out; the notes, maps and paintings of the same type, every
+    /// real key item and the other types' sort-group-20 goods stay.
+    #[test]
+    fn tutorial_logs_are_not_key_items_and_real_key_items_are() {
+        let rules = LootRules::load();
+        let goods = |id: u32, goods_type: u8, sort_group: u8| ErItem { cat: Some(Cat::Goods), id, goods_type, sort_group, known: true, ..ErItem::default() };
+        // the tutorial logs: base game and DLC
+        for (id, name) in [(9100, "About Sites of Grace"), (9110, "About Death"), (9141, "About Great Runes"), (9153, "About Marika's Effigy at the Roundtable"), (2009160, "About the Scadutree Blessing"), (2009162, "About New Inventory Features")] {
+            let item = goods(id, 12, 20);
+            assert!(rules.is_tutorial(&item), "{name}");
+            assert!(!in_key_items_tab(&item, &rules), "{name} is a tutorial log: not on the Key Items tab, and no OBTAINED popup (loot.rs key_item_of)");
+            assert!(!key_item_popup(&item), "{name}: no OBTAINED popup from the normal inventory either");
+        }
+        // the OBTAINED popup's gate of the key-item inventory (loot.rs key_item_of -> on_key_items_tab) is this list's:
+        // a real key item still gets the popup
+        for (id, goods_type, sort_group, name) in [(8000, 1, 40, "Stonesword Key"), (8148, 1, 40, "Godrick's Great Rune"), (8162, 1, 60, "Gold Sewing Needle"), (8600, 1, 70, "Map: Limgrave, West"), (2950, 3, 110, "Remembrance of the Grafted")] {
+            assert!(in_key_items_tab(&goods(id, goods_type, sort_group), &rules), "{name} still gets KH3's OBTAINED popup");
+        }
+        assert!(key_item_popup(&goods(150, 0, 120)), "an online item (Furlcalling Finger Remedy) still gets it from the normal inventory");
+        // what stays: (id, goodsType, sortGroupId, name)
+        for (id, goods_type, sort_group, name) in [
+            (8000, 1, 40, "Stonesword Key"),
+            (8010, 1, 40, "Rusty Key"),
+            (8105, 1, 40, "Dectus Medallion (Left)"),
+            (8176, 1, 40, "Haligtree Secret Medallion (Right)"),
+            (8148, 1, 40, "Godrick's Great Rune (key-item row)"),
+            (191, 15, 10, "Godrick's Great Rune"),
+            (8182, 1, 40, "Mending Rune of Perfect Order"),
+            (2950, 3, 110, "Remembrance of the Grafted"),
+            (8131, 1, 50, "Irina's Letter"),
+            (8158, 1, 60, "Spirit Calling Bell"),
+            (8161, 1, 60, "Sewing Needle"),
+            (8162, 1, 60, "Gold Sewing Needle"),
+            (8163, 1, 60, "Tailoring Tools"),
+            (8188, 1, 60, "Golden Tailoring Tools"),
+            (8500, 1, 60, "Crafting Kit"),
+            (8600, 1, 70, "Map: Limgrave, West"),
+            (130, 0, 10, "Spectral Steed Whistle"),
+            (150, 0, 120, "Furlcalling Finger Remedy"),
+            (8700, 12, 10, "Note: Hidden Cave"),
+            (2008007, 12, 15, "Cross Map"),
+            (2008200, 12, 15, "\"Incursion\" Painting"),
+            (820, 0, 20, "Boiled Crab (sort group 20 of another type)"),
+            (4300, 5, 20, "Glintblade Phalanx (sort group 20 of another type)"),
+        ] {
+            let item = goods(id, goods_type, sort_group);
+            assert!(!rules.is_tutorial(&item), "{name}");
+            assert!(in_key_items_tab(&item, &rules), "{name} stays on the Key Items tab");
+        }
+        // only goods rows that were found; a hidden row stays off as before
+        assert!(!rules.is_tutorial(&ErItem { known: false, ..goods(9100, 12, 20) }), "a row not found");
+        assert!(!rules.is_tutorial(&ErItem { cat: Some(Cat::Weapon), ..goods(9100, 12, 20) }), "goods only");
+        assert!(!in_key_items_tab(&ErItem { hidden: true, ..goods(166, 13, 120) }, &rules), "a row Elden Ring never shows");
+    }
+}
+
+/// (ER-TWEAKS, THE USER 2026-11-06: "Remove larval tears from the game and replace them with rare synthesis materials.")
+/// The Larval Tear's goods ids: 8185 (the base game) and 2008033 (the DLC's own copy, GoodsName_dlc01 "Larval Tear"; Boc's
+/// talk scripts count either). Every source gives a rare KH3 material in its place (sheet sora-er-items `r2.024.larval_tear`).
+pub const LARVAL_TEARS: [u32; 2] = [8185, 2008033];
+
+/// (ER-TWEAKS) AN ELDEN RING ITEM THE MOD TOOK OUT OF THE GAME: every new one becomes its KH3 material at the gate; a copy an
+/// older save still holds (in Elden Ring's key-item inventory: goodsType 1) is LEFT INERT, nothing written to Elden Ring's
+/// save: no KH screen lists it, no OBTAINED popup tells it, and Rennala's rebirth that used it is gone (ER-TWEAKS item 3).
+pub fn removed_from_game(item: &ErItem) -> bool {
+    item.cat == Some(Cat::Goods) && LARVAL_TEARS.contains(&item.id)
 }
 
 /// (KEYPOP, the user 2026-10-27: "also multiplayer items should give the "key item" pop up that maps do") AN ITEM OF THE
@@ -2323,6 +2617,102 @@ mod keypop_tests {
         assert!(!key_item_popup(&ErItem { known: false, ..online(106, false) }), "a row not found");
         assert!(!key_item_popup(&ErItem { hidden: true, ..online(166, false) }), "a row Elden Ring never shows");
         assert!(!key_item_popup(&ErItem { cat: Some(Cat::Weapon), ..online(106, false) }), "goods only");
+    }
+}
+
+/// (ER-TWEAKS item 4, THE USER 2026-11-06: "Remove larval tears from the game and replace them with rare synthesis
+/// materials.")
+#[cfg(test)]
+mod larval_tear_tests {
+    use super::*;
+
+    fn tear(id: u32) -> ErItem {
+        // as the regulation describes both ids: goodsType 1 (a key item), consumable, rarity 2, sortGroupId 50, no sell value
+        ErItem { cat: Some(Cat::Goods), id, goods_type: 1, rarity: 2, sort_group: 50, consumable: true, sell_value: -1, known: true, ..ErItem::default() }
+    }
+
+    fn key(d: &Decision) -> String {
+        match &d.give {
+            Give::Kh { key, .. } => key.clone(),
+            other => format!("{other:?}"),
+        }
+    }
+
+    /// The rare tier of KH3 (rank RANK00, grade 4) of sheet kh3-materials, read from the sheet itself.
+    fn rare_materials() -> Vec<String> {
+        let sheet: serde_json::Value = serde_json::from_str(include_str!("../../../sheets/port/kh3-materials.json")).expect("kh3-materials");
+        let col = |n: &str| sheet["columns"].as_array().unwrap().iter().position(|c| c == n).unwrap();
+        let (rank, grade) = (col("rank"), col("grade"));
+        sheet["rows"].as_array().unwrap().iter().filter(|r| r[rank] == "RANK00" && r[grade] == 4).map(|r| r[0].as_str().unwrap().to_string()).collect()
+    }
+
+    /// EVERY SOURCE OF A LARVAL TEAR (the table of build/sora_tmp/weapons/ER-TWEAKS/STATE.md item 4: how the gate reads it,
+    /// the depth of where it lies) gives the rare KH3 material of the table, never the tear (a pass), a slot or nothing; the
+    /// same with any slots held, any roll, `progression.convert` 0, and both ids.
+    #[test]
+    fn every_larval_tear_source_gives_its_rare_material() {
+        let r = LootRules::parse(SHEET, &kh_items());
+        assert!(r.problems.is_empty(), "{:?}", r.problems);
+        let rare = rare_materials();
+        assert!(rare.len() >= 8 && ["MAT_ITEM36", "MAT_ITEM56", "MAT_ITEM57"].iter().all(|k| rare.iter().any(|x| x == k)), "{rare:?}");
+        // (the source as the gate reads it, the depth) -> the material (STATE.md item 4)
+        let table: [(Source, u8, &str, &str); 12] = [
+            (Source::World, 0, "MAT_ITEM36", "Limgrave / Weeping map lot 1044350100 (by the lot tables: enemy + flagged map = world)"),
+            (Source::World, 1, "MAT_ITEM36", "Liurnia map lots 1034420060, 1035430100"),
+            (Source::World, 2, "MAT_ITEM56", "m12_07 lots 12070480 / 12070490, m60 lots 1036540100, 1043530100, 1047370100; the Nokron enemy drops"),
+            (Source::World, 3, "MAT_ITEM57", "Mountaintops map lot 1049550700"),
+            (Source::World, 4, "MAT_ITEM57", "the DLC's nine map lots of 2008033"),
+            (Source::Npc, 1, "MAT_ITEM56", "the event award 80312 (m60_36_50) when the call site reads npc"),
+            (Source::Npc, 2, "MAT_ITEM57", "the Mimic Tear's award 10340 (x2) when the call site reads npc"),
+            (Source::Npc, 4, "MAT_ITEM57", "a DLC award"),
+            (Source::Enemy, 2, "MAT_ITEM56", "the Nokron enemy drops when the reading is the enemy's"),
+            (Source::Chest, 2, "MAT_ITEM57", "a chest"),
+            (Source::Boss, 2, "MAT_ITEM57", "a boss"),
+            (Source::Shop, 1, "MAT_ITEM36", "Pidia's / the Abandoned Merchant's line (only with Elden Ring's own windows: shop.menu = 0)"),
+        ];
+        let off = LootRules::parse(&SHEET.replace("[\"progression.convert\",1,", "[\"progression.convert\",0,"), &kh_items());
+        let full = |k: &str| u32::from(k.starts_with('@')) * 9;
+        for id in LARVAL_TEARS {
+            for (source, depth, want, what) in table {
+                for rules in [&r, &off] {
+                    for state in [&holds_nothing as &dyn Fn(&str) -> u32, &full] {
+                        for unit in [0.0, 0.5, 0.999] {
+                            let d = rules.classify(&tear(id), &Ctx { source, depth, state, unit });
+                            assert_eq!((key(&d).as_str(), d.rule.as_str()), (want, "r2.024.larval_tear"), "{id} {what}: {d:?}");
+                            assert!(rare.contains(&key(&d)), "{id} {what}: {} is no rare KH3 material", key(&d));
+                        }
+                    }
+                }
+            }
+            // whatever the source and the depth: a rare material, never the tear itself (a pass)
+            for source in Source::ALL {
+                for depth in 0..=4 {
+                    let d = r.classify(&tear(id), &Ctx::of(source, depth));
+                    assert!(d.give != Give::Pass && rare.contains(&key(&d)), "{id} from {} at depth {depth}: {d:?}", source.name());
+                }
+            }
+        }
+    }
+
+    /// NO LARVAL TEAR PASSES: the script-keep rule (Boc's talk counts both ids: sheet sora-er-shop `required.keep`) does not
+    /// take it back to Elden Ring's, a merchant's line sells the material in its place, and a tear a save still holds is on no
+    /// KH screen and gets no popup; every other goods id is untouched by the new test.
+    #[test]
+    fn no_larval_tear_passes_and_a_held_one_is_inert() {
+        let r = LootRules::parse(SHEET, &kh_items());
+        for id in LARVAL_TEARS {
+            let t = tear(id);
+            assert!(removed_from_game(&t) && !listed_on_kh_screens(&t) && !key_item_popup(&t), "{id}");
+            assert!(script_required(&t).is_some(), "{id}: Boc's scripts count it (the keep list names it), and still it is converted");
+            match r.shop_line(&t, 1) {
+                (ShopLine::Sell { key, .. }, d) => assert!(key == "MAT_ITEM36" && d.rule == "r2.024.larval_tear", "{id}: {key} {d:?}"),
+                other => panic!("{id}: a merchant's line {other:?}"),
+            }
+            assert!(!removed_from_game(&ErItem { cat: Some(Cat::Weapon), ..t }), "goods only");
+        }
+        for id in [8184, 8186, 2008032, 2008034, 10040, 10070] {
+            assert!(!removed_from_game(&tear(id)) && listed_on_kh_screens(&tear(id)), "{id}");
+        }
     }
 }
 

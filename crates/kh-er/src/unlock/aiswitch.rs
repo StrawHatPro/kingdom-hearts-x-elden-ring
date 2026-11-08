@@ -16,7 +16,7 @@
 //!   the fight goes on with the same boss, no swap.
 //! - `release` when the staging ends without a fight (the player went away, the rule switched off): what was there is
 //!   written back (AI off, its rate), so the boss is again as its event left it.
-//! A new character behind the boss's entity (a reload made it again) starts afresh.
+//!   A new character behind the boss's entity (a reload made it again) starts afresh.
 
 /// What the boss's two fields hold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -293,7 +293,7 @@ mod tests {
         let mut handle = 1u64;
         let mut on_frames = 0;
         // the director's acts on the switch (as host.rs fight_step)
-        let mut frame = |d: &mut FightDirector, w: &mut AiWake, b: &mut Fake, facts: FightFacts, handle: u64| -> Vec<Note> {
+        let frame = |d: &mut FightDirector, w: &mut AiWake, b: &mut Fake, facts: FightFacts, handle: u64| -> Vec<Note> {
             let mut notes = Vec::new();
             for a in d.step(&facts, 1.0 / 60.0) {
                 match a {

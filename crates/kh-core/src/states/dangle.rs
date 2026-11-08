@@ -88,7 +88,6 @@ pub(super) fn push_from_wall_run(s: &mut Pawn, ledge: Ledge) -> bool {
 /// THE ENTRY CALL for other states (the airstep arrival's END branch: probe + slot 65 with
 /// variant 1): pushes DANGLE for a ledge found with `actions::probes::ledge_probe`; the caller
 /// chains or finishes as its own code says.
-#[allow(dead_code)]
 pub(crate) fn push(s: &mut Pawn, ledge: Ledge, from_wall_run: bool) {
     s.queue.push_state(Dangle { component: ledge.component, position: ledge.position, yaw: ledge.yaw, from_wall_run, ..Dangle::RESET });
 }

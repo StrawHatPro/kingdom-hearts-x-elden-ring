@@ -20,7 +20,7 @@
 use super::abilities::DonAbility;
 use super::combat::{CastPlan, DonEvent};
 use super::element::Element;
-use super::magic_fx::{self, fx, magic, ActorKind, Aim, Burst, Ctx, FieldRule, Follow, FxLog, HitSpec, MagicFx, Special, Wall};
+use super::magic_fx::{self, fx, magic, ActorKind, Aim, Burst, CastAt, Ctx, FieldRule, Follow, FxLog, HitSpec, MagicFx, Special, Wall, Who};
 use super::react::HitTag;
 use super::spells::{ArcaneLine, SpellRef};
 use super::status::{Apply, Size};
@@ -171,7 +171,9 @@ pub fn begin(p: &mut NpcPawn, plan: &CastPlan, target: CastTarget, host: &mut Pa
     if p.don_cast.run.is_some_and(|r| !r.shot) {
         return false;
     }
-    if plan.mp > 0 && (p.status.mp < plan.mp || p.status.mp_charge_left > 0.0) {
+    // (THE USER 2026-11-02: "make sure Donald and his spells ... have this as well") the party's MP rule (crate::mp_rule): any MP
+    // above 0 pays; refused only in MP Charge or at 0 MP
+    if !crate::mp_rule::may_pay(&p.status, plan.mp) {
         return false;
     }
     let Some(row) = plan.spell.row(&d).copied() else { return false };
@@ -213,10 +215,10 @@ pub fn begin(p: &mut NpcPawn, plan: &CastPlan, target: CastTarget, host: &mut Pa
         p.cmc.gravity_off = true;
         p.cmc.set_flying();
     }
-    // the MP: spent at the cast's start (lost if a hit interrupts it), then the core
-    if plan.mp > 0 {
-        crate::leader_magic::use_mp(&mut p.status, plan.mp);
-    }
+    // the MP: spent at the cast's start (lost if a hit interrupts it), then the core. (THE USER 2026-11-02: "let Goofy use his
+    // last MP and go into MP reserve, make sure Donald and his spells ... have this as well") a price at or above what he has
+    // takes the last of it and starts MP Charge at once (crate::mp_rule; the gate above let it through)
+    let _ = crate::mp_rule::spend(&mut p.status, plan.mp);
     if let Some(st) = p.status.donald.as_mut() {
         let mods = st.abilities.mods();
         st.core.commit_cast(plan, &mods, &d);
@@ -420,6 +422,8 @@ pub fn launch(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, run: &CastRun, 
         CastTarget::Point(p) => Aim::Point(p),
         CastTarget::Member(_) => Aim::Point(centre + fwd * 500.0),
     };
+    let shot = CastAt { aim, pos, yaw, mz };
+    let who = Who { caster, spell };
     let ground = aim.ground(cx.host);
     let mut base = HitSpec::of(spell, &row);
     base.mult = magic_fx::boost_of(spell, &abilities);
@@ -435,10 +439,10 @@ pub fn launch(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, run: &CastRun, 
     if spell.is_ultimate() || matches!(spell, SpellRef::Arcane(ArcaneLine::Ultima, _)) {
         // (AUD) the foes standing now: the ultimates' storms strike them first (Judgment Bolt's recipe)
         let foes: Vec<(TargetId, Vec3)> = magic_fx::foes(cx.host).into_iter().map(|f| (f.id, f.position)).collect();
-        super::spell_payload::launch_foes(fxw, caster, spell, ground, pos, yaw, row.radius.max(row.range.min(1200.0)), row.radius, &foes);
+        super::spell_payload::launch_foes(fxw, who, ground, pos, yaw, row.radius, &foes);
     }
     match spell {
-        SpellRef::Line1(e, tier) => super::sora_magic::shoot(fxw, cx, caster, e, tier, aim, pos, yaw, mz), // (DON-MAGIC part A)
+        SpellRef::Line1(e, tier) => super::sora_magic::shoot(fxw, cx, caster, e, tier, shot), // (DON-MAGIC part A)
         // ---- line 2
         SpellRef::Line2(Element::Fire, lv) => {
             // Flare: the star flies at the target, shrinks 0.5 s, detonates (2 / 3 m), Burn consumed +50 %; Lv 3 after-flare
@@ -450,7 +454,7 @@ pub fn launch(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, run: &CastRun, 
                 let mut s = spec.clone().kind(Kind::Small);
                 s.flare = false;
                 s.mult *= row.extra;
-                (m.flare_after_delay, Burst::new(s, row.radius).fx(&[fx::FLARE_AFTER]))
+                Box::new((m.flare_after_delay, Burst::new(s, row.radius).fx(&[fx::FLARE_AFTER])))
             });
             let dir = (aim.point(cx.host) - mz).normalize_or_zero();
             let id = fxw.add(caster, spell, ActorKind::Ball { pos: mz, aim, speed: m.flare_speed, turn: m.bolt_turn, dir, life: m.bolt_life, shrink: m.flare_shrink, arrived: None, burst, after });
@@ -476,7 +480,11 @@ pub fn launch(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, run: &CastRun, 
             burst.special = Special::Freeze { seconds: row.duration, max: Size::Medium, shards: lv >= 3 };
             fxw.add(caster, spell, ActorKind::Delayed { aim, delay: row.extra.max(0.0), burst });
         }
-        SpellRef::Line2(Element::Thunder, lv) => super::allyfx::put_orbs(fxw, cx, caster, member, lv, &row, lock_aim(cx, caster), sora_is_member, super::allyfx::wearer_at(cx.party, sora, member).unwrap_or(pos)),
+        SpellRef::Line2(Element::Thunder, lv) => {
+            let hurl = lock_aim(cx, caster);
+            let from = super::allyfx::wearer_at(cx.party, sora, member).unwrap_or(pos);
+            super::allyfx::put_orbs(fxw, cx, caster, super::allyfx::Wearer { member, from }, lv, &row, hurl);
+        }
         SpellRef::Line2(Element::Water, lv) => {
             // Flood: the wave in front (90 / 120 / 360 deg, 8 / 12 / 15 m), push 5 / 7 / 7 m, Wet, wall stun; a 6 s puddle
             let mut spec = base.clone().kind(Kind::Blow);
@@ -486,7 +494,7 @@ pub fn launch(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, run: &CastRun, 
             // (DON-SPELLB) Flood's look: the slam burst, the wave across the arc, the puddle's splashes (spell_payload.rs)
             {
                 let (pc, pr) = if half >= 179.0 { (pos, m.flood_puddle_radius * 1.5) } else { (pos + fwd * (row.range * 0.4), m.flood_puddle_radius) };
-                super::spell_payload::flood(fxw, caster, lv, pos, yaw, half, row.range, pc, pr, row.duration);
+                super::spell_payload::flood(fxw, caster, super::spell_payload::FloodLook { lv, me: pos, yaw, half, reach: row.range, puddle: pc, puddle_r: pr, puddle_life: row.duration });
             }
             fxw.add(caster, spell, ActorKind::Wave { origin: pos, yaw, half, reach: row.range, speed: m.flood_wave_speed, front: 0.0, spec, hit: Vec::new(), flood: true });
             let (pc, pr) = if half >= 179.0 { (pos, m.flood_puddle_radius * 1.5) } else { (pos + fwd * (row.range * 0.4), m.flood_puddle_radius) };
@@ -562,9 +570,9 @@ pub fn launch(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, run: &CastRun, 
             fxw.add(caster, spell, ActorKind::Delayed { aim, delay: m.holy_delay, burst: Burst::new(spec, row.radius).fx(&[fx::HOLY[2]]) });
         }
         // ---- the hybrids (6.4)
-        SpellRef::Hybrid(a, b) => hybrid(fxw, cx, caster, spell, (a, b), &row, base, aim, pos, yaw, mz),
+        SpellRef::Hybrid(a, b) => hybrid(fxw, cx, who, (a, b), &row, base, shot),
         // ---- Y Arcane (6.3, 6.5)
-        SpellRef::Arcane(line, lv) => arcane(fxw, cx, caster, spell, line, lv, &row, base, aim, pos, yaw), // (YFX) + Donald's place and facing
+        SpellRef::Arcane(line, lv) => arcane(fxw, cx, who, (line, lv), &row, base, shot), // (YFX) + Donald's place and facing
         SpellRef::Release(e) => release_into(fxw, cx, caster, e),
     }
 }
@@ -584,9 +592,10 @@ fn lock_aim(cx: &Ctx, caster: MemberId) -> Option<Aim> {
     t.map(|_| aim)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn hybrid(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, spell: SpellRef, pair: (Element, Element), row: &super::tune::DonSpellRow, base: HitSpec, aim: Aim, pos: Vec3, yaw: f32, mz: Vec3) {
+fn hybrid(fxw: &mut MagicFx, cx: &mut Ctx, who: Who, pair: (Element, Element), row: &super::tune::DonSpellRow, base: HitSpec, shot: CastAt) {
     use Element::*;
+    let Who { caster, spell } = who;
+    let CastAt { aim, pos, yaw, mz } = shot;
     let m = magic();
     let mut base = base;
     base.hit_fx = super::hybrid_look::hit_fx(pair.0, pair.1); // (HYB) the hybrid's own hit (the Light ones gold)
@@ -691,9 +700,9 @@ fn hybrid(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, spell: SpellRef, pa
     super::hybrid_look::launch(fxw, cx, super::hybrid_look::Launch { caster, spell, target, ground, me: pos, yaw, wand: mz, actor: main, radius: row.radius, range: row.range, angle: row.angle, duration: row.duration });
 }
 
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
-fn arcane(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, spell: SpellRef, line: ArcaneLine, lv: u8, row: &super::tune::DonSpellRow, base: HitSpec, aim: Aim, me: Vec3, yaw: f32) {
+fn arcane(fxw: &mut MagicFx, cx: &mut Ctx, who: Who, (line, lv): (ArcaneLine, u8), row: &super::tune::DonSpellRow, base: HitSpec, shot: CastAt) {
+    let Who { caster, spell } = who;
+    let CastAt { aim, pos: me, yaw, .. } = shot;
     let m = magic();
     let ground = aim.ground(cx.host);
     let mut base = base;
@@ -702,7 +711,7 @@ fn arcane(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, spell: SpellRef, li
     match line {
         ArcaneLine::Comet => {
             // (YFX) the stars' look and sound on the hits' clock (yfx.rs): the twinkle, the dive, the star blast
-            super::yfx::comet(fxw, caster, spell, lv, ground, me, yaw, row.count.max(1), m.comet_gap, m.comet_fall, m.comet_height);
+            super::yfx::comet(fxw, who, super::yfx::Volley { lv, ground, me, yaw, gap: m.comet_gap, fall: m.comet_fall, height: m.comet_height }, row.count.max(1));
             for k in 0..row.count.max(1) {
                 let b = Burst::new(base.clone().kind(Kind::Blow), row.radius);
                 fxw.add(caster, spell, ActorKind::Delayed { aim, delay: m.comet_fall + k as f32 * m.comet_gap, burst: b });
@@ -726,7 +735,7 @@ fn arcane(fxw: &mut MagicFx, cx: &mut Ctx, caster: MemberId, spell: SpellRef, li
         ArcaneLine::Meteor => {
             // a sunflower pattern over the radius (deterministic); (YFX) the rift, the burning rocks, their landings (yfx.rs)
             let spots = super::yfx::meteor_spots(ground, row.count.max(1), row.radius);
-            super::yfx::meteor(fxw, caster, spell, lv, ground, me, yaw, &spots, m.meteor_gap, m.meteor_fall, m.meteor_height);
+            super::yfx::meteor(fxw, who, super::yfx::Volley { lv, ground, me, yaw, gap: m.meteor_gap, fall: m.meteor_fall, height: m.meteor_height }, &spots);
             for (k, at) in spots.into_iter().enumerate() {
                 let delay = k as f32 * m.meteor_gap;
                 let b = Burst::new(base.clone().kind(if lv >= 3 { Kind::Blow } else { Kind::Small }), m.meteor_blast);
@@ -766,6 +775,7 @@ pub fn party_step(party: &mut Party, dt: f32, sora: &SoraView, host: &mut PartyH
         // 0. TEST / DEBUG: the script's casts (`party don-cast ID [sora]`): the first Donald casts at the nearest foe (an
         //    ally spell on himself, or on Sora with `sora`); the rules' price when they allow it, else free
         let on_sora = std::mem::take(&mut fxw.debug_on_sora);
+        let on_member = std::mem::take(&mut fxw.debug_on_member); // (PARTY-AI) `party don-cast ID goofy|donald|leader`
         for spell in std::mem::take(&mut fxw.debug_casts) {
             let Some(id) = cx.party.members().find(|i| cx.party.status(*i).is_some_and(|s| s.donald.is_some())) else { break };
             let Some(p) = cx.party.member_mut(id) else { continue };
@@ -780,6 +790,8 @@ pub fn party_step(party: &mut Party, dt: f32, sora: &SoraView, host: &mut PartyH
             let pos = p.position();
             let target = if on_sora && spell.ally_target() {
                 CastTarget::Member(SORA_MEMBER)
+            } else if let Some(w) = on_member.filter(|_| spell.ally_target()) {
+                CastTarget::Member(w)
             } else if spell.ally_target() || matches!(spell, SpellRef::Line1(Element::Light, _)) {
                 CastTarget::Member(id)
             } else {
@@ -792,6 +804,7 @@ pub fn party_step(party: &mut Party, dt: f32, sora: &SoraView, host: &mut PartyH
         // 1. the casts
         let ids: Vec<MemberId> = cx.party.members().collect();
         for id in ids.iter().copied() {
+            let dt = dt * cx.party.member_rate(id); // (PARTY-AI, AUDIT-A WORLDTIME) an AI Donald's cast at KH3's [FRIEND] rate
             let Some(p) = cx.party.member_mut(id) else { continue };
             if let Some((_, age)) = p.don_cast.last.as_mut() {
                 *age += dt;

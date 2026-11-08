@@ -70,6 +70,62 @@ static OURS_AT: AtomicU64 = AtomicU64::new(0);
 
 type StartFn = unsafe extern "C" fn(u64, u64, u64, u64) -> u8;
 
+/// (TESTPREP, the combined round 2026-11-03: `dbg.loadslot` answered Ok and never loaded) THE GAME'S REQUEST STEP
+/// (2.7.2.0 0xafd060, 2.7.1.0 0xafcba0; read from the file): once a frame, with no save or load running, it asks
+/// `GameMan + 0xB72` / `+ 0xB73` FIRST (a save start: S3 when both, S2 for 0xB72 alone, S1 for 0xB73 alone) and reaches the
+/// load of `+ 0xB78` ONLY WHEN NEITHER IS SET (0xafd211 -> 0x67c500). Elden Ring's timed autosave, once due, sets 0xB72
+/// again every frame until a save happens (MEASURED in the round's log: from 1735 s on, S2 asked about 48 times a second,
+/// refused by `save.points_only`, paused only by map loads); so a load asked meanwhile waited for ever: the three stalled
+/// requests (slot 0 twice, slot 2) all fell in that stream, the ones that worked before it. A real player who has not
+/// saved for that long and dies (the death's reload, Continue) would wait the same way.
+/// THE FIX: this step is detoured; while one of OUR loads is asked (`+ 0xB78` != -1, nothing running) the save requests
+/// are cleared before the game's step reads them, so the load is taken that frame. A load replaces the whole session, so a
+/// save request of the session it replaces is moot; nothing in the executable writes `+ 0xB78` (only our loads).
+pub(crate) const REQUEST_STEP: Located = Located { name: "save / load request step", pattern: "48 89 5c 24 08 48 89 6c 24 18 48 89 74 24 20 57 41 56 41 57 48 83 ec 20 48 8b f9 e8 ? ? ? ? 44 0f b6 f8 e8 ? ? ? ? 0f b6 d8 e8 ? ? ? ? 83 f8 ff 40 0f 95 c6", capture: 0, rva_2_7_1_0: 0x00af_cba0, rva_2_7_2_0: 0x00af_d060 /* (PORT) */ };
+static STEP_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
+/// Save requests the step hook held back in favour of a load, and that load's slot (for the log).
+static STEP_HELD: AtomicU32 = AtomicU32::new(0);
+static STEP_HELD_SLOT: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+/// Tick (ms) at which our latest load was asked (the watchdog's start).
+static LOAD_ASKED_AT: AtomicU64 = AtomicU64::new(0);
+/// A load asked and not taken in this long is withdrawn (it must never fire later, at a moment nobody chose).
+const LOAD_TAKE_MS: u64 = 15_000;
+
+type StepFn = unsafe extern "C" fn(usize) -> usize;
+
+/// The step's choice made ours: a load asked (`load_slot` != -1) with nothing running wins over the save requests.
+fn load_wins(load_slot: i32, save_state: u32, requested: u8, requested_2: u8) -> bool {
+    load_slot != -1 && save_state == 0 && (requested != 0 || requested_2 != 0)
+}
+
+/// The watchdog: a load still asked, nothing running, longer than [`LOAD_TAKE_MS`] after we asked it.
+fn load_not_taken(load_slot: i32, save_state: u32, asked_at: u64, now: u64) -> bool {
+    load_slot != -1 && save_state == 0 && asked_at != 0 && now.saturating_sub(asked_at) > LOAD_TAKE_MS
+}
+
+/// (nothing in here can panic: loads and byte writes of the game manager)
+unsafe extern "C" fn step_hook(this: usize) -> usize {
+    let original: StepFn = std::mem::transmute::<usize, StepFn>(STEP_ORIGINAL.load(Ordering::Relaxed));
+    if let Some(g) = game_man() {
+        let load = std::ptr::read_unaligned(g.add(LOAD_SLOT) as *const i32);
+        let state = std::ptr::read_unaligned(g.add(SAVE_STATE) as *const u32);
+        if load_wins(load, state, *g.add(SAVE_REQUESTED), *g.add(SAVE_REQUESTED_2)) {
+            *g.add(SAVE_REQUESTED) = 0;
+            *g.add(SAVE_REQUESTED_2) = 0;
+            STEP_HELD.fetch_add(1, Ordering::Relaxed);
+            STEP_HELD_SLOT.store(load, Ordering::Relaxed);
+        }
+    }
+    original(this)
+}
+
+/// (TESTPREP) The game's load of a slot is asked for or running (`GameMan + 0xB78` != -1, or save state 2): what the
+/// game's inventory shows meanwhile is the loaded save's, not something the player got (loot.rs key popups).
+pub fn load_in_flight() -> bool {
+    // SAFETY: an i32 and a u32 of the live game manager.
+    game_man().is_some_and(|g| unsafe { std::ptr::read_unaligned(g.add(LOAD_SLOT) as *const i32) != -1 || std::ptr::read_unaligned(g.add(SAVE_STATE) as *const u32) == 2 })
+}
+
 fn game_man() -> Option<*mut u8> {
     use eldenring::cs::GameMan;
     use fromsoftware_shared::FromStatic;
@@ -94,6 +150,16 @@ unsafe fn start_hook(k: usize, a: u64, b: u64, c: u64, d: u64) -> u8 {
     // (IMPL_ER21) ... nor on the way to the title screen we asked for (Title Screen of our menus: no save, whatever
     // the character's state), nor while a new character's creation save is ours to make (CREATION 2: only the "both"
     // save we asked for goes through, by the open gate)
+    // (CAMP-OPTIONS) the settings save: S1 alone, while the options screen's pass holds (the system data, never a slot)
+    if k == 0 && GetTickCount64() < SETTINGS_PASS.load(Ordering::Relaxed) {
+        let done = original(a, b, c, d);
+        if done != 0 {
+            SETTINGS_PASS.store(0, Ordering::Relaxed);
+            STARTED[k].fetch_add(1, Ordering::Relaxed);
+        }
+        erlog!("savegate: (CAMP-OPTIONS) the settings save {} (S1: the system data + GraphicsConfig.xml)", if done != 0 { "STARTS" } else { "could not start now (a save is running): asked again by the game's request" });
+        return done;
+    }
     if BLOCK.load(Ordering::Relaxed) && (ARMED.load(Ordering::Relaxed) || LEAVING.load(Ordering::Relaxed)) && !open && k != 3 {
         if let Some(g) = game_man() {
             *g.add(SAVE_REQUESTED) = 0;
@@ -213,24 +279,8 @@ static QUIT_PASS: AtomicBool = AtomicBool::new(true);
 static QUIT_TOLD: AtomicU32 = AtomicU32::new(0);
 /// Tick of the latest quit-menu save call that was answered without saving (0: none).
 pub static QUITTING: AtomicU64 = AtomicU64::new(0);
-/// The quit menu's job steps that call the save starts (2.7.1.0; the starts themselves are RVA-gated).
-const QUIT_STEPS: std::ops::Range<usize> = 0x0082_ca70..0x0082_cb20;
-
-/// A save start was called from the menu's job steps (the return addresses on the stack). NOT USED for the rule any
-/// more: the title screen's own system save comes through these steps too (MEASURED).
-#[allow(dead_code)]
-fn from_quit_menu() -> bool {
-    // (PORT) the steps' range is recorded for 2.7.1.0 only (unused code; 2.7.2.0 start 0x82cf20 is known, its end is not)
-    if crate::gamever::current() != Some(crate::gamever::ExeVersion::V2710) {
-        return false;
-    }
-    use windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace;
-    let mut frames = [std::ptr::null_mut::<core::ffi::c_void>(); 8];
-    // SAFETY: the buffer holds 8 entries.
-    let n = unsafe { RtlCaptureStackBackTrace(0, 8, frames.as_mut_ptr(), std::ptr::null_mut()) } as usize;
-    let base = crate::entry::exe_base();
-    frames[..n.min(8)].iter().any(|f| QUIT_STEPS.contains(&(*f as usize).wrapping_sub(base)))
-}
+// (MEASURED) The quit menu's job steps (2.7.1.0 RVA 0x82ca70..0x82cb20; 2.7.2.0 start 0x82cf20) say nothing about who saves:
+// the title screen's own system save comes through them too.
 
 /// Detours the four save-start functions (all four or none is used).
 pub fn install() -> bool {
@@ -252,6 +302,18 @@ pub fn install() -> bool {
     }
     HOOKED.store(all, Ordering::SeqCst);
     erlog!("savegate: the game's four save-start functions are {}", if all { "detoured (its saves can be held back: save.points_only)" } else { "NOT all detoured: save.points_only has no effect" });
+    // (TESTPREP) the request step: our loads win over the game's save requests (see REQUEST_STEP)
+    match locate(&REQUEST_STEP) {
+        // SAFETY: the function's start found by pattern at the recorded address; the hook passes its one argument on.
+        Some(f) => match unsafe { kh_er_render::inline_hook(f, step_hook as *const () as usize, &STEP_ORIGINAL, REQUEST_STEP.name) } {
+            Ok(()) => erlog!("savegate: the game's save / load request step is detoured: a load we ask for wins over its save requests"),
+            Err(e) => {
+                STEP_ORIGINAL.store(0, Ordering::SeqCst);
+                erlog!("savegate: the request step was NOT detoured ({e}): a load asked while the game keeps asking to save may wait (the watchdog withdraws it after {} s)", LOAD_TAKE_MS / 1000);
+            }
+        },
+        None => erlog!("savegate: the request step was not found for this executable: a load asked while the game keeps asking to save may wait (the watchdog withdraws it after {} s)", LOAD_TAKE_MS / 1000),
+    }
     all
 }
 
@@ -262,6 +324,7 @@ pub fn uninstalled() {
     for o in &ORIGINAL {
         o.store(0, Ordering::SeqCst);
     }
+    STEP_ORIGINAL.store(0, Ordering::SeqCst); // (TESTPREP)
 }
 
 /// THE MODE IS ARMED PER CHARACTER: a character's saving belongs to the save points FROM ITS FIRST SAVE AT ONE
@@ -367,6 +430,38 @@ pub fn save_file_path() -> Option<PathBuf> {
     WATCH.lock().ok().filter(|w| w.detected).and_then(|w| w.path.clone())
 }
 
+/// (CAMP-OPTIONS) THE SETTINGS SAVE: S1 (0x67c3c0) writes the game's SYSTEM DATA (USER_DATA_10: a 0x60000-byte buffer, slot
+/// index 0xA at 0x67c50b; GameSettings, the key config, the profile summaries) and then GraphicsConfig.xml (0x67c53d), never
+/// a character's slot (read in both executables, CAMP-OPTIONS/re-a NOTES 2.2). Elden Ring's options screen asks no save of
+/// its own (its next save carries the settings); with `save.points_only` that would wait for a save point, so the options
+/// screen asks this one: `GameMan + 0xB73` alone (the game's request step answers it with S1, and only with S1), and the
+/// next S1 within 8 s is let through by this pass, whatever the gate says.
+static SETTINGS_PASS: AtomicU64 = AtomicU64::new(0);
+
+/// `direct` (the title screen: the game's request step does not run there, MEASURED 2026-11-05: B73 stayed set, no S1): S1 is
+/// called at once, with the arguments the request step gives it (0xafccb2: 0, 0, flag 0).
+pub fn allow_settings_save(why: &str, direct: bool) -> bool {
+    let Some(g) = game_man() else { return false };
+    // SAFETY: plain getter; a byte of the live game manager (the request the game's own system-save request sets).
+    unsafe {
+        SETTINGS_PASS.store(GetTickCount64() + 8_000, Ordering::Relaxed);
+        *g.add(SAVE_REQUESTED_2) = 1;
+    }
+    erlog!("savegate: (CAMP-OPTIONS) THE SETTINGS SAVE asked ({why}): the game's system data + GraphicsConfig.xml (S1); no character's slot{}", if direct { "; started at once (the title)" } else { "" });
+    if direct {
+        if let Some(f) = locate(&STARTS[0]) {
+            // SAFETY: S1's start (detoured: our pass lets it through) with the request step's own arguments (cl 0, dl 0, r8b 0).
+            let started = unsafe { std::mem::transmute::<usize, StartFn>(f)(0, 0, 0, 0) };
+            if started != 0 {
+                // SAFETY: as above: the request byte the started save answers.
+                unsafe { *g.add(SAVE_REQUESTED_2) = 0 };
+            }
+            return started != 0;
+        }
+    }
+    true
+}
+
 /// The save point's Save: the gate opens and the game is asked to save now.
 pub fn request_save(why: &str) -> bool {
     let Some(g) = game_man() else { return false };
@@ -443,6 +538,7 @@ pub fn request_load_of(slot: i32, why: &str) -> bool {
         *g.add(SAVE_REQUESTED) = 0;
         *g.add(SAVE_REQUESTED_2) = 0;
         std::ptr::write_unaligned(g.add(LOAD_SLOT) as *mut i32, slot);
+        LOAD_ASKED_AT.store(GetTickCount64(), Ordering::Relaxed); // (TESTPREP) the watchdog's start
         erlog!("savegate: LOAD OF SAVE SLOT {slot} ASKED OF THE GAME ({why})");
     }
     true
@@ -487,13 +583,6 @@ pub fn load_slot(slot: i32, armed: Option<bool>, why: &str) -> bool {
     RELOAD_AT.store(unsafe { GetTickCount64() }, Ordering::Relaxed);
     RELOADS.fetch_add(1, Ordering::Relaxed);
     true
-}
-
-/// Milliseconds since the latest in-session load was asked for (`None`: never in this run).
-pub fn load_asked_ago() -> Option<u64> {
-    let at = RELOAD_AT.load(Ordering::Relaxed);
-    // SAFETY: plain getter.
-    (at != 0).then(|| unsafe { GetTickCount64() }.saturating_sub(at))
 }
 
 /// (frame.rs) The game killed its player itself (a pit, deep water, a blow of his whole HP): with
@@ -640,6 +729,21 @@ pub fn frame(control: &Control, dt: f32) {
             erlog!("savegate: game manager: save requested {} / {} (flag {}), load slot {}, save state {}, autosave phase {}  (was {} / {} ({}), {}, {}, {})", now[0], now[1], now[2], now[3] as i32, now[4], now[5], w.last[0], w.last[1], w.last[2], w.last[3] as i32, w.last[4], w.last[5]);
             w.last = now;
         }
+        // (TESTPREP) the step hook's held-back save requests, and THE WATCHDOG: a load never taken is withdrawn
+        let held = STEP_HELD.swap(0, Ordering::Relaxed);
+        if held > 0 {
+            erlog!("savegate: the load of slot {} won over {held} save request(s) of the game's (its timed autosave or another; held back by the request step)", STEP_HELD_SLOT.load(Ordering::Relaxed));
+        }
+        // SAFETY: plain getter.
+        let tick = unsafe { GetTickCount64() };
+        if load_not_taken(now[3] as i32, now[4], LOAD_ASKED_AT.load(Ordering::Relaxed), tick) {
+            // SAFETY: an i32 of the live game manager (what the game's own step writes back after a load: -1).
+            unsafe { std::ptr::write_unaligned(g.add(LOAD_SLOT) as *mut i32, -1) };
+            LOAD_ASKED_AT.store(0, Ordering::Relaxed);
+            erlog!("savegate: THE LOAD OF SLOT {} WAS NOT TAKEN by the game in {} s: the request is withdrawn (it must not fire later at a moment nobody chose)", now[3] as i32, LOAD_TAKE_MS / 1000);
+        } else if now[3] as i32 == -1 {
+            LOAD_ASKED_AT.store(0, Ordering::Relaxed);
+        }
     }
     // ---- (IMPL_ER11) a quit whose save request was refused before the phase was looked at: it is answered here
     if points_only() && QUIT_PASS.load(Ordering::Relaxed) {
@@ -705,20 +809,17 @@ pub fn frame(control: &Control, dt: f32) {
         crate::save::ask_write(); // (IMPL_ER12)
         request_save("dbg.save");
     }
-    if fire_load {
-        if !reload("dbg.load") {
+    if fire_load
+        && !reload("dbg.load") {
             request_load("dbg.load (save.points_only is off: the plain request)");
         }
-    }
     if fire_title {
         quit_to_title("dbg.title");
     }
     if death_reload {
         let when = control.str("save.death_reload").unwrap_or("alive");
         let alive = crate::game::player_mut().is_some_and(|p| crate::game::player_alive(p));
-        if !points_only() {
-            DEATH_RELOAD.store(false, Ordering::Relaxed);
-        } else if (when == "now" || alive) && reload("after a death of the game's own") {
+        if !points_only() || ((when == "now" || alive) && reload("after a death of the game's own")) {
             DEATH_RELOAD.store(false, Ordering::Relaxed);
         }
     }
@@ -765,4 +866,34 @@ fn creation_step(control: &Control) {
 pub fn summary() -> String {
     let n = |a: &[AtomicU32; 4]| format!("{}/{}/{}/{}", a[0].load(Ordering::Relaxed), a[1].load(Ordering::Relaxed), a[2].load(Ordering::Relaxed), a[3].load(Ordering::Relaxed));
     format!("savegate: {} | save starts asked {} refused {} started {} (S1/S2/S3/S4) | saves holding Sora's munny in the counter {} | slot {:?}", if points_only() { "points only" } else { "the game's own saving" }, n(&CALLS), n(&REFUSED), n(&STARTED), MUNNY_FIXED.load(Ordering::Relaxed), current_slot())
+}
+
+#[cfg(test)]
+mod load_tests {
+    use super::*;
+
+    /// (TESTPREP) The round's stall: Elden Ring's due autosave set `+ 0xB72` every frame, the request step served it first and
+    /// the load never came. A load asked with nothing running now wins over either save request; no load asked, or a save /
+    /// load already running, changes nothing.
+    #[test]
+    fn a_load_we_asked_wins_over_the_games_save_requests() {
+        assert!(load_wins(0, 0, 1, 0), "the round's case: slot 0 asked, the autosave's 0xB72 set every frame");
+        assert!(load_wins(2, 0, 0, 1));
+        assert!(load_wins(9, 0, 1, 1));
+        assert!(!load_wins(-1, 0, 1, 1), "no load asked: the game's save requests are its own");
+        assert!(!load_wins(2, 0, 0, 0), "nothing to hold back");
+        assert!(!load_wins(2, 1, 1, 0), "a save is running: the step does nothing this frame anyway");
+        assert!(!load_wins(2, 2, 1, 0), "the load is running already");
+    }
+
+    /// (TESTPREP) A load never taken is withdrawn after 15 s, never fired later; a load taken or running is left alone.
+    #[test]
+    fn a_load_not_taken_is_withdrawn() {
+        let asked = 1_000_000;
+        assert!(!load_not_taken(0, 0, asked, asked + 14_000), "still within its time");
+        assert!(load_not_taken(0, 0, asked, asked + 15_001), "the round's stalled request");
+        assert!(!load_not_taken(-1, 0, asked, asked + 60_000), "taken: the game wrote -1 back");
+        assert!(!load_not_taken(0, 2, asked, asked + 60_000), "the load is running");
+        assert!(!load_not_taken(0, 0, 0, 60_000), "no load of ours was asked");
+    }
 }

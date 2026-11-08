@@ -9,7 +9,7 @@ use std::sync::{Arc, OnceLock};
 
 use glam::Vec3;
 use kh_audio::routes::{localized, pick_voice, Context, Resolved};
-use kh_audio::{Engine, Language, Listener, Materials, Mixer, Motion, Pack, PlayOutcome, PlayParams, SeamPlay, VoiceCommand, RULES};
+use kh_audio::{AssetPlay, Engine, Language, Listener, Materials, Mixer, Motion, Pack, PlayOutcome, PlayParams, SeamPlay, VoiceCommand, RULES};
 
 const DT: f32 = 1.0 / 60.0;
 
@@ -49,7 +49,9 @@ fn the_pack_loads_with_everything_the_spec_counts() {
     let Some(pack) = pack() else { return };
     // (party stream E) the pack also holds Donald's and Goofy's rows (owner set, or the party's code rows): Sora's own
     // are counted here.
-    let sora_rows = pack.triggers.iter().filter(|t| t.owner.is_none() && t.route != "code.effect_se_npc" && !t.trigger.starts_with("n_ex00")).count();
+    // (KEYBLADES) the other keyblades' set entries (weapon = their model) and their effects' SE rows
+    // (tools/sora_keyblades_pack.js -> keyblade_rows.json) are counted by tests/keyblades.rs.
+    let sora_rows = pack.triggers.iter().filter(|t| t.owner.is_none() && t.route != "code.effect_se_npc" && !t.trigger.starts_with("n_ex00") && t.weapon.is_none() && t.route != "code.effect_se_keyblade").count();
     assert!(pack.banks.len() >= 383);
     assert_eq!(sora_rows, 1972);
     assert!(pack.assets.len() >= 947);
@@ -140,7 +142,7 @@ fn walk_footsteps_rotate_through_their_eight_variations() {
     let walk = engine.routes.motion_asset(Motion::Walk, 10).unwrap().to_string();
     let mut files = Vec::new();
     for _ in 0..17 {
-        assert!(engine.play_asset(&walk, "test", None, None, 1.0, 1.0, 0.0).is_some());
+        assert!(engine.play_asset(&walk, "test", AssetPlay::at(None, None)).is_some());
         let started = step(&mut engine);
         assert_eq!(started.len(), 1);
         files.push(started[0].clone());
@@ -154,10 +156,10 @@ fn walk_footsteps_rotate_through_their_eight_variations() {
     assert_eq!(files[16], files[0]);
     // The run sound has its own cursor.
     let run = engine.routes.motion_asset(Motion::Run, 10).unwrap().to_string();
-    engine.play_asset(&run, "test", None, None, 1.0, 1.0, 0.0);
+    engine.play_asset(&run, "test", AssetPlay::at(None, None));
     let first_run = step(&mut engine);
     let mut other = Engine::new(pack, 99, Language::En);
-    other.play_asset(&run, "test", None, None, 1.0, 1.0, 0.0);
+    other.play_asset(&run, "test", AssetPlay::at(None, None));
     assert_eq!(step(&mut other), first_run, "a fresh bank starts at group 0 whatever the seed");
 }
 
@@ -403,7 +405,7 @@ fn the_mixer_renders_a_real_footstep() {
     let Some(pack) = pack() else { return };
     let mut engine = Engine::new(pack.clone(), 5, Language::En);
     let walk = engine.routes.motion_asset(Motion::Walk, 10).unwrap().to_string();
-    engine.play_asset(&walk, "test", None, None, 1.0, 1.0, 0.0);
+    engine.play_asset(&walk, "test", AssetPlay::at(None, None));
     let mut mixer = Mixer::new();
     let mut materials = Materials::default();
     let mut out = Vec::new();

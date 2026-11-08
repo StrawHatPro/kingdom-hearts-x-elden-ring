@@ -24,6 +24,9 @@ pub mod gameover;
 // (CV1) the conversation runner (steps, choices, directives, locks, camera cues) for every host
 pub mod conv;
 pub mod hud;
+pub mod remap; // (CAMP-OPTIONS) the button tables (controller, keyboard + mouse), applied at the input layer
+pub mod button_icons; // (BUTTON-ICONS) the UI's button-icon state: the remap tables, the Button Icons setting, the device used last
+pub mod er_options; // (CAMP-OPTIONS) Elden Ring's options screen as data + its controller (the tabbed Config screen's host)
 pub mod hud_layers;
 // (loot) KH3's item table and the one door through which a host hands Sora an item (prize boxes, rewards).
 pub mod items;
@@ -46,4 +49,20 @@ pub mod savepoint_menu;
 pub mod seam;
 // (SHOP) the KH shop that stands in for a host's merchants: area tier, stock, prices, the sell rule, the trades.
 pub mod shop;
+// (SHOP-TIERS) the KH stock grows with the merchant's own Elden Ring lineup (its release flags): a basic start, more later.
+pub mod shop_growth;
 pub mod vfx;
+// (weapons P1) KH3's weapons as items (no Keyblade twice, the friends' to 99), Keyblade levels / slots, the Workshop's record.
+pub mod weapons;
+// (FORMWEP-FIX) the hand Keyblade drawn between a form's start and its transformation (no new weapon a frame early)
+pub mod formstart;
+// (weapons P6a) the Moogle Workshop's rules: recipes, Collector's Goals, the Keyblade Forge, the Moogle shop, the milestones.
+pub mod workshop;
+// (weapons P6b) KH3's Workshop screens in the HUD: open(Entry::Workshop / Entry::Forge), take_result, WorkshopState.
+pub mod hud_workshop;
+// (F-HUD) the formchange HUD: form style / logo, ShooterMode scope + guide, multi-lock markers, Counter Shield's ride. INT: keep.
+pub mod hud_forms;
+// (AUDIT-A) the form audit's recorder: a session through the real core, effect side and audio side, notify coverage.
+pub mod audit_a;
+// (AUDIT-A WORLDTIME) KH3's world time for a host: WorldSlow's per-type table and the forms' SetGlobalGameSpeed.
+pub mod worldtime;

@@ -10,13 +10,13 @@
 //! - THE MOVERS: an effect flown from a point to a target over a time (Thermal Shock's two comets);
 //! - THE REPEATERS: something an actor does on its own clock while it lasts (Tempest's bolts as it passes, a storm's sounds);
 //! - THE ARCS: a jagged bolt laid from one point to another (`Effects::transform`: turned and stretched), for every chain.
-//! The authored effects `vd_hyb_*` are built by build/sora_tmp/party/HYB/tools/make_hyb_fx.js from KH3 emitters; the KH3
-//! effects layered here are named where they are used. Light hybrids never heal and never use the Cure flowers: holy damage
-//! plus Reveal, in golden-white light. Every sound is one of KH3's own element sounds ("effect:<KH3 effect>": the sound that
-//! effect carries), several layered per beat.
+//!   The authored effects `vd_hyb_*` are built by build/sora_tmp/party/HYB/tools/make_hyb_fx.js from KH3 emitters; the KH3
+//!   effects layered here are named where they are used. Light hybrids never heal and never use the Cure flowers: holy damage
+//!   plus Reveal, in golden-white light. Every sound is one of KH3's own element sounds ("effect:<KH3 effect>": the sound that
+//!   effect carries), several layered per beat.
 
 use super::element::Element;
-use super::magic_fx::{self, Ctx, MagicFx};
+use super::magic_fx::{self, Ctx, MagicFx, Who};
 use super::spells::SpellRef;
 use crate::ids::MemberId;
 use glam::Vec3;
@@ -139,8 +139,8 @@ impl HybLook {
         (x >> 8) as f32 / (1u32 << 24) as f32
     }
 
-    fn fx(&mut self, caster: MemberId, spell: SpellRef, delay: f32, at: At, name: &'static str, scale: f32, yaw: f32, tint: Option<Tint>) {
-        self.cues.push(Cue { left: delay, caster, spell, at, what: What::Fx { name, scale, yaw, tint } });
+    fn fx(&mut self, who: Who, delay: f32, at: At, what: What) {
+        self.cues.push(Cue { left: delay, caster: who.caster, spell: who.spell, at, what });
     }
 
     fn snd(&mut self, caster: MemberId, spell: SpellRef, delay: f32, at: At, name: &'static str) {
@@ -150,7 +150,18 @@ impl HybLook {
 
 // =============================================================================================== the spawn helpers
 
-fn spawn(cx: &mut Ctx, caster: MemberId, spell: SpellRef, name: &'static str, at: Attach, yaw: f32, scale: f32, tint: Option<Tint>, persistent: bool) -> Option<EffectHandle> {
+/// How an effect is spawned: its yaw (deg), scale and recolour, and whether it lasts until stopped.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Look {
+    yaw: f32,
+    scale: f32,
+    tint: Option<Tint>,
+    persistent: bool,
+}
+
+fn spawn(cx: &mut Ctx, who: Who, name: &'static str, at: Attach, look: Look) -> Option<EffectHandle> {
+    let Who { caster, spell } = who;
+    let Look { yaw, scale, tint, persistent } = look;
     let host = &mut *cx.host;
     let m = cx.party.member_mut(caster)?;
     let h = m.seam.spawn(host.effects, &EffectSpawn { id: EffectId(kh_core::notify::notify_asset_id(name)), name, at, rotation: Vec3::new(0.0, yaw, 0.0), scale, persistent });
@@ -206,7 +217,7 @@ pub fn arc(cx: &mut Ctx, caster: MemberId, spell: SpellRef, name: &'static str, 
         return;
     }
     let (rot, scale) = arc_transform(d);
-    if let Some(h) = spawn(cx, caster, spell, name, Attach::World(a), 0.0, 1.0, tint, false) {
+    if let Some(h) = spawn(cx, Who { caster, spell }, name, Attach::World(a), Look { yaw: 0.0, scale: 1.0, tint, persistent: false }) {
         cx.host.effects.transform(h, a, rot, scale);
     }
 }
@@ -244,6 +255,12 @@ pub struct Launch {
     pub duration: f32,
 }
 
+impl Launch {
+    fn who(&self) -> Who {
+        Who { caster: self.caster, spell: self.spell }
+    }
+}
+
 const GOLD: Tint = Tint { color: [1.0, 0.8, 0.38], intensity: 1.2 };
 const VIOLET: Tint = Tint { color: [0.78, 0.42, 1.0], intensity: 1.25 };
 
@@ -251,19 +268,27 @@ fn fwd_of(yaw: f32) -> Vec3 {
     Vec3::new(yaw.to_radians().cos(), yaw.to_radians().sin(), 0.0)
 }
 
-fn body(hl: &mut HybLook, cx: &mut Ctx, l: &Launch, name: &'static str, at: Vec3, yaw: f32, owner: Owner, off: Vec3, fin: Fin) {
+/// What keeps a body and how it ends: its owner, its offset from the owner, its dissipation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Hold {
+    owner: Owner,
+    off: Vec3,
+    fin: Fin,
+}
+
+fn body(hl: &mut HybLook, cx: &mut Ctx, l: &Launch, name: &'static str, at: Vec3, yaw: f32, hold: Hold) {
+    let Hold { owner, off, fin } = hold;
     let place = match owner {
         Owner::Actor { .. } => at + off,
         Owner::Timer(_) => at,
     };
-    if let Some(h) = spawn(cx, l.caster, l.spell, name, Attach::World(place), yaw, 1.0, None, true) {
+    if let Some(h) = spawn(cx, l.who(), name, Attach::World(place), Look { yaw, scale: 1.0, tint: None, persistent: true }) {
         hl.bodies.push(Body { handle: h, caster: l.caster, spell: l.spell, owner, off, last: place, fin });
     }
 }
 
-fn now(hl: &mut HybLook, cx: &mut Ctx, l: &Launch, name: &'static str, at: Vec3, yaw: f32, scale: f32, tint: Option<Tint>) {
-    let _ = hl;
-    let _ = spawn(cx, l.caster, l.spell, name, Attach::World(at), yaw, scale, tint, false);
+fn now(cx: &mut Ctx, l: &Launch, name: &'static str, at: Vec3, yaw: f32, scale: f32, tint: Option<Tint>) {
+    let _ = spawn(cx, l.who(), name, Attach::World(at), Look { yaw, scale, tint, persistent: false });
 }
 
 fn sounds(cx: &mut Ctx, l: &Launch, at: Vec3, list: &[&'static str]) {
@@ -290,6 +315,7 @@ pub fn launch(fxw: &mut MagicFx, cx: &mut Ctx, l: Launch) {
     let fwd = fwd_of(l.yaw);
     let side = Vec3::new(-fwd.y, fwd.x, 0.0);
     let (c, s) = (l.caster, l.spell);
+    let who = l.who();
     let tgt = |off: Vec3| l.target.map_or(At::World(l.ground + Vec3::Z * 100.0 + off), |(t, centre, _)| At::Target(t, centre, off));
     let feet = |off: Vec3| l.target.map_or(At::World(l.ground + off), |(t, _, f)| At::Feet(t, f, off));
     let centre = l.target.map_or(l.ground + Vec3::Z * 100.0, |t| t.1);
@@ -299,14 +325,14 @@ pub fn launch(fxw: &mut MagicFx, cx: &mut Ctx, l: Launch) {
         (Fire, Blizzard) => {
             for (name, k) in [("vd_hyb_ts_fire", 1.0f32), ("vd_hyb_ts_ice", -1.0)] {
                 let from = centre + side * (380.0 * k) + Vec3::Z * 260.0 - fwd * 160.0;
-                if let Some(h) = spawn(cx, c, s, name, Attach::World(from), 0.0, 1.0, None, true) {
+                if let Some(h) = spawn(cx, who, name, Attach::World(from), Look { yaw: 0.0, scale: 1.0, tint: None, persistent: true }) {
                     hl.movers.push(Mover { handle: h, from, to: tgt(Vec3::ZERO), t: 0.0, dur: THERMAL_TRAVEL, bow: Vec3::Z * 60.0 });
                 }
             }
             sounds(cx, &l, centre, &["effect:vm_fir_cal0", "effect:vm_blz_cal0"]);
-            hl.fx(c, s, THERMAL_TRAVEL, tgt(Vec3::ZERO), "vd_hyb_ts_boom", 1.0, l.yaw, None);
-            hl.fx(c, s, THERMAL_TRAVEL, feet(Vec3::ZERO), "vm_fir_han_015", 0.6, 0.0, None);
-            hl.fx(c, s, THERMAL_TRAVEL + 0.03, feet(Vec3::ZERO), "vm_blz_han040", 0.65, 0.0, None);
+            hl.fx(who, THERMAL_TRAVEL, tgt(Vec3::ZERO), What::Fx { name: "vd_hyb_ts_boom", scale: 1.0, yaw: l.yaw, tint: None });
+            hl.fx(who, THERMAL_TRAVEL, feet(Vec3::ZERO), What::Fx { name: "vm_fir_han_015", scale: 0.6, yaw: 0.0, tint: None });
+            hl.fx(who, THERMAL_TRAVEL + 0.03, feet(Vec3::ZERO), What::Fx { name: "vm_blz_han040", scale: 0.65, yaw: 0.0, tint: None });
             for n in ["effect:vm_fir_han_010", "effect:vm_blz_han040", "effect:vs_abn_frz3"] {
                 hl.snd(c, s, THERMAL_TRAVEL, tgt(Vec3::ZERO), n);
             }
@@ -315,7 +341,7 @@ pub fn launch(fxw: &mut MagicFx, cx: &mut Ctx, l: Launch) {
         (Fire, Thunder) => {
             if let Some(id) = l.actor {
                 const FIN: Fin = Fin { fx: &[("vd_hyb_pl_boom", 1.0), ("vm_fir_han_025a", 0.6), ("vm_thd_str4", 0.8)], sounds: &["effect:vm_fir_han_020", "effect:vm_thd_str03", "effect:vm_fic_rng0"], cut: false };
-                body(&mut hl, cx, &l, "vd_hyb_pl_orb", l.wand, 0.0, Owner::Actor { id, fixed: false }, Vec3::ZERO, FIN);
+                body(&mut hl, cx, &l, "vd_hyb_pl_orb", l.wand, 0.0, Hold { owner: Owner::Actor { id, fixed: false }, off: Vec3::ZERO, fin: FIN });
                 rep(&mut hl, &l, 0.45, 0.2, Rep::Sound("effect:vs_abn_cld_thd0"));
             }
             sounds(cx, &l, l.wand, &["effect:vm_thd_cal0", "effect:vm_fir_cal0", "effect:vm_fir_han_010"]);
@@ -323,10 +349,10 @@ pub fn launch(fxw: &mut MagicFx, cx: &mut Ctx, l: Launch) {
         // SCALD: a boiling pool and a rolling bank of steam
         (Fire, Water) => {
             const FIN: Fin = Fin { fx: &[("vd_hyb_sc_burst", 0.6)], sounds: &["effect:vs_abn_frz1"], cut: false };
-            body(&mut hl, cx, &l, "vd_hyb_sc_body", l.ground, 0.0, fix(l.actor).unwrap_or(Owner::Timer(l.duration)), Vec3::ZERO, FIN);
-            now(&mut hl, cx, &l, "vd_hyb_sc_burst", l.ground, 0.0, 1.0, None);
-            now(&mut hl, cx, &l, "vp_wfi_han0", l.ground, l.yaw, 1.0, None);
-            now(&mut hl, cx, &l, "vm_wat_han040", l.ground, 0.0, 0.55, None);
+            body(&mut hl, cx, &l, "vd_hyb_sc_body", l.ground, 0.0, Hold { owner: fix(l.actor).unwrap_or(Owner::Timer(l.duration)), off: Vec3::ZERO, fin: FIN });
+            now(cx, &l, "vd_hyb_sc_burst", l.ground, 0.0, 1.0, None);
+            now(cx, &l, "vp_wfi_han0", l.ground, l.yaw, 1.0, None);
+            now(cx, &l, "vm_wat_han040", l.ground, 0.0, 0.55, None);
             sounds(cx, &l, l.ground, &["effect:vn_ex001_wfi_han00", "effect:vm_wat_han040", "effect:vm_fir_cal0"]);
             rep(&mut hl, &l, 1.3, 0.9, Rep::Sound("effect:vm_wat_han010"));
         }
@@ -334,11 +360,11 @@ pub fn launch(fxw: &mut MagicFx, cx: &mut Ctx, l: Launch) {
         (Fire, Aero) => {
             if let Some(id) = l.actor {
                 const FIN: Fin = Fin { fx: &[("vd_hyb_fw_end", 1.0)], sounds: &["effect:vm_fir_han_010", "effect:vm_air_hit0"], cut: false };
-                body(&mut hl, cx, &l, "vd_hyb_fw_body", l.ground, 0.0, Owner::Actor { id, fixed: false }, Vec3::ZERO, FIN);
+                body(&mut hl, cx, &l, "vd_hyb_fw_body", l.ground, 0.0, Hold { owner: Owner::Actor { id, fixed: false }, off: Vec3::ZERO, fin: FIN });
                 rep(&mut hl, &l, 1.4, 1.0, Rep::Sound("effect:vm_air_han_040"));
                 rep(&mut hl, &l, 1.4, 1.7, Rep::Sound("effect:vm_fir_cal0"));
             }
-            now(&mut hl, cx, &l, "vm_fir_han_015", l.ground, 0.0, 0.6, None);
+            now(cx, &l, "vm_fir_han_015", l.ground, 0.0, 0.6, None);
             sounds(cx, &l, l.ground, &["effect:vm_air_han_080", "effect:vm_fir_han_010"]);
         }
         // SUNBURST: a small sun over the target pouring holy light down
@@ -348,17 +374,17 @@ pub fn launch(fxw: &mut MagicFx, cx: &mut Ctx, l: Launch) {
             let up = Vec3::Z * magic_fx::magic().sunburst_height.min(SUN_HEIGHT);
             const FIN: Fin = Fin { fx: &[("vd_hyb_sb_end", 1.0)], sounds: &["effect:vn_ex003_hly_hit0", "effect:vm_fir_han_010"], cut: false };
             let own = fix(l.actor).unwrap_or(Owner::Timer(l.duration));
-            body(&mut hl, cx, &l, "vd_hyb_sb_sun", l.ground, 0.0, own, up, FIN);
-            body(&mut hl, cx, &l, "vd_hyb_sb_ground", l.ground, 0.0, own, Vec3::ZERO, NO_FIN);
-            now(&mut hl, cx, &l, "vd_hyb_sb_ignite", l.ground + up, 0.0, 1.0, None);
+            body(&mut hl, cx, &l, "vd_hyb_sb_sun", l.ground, 0.0, Hold { owner: own, off: up, fin: FIN });
+            body(&mut hl, cx, &l, "vd_hyb_sb_ground", l.ground, 0.0, Hold { owner: own, off: Vec3::ZERO, fin: NO_FIN });
+            now(cx, &l, "vd_hyb_sb_ignite", l.ground + up, 0.0, 1.0, None);
             sounds(cx, &l, l.ground + up, &["effect:vn_ex003_hly_cal0", "effect:vm_fir_han_010", "effect:vm_lgt_2"]);
             rep(&mut hl, &l, 1.6, 1.2, Rep::Sound("effect:vm_fir_cal0"));
         }
         // HAILSTORM: a dark cloud pelting hail, lightning inside it
         (Blizzard, Thunder) => {
             const FIN: Fin = Fin { fx: &[], sounds: &["effect:vm_thd_str00"], cut: false };
-            body(&mut hl, cx, &l, "vd_hyb_hs_body", l.ground, 0.0, fix(l.actor).unwrap_or(Owner::Timer(l.duration)), Vec3::ZERO, FIN);
-            now(&mut hl, cx, &l, "vd_hyb_hs_start", l.ground, 0.0, 1.0, None);
+            body(&mut hl, cx, &l, "vd_hyb_hs_body", l.ground, 0.0, Hold { owner: fix(l.actor).unwrap_or(Owner::Timer(l.duration)), off: Vec3::ZERO, fin: FIN });
+            now(cx, &l, "vd_hyb_hs_start", l.ground, 0.0, 1.0, None);
             sounds(cx, &l, l.ground, &["effect:vm_blz_han060", "effect:vm_thd_cal0"]);
             hl.snd(c, s, 0.35, At::World(l.ground), "effect:vm_thd_str00");
             rep(&mut hl, &l, 0.9, 0.6, Rep::Sound("effect:vm_blz_han010"));
@@ -371,7 +397,7 @@ pub fn launch(fxw: &mut MagicFx, cx: &mut Ctx, l: Launch) {
             for i in 0..n {
                 let at = l.me + dir * (l.range * (i as f32 + 0.5) / n as f32);
                 let d = 0.04 * i as f32;
-                hl.fx(c, s, d, At::World(at), "vd_hyb_gl_rise", 1.0, wyaw, None);
+                hl.fx(who, d, At::World(at), What::Fx { name: "vd_hyb_gl_rise", scale: 1.0, yaw: wyaw, tint: None });
                 hl.cues.push(Cue { left: d, caster: c, spell: s, at: At::World(at), what: What::Fx { name: "vd_hyb_gl_seg", scale: -(l.duration - d).max(0.5), yaw: wyaw + 37.0 * i as f32, tint: None } });
             }
             sounds(cx, &l, l.me + dir * l.range * 0.3, &["effect:vm_blz_han060", "effect:vm_blz_han040", "effect:vm_wat_han040"]);
@@ -384,28 +410,28 @@ pub fn launch(fxw: &mut MagicFx, cx: &mut Ctx, l: Launch) {
             if let Some(m) = cx.party.member(c) {
                 let at = Attach::party(PartyMember(c.0), None);
                 let feet_at = m.position();
-                if let Some(h) = spawn(cx, c, s, "vd_hyb_wo_body", at, 0.0, 1.0, None, true) {
+                if let Some(h) = spawn(cx, who, "vd_hyb_wo_body", at, Look { yaw: 0.0, scale: 1.0, tint: None, persistent: true }) {
                     const FIN: Fin = Fin { fx: &[("vd_hyb_wo_burst", 0.7)], sounds: &["effect:vm_air_han_040"], cut: false };
                     let owner = l.actor.map_or(Owner::Timer(l.duration), |id| Owner::Actor { id, fixed: true });
                     hl.bodies.push(Body { handle: h, caster: c, spell: s, owner, off: Vec3::ZERO, last: feet_at, fin: FIN });
                 }
-                now(&mut hl, cx, &l, "vd_hyb_wo_burst", feet_at, 0.0, 1.0, None);
-                now(&mut hl, cx, &l, "vm_blz_han040", feet_at, 0.0, 0.7, None);
+                now(cx, &l, "vd_hyb_wo_burst", feet_at, 0.0, 1.0, None);
+                now(cx, &l, "vm_blz_han040", feet_at, 0.0, 0.7, None);
                 sounds(cx, &l, feet_at, &["effect:vm_air_han_080", "effect:vm_blz_han040"]);
                 rep(&mut hl, &l, 1.8, 1.4, Rep::Sound("effect:vm_air_han_040"));
             }
         }
         // PRISM FROST: a fan of prismatic ice shards across the cone
         (Blizzard, Light) => {
-            now(&mut hl, cx, &l, "vd_hyb_pf_cone", l.me, l.yaw, 1.0, None);
+            now(cx, &l, "vd_hyb_pf_cone", l.me, l.yaw, 1.0, None);
             sounds(cx, &l, l.wand, &["effect:vm_blz_cal0", "effect:vn_ex003_hly_fir2", "effect:vm_blz_han010"]);
             cone_hits(&mut hl, cx, &l, "vd_hyb_pf_hit", &["effect:vs_abn_frz2", "effect:vm_blz_han010"]);
         }
         // THUNDERSTORM: a black storm cloud raining over the field (the strikes and chains: magic_fx WetStrikes + `chain`)
         (Thunder, Water) => {
             const FIN: Fin = Fin { fx: &[], sounds: &["effect:vm_thd_str00"], cut: false };
-            body(&mut hl, cx, &l, "vd_hyb_st_body", l.ground, 0.0, fix(l.actor).unwrap_or(Owner::Timer(l.duration)), Vec3::ZERO, FIN);
-            now(&mut hl, cx, &l, "vd_hyb_st_start", l.ground, 0.0, 1.0, None);
+            body(&mut hl, cx, &l, "vd_hyb_st_body", l.ground, 0.0, Hold { owner: fix(l.actor).unwrap_or(Owner::Timer(l.duration)), off: Vec3::ZERO, fin: FIN });
+            now(cx, &l, "vd_hyb_st_start", l.ground, 0.0, 1.0, None);
             sounds(cx, &l, l.ground, &["effect:vn_ex001_wth_cal00", "effect:vm_wat_han060"]);
             hl.snd(c, s, 0.4, At::World(l.ground), "effect:vm_thd_str01");
             rep(&mut hl, &l, 2.2, 1.6, Rep::Sound("effect:vm_wat_bar0"));
@@ -414,7 +440,7 @@ pub fn launch(fxw: &mut MagicFx, cx: &mut Ctx, l: Launch) {
         (Thunder, Aero) => {
             if let Some(id) = l.actor {
                 const FIN: Fin = Fin { fx: &[("vd_hyb_tp_end", 1.0)], sounds: &["effect:vm_air_hit0", "effect:vm_thd_str00"], cut: false };
-                body(&mut hl, cx, &l, "vd_hyb_tp_body", l.me + fwd * 200.0, l.yaw, Owner::Actor { id, fixed: false }, Vec3::ZERO, FIN);
+                body(&mut hl, cx, &l, "vd_hyb_tp_body", l.me + fwd * 200.0, l.yaw, Hold { owner: Owner::Actor { id, fixed: false }, off: Vec3::ZERO, fin: FIN });
                 rep(&mut hl, &l, 0.33, 0.15, Rep::Bolts { r: l.radius * 0.8 });
                 rep(&mut hl, &l, 1.5, 0.8, Rep::Sound("effect:vm_air_han_120"));
             }
@@ -427,23 +453,23 @@ pub fn launch(fxw: &mut MagicFx, cx: &mut Ctx, l: Launch) {
         // MAELSTROM: a whirlpool with a waterspout at its heart
         (Water, Aero) => {
             const FIN: Fin = Fin { fx: &[("vd_hyb_ml_end", 1.0)], sounds: &["effect:vm_wat_han040"], cut: false };
-            body(&mut hl, cx, &l, "vd_hyb_ml_body", l.ground, 0.0, fix(l.actor).unwrap_or(Owner::Timer(l.duration)), Vec3::ZERO, FIN);
-            now(&mut hl, cx, &l, "vp_wai_han0", l.ground, l.yaw, 1.2, None);
-            now(&mut hl, cx, &l, "vm_wat_han040", l.ground, 0.0, 0.7, None);
+            body(&mut hl, cx, &l, "vd_hyb_ml_body", l.ground, 0.0, Hold { owner: fix(l.actor).unwrap_or(Owner::Timer(l.duration)), off: Vec3::ZERO, fin: FIN });
+            now(cx, &l, "vp_wai_han0", l.ground, l.yaw, 1.2, None);
+            now(cx, &l, "vm_wat_han040", l.ground, 0.0, 0.7, None);
             sounds(cx, &l, l.ground, &["effect:vp_wai_han0", "effect:vm_wat_han060", "effect:vm_air_han_080"]);
             rep(&mut hl, &l, 1.5, 1.0, Rep::Sound("effect:vm_wat_han010"));
             rep(&mut hl, &l, 1.5, 1.75, Rep::Sound("effect:vm_air_han_040"));
         }
         // SHINING RAIN: a canopy of light raining glittering gold
         (Water, Light) => {
-            body(&mut hl, cx, &l, "vd_hyb_sr_body", l.ground, 0.0, fix(l.actor).unwrap_or(Owner::Timer(l.duration)), Vec3::ZERO, NO_FIN);
-            now(&mut hl, cx, &l, "vd_hyb_sr_start", l.ground, 0.0, 1.0, None);
+            body(&mut hl, cx, &l, "vd_hyb_sr_body", l.ground, 0.0, Hold { owner: fix(l.actor).unwrap_or(Owner::Timer(l.duration)), off: Vec3::ZERO, fin: NO_FIN });
+            now(cx, &l, "vd_hyb_sr_start", l.ground, 0.0, 1.0, None);
             sounds(cx, &l, l.ground + Vec3::Z * 500.0, &["effect:vn_ex003_hly_cal0", "effect:vm_lgt_2", "effect:vm_wat_cal0"]);
             rep(&mut hl, &l, 1.7, 1.0, Rep::Sound("effect:vm_wat_han010"));
         }
         // RADIANT GALE: a gust of golden light and feathers across the cone
         (Aero, Light) => {
-            now(&mut hl, cx, &l, "vd_hyb_rg_cone", l.me, l.yaw, 1.0, None);
+            now(cx, &l, "vd_hyb_rg_cone", l.me, l.yaw, 1.0, None);
             sounds(cx, &l, l.wand, &["effect:vm_air_han_080", "effect:vm_air_han_120", "effect:vn_ex003_hly_fir2"]);
             cone_hits(&mut hl, cx, &l, "vd_hyb_rg_hit", &["effect:vm_air_hit0", "effect:vn_ex003_hly_hit0"]);
         }
@@ -458,7 +484,7 @@ fn cone_hits(hl: &mut HybLook, cx: &mut Ctx, l: &Launch, name: &'static str, snd
     let list = magic_fx::within(cx.host, l.me, l.range, Some((l.yaw, (l.angle * 0.5).max(5.0))));
     for (k, e) in list.into_iter().enumerate() {
         let d = (e.center - l.wand).length() / CONE_SPEED;
-        hl.fx(l.caster, l.spell, d, At::Target(e.id, e.center, Vec3::ZERO), name, 1.0, l.yaw, None);
+        hl.fx(l.who(), d, At::Target(e.id, e.center, Vec3::ZERO), What::Fx { name, scale: 1.0, yaw: l.yaw, tint: None });
         if k < 3 {
             for n in snd {
                 hl.snd(l.caster, l.spell, d, At::Target(e.id, e.center, Vec3::ZERO), n);
@@ -473,7 +499,7 @@ fn cone_hits(hl: &mut HybLook, cx: &mut Ctx, l: &Launch, name: &'static str, snd
 /// of holy light on it.
 pub fn spark_hop(cx: &mut Ctx, caster: MemberId, spell: SpellRef, from: Vec3, to: Vec3) {
     arc(cx, caster, spell, "vd_hyb_arc_gold", from, to, None);
-    let _ = spawn(cx, caster, spell, "vd_hyb_ds_hit", Attach::World(to), 0.0, 1.0, None, false);
+    let _ = spawn(cx, Who { caster, spell }, "vd_hyb_ds_hit", Attach::World(to), Look { yaw: 0.0, scale: 1.0, tint: None, persistent: false });
     sound(cx, caster, "effect:vm_thd_str01", to, 0.8);
     sound(cx, caster, "effect:vn_ex003_hly_hit0", to, 1.0);
 }
@@ -489,7 +515,7 @@ pub fn chain(cx: &mut Ctx, caster: MemberId, spell: SpellRef, points: &[Vec3]) {
 pub fn plasma_arc(cx: &mut Ctx, caster: MemberId, from: Vec3, to: Vec3) {
     let spell = SpellRef::Hybrid(Element::Fire, Element::Thunder);
     arc(cx, caster, spell, "vd_hyb_arc", from, to, Some(VIOLET));
-    let _ = spawn(cx, caster, spell, "vd_hyb_pl_arc", Attach::World(to), 0.0, 1.0, None, false);
+    let _ = spawn(cx, Who { caster, spell }, "vd_hyb_pl_arc", Attach::World(to), Look { yaw: 0.0, scale: 1.0, tint: None, persistent: false });
     sound(cx, caster, "effect:vm_thd_str02", to, 0.8);
     sound(cx, caster, "effect:vm_fir_cal0", to, 1.0);
 }
@@ -517,13 +543,13 @@ pub fn step(fxw: &mut MagicFx, cx: &mut Ctx, dt: f32) {
         match q.what {
             // a negative scale: a timed body of that many seconds (Glacier's segments)
             What::Fx { name, scale, yaw, tint } if scale < 0.0 => {
-                if let Some(h) = spawn(cx, q.caster, q.spell, name, Attach::World(p), yaw, 1.0, tint, true) {
+                if let Some(h) = spawn(cx, Who { caster: q.caster, spell: q.spell }, name, Attach::World(p), Look { yaw, scale: 1.0, tint, persistent: true }) {
                     const FIN: Fin = Fin { fx: &[("vd_hyb_gl_break", 1.0)], sounds: &[], cut: true };
                     hl.bodies.push(Body { handle: h, caster: q.caster, spell: q.spell, owner: Owner::Timer(-scale), off: Vec3::ZERO, last: p, fin: FIN });
                 }
             }
             What::Fx { name, scale, yaw, tint } => {
-                let _ = spawn(cx, q.caster, q.spell, name, Attach::World(p), yaw, scale, tint, false);
+                let _ = spawn(cx, Who { caster: q.caster, spell: q.spell }, name, Attach::World(p), Look { yaw, scale, tint, persistent: false });
             }
             What::Sound { name, volume } => sound(cx, q.caster, name, p, volume),
         }
@@ -559,7 +585,7 @@ pub fn step(fxw: &mut MagicFx, cx: &mut Ctx, dt: f32) {
         // a body attached to Donald (Whiteout) ends where he stands
         let at = if bd.spell == SpellRef::Hybrid(Element::Blizzard, Element::Aero) { cx.party.member(bd.caster).map_or(bd.last, |m| m.position()) } else { bd.last };
         for (name, scale) in bd.fin.fx {
-            let _ = spawn(cx, bd.caster, bd.spell, name, Attach::World(at), 0.0, *scale, None, false);
+            let _ = spawn(cx, Who { caster: bd.caster, spell: bd.spell }, name, Attach::World(at), Look { yaw: 0.0, scale: *scale, tint: None, persistent: false });
         }
         for n in bd.fin.sounds {
             sound(cx, bd.caster, n, at, 1.0);
@@ -599,7 +625,7 @@ pub fn step(fxw: &mut MagicFx, cx: &mut Ctx, dt: f32) {
             Rep::Bolts { r: rad } => {
                 let (a, d) = (hl.rnd() * std::f32::consts::TAU, hl.rnd().sqrt() * rad);
                 let at = Vec3::new(p.x + a.cos() * d, p.y + a.sin() * d, p.z);
-                let _ = spawn(cx, r.caster, r.spell, "vd_don_thd_str0s", Attach::World(at), 0.0, 0.75, Some(Tint { color: [1.0, 0.92, 0.45], intensity: 1.2 }), false);
+                let _ = spawn(cx, Who { caster: r.caster, spell: r.spell }, "vd_don_thd_str0s", Attach::World(at), Look { yaw: 0.0, scale: 0.75, tint: Some(Tint { color: [1.0, 0.92, 0.45], intensity: 1.2 }), persistent: false });
             }
         }
     }

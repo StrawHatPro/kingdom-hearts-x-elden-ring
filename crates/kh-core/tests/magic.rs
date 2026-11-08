@@ -5,7 +5,7 @@
 
 use kh_core::command::{CommandRequest, MenuEvent, MenuState};
 use kh_core::enums::{ETresAbilityKind, ETresDamageKind};
-use kh_core::host::{EventKind, HitRecord};
+use kh_core::host::HitRecord;
 use kh_core::magic::spells::cmd;
 use kh_core::magic::{View, MASK_PLAYER};
 use kh_core::status::{ItemKind, LoadoutValue};
@@ -962,7 +962,6 @@ fn airstep() {
     b.sora.magic_mut().airstep_unlocked = false;
     b.hold(&[PadButton::RightShoulder], 40);
     assert!(!b.sora.aim().can_airstep);
-    let _ = EventKind::AimMode { open: true, reason: 0 };
 }
 
 /// (IMPL_ER42, port, user request "shotlock should aim at softlock target") The aim's entry remembers the soft target for

@@ -144,13 +144,16 @@ function decodeDds(buf, mip = 0) {
   const d = readDds(buf);
   if (d.slices !== 1) throw new Error('cube maps are not handled');
   if (mip >= d.mipCount) throw new Error(`mip ${mip} of ${d.mipCount}`);
-  const sizeOf = (w, h) => (BLOCK_BYTES[d.format] ? Math.ceil(w / 4) * Math.ceil(h / 4) * BLOCK_BYTES[d.format] : w * h * (d.format === 'PF_G8' ? 1 : 4));
+  const sizeOf = (w, h) => (BLOCK_BYTES[d.format] ? Math.ceil(w / 4) * Math.ceil(h / 4) * BLOCK_BYTES[d.format] : w * h * (d.format === 'PF_G8' ? 1 : d.format === 'PF_FloatRGBA' ? 8 : 4));
   let off = d.dataOffset, w = d.width, h = d.height;
   for (let i = 0; i < mip; i++) { off += sizeOf(w, h); w = Math.max(1, w >> 1); h = Math.max(1, h >> 1); }
   const rgba = Buffer.alloc(w * h * 4);
   const stats = { modes: new Array(8).fill(0), shapes: { 2: new Array(64).fill(0), 3: new Array(64).fill(0) } };
   if (d.format === 'PF_B8G8R8A8') {
     for (let i = 0; i < w * h; i++) { rgba[i * 4] = buf[off + i * 4 + 2]; rgba[i * 4 + 1] = buf[off + i * 4 + 1]; rgba[i * 4 + 2] = buf[off + i * 4]; rgba[i * 4 + 3] = buf[off + i * 4 + 3]; }
+  } else if (d.format === 'PF_FloatRGBA') { // (KEYBLADES) four half floats per texel: clamped to 0..1, 8 bits (values as stored, no transfer curve)
+    const half = (v) => { const e = (v >> 10) & 31, m = v & 1023, sg = v >> 15 ? -1 : 1; return sg * (e === 0 ? m / 1024 * 2 ** -14 : e === 31 ? (m ? NaN : Infinity) : (1 + m / 1024) * 2 ** (e - 15)); };
+    for (let i = 0; i < w * h * 4; i++) { const x = half(buf.readUInt16LE(off + i * 2)); rgba[i] = Number.isNaN(x) ? 0 : Math.max(0, Math.min(255, Math.round(x * 255))); }
   } else if (d.format === 'PF_G8') {
     for (let i = 0; i < w * h; i++) { rgba[i * 4] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = buf[off + i]; rgba[i * 4 + 3] = 255; }
   } else if (BLOCK_BYTES[d.format]) {
@@ -220,3 +223,118 @@ function decodePng(buf) {
 }
 
 module.exports = { VERSION, decodeDds, encodePng, decodePng, selfCheck, crc32 };
+
+// ---------------------------------------------------------------- (VFX-2) BC6H (DXGI_FORMAT_BC6H_UF16) and cube maps
+// The 14 modes as the D3D11 format specification lists their bits (w/x/y/z = endpoints A0/B0/A1/B1, d = shape; [hi:lo]
+// read lowest bit first, [lo:hi] reversed), the 32 two-subset shapes and anchors of BC7 (P2 / A2 above), 3-bit weights for
+// two regions, 4-bit for one; the unsigned unquantize and the half-float finish (x 31 / 64). Checked by decoding a mip
+// and comparing it with the next one (tools/vfx_cube_pack.js prints it).
+const BC6_MODES = {
+  0: [10, [5, 5, 5], true, 'gy[4] by[4] bz[4] rw[9:0] gw[9:0] bw[9:0] rx[4:0] gz[4] gy[3:0] gx[4:0] bz[0] gz[3:0] bx[4:0] bz[1] by[3:0] ry[4:0] bz[2] rz[4:0] bz[3] d[4:0]'],
+  1: [7, [6, 6, 6], true, 'gy[5] gz[4] gz[5] rw[6:0] bz[0] bz[1] by[4] gw[6:0] by[5] bz[2] gy[4] bw[6:0] bz[3] bz[5] bz[4] rx[5:0] gy[3:0] gx[5:0] gz[3:0] bx[5:0] by[3:0] ry[5:0] rz[5:0] d[4:0]'],
+  2: [11, [5, 4, 4], true, 'rw[9:0] gw[9:0] bw[9:0] rx[4:0] rw[10] gy[3:0] gx[3:0] gw[10] bz[0] gz[3:0] bx[3:0] bw[10] bz[1] by[3:0] ry[4:0] bz[2] rz[4:0] bz[3] d[4:0]'],
+  6: [11, [4, 5, 4], true, 'rw[9:0] gw[9:0] bw[9:0] rx[3:0] rw[10] gz[4] gy[3:0] gx[4:0] gw[10] gz[3:0] bx[3:0] bw[10] bz[1] by[3:0] ry[3:0] bz[0] bz[2] rz[3:0] gy[4] bz[3] d[4:0]'],
+  10: [11, [4, 4, 5], true, 'rw[9:0] gw[9:0] bw[9:0] rx[3:0] rw[10] by[4] gy[3:0] gx[3:0] gw[10] bz[0] gz[3:0] bx[4:0] bw[10] by[3:0] ry[3:0] bz[1] bz[2] rz[3:0] bz[4] bz[3] d[4:0]'],
+  14: [9, [5, 5, 5], true, 'rw[8:0] by[4] gw[8:0] gy[4] bw[8:0] bz[4] rx[4:0] gz[4] gy[3:0] gx[4:0] bz[0] gz[3:0] bx[4:0] bz[1] by[3:0] ry[4:0] bz[2] rz[4:0] bz[3] d[4:0]'],
+  18: [8, [6, 5, 5], true, 'rw[7:0] gz[4] by[4] gw[7:0] bz[2] gy[4] bw[7:0] bz[3] bz[4] rx[5:0] gy[3:0] gx[4:0] bz[0] gz[3:0] bx[4:0] bz[1] by[3:0] ry[5:0] rz[5:0] d[4:0]'],
+  22: [8, [5, 6, 5], true, 'rw[7:0] bz[0] by[4] gw[7:0] gy[5] gy[4] bw[7:0] gz[5] bz[4] rx[4:0] gz[4] gy[3:0] gx[5:0] gz[3:0] bx[4:0] bz[1] by[3:0] ry[4:0] bz[2] rz[4:0] bz[3] d[4:0]'],
+  26: [8, [5, 5, 6], true, 'rw[7:0] bz[1] by[4] gw[7:0] by[5] gy[4] bw[7:0] bz[5] bz[4] rx[4:0] gz[4] gy[3:0] gx[4:0] bz[0] gz[3:0] bx[5:0] by[3:0] ry[4:0] bz[2] rz[4:0] bz[3] d[4:0]'],
+  30: [6, [6, 6, 6], false, 'rw[5:0] gz[4] bz[0] bz[1] by[4] gw[5:0] gy[5] by[5] bz[2] gy[4] bw[5:0] gz[5] bz[3] bz[5] bz[4] rx[5:0] gy[3:0] gx[5:0] gz[3:0] bx[5:0] by[3:0] ry[5:0] rz[5:0] d[4:0]'],
+  3: [10, [10, 10, 10], false, 'rw[9:0] gw[9:0] bw[9:0] rx[9:0] gx[9:0] bx[9:0]'],
+  7: [11, [9, 9, 9], true, 'rw[9:0] gw[9:0] bw[9:0] rx[8:0] rw[10] gx[8:0] gw[10] bx[8:0] bw[10]'],
+  11: [12, [8, 8, 8], true, 'rw[9:0] gw[9:0] bw[9:0] rx[7:0] rw[10:11] gx[7:0] gw[10:11] bx[7:0] bw[10:11]'],
+  15: [16, [4, 4, 4], true, 'rw[9:0] gw[9:0] bw[9:0] rx[3:0] rw[10:15] gx[3:0] gw[10:15] bx[3:0] bw[10:15]'],
+};
+const BC6_FIELDS = {};
+for (const [m, v] of Object.entries(BC6_MODES)) {
+  BC6_FIELDS[m] = v[3].split(' ').map((t) => {
+    const x = /^([rgbd])([wxyz]?)\[(\d+)(?::(\d+))?\]$/.exec(t);
+    if (!x) throw new Error('BC6H field ' + t);
+    const a = +x[3], b = x[4] === undefined ? a : +x[4];
+    return { ch: x[1], ep: x[2], hi: Math.max(a, b), lo: Math.min(a, b), rev: a < b };
+  });
+}
+function bc6hBlock(src, o, out) { // -> 16 x [r, g, b] linear floats
+  const lo = src.readBigUInt64LE(o), hi = src.readBigUInt64LE(o + 8);
+  let pos = 0;
+  const bits = (n) => { let v = 0; for (let i = 0; i < n; i++, pos++) { const word = pos < 64 ? lo : hi; v |= Number((word >> BigInt(pos & 63)) & 1n) << i; } return v; };
+  let mode = bits(2); if (mode > 1) mode |= bits(3) << 2;
+  const def = BC6_MODES[mode];
+  if (!def) { out.fill(0); return -1; }
+  const [epb, db, transformed] = def;
+  const e = { w: [0, 0, 0], x: [0, 0, 0], y: [0, 0, 0], z: [0, 0, 0] }; let shape = 0;
+  for (const f of BC6_FIELDS[mode]) {
+    const n = f.hi - f.lo + 1; let v = bits(n);
+    if (f.rev) { let r = 0; for (let i = 0; i < n; i++) { r = (r << 1) | (v & 1); v >>= 1; } v = r; }
+    if (f.ch === 'd') shape = v; else e[f.ep]['rgb'.indexOf(f.ch)] |= v << f.lo;
+  }
+  const two = mode < 2 || (mode & 3) === 2;
+  const mask = (1 << epb) - 1, sext = (v, n) => (v & (1 << (n - 1)) ? v - (1 << n) : v);
+  const eps = two ? ['w', 'x', 'y', 'z'] : ['w', 'x'];
+  if (transformed) for (const k of eps.slice(1)) for (let c = 0; c < 3; c++) e[k][c] = (e.w[c] + sext(e[k][c], db[c])) & mask;
+  const unq = (x) => (epb >= 15 ? x : x === 0 ? 0 : x === mask ? 0xffff : ((x << 15) + 0x4000) >> (epb - 1));
+  for (const k of eps) for (let c = 0; c < 3; c++) e[k][c] = unq(e[k][c]);
+  const ib = two ? 3 : 4, anchor = two ? A2[shape] : -1;
+  const idx = new Array(16);
+  for (let i = 0; i < 16; i++) idx[i] = bits(i === 0 || i === anchor ? ib - 1 : ib);
+  const half = (h) => { const ex = (h >> 10) & 31, m = h & 1023; return ex === 0 ? m / 1024 * 2 ** -14 : ex === 31 ? 65504 : (1 + m / 1024) * 2 ** (ex - 15); };
+  for (let i = 0; i < 16; i++) {
+    const s = two ? Number(P2[shape][i]) : 0;
+    const a = e[eps[s * 2]], b = e[eps[s * 2 + 1]], w = W[ib][idx[i]];
+    for (let c = 0; c < 3; c++) out[i * 3 + c] = half(((((64 - w) * a[c] + w * b[c] + 32) >> 6) * 31) >> 6);
+  }
+  return mode;
+}
+// A BC6H cube DDS (face-major: +X, -X, +Y, -Y, +Z, -Z, each with its mip chain) at `mip` -> { size, faces: [Float32Array
+// size x size x 3 linear RGB, rows from the top] }.
+function decodeBc6hCube(buf, mip = 0) {
+  const d = readDds(buf);
+  if (d.slices !== 6 || d.format !== 'PF_BC6H') throw new Error('not a BC6H cube: ' + d.format + ' x ' + d.slices);
+  const blocks = (w) => Math.ceil(w / 4) * Math.ceil(w / 4) * 16;
+  let faceBytes = 0; for (let k = 0, w = d.width; k < d.mipCount; k++, w = Math.max(1, w >> 1)) faceBytes += blocks(w);
+  let skip = 0, size = d.width; for (let k = 0; k < mip; k++) { skip += blocks(size); size = Math.max(1, size >> 1); }
+  const faces = []; const px = new Float32Array(48);
+  for (let f = 0; f < 6; f++) {
+    const img = new Float32Array(size * size * 3), base = d.dataOffset + f * faceBytes + skip, bw = Math.ceil(size / 4);
+    for (let by = 0; by < bw; by++) for (let bx = 0; bx < bw; bx++) {
+      bc6hBlock(buf, base + (by * bw + bx) * 16, px);
+      for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) { const X = bx * 4 + x, Y = by * 4 + y; if (X < size && Y < size) for (let c = 0; c < 3; c++) img[(Y * size + X) * 3 + c] = px[(y * 4 + x) * 3 + c]; }
+    }
+    faces.push(img);
+  }
+  return { size, mipCount: d.mipCount, faces };
+}
+// The six faces side by side (6 size x size: +X -X +Y -Y +Z -Z) as RGBM in 8 bits: rgb = c / (M x range), a = M; the
+// shaders decode rgb x a x range (kh_cube in crates/kh-er-render/shaders/er_vfx.wgsl, range 8). Linear (no sRGB curve).
+const CUBE_RGBM_RANGE = 8;
+function cubeAtlasRgbm(cube) {
+  const n = cube.size, W6 = n * 6, rgba = Buffer.alloc(W6 * n * 4);
+  cube.faces.forEach((img, f) => {
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+      const i = (y * n + x) * 3, o = (y * W6 + f * n + x) * 4;
+      const r = img[i], g = img[i + 1], b = img[i + 2];
+      const m = Math.min(1, Math.max(r, g, b, 1e-6) / CUBE_RGBM_RANGE), a = Math.ceil(m * 255) / 255;
+      const enc = (v) => Math.min(255, Math.round((v / (a * CUBE_RGBM_RANGE)) * 255));
+      rgba[o] = enc(r); rgba[o + 1] = enc(g); rgba[o + 2] = enc(b); rgba[o + 3] = Math.round(a * 255);
+    }
+  });
+  return { width: W6, height: n, rgba };
+}
+module.exports.decodeBc6hCube = decodeBc6hCube;
+module.exports.cubeAtlasRgbm = cubeAtlasRgbm;
+module.exports.CUBE_RGBM_RANGE = CUBE_RGBM_RANGE;
+// (AUDIT-C TF) A 2D BC6H DDS (one slice: SKY_bluehour_018_8K_EXR, Double Form's Blue Hour sky) at `mip` -> { width, height,
+// rgb: Float32Array width x height x 3 linear RGB, rows from the top }.
+function decodeBc6h2d(buf, mip = 0) {
+  const d = readDds(buf);
+  if (d.slices !== 1 || d.format !== 'PF_BC6H') throw new Error('not a 2D BC6H: ' + d.format + ' x ' + d.slices);
+  let off = d.dataOffset, w = d.width, h = d.height;
+  for (let k = 0; k < mip; k++) { off += Math.ceil(w / 4) * Math.ceil(h / 4) * 16; w = Math.max(1, w >> 1); h = Math.max(1, h >> 1); }
+  const bw = Math.ceil(w / 4), bh = Math.ceil(h / 4), rgb = new Float32Array(w * h * 3), px = new Float32Array(48);
+  for (let by = 0; by < bh; by++) for (let bx = 0; bx < bw; bx++) {
+    bc6hBlock(buf, off + (by * bw + bx) * 16, px);
+    for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) { const X = bx * 4 + x, Y = by * 4 + y; if (X < w && Y < h) for (let c = 0; c < 3; c++) rgb[(Y * w + X) * 3 + c] = px[(y * 4 + x) * 3 + c]; }
+  }
+  return { width: w, height: h, mipCount: d.mipCount, rgb };
+}
+module.exports.decodeBc6h2d = decodeBc6h2d;

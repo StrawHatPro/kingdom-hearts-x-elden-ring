@@ -54,10 +54,36 @@ impl Tint {
     }
 }
 
+/// (AUDIT-B W-FIN) The timing fields of an attach row (SQEX_StructParticleAttachData) a spawn carries: KH3's post-spawn
+/// 0x141772CD0 gives `FadeIn` to the component's `FadeIn(t)` (0x144262FF0) and `StartDelayTime` to component +0xB88 (counted
+/// down before the system ticks); `FadeOut` is the time the FADEOUT end type fades over (0x141763E60 -> `FadeOut(t)`
+/// 0x1442633A0), 0 = the end type's own way (LOOPEND, NONE ...). All seconds.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct EffectTiming {
+    pub fade_in: f32,
+    pub fade_out: f32,
+    pub start_delay: f32,
+}
+
+impl EffectTiming {
+    /// True when the row asks for nothing (the host's own defaults stay).
+    pub fn is_zero(&self) -> bool {
+        self.fade_in <= 0.0 && self.fade_out <= 0.0 && self.start_delay <= 0.0
+    }
+}
+
 pub trait Effects {
     fn spawn(&mut self, handle: EffectHandle, spawn: &EffectSpawn);
+    /// (AUDIT-B W-FIN) The attach row's FadeIn / FadeOut / StartDelayTime of the effect JUST spawned with `handle` (sent right
+    /// after its spawn, before anything else of the step; see [`EffectTiming`]): a form weapon's / finisher pawn's own clip
+    /// rows (`wfx`, `wnotify`) carry them as Sora's clips' rows do through the host's placement table. The default: nothing.
+    fn timing(&mut self, _handle: EffectHandle, _timing: EffectTiming) {}
     /// (DON-MAGIC tint) Recolour the effect just spawned with `handle` (see [`Tint`]); the default: nothing.
     fn tint(&mut self, _handle: EffectHandle, _tint: Tint) {}
+    /// (AUDIT-C) The attach row's `ParticleColor` (rgb) / `ParticleAlpha` (a) of the effect just spawned with `handle`: KH3's
+    /// post-spawn 0x141772CD0 writes them to the component (+0xB78 / +0xB84), which MULTIPLIES everything the effect and its
+    /// nested systems draw (kh-vfx `SpawnOptions::color` / `World::set_color`). The default: nothing.
+    fn color(&mut self, _handle: EffectHandle, _rgba: [f32; 4]) {}
     /// (DON-MAGIC orbit) Move the live effect of `handle` (Ball Lightning's orbiting balls): spawned at a world point, it
     /// moves to `at` (cm, core axes); spawned on Sora / a target / a member, `at` becomes its offset. The default: nothing.
     fn place(&mut self, _handle: EffectHandle, _at: Vec3) {}

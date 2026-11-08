@@ -24,7 +24,7 @@
 
 use glam::{Vec2, Vec3};
 
-use super::common::{ground_probe, on_ground, turn};
+use super::common::{ground_probe, on_ground, turn_to};
 use super::{PlayerState, StateData, StateId};
 use crate::anim::{AnimId, NotifyClass, NotifyPhase, Notifies, PlayArgs};
 use crate::combat::decide::{decide, ComboAbilities, DecideIn};
@@ -33,6 +33,23 @@ use crate::combat::AttackCtx;
 use crate::host::{TargetFlags, TargetId, TargetInfo};
 use crate::pawn::{Ctx, Pawn};
 use crate::sora::{wrap_degrees, MovementState};
+
+/// (AUDIT-B W-CORE) ETresBodyPushPowerLevel::PPL_90: the `dl` PlayAttack passes 0x1405B8B30 (sheets/reflect/enum-values.json).
+pub(crate) const PUSH_LEVEL_PPL_90: u8 = 8;
+
+/// (AUDIT-B W-CORE) +0x22C of Final Blow's chase (Begin 0x141333210: `mov dword ptr [rdi+0x22C],0xD`, asm/text/141330000.s
+/// line 3367): ead_pc_aura_com0 group 13 at the vanish, 14 at the reappearance.
+pub(crate) const CHASE_WARP_AURA: i32 = 0xD;
+/// (AUDIT-B W-CORE) +0x22C as the Attack Reset 0x14133D230 leaves it (0xB): the warps of the classes that write none
+/// (ComboDF's Dark Break; Highwind's: combo_hl.rs `WARP_AURA`).
+pub(crate) const RESET_WARP_AURA: i32 = 0xB;
+
+/// (AUDIT-B W-CORE) The anim interface's vt+0x1A0(m_CmnAuraEffect, group, 0) for the groups of the generic Attack (11 / 12, 13 /
+/// 14): every row of Sora's ead_pc_aura_com0 of that group (sheet sora-form-ship `aura.*`, tools/sora_form_ship.js), on his
+/// sockets, attached or left where he was (ToAttach).
+pub(crate) fn cmn_aura(cx: &mut Ctx, group: i32) {
+    crate::combat::forms::ship::warp_aura(cx, group);
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Attack {
@@ -77,6 +94,10 @@ pub(crate) struct Attack {
     pub(super) keep_face: bool,
     pub(super) face_timer: f32,
     pub(super) face_yaw: f32,
+    /// (F-LOCO) +0x1F4 bit 5 and +0x218: the attack pitches the actor toward its target (PlayAttack 0x1413378B0 at
+    /// 0x141338CE1: kinds 0x91 M_C418, 0x96 M_4415, 0xAF M_7417, 0xBC M_8423; +0x218 = the actor's pitch then), until End.
+    pub(super) pitched: bool,
+    pub(super) pitch_aim: f32,
     /// +0x220, +0x224, +0x228: the channel phases; +0x234 bits 0 / 1: the channels in use.
     pub(super) phase_xy: u8,
     pub(super) phase_root: u8,
@@ -102,6 +123,9 @@ pub(crate) struct Attack {
     /// The instance is a `TresPlayerState_ComboLimit` (id 90, Second Form): its `Decide`
     /// 0x141362AB0 (states/combo_limit.rs wraps this struct).
     pub limit: bool,
+    /// (F-LIGHTDARK) The instance is one of the Re Mind classes COMBO_LF / COMBO_DF / COMBO_TF (`forms::lightdark::Class`
+    /// value; 0 = none): their Decide, PlayAttack cases, Dark Break's warp (states/combo_lf.rs wraps this struct).
+    pub remind: u8,
     /// state+0x1EC bit 3 with +0x1E4: the attack was requested out of a wall run of this class
     /// (0 up, 1 / 2 along): `Decide` rule 4 picks a wall-run attack, kinds 0x31 - 0x34.
     pub wall_run: Option<u8>,
@@ -115,6 +139,22 @@ pub(crate) struct Attack {
     /// state+0x234 bit 5: the dive has landed; bit 6: the shot handler was called once.
     pub(super) dive_landed: bool,
     pub(super) shot_called: bool,
+    /// (AUDIT-C LD) state+0x23C bit 5 (PlayAttack 0x1413378B0 case 0xD0, Dark Break): the end of the traction window lands
+    /// the attack (traction 0x141349CC0 at 0x14134A740: +0x234 |= 0x20, the shot handler, traction off, StopMovement).
+    pub(super) land_at_traction_end: bool,
+    /// (AUDIT-C LD) state+0x234 bit 11: PlayAttack set 0x1405B8B30(pawn+0x460, 8); End 0x141335120 restores it (0x1405B6100).
+    /// (AUDIT-B W-CORE) That call is MyBodyColl slot 228 0x1406469A0: TresBodyCollComponent+0x4A4 = his PUSH POWER LEVEL
+    /// (ETresBodyPushPowerLevel 8 = PPL_90; the ctor 0x14062F3D0 writes 4 = PPL_50; 0x1405B6100 puts back m_pBaseParam+0x98 =
+    /// TresChrBaseParamDataTable.m_BodyPushPower), read only through slot 229 0x140642B50 <- 0x1405AA1A0 by the push solver
+    /// 0x140637430 (the weights of combat/push.rs), 0x1405A5BA0 (level >= 7), and enemies' / NPCs' own code: not his
+    /// reaction type (pawn+0x619). Set by cases 0x25 (outside 0xDF / 0xE0), 0x6A and 0x3F .. 0x43 ([`Attack::raise_push`]).
+    pub(super) push_restore: bool,
+    /// (AUDIT-B W-CORE) +0x22C + 1 while a warp begun by [`Attack::warp_head`] has not reappeared (slot 117 / End spawn it).
+    pub(super) warp_aura_end: Option<i32>,
+    /// (AUDIT-B W-CORE) The warp head's vt+0x2068(1): End's vt+0x2068(0) takes it back.
+    pub(super) warp_invincible: bool,
+    /// (AUDIT-C LD) state+0x234 bit 13 (the same case): End in the air skips vt+0x1E18 / +0x1E28 and zeroes +0x18C.
+    pub(super) air_end_plain: bool,
     /// state+0x170: shots this attack has spawned.
     pub shots: i32,
     // ---- fourth pass (2026-10-12)
@@ -132,6 +172,22 @@ pub(crate) struct Attack {
     /// `= target.m_bRushSuppression`. The XY channel then homes at 0 and the root-scale channel
     /// writes 0.1 (spec 6.3).
     pub(super) rush: bool,
+    /// (F-SHIP) state+0x234 bit 16 (PlayAttack cases 0x9C .. 0xA2, Highwind): the root scale the channel wrote is kept
+    /// when the traction window closes ("unless bit 15 or 16: SetRootScale(1.0)").
+    pub(super) root_keep: bool,
+    /// (AUDIT-A ARROWGUN) +0x16C: the stick steers the attack (PlayAttack 0x1413378B0: the arrowguns' 0x44 .. 0x46 (and
+    /// Mirage Staff's kinds, combo_wa.rs's own); its tail then sets MaxWalkSpeed = vt+0x1588() x 0.9, MaxAcceleration
+    /// 3672): slot 131 0x141341870 in Tick ([`Attack::steering`]); End 0x141335120 on the ground keeps the velocity.
+    /// +0x174 its speed scale, +0x17C its yaw (the actor's at the play), the MaxAcceleration it replaced.
+    pub(super) steer: bool,
+    pub(super) steer_scale: f32,
+    pub(super) steer_yaw: f32,
+    pub(super) steer_accel: f32,
+    /// (AUDIT-A ARROWGUN) +0x188: the target point's height offset of the traction (slot 116 0x141349CC0: dz = target -
+    /// him + offset, clamped +-500): 500 for the arrowguns' 0x48; +0x16D: when the traction window closes, DirZ (+0x1D4)
+    /// and the offset go to 0 (0x141349CC0, the +0x16D test).
+    pub(super) target_dz: f32,
+    pub(super) reset_dz: bool,
 }
 
 impl Attack {
@@ -168,6 +224,8 @@ impl Attack {
         keep_face: false,
         face_timer: 0.0,
         face_yaw: 0.0,
+        pitched: false, // (F-LOCO)
+        pitch_aim: 0.0,
         phase_xy: 0,
         phase_root: 0,
         phase_z: 0,
@@ -182,18 +240,31 @@ impl Attack {
         forced_kind: 0,
         just_guard: false,
         limit: false,
+        remind: 0,
         wall_run: None,
         endless: false,
         warp_delay: 0.0,
         warp_start: false,
         dive_landed: false,
         shot_called: false,
+        land_at_traction_end: false,
+        push_restore: false, // (AUDIT-B W-CORE)
+        warp_aura_end: None,
+        warp_invincible: false,
+        air_end_plain: false,
         shots: 0,
         no_vz: false,
         keep_dir_z: false,
         hop: false,
         slope: false,
         rush: false,
+        root_keep: false,
+        steer: false, // (AUDIT-A ARROWGUN)
+        steer_scale: 0.0,
+        steer_yaw: 0.0,
+        steer_accel: 0.0,
+        target_dz: 0.0,
+        reset_dz: false,
     };
 
     /// The target, while it is targetable (component vt+0xA80).
@@ -222,6 +293,32 @@ impl Attack {
         }
     }
 
+    /// Slot 115 (0x141332790; strand A 6.4) at a hit window's begin (the handler 0x1413459E0, which STYLEFINISH's own
+    /// 0x1413DD7D0 calls first too): +0x12C and +0x138 += max(m_ComboCountUpParam, 1). +0x12C only when pawn
+    /// vt+0x1D20(row is magic) says so (0x1405AD380, verdict same): a physical row not while the MP charge runs with
+    /// CHARGE_BERSERK (178), a magic row not with ENDLESS_MAGIC (82): the damage step of the combo boosts then stands
+    /// still. (F-SECOND: moved here from `on_notifies`, for STYLEFINISH, which counts +0x12C in every finish command.)
+    ///
+    /// (F-SECOND) 0x1413459E0's guard and amount: the notify's begin 0x140561F40 copies `m_bIgnoreComboCountUp` (notify
+    /// +0x98) into bit 7 of the event's byte +0x5C and `m_ComboCountUpParam` (+0x9C) into its +0x6C; the handler calls
+    /// slot 115 only while that byte is >= 0 (not ignored), with max(+0x6C, 1).
+    pub(super) fn count_window(&mut self, pawn: &Pawn, event: &crate::anim::NotifyEvent) {
+        let def = event.def();
+        let prop = |name: &str| def.props.iter().find(|(n, _)| *n == name).map(|(_, v)| *v);
+        if prop("m_bIgnoreComboCountUp") == Some("true") {
+            return;
+        }
+        let up = prop("m_ComboCountUpParam").and_then(|v| v.parse::<i32>().ok()).unwrap_or(0).max(1);
+        let magic_row = matches!(def.data, crate::anim::NotifyData::Attack { row, .. } if crate::combat::tables::attack_row(row).is_some_and(|(_, r)| r.magic));
+        let status = &pawn.status;
+        use crate::enums::ETresAbilityKind as Ab;
+        let frozen = if magic_row { status.abilities.has(Ab::EndlessMagic) } else { status.abilities.has(Ab::ChargeBerserk) && status.mp_charging };
+        if !frozen {
+            self.counters[0] += up;
+        }
+        self.counters[3] += up;
+    }
+
     pub(super) fn sync_ctx(&self, pawn: &mut Pawn) {
         pawn.combat.attack_ctx = AttackCtx { kind: self.kind, counters: [self.combo, self.counters[0], self.counters[1], self.counters[2]], finish_end: self.finish_end, aerial: self.air_mode, just_guard: self.just_guard, has_target: self.target != TargetId::NONE, target: self.target, state: true };
     }
@@ -233,7 +330,7 @@ impl Attack {
     /// when it is more below than away and SONIC_DOWN (92) is equipped. A flow kind whose own
     /// ability (0x39: SUMMERSALT 94) is missing is dropped for an ordinary air attack by the
     /// reach (state+0x154: 1 -> 0x11, 2 -> 0x12, 3 -> 0x0F, else 0x10).
-    fn flow_refine(&mut self, pawn: &Pawn) {
+    pub(super) fn flow_refine(&mut self, pawn: &Pawn) { // (F-NANO) pub(super): states/combo_gm.rs
         use crate::enums::ETresAbilityKind as Ab;
         let has = |a| pawn.status.abilities.has(a);
         if matches!(self.forced_kind, 0x36 | 0x37) {
@@ -270,7 +367,7 @@ impl Attack {
         //   if +0x1EC & 0x50: kind = 0x10;                 forcedKind = 0; bAir = 1
         //   elif +0x1EC & 0x20: kind = dz > 30 ? 0x10 : 0x2F; forcedKind = 0; bAir = 1
         if self.hop || self.slope {
-            self.kind = if self.slope && !(self.dz > 30.0) { 0x2F } else { 0x10 };
+            self.kind = if self.slope && self.dz.partial_cmp(&30.0).is_none_or(std::cmp::Ordering::is_le) { 0x2F } else { 0x10 };
             (self.forced_kind, self.air) = (0, true);
         }
         let kind = self.kind;
@@ -340,11 +437,18 @@ impl Attack {
             self.dir_z = 0.0;
             self.swing_started = true;
             self.face_yaw = pawn.yaw;
+            // (AUDIT-B W-CORE) LAB_14133A40B: bit 11 of the 0x808 with 0x1405B8B30(pawn+0x460, 8): push power PPL_90 until End.
+            self.raise_push(pawn);
             let target = self.target;
             crate::combat::friend::play_unison(cx, kind, target);
             self.sync_ctx(cx.pawn);
             return;
         }
+        // (F-LIGHTDARK) PlayAttack's cases of the Re Mind classes (0x1F, 0x25, 0xCD .. 0xE0: states/combo_lf.rs).
+        if self.remind != 0 && self.play_remind(cx) {
+            return;
+        }
+        let pawn = &mut *cx.pawn;
         let Some(row) = attack_kind(kind) else {
             pawn.note("an attack kind without a row was decided (spec 4.2: an empty finisher slot): nothing is played");
             return;
@@ -377,6 +481,11 @@ impl Attack {
             0x14 | 0x15 => self.rearm_z = true,
             // 0x1C Rising Spiral (clip 1319) [I 0x14133817C]: +0x234 |= 8, +0x23C |= 0x10.
             0x1C => (self.no_vz, self.keep_dir_z) = (true, true),
+            // (AUDIT-B W-CORE) a form kind a form state handed to this path: case 0x25 outside 0xDF / 0xE0 (+0x234 |= 0x2800)
+            // and 0x6A (+0x234 |= 0x802) with 0x1405B8B30(pawn+0x460, 8); 0x24 RevengeDive's +0x234 |= 0x10002 (bit 16).
+            0x25 if !matches!(pawn.combat.form.cmd, 0xDF | 0xE0) => self.counter_body(pawn),
+            0x6A => self.raise_push(pawn),
+            0x24 => self.root_keep = true,
             _ => {}
         }
         // Kind 0x2F, the slope-slide attack (clip M_1143, row RUN_SLOPE) [I 0x14133A160]: the Play
@@ -445,6 +554,92 @@ impl Attack {
         self.face_yaw = cx.pawn.yaw;
     }
 
+    /// (AUDIT-B W-CORE) PlayAttack 0x1413378B0's `+0x234 |= 0x800; 0x1405B8B30(pawn+0x460, dl = 8)` (asm/text/141330000.s lines 8590 case
+    /// 0x25, 9089 case 0x6A, 9886 cases 0x3F .. 0x43): his push power level PPL_90 until End (bit 11). Against
+    /// an Elden Ring enemy's push body (kh-er targets.rs `push_body`: small 2, medium 5, large 8) he is then pushed by none
+    /// lighter than 8 and half by an 8, as KH3's solver weighs it (combat/push.rs `weight`).
+    pub(super) fn raise_push(&mut self, pawn: &mut Pawn) {
+        self.push_restore = true;
+        pawn.actions.push_level = Some(PUSH_LEVEL_PPL_90);
+    }
+
+    /// (AUDIT-B W-CORE) FINAL BLOW'S CHASE WARP, in every attack class (their Begin is the Attack's 0x141333210, a thunk in each
+    /// class's vtable): "if +0x234 & 0x80000 (the chain's End handed the armed chase over): kind = 0x22, +0x1E1 = 1, +0x22C =
+    /// 0xD", then PlayAttack, whose head with +0x1E1 ([`Attack::warp_head`]) starts the 0.2 s countdown (slot 117). False = no
+    /// chase was handed over.
+    pub(super) fn chase_begin(&mut self, cx: &mut Ctx) -> bool {
+        let pawn = &mut *cx.pawn;
+        if !std::mem::take(&mut pawn.combat.chase_next) {
+            return false;
+        }
+        self.kind = 0x22;
+        (self.warp_start, self.warp_delay) = (true, P.chase_warp_delay);
+        (pawn.combat.chase_armed, pawn.combat.revenge) = (false, TargetId::NONE);
+        pawn.combat.chases += 1;
+        crate::combat::situation::clear_reaction(cx, P.chase_command as i32);
+        self.warp_head(cx, CHASE_WARP_AURA);
+        self.sync_ctx(cx.pawn);
+        self.sub = 1;
+        true
+    }
+
+    /// Slot 117 (0x14134AA80) when its countdown is over, before PlayAttack: the teleport of a pending warp (slot 136
+    /// 0x141337320 with 150 / 100), then (AUDIT-B W-CORE) vt+0x1A0(m_CmnAuraEffect, +0x22C + 1, 0), the reappearance.
+    /// (AUDIT-B W-CORE) A function of its own so that a form state with its own countdown (combo_sw.rs) arrives the same way.
+    pub(super) fn warp_arrive(&mut self, cx: &mut Ctx) {
+        if std::mem::take(&mut self.warp_start) {
+            // (F-LIGHTDARK) ComboDF slot 136 0x141352160 for Dark Break (0xD0), with the same (150, 100).
+            if self.remind != 0 && self.kind == crate::combat::forms::lightdark::KIND_DARK_BREAK {
+                let target = self.target;
+                crate::combat::forms::lightdark::dark_break_warp(cx, target, P.chase_warp_drop);
+            } else if let Some(t) = self.target_info(cx) {
+                let own = cx.pawn.cmc.location;
+                let dir = ((t.center - own) * Vec3::new(1.0, 1.0, 0.0)).normalize_or_zero();
+                // (F-CLAWS) slot 136 as KH3 computes it (line tests from HIM: never beyond a wall), placed swept (the port's guard)
+                let end = warp_point(cx, &t, P.chase_warp_distance, P.chase_warp_drop);
+                cx.pawn.cmc.location = swept_warp(cx, end);
+                cx.pawn.cmc.stop_movement();
+                if dir != Vec3::ZERO {
+                    cx.pawn.yaw = wrap_degrees(dir.y.atan2(dir.x).to_degrees());
+                }
+            }
+        }
+        if let Some(group) = self.warp_aura_end.take() {
+            cmn_aura(cx, group);
+        }
+    }
+
+    /// (AUDIT-B W-CORE) The head of PlayAttack 0x1413378B0 with +0x1E1 (decompiled C lines 91-152): +0x21C = 1, +0x234 = (bits
+    /// & ~2) | 4 (the root channel off, the Z channel on), +0x224 = 0, air mode (+0x1DF), gravity off (vt+0x1728(0)), Flying
+    /// (vt+0x17A0(5, 1)), Play("JumpNormalStart", 0, blend -1, mode 2) (SetVoiceGroupNo(0) when it started), the anim interface's
+    /// vt+0x1A0(pawn vt+0x2458() = m_CmnAuraEffect ead_pc_aura_com0, +0x22C, 0): the VANISH's aura group, m_bFaceAt, invincible
+    /// (vt+0x2068(1); End's vt+0x2068(0)), the countdown delegate (slot 117 0x14134AA80: at 0 the warp and vt+0x1A0(..,
+    /// +0x22C + 1, 0), the REAPPEARANCE; End the same while it is still pending). `group` = +0x22C.
+    pub(super) fn warp_head(&mut self, cx: &mut Ctx, group: i32) {
+        (self.chan_root, self.air_mode, self.face_at) = (false, true, true);
+        let s = &mut *cx.pawn;
+        s.cmc.gravity_off = true;
+        s.cmc.set_flying();
+        match AnimId::from_name("JumpNormalStart") {
+            Some(id) => s.anim.play_with(id, PlayArgs::mode(2, -1.0)),
+            None => s.note("JumpNormalStart is not in the generated animation table"),
+        }
+        s.status.damage_invalid = true;
+        self.warp_invincible = true;
+        self.face_yaw = s.yaw;
+        cx.set_voice_group_no(0);
+        cmn_aura(cx, group);
+        self.warp_aura_end = Some(group + 1);
+    }
+
+    /// (AUDIT-B W-CORE) PlayAttack case 0x25 outside 0xDF / 0xE0 (Barrier Cracker, the Nano Counter, the Reprisals): `+0x234 |=
+    /// 0x2800` with 0x1405B8B30(pawn+0x460, 8): bit 11 ([`Attack::raise_push`]) and bit 13 (End 0x141335120 in the air
+    /// without a landing: SetMovementMode and +0x18C = 0 instead of vt+0x1E18 / vt+0x1E28: `air_end_plain`).
+    pub(super) fn counter_body(&mut self, pawn: &mut Pawn) {
+        self.raise_push(pawn);
+        self.air_end_plain = true;
+    }
+
     /// The tail of PlayAttack [I 0x14133AC8A - 0x14133ACB7]: with the SNEEZE status on him
     /// (pawn+0x85D == 13), outside the endless combo (state+0x234 bit 21) and from the step
     /// `combo >= MaxCombo() - 2` on: `0x14140DF30(ctrl, 1)` = controller+0x920 = 1 and the HUD's
@@ -465,7 +660,19 @@ impl Attack {
             alpha = 1.0;
             self.target_metrics(cx);
         }
+        // (F-LOCO) +0x1F4 bit 5 (the pitching kinds' PlayAttack, 0x141338CE1): +0x218 = the actor's pitch at the play.
+        if !self.pitched && matches!(self.kind, 0x91 | 0x96 | 0xAF | 0xBC) {
+            (self.pitched, self.pitch_aim) = (true, cx.pawn.pitch);
+        }
         if !self.facing_on {
+            // (F-LOCO) bit 5 without facing: the rotation (pitch +0x218, or 0 and +0x218 = 0 once m_bEnableChange, yaw
+            // +0x1FC) at the same rate (pawn vt+0xDB0).
+            if self.pitched {
+                if cx.pawn.queue.flags.enable_change {
+                    self.pitch_aim = 0.0;
+                }
+                turn_to(cx.pawn, self.pitch_aim, self.face_yaw, alpha);
+            }
             return;
         }
         if let Some(t) = self.target_info(cx) {
@@ -473,14 +680,50 @@ impl Attack {
             if d.truncate().length_squared() > 1.0e-8 {
                 self.face_yaw = d.y.atan2(d.x).to_degrees();
             }
+            // (F-LOCO) bit 5: the pitch of the direction from the actor (UE: the capsule centre) to the target's point,
+            // FVector::Rotation (FUN_142d8d950) of the normalised 3D vector; else 0 (+0x218 = 0).
+            self.pitch_aim = if self.pitched {
+                let d = t.center - cx.pawn.cmc.capsule_centre(cx.pawn.params());
+                d.z.atan2(d.truncate().length()).to_degrees()
+            } else {
+                0.0
+            };
         }
-        turn(cx.pawn, self.face_yaw, alpha);
+        turn_to(cx.pawn, self.pitch_aim, self.face_yaw, alpha); // (F-LOCO) the rotator's pitch: 0 for every other kind
         if !self.keep_face {
             self.face_timer -= dt;
             if self.face_timer <= 0.0 {
                 self.facing_on = false;
             }
         }
+    }
+
+    /// (AUDIT-A ARROWGUN) Slot 131 (0x141341870, the Attack class's; ComboWA overrides it, combo_wa.rs): with +0x16C the
+    /// stick steers the attack after the traction (Tick 0x141341340: slots 126, 128, 131):
+    ///
+    /// ```text
+    /// no stick (+0x158) or below 0.5 (+0x160): +0x174 *= 0.5; v = dir(+0x17C) x vt+0x1580 (MaxWalkSpeed) x +0x174
+    /// else: +0x17C += wrap(stick yaw +0x15C - +0x17C) x clamp(dt x 6, 0, 1); +0x174 = min(+0x174 + dt x 7.5, 1);
+    ///       v = dir(+0x17C) x vt+0x1B30 (MySprintSpeed) x +0x174
+    /// SetVelocity(v) (vt+0x16C0: XY, Z 0 in the rotator's plane)
+    /// ```
+    pub(super) fn steering(&mut self, cx: &mut Ctx, dt: f32) {
+        if !self.steer {
+            return;
+        }
+        let s = &mut *cx.pawn;
+        let (stick, magnitude) = (s.stick_yaw, s.stick_magnitude);
+        let speed = if magnitude < 0.5 {
+            self.steer_scale *= 0.5;
+            s.cmc.max_walk_speed
+        } else {
+            let rate = (dt * 6.0).clamp(0.0, 1.0);
+            self.steer_yaw = crate::sora::wrap_degrees(self.steer_yaw + crate::sora::wrap_degrees(stick - self.steer_yaw) * rate);
+            self.steer_scale = (self.steer_scale + dt * 7.5).min(1.0);
+            s.params().speed_sprint
+        };
+        let a = self.steer_yaw.to_radians();
+        s.cmc.set_velocity_xy(Vec2::new(a.cos(), a.sin()) * speed * self.steer_scale);
     }
 
     /// Traction (slot 116 0x141349CC0), spec 6.3: the XY homing channel, the root-scale channel
@@ -499,7 +742,8 @@ impl Attack {
         let (dzc, dxy) = match target {
             Some(t) => {
                 let d = t.center - pawn.cmc.location;
-                (d.z.clamp(-P.traction_dz_clamp, P.traction_dz_clamp), d.truncate().length().clamp(0.0, P.traction_dist_clamp))
+                // (AUDIT-A ARROWGUN) + the target offset's height (+0x188; 0 but in the arrowguns' 0x48)
+                ((d.z + self.target_dz).clamp(-P.traction_dz_clamp, P.traction_dz_clamp), d.truncate().length().clamp(0.0, P.traction_dist_clamp))
             }
             None => (0.0, 0.0),
         };
@@ -531,7 +775,7 @@ impl Attack {
                     rate = P.traction_rate_on * k;
                 }
             }
-            if !(wanted > 0.0) {
+            if wanted.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
                 wanted = 0.0;
                 rate = if inside {
                     P.traction_rate_off_ground
@@ -556,12 +800,26 @@ impl Attack {
             pawn.cmc.set_velocity_xy(Vec2::new(a.cos(), a.sin()) * v);
         }
         // ---- root-scale channel
+        let mut root_done = false; // (AUDIT-B W-CORE) the traction's bl (0x14134A3EE)
         if self.chan_root {
             if self.phase_root == 0 && open {
                 self.phase_root = 1;
             }
             if self.phase_root == 1 {
-                if open {
+                if open && !self.rush && self.root_keep {
+                    // (AUDIT-B W-CORE) bit 16 with the window open (0x14134A3EE: `bt ecx,0x10` after bit 15), no target test:
+                    // dist 0 -> SetRootScale(1.0) and bl = 1; dist > +0x24C -> dist / +0x1D8 (0 without a root length);
+                    // else SetRootScale(0.1) (0x145C87D00) and bl = 1. bl: RevengeDive (0x24) then writes Z speed 0 (below).
+                    pawn.root_scale.0 = if dxy == 0.0 {
+                        root_done = true;
+                        1.0
+                    } else if dxy > self.stop_dist {
+                        if self.root_len > 0.0 { dxy / self.root_len } else { 0.0 }
+                    } else {
+                        root_done = true;
+                        0.1
+                    };
+                } else if open {
                     let mut scale = match target {
                         Some(_) if self.root_len > 0.0 => dxy / self.root_len,
                         Some(_) => 0.0,
@@ -574,7 +832,7 @@ impl Attack {
                     pawn.root_scale.0 = if self.rush { 0.1 } else { scale };
                 } else {
                     // "unless bit 15 or 16: SetRootScale(1.0)".
-                    if !self.rush {
+                    if !self.rush && !self.root_keep {
                         pawn.root_scale.0 = 1.0;
                     }
                     self.phase_root = 2;
@@ -587,10 +845,10 @@ impl Attack {
                 self.phase_z = 1;
             }
             if self.phase_z == 1 && open {
-                let vz;
-                if self.no_vz {
+                
+                let vz = if self.no_vz {
                     // [I] 0x14134A74D: `test dl,8` (state+0x234 bit 3) before the dive test: vz = 0.
-                    vz = 0.0;
+                    0.0
                 } else if self.dive {
                     let (hit, distance, _) = ground_probe(pawn, w, P.decide_ground_probe_range);
                     let g = if hit { distance } else { P.decide_ground_probe_range };
@@ -611,24 +869,41 @@ impl Attack {
                         }
                         return;
                     }
-                    vz = velocity.z.min(self.dir_z) + self.dir_z * 0.25;
+                    velocity.z.min(self.dir_z) + self.dir_z * 0.25
                 } else if self.fixed_dir_z {
-                    vz = self.dir_z;
+                    // (AUDIT-B W-CORE) traction 0x141349CC0: `cmp [rdi+0x1DD],0; test bl,bl; cmp [rdi+0x1B0],0x24`: Z speed 0 (RevengeDive at its target).
+                    if root_done && self.kind == 0x24 { 0.0 } else { self.dir_z }
                 } else if self.dir_z != 0.0 && dzc != 0.0 && (self.dir_z > 0.0) == (dzc > 0.0) {
                     self.dir_z = dzc * self.z_gain;
-                    vz = self.dir_z;
+                    self.dir_z
                 } else {
                     // The signs differ (or DirZ is 0): the current Z speed is written again.
-                    vz = velocity.z;
-                }
+                    velocity.z
+                };
                 pawn.cmc.set_velocity_z(vz);
             } else if self.phase_z == 1 {
+                // (AUDIT-A ARROWGUN) +0x16D (the arrowguns' 0x48): DirZ and the target offset's height go to 0.
+                if self.reset_dz {
+                    (self.dir_z, self.target_dz) = (0.0, 0.0);
+                }
                 // The window closed: gravity on, Falling.
                 pawn.cmc.gravity_off = false;
                 if pawn.cmc.is_flying() {
                     pawn.cmc.set_falling();
                 }
                 self.phase_z = 2;
+                // (AUDIT-C LD) 0x14134A786: `if (+0x23C & 0x20) && !(+0x234 & 0x20)`: +0x23C &= ~0x20, +0x234 |= 0x20 (landed),
+                // the shot handler (iface40 vt+0x228), traction off, StopMovement (vt+0x16E8), +0x234 &= ~4 (the Z channel
+                // off), +0x1D4 (DirZ) = 0, no Z write this tick. Dark Break's eruption (SCDF_DARKBREAK) comes from here.
+                if std::mem::take(&mut self.land_at_traction_end) && !self.dive_landed {
+                    self.dive_landed = true;
+                    self.shot_handler(pawn);
+                    self.enable_traction = false;
+                    pawn.cmc.stop_movement();
+                    self.air_mode = false;
+                    self.dir_z = 0.0;
+                    return;
+                }
             }
             if self.phase_z == 2 {
                 // No write at all once DirZ is 0: he then falls under the (scaled) gravity.
@@ -660,11 +935,19 @@ pub(crate) fn in_form(s: &Pawn) -> bool {
 /// `MaxCombo()` (pawn slot 928 0x141433570): 6 in Second Form (Combo Plus is only in the
 /// no-form branch), else 4 + Combo Plus / Air Combo Plus.
 pub(crate) fn max_combo(s: &Pawn) -> i32 {
+    // (F-LIGHTDARK) 0x141433570: 6 in forms 0xDD .. 0xE0 too.
+    if let Some((max, _)) = crate::combat::forms::lightdark::counts_in(s.combat.form.cmd) {
+        return max;
+    }
     if in_form(s) { P.form_max_combo } else { combo_abilities(s).max_combo(on_ground(s)) }
 }
 
 /// `Finishers()` (pawn slot 1253 0x141433A60): 3 in Second Form.
 pub(crate) fn finishers(s: &Pawn) -> i32 {
+    // (F-LIGHTDARK) 0x141433A60: 3 in forms 0xDD .. 0xE0 too.
+    if let Some((_, fin)) = crate::combat::forms::lightdark::counts_in(s.combat.form.cmd) {
+        return fin;
+    }
     if in_form(s) { P.form_finishers } else { combo_abilities(s).finishers() }
 }
 
@@ -693,6 +976,8 @@ impl Attack {
         let name = match self.kind {
             0x0E => "DOWNIMPACT",
             0x37 => "SHOCKWAVE_S",
+            // (F-LIGHTDARK) case 0xD0 (Dark Break in ComboDF): "SCDF_DARKBREAK", the same two bits.
+            0xD0 if self.remind != 0 => "SCDF_DARKBREAK",
             // (party stream D) slot 137 0x14134CCE0 / slot 138 0x14134C710: the team shots, at once.
             0x3F..=0x42 => {
                 pawn.combat.pending_shot = Some(crate::combat::friend::unison_shot(self.kind));
@@ -719,6 +1004,23 @@ impl super::StateData {
         match self {
             StateData::Attack(a) => Some(a),
             StateData::ComboLimit(c) => Some(&c.0),
+            StateData::ComboAnti(c) => Some(&c.a), // (F-RAGE)
+            StateData::ComboDw(c) => Some(&c.a), // (F-ARROWGUN)
+            StateData::ComboBz(c) => Some(&c.a), // (F-ARROWGUN)
+            StateData::ComboCl(c) => Some(&c.0.a), // (F-CLAWS)
+            StateData::ComboYo(c) => Some(&c.0.a), // (F-CLAWS)
+            StateData::ComboSk(c) => Some(&c.0.a), // (F-CLAWS)
+            StateData::ComboHl(c) => Some(&c.0.a), // (F-SHIP)
+            StateData::ComboFl(c) => Some(&c.0.a), // (F-SHIP)
+            StateData::ComboWa(c) => Some(&c.a), // (F-STAFF)
+            StateData::ComboLf(c) => Some(&c.a), // (F-LIGHTDARK)
+            StateData::ComboDf(c) => Some(&c.0.a), // (F-LIGHTDARK)
+            StateData::ComboTf(c) => Some(&c.0.a), // (F-LIGHTDARK)
+            StateData::ComboHm(c) => Some(&c.0.a), // (F-HAMMER)
+            StateData::ComboDr(c) => Some(&c.0.a), // (F-HAMMER)
+            StateData::ComboSw(c) => Some(&c.a), // (F-ULTIMATE)
+            StateData::ComboSh(c) => Some(&c.a), // (F-SHIELD)
+            StateData::ComboGm(c) => Some(&c.a), // (F-SHIELD, for F-NANO)
             _ => None,
         }
     }
@@ -727,6 +1029,23 @@ impl super::StateData {
         match self {
             StateData::Attack(a) => Some(a),
             StateData::ComboLimit(c) => Some(&mut c.0),
+            StateData::ComboAnti(c) => Some(&mut c.a), // (F-RAGE)
+            StateData::ComboDw(c) => Some(&mut c.a), // (F-ARROWGUN)
+            StateData::ComboBz(c) => Some(&mut c.a), // (F-ARROWGUN)
+            StateData::ComboCl(c) => Some(&mut c.0.a), // (F-CLAWS)
+            StateData::ComboYo(c) => Some(&mut c.0.a), // (F-CLAWS)
+            StateData::ComboSk(c) => Some(&mut c.0.a), // (F-CLAWS)
+            StateData::ComboHl(c) => Some(&mut c.0.a), // (F-SHIP)
+            StateData::ComboFl(c) => Some(&mut c.0.a), // (F-SHIP)
+            StateData::ComboWa(c) => Some(&mut c.a), // (F-STAFF)
+            StateData::ComboLf(c) => Some(&mut c.a), // (F-LIGHTDARK)
+            StateData::ComboDf(c) => Some(&mut c.0.a), // (F-LIGHTDARK)
+            StateData::ComboTf(c) => Some(&mut c.0.a), // (F-LIGHTDARK)
+            StateData::ComboHm(c) => Some(&mut c.0.a), // (F-HAMMER)
+            StateData::ComboDr(c) => Some(&mut c.0.a), // (F-HAMMER)
+            StateData::ComboSw(c) => Some(&mut c.a), // (F-ULTIMATE)
+            StateData::ComboSh(c) => Some(&mut c.a), // (F-SHIELD)
+            StateData::ComboGm(c) => Some(&mut c.a), // (F-SHIELD, for F-NANO)
             _ => None,
         }
     }
@@ -734,6 +1053,11 @@ impl super::StateData {
 
 /// Queues an attack instance of the class the pawn's form asks for.
 fn queue_attack(s: &mut Pawn, next: Attack, push: bool) {
+    // (F-LIGHTDARK) pawn slot 1337 0x141432F00: forms 0xDD / 0xDE / 0xDF, 0xE0 -> COMBO_LF / COMBO_DF / COMBO_TF.
+    if let Some(class) = crate::combat::forms::lightdark::class_of(s.combat.form.cmd) {
+        super::combo_lf::queue(s, class, next, push);
+        return;
+    }
     let limit = in_form(s);
     let next = Attack { limit, ..next };
     match (limit, push) {
@@ -774,7 +1098,7 @@ fn can_attack(state: &StateData, s: &mut Pawn) -> bool {
         s.combat.hit_flag = true;
     }
     let s = &*s;
-    let queued_attack = matches!(s.queue.queued_id(), Some(StateId::Attack) | Some(StateId::ComboLimit));
+    let queued_attack = matches!(s.queue.queued_id(), Some(StateId::Attack) | Some(StateId::ComboLimit) | Some(StateId::ComboLf) | Some(StateId::ComboDf) | Some(StateId::ComboTf) /* (F-LIGHTDARK) */);
     // The counter windows of the actions implementer's states (spec 5.6.2; combat/guard.rs):
     // GUARD accepts an attack whenever the counter window is open; RISKDODGE / AIR_SLIDE while
     // their counter is offered.
@@ -819,7 +1143,8 @@ fn can_attack(state: &StateData, s: &mut Pawn) -> bool {
         StateData::Damage(d) => s.queue.nothing_queued() && !d.bad && matches!(d.kind.value(), 1 | 2 | 7 | 8 | 9 | 10) && s.queue.flags.enable_change,
         // BADSTAT_STUN (122; strand A 2): nothing queued and m_bEnableChange (the end clip).
         StateData::BadstatStun(_) => s.queue.nothing_queued() && s.queue.flags.enable_change,
-        #[allow(unreachable_patterns)]
+        // (weapons P2) 32 WEAPONCHANGE: sub-step != 0 (the switch is made) && pawn+0xE28 (a hit landed).
+        StateData::WeaponChange(w) => w.changed && s.combat.hit_flag,
         _ => false,
     }
 }
@@ -828,6 +1153,9 @@ fn can_attack(state: &StateData, s: &mut Pawn) -> bool {
 /// button during a combo, base form: an unused stock (Rising Spiral / Groundbreaker), a landed
 /// hit, a non-finisher step, the same windows as an attack request. Each stock once per chain.
 pub(crate) fn try_launch(state: &mut StateData, cx: &mut Ctx, target: TargetId) -> bool {
+    if !crate::nocombat::allows(crate::nocombat::Fighter::Sora, crate::nocombat::Act::Attack) {
+        return false; // (NOCOMBAT)
+    }
     let s = &mut *cx.pawn;
     let Some(cur) = state.attack_mut() else { return false };
     if s.combat.command_cooldown > 0.0 || !s.queue.nothing_queued() {
@@ -869,6 +1197,17 @@ fn traversal_attack(state: &StateData) -> Option<(u8, bool, Option<u8>, Option<f
 
 /// `TryAttack(target, 0)` (slot 45 0x141437330), spec 3.3. Returns whether the request was taken.
 pub(crate) fn try_attack(state: &mut StateData, cx: &mut Ctx, target: TargetId) -> bool {
+    // (NOCOMBAT) the no-combat rule: no attack request is taken (every form's, the XS forced ones, the guard counters)
+    if !crate::nocombat::allows(crate::nocombat::Fighter::Sora, crate::nocombat::Act::Attack) {
+        return false;
+    }
+    // (weapons P3, INT) the held form's own attack request (combat/forms: an F-package's `attack` hook; None = the normal one)
+    // (REVENGE) ... not while a host-asked BLADE counter waits (abilities/xs/counter.rs: the plain attack state plays it)
+    if !crate::abilities::xs::counter::skips_form(cx.pawn) {
+        if let Some(accepted) = crate::combat::forms::attack(state, cx, target) {
+            return accepted;
+        }
+    }
     // (XSI) The XS abilities' forced attacks (abilities/xs): Diving Strike out of a fall, Sonic Dash's launch.
     let xs = crate::abilities::xs::forced_attack(state, cx);
     let s = &mut *cx.pawn;
@@ -929,6 +1268,14 @@ pub(crate) fn try_attack(state: &mut StateData, cx: &mut Ctx, target: TargetId) 
         let next = Attack { combo: 0, air: !on_ground(s), target, forced_kind: forced, wall_run, hop, slope, ..Attack::RESET };
         s.combat.combo = 0;
         queue_attack(s, next, push);
+    } else if let StateData::WeaponChange(_) = state {
+        // (weapons P2) TryAttack case 32 (0x141437330, decompiled C): SetState(attack); combo = pawn+0xE18 + 1;
+        // +0x12C / +0x138 = pawn+0xE1C / +0xE20 (the counters the chain handed over); bAir = 1 (PreDecide recomputes
+        // it); the target.
+        let next = Attack { combo: s.combat.combo + 1, air: true, target, ..Attack::RESET };
+        s.combat.pass_on = s.combat.carry;
+        s.combat.combo = next.combo;
+        queue_attack(s, next, false);
     } else {
         // IDLE, RUN, JUMP, GUARD: SetState; RISKDODGE / AIR_SLIDE: PushState behind the state.
         // A new combo always starts at 0 (spec 3.3; the combo is not carried into or out of
@@ -939,8 +1286,15 @@ pub(crate) fn try_attack(state: &mut StateData, cx: &mut Ctx, target: TargetId) 
             Some((kind, t)) if forced_kind == 0 || kind == crate::abilities::xs::rage::RAGE_RAID => (t, kind),
             _ => (target, forced_kind),
         };
-        let next = Attack { combo: 0, air: !on_ground(s), target, forced_kind, just_guard, ..Attack::RESET };
-        s.combat.combo = 0;
+        // (weapons P2) IDLE / RUN / JUMP / GLIDE / FLOATING with the carry timer pawn+0x10E4 running (a Keyblade switch
+        // out of a hit combo: states/weapon_change.rs): combo = pawn+0xE18 + 1, the counters handed over (spec 3.3).
+        let carried = s.magic.combo_keep > 0.0 && matches!(state, StateData::Idle(_) | StateData::Run(_) | StateData::Jump(_) | StateData::Glide(_) | StateData::Floating(_));
+        let combo = if carried { s.combat.combo + 1 } else { 0 };
+        if carried {
+            s.combat.pass_on = s.combat.carry;
+        }
+        let next = Attack { combo, air: !on_ground(s), target, forced_kind, just_guard, ..Attack::RESET };
+        s.combat.combo = combo;
         queue_attack(s, next, push);
     }
     true
@@ -1007,7 +1361,8 @@ impl PlayerState for Attack {
             stocks: pawn.combat.stocks,
         };
         self.endless = input.endless;
-        let mut d = if self.limit { crate::combat::decide::decide_limit(&input, &abilities) } else { decide(&input, &abilities) };
+        // (F-LIGHTDARK) the Re Mind classes' Decide (0x141362300 / 0x1413606F0 / 0x141363CE0).
+        let mut d = if self.remind != 0 { self.remind_decide(&input, &abilities) } else if self.limit { crate::combat::decide::decide_limit(&input, &abilities) } else { decide(&input, &abilities) };
         // Rule 4 (0x14134AF5D, decompiled C; spec 4.2): the wall-run request (state+0x1EC bit 3) with
         // a keyblade (pawn vt+0x28B0: taken as true for the Kingdom Key): the kind by where the
         // target is. side (+0x1C8, TargetMetrics 0x141330D30) from the wall-run class (+0x1E4), his
@@ -1046,12 +1401,12 @@ impl PlayerState for Attack {
         // pawn+0x1464`): the unison / fusion request of the roll one step before (the bit is copied
         // into the pushed attack while pawn+0x1464 is set: TryAttack 0x141437ADA); then the roll of
         // this step (`if combo + 1 == max - 1: pawn.slot1304()`). combat/friend.rs.
-        if !self.launch && !self.limit && !cx.pawn.combat.sneeze_next && (self.combo > 0 || cx.pawn.combat.friend.leader_unison > 0.0) && cx.pawn.combat.friend.unison != 0 {
+        if !self.launch && !self.limit && self.remind == 0 && !cx.pawn.combat.sneeze_next && (self.combo > 0 || cx.pawn.combat.friend.leader_unison > 0.0) && cx.pawn.combat.friend.unison != 0 {
             // (D3) or on a friend leader's combo (the latch of FriendState::roll_leader_unison).
             cx.pawn.combat.friend.leader_unison = 0.0;
             let kind = crate::combat::friend::unison_attack_kind(cx.pawn.combat.friend.unison);
             d = crate::combat::decide::Decision { kind, finish: true, finish_end: true, finish_count: cx.pawn.combat.finish_count + 1, fixed_dir_z: None, ..d };
-        } else if !self.launch && !self.limit && self.combo + 1 == max - 1 {
+        } else if !self.launch && !self.limit && self.remind == 0 && self.combo + 1 == max - 1 {
             crate::combat::friend::unison_roll(cx);
         }
         let pawn = &mut *cx.pawn;
@@ -1062,11 +1417,11 @@ impl PlayerState for Attack {
         // FOURTH PASS: controller+0x920 is not "the status is on him": it is latched by PlayAttack's
         // tail (`sneeze_latch`) and by the cast's (0x1413794B0), cleared when the chain ends
         // (pawn slot 981 -> 0x14140DF30(ctrl, 0)).
-        if !self.launch && !self.limit && pawn.combat.sneeze_next {
+        if !self.launch && !self.limit && self.remind == 0 && pawn.combat.sneeze_next {
             d = crate::combat::decide::Decision { kind: 0x1E, finish: true, finish_end: true, finish_count: pawn.combat.finish_count + 1, fixed_dir_z: None, ..d };
         }
         // (XSI) The XS ground finishers (abilities/xs/finishers.rs): our choice after KH3's decision.
-        d.kind = crate::abilities::xs::finishers::refine(cx, d.kind, d.finish, d.air, self.limit, self.target);
+        d.kind = crate::abilities::xs::finishers::refine(cx, d.kind, d.finish, d.air, self.limit || self.remind != 0, self.target);
         let pawn = &mut *cx.pawn;
         // "if forcedKind(+0x1E8) != 0: ... kind = forcedKind" (spec 4.2, rule 29).
         if self.forced_kind != 0 {
@@ -1096,14 +1451,12 @@ impl PlayerState for Attack {
         // previous attack of the chain handed the armed chase over (its End, slot 113). PlayAttack
         // then only starts the warp countdown (slot 117 0x14134AA80, 0.2 s): the clip is played
         // when it runs out.
-        if std::mem::take(&mut pawn.combat.chase_next) {
-            self.kind = 0x22;
-            (self.warp_start, self.warp_delay) = (true, P.chase_warp_delay);
-            (pawn.combat.chase_armed, pawn.combat.revenge) = (false, TargetId::NONE);
-            pawn.combat.chases += 1;
-            crate::combat::situation::clear_reaction(cx, P.chase_command as i32);
-            self.sync_ctx(cx.pawn);
-            self.sub = 1;
+        // (AUDIT-B W-CORE) Begin's 0x80000 test comes after Decide, so the chase wins over a warp Decide asked for (Dark Break).
+        if self.chase_begin(cx) {
+            return;
+        }
+        // (F-LIGHTDARK) ComboDF's Dark Break: PlayAttack's head with +0x1E1 (the warp) first.
+        if self.remind != 0 && self.remind_warp_begin(cx) {
             return;
         }
         self.play_attack(cx);
@@ -1137,39 +1490,14 @@ impl PlayerState for Attack {
                 return;
             }
             self.warp_delay = 0.0;
-            if std::mem::take(&mut self.warp_start) {
-                if let Some(t) = self.target_info(cx) {
-                    let own = cx.pawn.cmc.location;
-                    let flat = (t.center - own) * Vec3::new(1.0, 1.0, 0.0);
-                    let dir = flat.normalize_or_zero();
-                    let beside = t.center - dir * P.chase_warp_distance;
-                    let to = beside - Vec3::Z * P.chase_warp_drop;
-                    let p = *cx.pawn.params();
-                    let (r, hh) = (p.capsule_radius, p.capsule_half_height);
-                    let centre = Vec3::Z * p.capsule_center_z;
-                    // Leg 1: from the target's point out to the side point; leg 2: down.
-                    let side = match cx.world.sweep_capsule(t.center, beside, r, r) {
-                        Some(hit) if !hit.start_penetrating => t.center + (beside - t.center) * hit.time.clamp(0.0, 1.0),
-                        _ => beside,
-                    };
-                    let down = Vec3::new(side.x, side.y, to.z);
-                    let end = match cx.world.sweep_capsule(side + centre, down + centre, r, hh) {
-                        Some(hit) if !hit.start_penetrating => side + (down - side) * hit.time.clamp(0.0, 1.0),
-                        Some(_) => side,
-                        None => down,
-                    };
-                    cx.pawn.cmc.location = end;
-                    cx.pawn.cmc.stop_movement();
-                    if dir != Vec3::ZERO {
-                        cx.pawn.yaw = wrap_degrees(dir.y.atan2(dir.x).to_degrees());
-                    }
-                }
-            }
+            self.warp_arrive(cx);
             self.play_attack(cx);
             return;
         }
         self.facing(cx, dt);
         self.traction(cx, dt);
+        // (AUDIT-A ARROWGUN) slot 131 (0x141341870): the stick steering of the kinds with +0x16C.
+        self.steering(cx, dt);
         // (XSI) The XS abilities' attacks: the dive's homing, the dash's timers (abilities/xs).
         crate::abilities::xs::attack_tick(cx, self.kind, dt);
         if let Some(name) = cx.pawn.combat.pending_shot.take() {
@@ -1186,7 +1514,10 @@ impl PlayerState for Attack {
             // (party stream D6b) The team finishers' actors are placed by their spawn rule (sheet
             // sora-combat-shots: slot 137 0x14134CCE0 / 138 0x14134C710); `origin` (vt+0x1410) is
             // where their SpawnFireEffects plays.
-            crate::combat::hit::spawn_shot(cx, name, origin, info);
+            // (F-LIGHTDARK) a Re Mind class's projectile (Dark Break's SCDF_DARKBREAK) from the form's projectile set.
+            if !(self.remind != 0 && crate::combat::forms::lightdark::spawn_pending(cx, self.remind, name, origin)) {
+                crate::combat::hit::spawn_shot(cx, name, origin, info);
+            }
         }
         // Sonic Cleave's hit (on-contact 0x14134208A, decompiled C): kind 0x37 with combo 0: the
         // first landed hit sets both shot bits and calls the shot handler.
@@ -1205,7 +1536,8 @@ impl PlayerState for Attack {
                 s.cmc.set_falling();
             }
         }
-        if s.anim.ended || (s.queue.flags.enable_change && self.next_queued) {
+        // (weapons P2) ... or a Keyblade switch queued behind it (PushState(32): "a state is queued").
+        if s.anim.ended || (s.queue.flags.enable_change && (self.next_queued || s.queue.queued_id() == Some(StateId::Weaponchange))) {
             s.queue.do_chain();
             return;
         }
@@ -1233,6 +1565,19 @@ impl PlayerState for Attack {
 
     /// `End` (0x141335120): its call list (spec 5), unconditionally.
     fn end(&mut self, cx: &mut Ctx) {
+        // (AUDIT-B W-CORE) End 0x141335120 line 72: "if +0x1E1: vt+0x1A0(m_CmnAuraEffect, +0x22C + 1, 0)" (a warp left before
+        // it reappeared), and line 233's vt+0x2068(0) for the warp head's invincibility.
+        if let Some(group) = self.warp_aura_end.take() {
+            cmn_aura(cx, group);
+        }
+        if std::mem::take(&mut self.warp_invincible) {
+            cx.pawn.status.damage_invalid = false;
+        }
+        // (F-LOCO) End 0x141335120: with +0x1F4 bit 5, Turn((0, the actor's yaw, its roll), 1.0) and the bit cleared.
+        if std::mem::take(&mut self.pitched) {
+            let yaw = cx.pawn.yaw;
+            turn_to(cx.pawn, 0.0, yaw, 1.0);
+        }
         // (XSI) The XS abilities' attacks (abilities/xs).
         crate::abilities::xs::attack_end(cx, self.kind);
         // `if ctrl && kind in {0x28..0x2B, 0x36..0x39, 0x3F..0x43, 0xD0}: 0x14140DF20(ctrl, 0, 0, 0, 0)`.
@@ -1254,7 +1599,17 @@ impl PlayerState for Attack {
         s.cmc.gravity_off = false;
         s.cmc.direct_xy = None;
         s.cmc.direct_z = None;
-        if on_ground(s) {
+        // (AUDIT-A ARROWGUN) End's vt+0x1648: the MaxAcceleration the steering (+0x16C) replaced goes back.
+        if self.steer {
+            s.cmc.max_acceleration = self.steer_accel;
+        }
+        if on_ground(s) && self.steer {
+            // (AUDIT-A ARROWGUN) End 0x141335120's +0x16C branch: on the ground SetMovementMode(Falling) with the velocity kept
+            // (the steered glide runs out under the movement; as combo_wa.rs's End).
+            let velocity = s.cmc.velocity;
+            s.cmc.set_falling();
+            s.cmc.velocity = velocity;
+        } else if on_ground(s) {
             // SetMovementMode(Walking, bStop): Velocity = 0 (an air-mode attack that ended on the
             // floor: Falling with the same stop; the movement lands him again next tick).
             s.cmc.stop_movement();
@@ -1263,12 +1618,20 @@ impl PlayerState for Attack {
             if s.cmc.is_flying() {
                 s.cmc.set_falling();
             }
-            if landed_hit {
+            if self.air_end_plain {
+                // (AUDIT-C LD) 0x141335120: +0x234 bit 13: no vt+0x1E18 / +0x1E28, +0x18C = 0.
+                self.air_hold = 0.0;
+            } else if landed_hit {
                 self.air_hold = 0.0;
             } else {
                 s.combat.air_slide_cooldown = 0.6;
                 s.combat.air_guard_cooldown = 0.3333;
             }
+        }
+        // (AUDIT-C LD) End 0x141335120: `if (+0x234 & 0x800) 0x1405B6100(pawn+0x460)`.
+        // (AUDIT-B W-CORE) ... = his push power level back to the base parameter's (m_pBaseParam+0x98).
+        if std::mem::take(&mut self.push_restore) {
+            s.actions.push_level = None;
         }
         s.cmc.gravity_scale = p.gravity_scale;
         s.root_scale = (1.0, 1.0);
@@ -1276,7 +1639,13 @@ impl PlayerState for Attack {
         let counters = if landed_hit { (self.counters[0], self.counters[3]) } else { (0, 0) };
         match s.queue.queued_id() {
             // (magic implementer) FIREMAGIC (18) takes the same two counters (Magic+0xB8 / +0xC4).
-            Some(StateId::Attack) | Some(StateId::ComboLimit) | Some(StateId::Firemagic) => {
+            // (weapons P2) 32 WEAPONCHANGE (End 0x141335120, as 162): the counters go to the pawn (pawn+0xE1C / +0xE20)
+            // and the chain does not end: the switch carries the combo (states/weapon_change.rs).
+            Some(StateId::Weaponchange) => {
+                s.combat.carry = counters;
+            }
+            // (F-ARROWGUN) and the gun forms' attack classes (KH3: any attack class continues the chain)
+            Some(StateId::Attack) | Some(StateId::ComboLimit) | Some(StateId::Firemagic) | Some(StateId::ComboLf) | Some(StateId::ComboDf) | Some(StateId::ComboTf) /* (F-LIGHTDARK) */ | Some(StateId::ComboDw) | Some(StateId::ComboBz) | Some(StateId::ComboCl) | Some(StateId::ComboYo) | Some(StateId::ComboSk) /* (F-CLAWS) */ | Some(StateId::ComboHl) | Some(StateId::ComboFl) /* (F-SHIP) */ | Some(StateId::ComboSw) /* (F-ULTIMATE) */ => {
                 s.combat.pass_on = counters;
                 // "if slot113(): next+0x234 |= 0x80000" (End 0x141335120; spec 5.4, 5.6.4): the armed
                 // chase goes to the next attack of the chain (the caller re-tests the revenge
@@ -1300,7 +1669,7 @@ impl PlayerState for Attack {
                     combat.command_cooldown = 0.6;
                     combat.lockon.attack_target = TargetId::NONE;
                 }
-                combat.carry = if landed_hit && !(self.air_hold > 0.0) { (self.counters[0], self.counters[3]) } else { (0, 0) };
+                combat.carry = if landed_hit && self.air_hold.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) { (self.counters[0], self.counters[3]) } else { (0, 0) };
                 (combat.revenge, combat.chase_armed, combat.chase_next) = (TargetId::NONE, false, false);
             }
         }
@@ -1318,19 +1687,7 @@ impl PlayerState for Attack {
                 (NotifyClass::TresAnimNotifyStateAttack, NotifyPhase::Begin) => {
                     self.swing_started = true;
                     self.keep_face = false;
-                    // Slot 115 (0x141332790; strand A 6.4): +0x12C and +0x138 += max(m_ComboCountUpParam,
-                    // 1). +0x12C only when pawn vt+0x1D20(row is magic) says so (0x1405AD380, verdict
-                    // same): a physical row not while the MP charge runs with CHARGE_BERSERK (178), a
-                    // magic row not with ENDLESS_MAGIC (82): the damage step of the combo boosts
-                    // then stands still.
-                    let magic_row = matches!(event.def().data, crate::anim::NotifyData::Attack { row, .. } if crate::combat::tables::attack_row(row).is_some_and(|(_, r)| r.magic));
-                    let status = &cx.pawn.status;
-                    use crate::enums::ETresAbilityKind as Ab;
-                    let frozen = if magic_row { status.abilities.has(Ab::EndlessMagic) } else { status.abilities.has(Ab::ChargeBerserk) && status.mp_charging };
-                    if !frozen {
-                        self.counters[0] += 1;
-                    }
-                    self.counters[3] += 1;
+                    self.count_window(cx.pawn, event); // (F-SECOND) slot 115, shared with STYLEFINISH
                 }
                 (NotifyClass::TresAnimNotifyEnableInput, NotifyPhase::Instant) => self.enable_input = true,
                 (NotifyClass::TresAnimNotifyStateTraction, NotifyPhase::Begin) => self.enable_traction = true,
@@ -1370,10 +1727,7 @@ pub struct AttackView {
 }
 
 pub(crate) fn view(state: &StateData) -> Option<AttackView> {
-    match state.attack() {
-        Some(a) => Some(AttackView { kind: a.kind, combo: a.combo, air: a.air, target: a.target, finish: a.finish, finish_end: a.finish_end, swing_started: a.swing_started, enable_input: a.enable_input, enable_traction: a.enable_traction, next_queued: a.next_queued, dist: a.dist, dz: a.dz, reach: a.reach, rush: a.rush }),
-        None => None,
-    }
+    state.attack().map(|a| AttackView { kind: a.kind, combo: a.combo, air: a.air, target: a.target, finish: a.finish, finish_end: a.finish_end, swing_started: a.swing_started, enable_input: a.enable_input, enable_traction: a.enable_traction, next_queued: a.next_queued, dist: a.dist, dz: a.dz, reach: a.reach, rush: a.rush })
 }
 
 /// Slot 129 (0x141331AF0; spec 5.6.3): a swing that was repelled (the on-contact handler left a
@@ -1402,4 +1756,98 @@ pub(super) fn recoil(cx: &mut Ctx) -> bool {
     super::reflect::request(cx, causer, position, Vec3::ZERO, false);
     cx.pawn.queue.do_chain();
     true
+}
+
+/// (F-CLAWS) THE WARP POINT, shared by every attack that warps (Final Blow's chase 0x22, Anchor Shot 0x96: KH3 runs both
+/// through slot 136). Slot 136 (Attack 0x141337320; ComboYO's 0x141337890 forces the drop to 100), the straight mode of kinds
+/// 0x22 / 0x96: the line test 0x141431630 ("Warp": FCollisionShape Line, trace channel 2, responses Block for WorldStatic,
+/// WorldDynamic and channel 18 = TresGimmick only (DefaultEngine.ini), so a pawn's body never blocks; his own actor ignored)
+/// from his warp start (pawn vt+0x2110 0x141448550: his root + 100 up) to the target's lock point. Blocked by the level:
+/// that hit. Clear: a second test from the point `dist` short of the lock point on the line from him, straight down `drop`.
+/// The point is always on HIS side of the first wall between them.
+pub(crate) fn warp_point(cx: &Ctx, t: &crate::host::TargetInfo, dist: f32, drop: f32) -> Vec3 {
+    let own = cx.pawn.cmc.location;
+    let start = own + Vec3::Z * 100.0;
+    match warp_test(cx, start, t.center) {
+        Err(at) => at,
+        Ok(_) => {
+            let dir = ((t.center - own) * Vec3::new(1.0, 1.0, 0.0)).normalize_or_zero();
+            let side = t.center - dir * dist;
+            match warp_test(cx, side, side - Vec3::Z * drop) {
+                Ok(at) | Err(at) => at,
+            }
+        }
+    }
+}
+
+/// (F-CLAWS) 0x141431630: the first blocking hit of the level from `start` to `end` gives Err(its location - 60 up, then 1 cm
+/// toward the start's height: the function's z nudge); no hit gives Ok(end).
+pub(crate) fn warp_test(cx: &Ctx, start: Vec3, end: Vec3) -> Result<Vec3, Vec3> {
+    let Some(hit) = cx.world.line_trace(start, end).filter(|h| !h.start_penetrating) else { return Ok(end) };
+    let z = hit.position.z - 60.0;
+    let z = if z < start.z { z + 1.0 } else if z > start.z { z - 1.0 } else { z };
+    Err(Vec3::new(hit.position.x, hit.position.y, z))
+}
+
+/// (F-CLAWS) The port's guard on the warp. KH3 sets the actor at the point unswept (FUN_143EAC3D0, bSweep 0) and the movement
+/// component then pushes him out of what he overlaps (the point can lie 59 cm under a floor the second test met). Here his
+/// capsule is swept there: up (or level) to the higher of the two heights + 2 cm, across, then down, each leg stopping at
+/// its first contact, so he can never end inside or beyond the level.
+pub(crate) fn swept_warp(cx: &Ctx, to: Vec3) -> Vec3 {
+    let p = *cx.pawn.params();
+    let centre = Vec3::Z * p.capsule_center_z;
+    let leg = |from: Vec3, to: Vec3| match cx.world.sweep_capsule(from + centre, to + centre, p.capsule_radius, p.capsule_half_height) {
+        Some(hit) if hit.start_penetrating => from,
+        Some(hit) => from + (to - from) * hit.time.clamp(0.0, 1.0),
+        None => to,
+    };
+    let from = cx.pawn.cmc.location;
+    let high = from.z.max(to.z) + 2.0;
+    let up = leg(from, Vec3::new(from.x, from.y, high));
+    let across = leg(up, Vec3::new(to.x, to.y, up.z));
+    leg(across, Vec3::new(across.x, across.y, to.z))
+}
+
+// (F-CLAWS) the warp against the level (Final Blow's chase, Anchor Shot): slot 136's line tests from him, then the port's
+// swept placement.
+#[cfg(test)]
+mod warp_tests {
+    use super::*;
+    use crate::anim::{AnimId, AnimPlayer};
+    use crate::cmc::Cmc;
+    use crate::host::{NullHost, TargetFlags, TargetInfo};
+    use crate::params::SORA_PARAMS;
+    use crate::test_world::TestWorld;
+
+    fn target(x: f32) -> TargetInfo {
+        TargetInfo { id: TargetId(1), position: Vec3::new(x, 0.0, 0.0), center: Vec3::new(x, 0.0, 90.0), velocity: Vec3::ZERO, yaw: 180.0, radius: 40.0, half_height: 90.0, flags: TargetFlags(TargetFlags::ALIVE | TargetFlags::LOCKABLE), hp: 1.0, hp_max: 1.0 }
+    }
+
+    #[test]
+    fn the_warp_point_and_its_placement_stay_on_his_side_of_a_wall() {
+        let at = Vec3::new(0.0, 0.0, crate::sora::Sora::origin_height_on_floor(&SORA_PARAMS));
+        let mut p = Pawn::new(SORA_PARAMS, Cmc::new(&SORA_PARAMS, at), 0.0, AnimPlayer::new(AnimId::IdleN));
+        let mut null = NullHost::default();
+        // open floor: a pawn's body does not block the Warp test: 150 short of the lock point, placed on the floor
+        let open = TestWorld::floor();
+        {
+            let mut host = null.host(&open);
+            let cx = Ctx::new(&mut p, &mut host);
+            let w = warp_point(&cx, &target(700.0), 150.0, 100.0);
+            assert!((w.x - 550.0).abs() < 0.5, "{w:?}");
+            let placed = swept_warp(&cx, w);
+            assert!((placed.x - 550.0).abs() < 0.5 && placed.z > at.z - 5.0 && placed.z < at.z + 5.0, "on the floor (his capsule resting on it), not 59 cm under it: {placed:?}");
+        }
+        // a wall between them (x 400 .. 450): the point is on the wall's face, his placement stops before it
+        let walled = TestWorld::floor().with_box(Vec3::new(400.0, -1000.0, -10.0), Vec3::new(450.0, 1000.0, 800.0));
+        let mut host = null.host(&walled);
+        let cx = Ctx::new(&mut p, &mut host);
+        let w = warp_point(&cx, &target(700.0), 150.0, 100.0);
+        assert!(w.x <= 400.5, "{w:?}");
+        let placed = swept_warp(&cx, w);
+        assert!(placed.x <= 400.5 - SORA_PARAMS.capsule_radius, "{placed:?}");
+        // a point beyond the wall (as target-side legs could give): the placement still stops before it
+        let placed = swept_warp(&cx, Vec3::new(600.0, 0.0, at.z));
+        assert!(placed.x <= 400.5 - SORA_PARAMS.capsule_radius, "{placed:?}");
+    }
 }

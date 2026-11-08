@@ -32,6 +32,17 @@ const BUTTON_BITS: [(u16, PadButton); 14] = [
     (0x8000, PadButton::FaceTop),
 ];
 
+/// (CAMP-OPTIONS) A pad's buttons as they are (no table): the bits, the triggers as buttons above 30.
+pub fn buttons_of(pad: &windows_sys::Win32::UI::Input::XboxController::XINPUT_GAMEPAD) -> PadButtons {
+    let mut buttons = PadButtons::NONE;
+    for (bit, button) in BUTTON_BITS {
+        buttons.set(button, pad.wButtons & bit != 0);
+    }
+    buttons.set(PadButton::LeftTrigger, pad.bLeftTrigger > 30);
+    buttons.set(PadButton::RightTrigger, pad.bRightTrigger > 30);
+    buttons
+}
+
 /// UE 4.17 `ShortToNormalizedFloat`.
 pub fn short_to_float(value: i16) -> f32 {
     let norm = if value <= 0 { 32768.0 } else { 32767.0 };
@@ -69,16 +80,10 @@ impl Reader {
             }
         }
         let pad = found?.Gamepad;
-        let mut buttons = PadButtons::NONE;
-        for (bit, button) in BUTTON_BITS {
-            buttons.set(button, pad.wButtons & bit != 0);
-        }
-        buttons.set(PadButton::LeftTrigger, pad.bLeftTrigger > 30);
-        buttons.set(PadButton::RightTrigger, pad.bRightTrigger > 30);
-        Some(Pad {
-            left: Vec2::new(short_to_float(pad.sThumbLX), short_to_float(pad.sThumbLY)),
-            right: Vec2::new(short_to_float(pad.sThumbRX), short_to_float(pad.sThumbRY)),
-            buttons,
-        })
+        // (CAMP-OPTIONS) the controller's button table (remap_er.rs), before any KH logic
+        let buttons = crate::remap_er::pad(buttons_of(&pad));
+        let (left, right) = (Vec2::new(short_to_float(pad.sThumbLX), short_to_float(pad.sThumbLY)), Vec2::new(short_to_float(pad.sThumbRX), short_to_float(pad.sThumbRY)));
+        crate::button_icons_er::pad_read(buttons != PadButtons::NONE, left, right); // (BUTTON-ICONS) the device used last
+        Some(Pad { left, right, buttons })
     }
 }

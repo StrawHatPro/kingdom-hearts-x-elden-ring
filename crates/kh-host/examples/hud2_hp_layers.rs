@@ -9,7 +9,7 @@ use std::io::Write as _;
 
 use kh_core::{PadButtons, Sora, TargetId, Vec3};
 use kh_host::hud::{Frame, Hud, HudTargets, TargetView};
-use kh_host::hud_layers::{draw_movie_in, stage_root, Draw, Drawn, Perf};
+use kh_host::hud_layers::{draw_movie_in, stage_root, Draw, DrawArea, Drawn, Perf};
 use kh_host::party::{PartyChara, PartyHudSlot};
 
 struct NoTargets;
@@ -77,9 +77,9 @@ fn main() {
         };
         hud.frame(&mut Frame { snapshot: &snapshot, sora: &sora, events: &[], state: kh_core::StateId::Idle, step_dt: 1.0 / 60.0, play_seconds: 0, targets: &NoTargets, to_view: same, view: None, words: &[], dt: ticks as f32 / 60.0, ticks, pressed: PadButtons::NONE, nav: Vec::new() });
         let movie = hud.movie("HudStatus").expect("HudStatus");
-        let drawn = draw_movie_in(&mut kept, &mut r_kept, movie, &stage, (w, h), frame == 0, perf, Some(view));
+        let drawn = draw_movie_in(&mut kept, &mut r_kept, movie, &stage, DrawArea { size: (w, h), clip: Some(view) }, frame == 0, perf);
         let mut whole = Draw::default();
-        let full = draw_movie_in(&mut whole, &mut r_whole, movie, &stage, (w, h), true, Perf::default(), Some(view));
+        let full = draw_movie_in(&mut whole, &mut r_whole, movie, &stage, DrawArea { size: (w, h), clip: Some(view) }, true, Perf::default());
         let what = match &drawn {
             Drawn::Picture(_, Some(d)) => format!("part {}x{}", d.2, d.3),
             Drawn::Picture(_, None) => "whole".into(),

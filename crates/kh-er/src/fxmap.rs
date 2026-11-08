@@ -18,6 +18,9 @@ pub struct FxParams {
     pub volume_db: f32,
     /// (IMPL_ER14) `sound.ui_gain_db`: the menus' own sounds are played this much louder than authored (`snd.ui_gain` overrides).
     pub ui_gain_db: f32,
+    /// (THE USER 2026-11-02: "...shotlock's startup sfx is way too loud") `sound.ui_peak_ceiling`: `ui_gain_db` raises a HUD
+    /// sound only until its authored peak reaches this (linear, full scale 1; never below KH3's level; `snd.ui_peak` overrides).
+    pub ui_peak_ceiling: f32,
     /// What KH3's scene-linear 1.0 of an EFFECT becomes in Elden Ring's HDR scene target
     /// (`vfx.hdr` overrides).
     pub vfx_hdr_scale: f32,
@@ -30,10 +33,12 @@ pub struct FxParams {
 
 /// The built-in value of sheet row `sound.ui_gain_db` (the title mode has no sheet read yet).
 pub const UI_GAIN_DB: f32 = 12.0;
+/// (THE USER 2026-11-02) The built-in value of sheet row `sound.ui_peak_ceiling` (the title mode has no sheet read yet).
+pub const UI_PEAK_CEILING: f32 = 0.8;
 
 impl Default for FxParams {
     fn default() -> FxParams {
-        FxParams { surfaces: Vec::new(), surface_default: 0, volume_db: -6.0, ui_gain_db: UI_GAIN_DB, vfx_hdr_scale: 1.0, slash_follow: true, light: kh_er_render::pointlight::LightSettings::default() }
+        FxParams { surfaces: Vec::new(), surface_default: 0, volume_db: -6.0, ui_gain_db: UI_GAIN_DB, ui_peak_ceiling: UI_PEAK_CEILING, vfx_hdr_scale: 1.0, slash_follow: true, light: kh_er_render::pointlight::LightSettings::default() }
     }
 }
 
@@ -55,6 +60,7 @@ impl FxParams {
                 ("surface.default", Some(v)) if v >= 0.0 => p.surface_default = v as u32,
                 ("sound.volume_db", Some(v)) => p.volume_db = v,
                 ("sound.ui_gain_db", Some(v)) if (-24.0..=24.0).contains(&v) => p.ui_gain_db = v,
+                ("sound.ui_peak_ceiling", Some(v)) if (0.05..=1.0).contains(&v) => p.ui_peak_ceiling = v, // (THE USER 2026-11-02)
                 ("vfx.hdr_scale", Some(v)) if v > 0.0 => p.vfx_hdr_scale = v,
                 ("vfx.slash_follow", Some(v)) => p.slash_follow = v != 0.0,
                 // (IMPL_ER39) the light pass
@@ -157,6 +163,8 @@ mod tests {
         let (p, problems) = FxParams::from_sheet(&text).unwrap();
         assert!(problems.is_empty(), "{problems:?}");
         assert!(p.surfaces.len() >= 5 && p.volume_db <= 0.0);
+        // (THE USER 2026-11-02) the HUD sounds' ceiling: Sora's own combat peak
+        assert_eq!(p.ui_peak_ceiling, UI_PEAK_CEILING);
         // Sand is sand, water is one of KH3's water surfaces.
         assert_eq!(p.surface(3), Some(4));
         assert!(matches!(p.surface(21), Some(32..=37)));

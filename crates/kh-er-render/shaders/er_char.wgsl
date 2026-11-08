@@ -79,7 +79,7 @@ struct ErFrame {
 #ifdef KH_BLOOD
     // (IMPL_ER60) THE BLOOD ON HIM (src/blood.rs `block`; only the *_bl variants declare it, and they are always built
     // WITH KH_EXTRA_LIGHTS, so it follows the lights' block). bl_head: x on the body, y on the Keyblade (0..1),
-    // z fresh (1 wet red .. 0 dried brown), w the splatter's seed; bl_feet: his feet (game space, cm) + his height;
+    // z fresh (1 wet .. 0 dried: the gloss only, BLOOD-RED), w the splatter's seed; bl_feet: his feet (game space, cm) + his height;
     // bl_hand_l / bl_hand_r: the hands + their reach (cm, 0 = none); bl_blade_a / bl_blade_b: grip and tip of the
     // Keyblade + its reach (cm, 0 = not out).
     bl_head: vec4<f32>,
@@ -156,6 +156,25 @@ fn er_camfade_keep(position: vec2<f32>) -> bool {
     return (f32(cell) + 0.5) / 16.0 < f32(kept) / 6.0;
 }
 
+// (ER-NATIVE) THE CAPTURE'S NATIVE LAYOUT with the game's specular (block row 3.y = -2, hycap writes it, the *_hy3 shaders read it):
+// light = (the game's diffuse light on a white surface, rgb; the specular's blue), geo = (the unit normal octahedral + 2 (x, y: a
+// cleared texel reads 0 = not captured), the specular's red and green). Every other mode keeps (light, occlusion) / (normal, sun).
+fn er_oct_encode(n: vec3<f32>) -> vec2<f32> {
+    let a = n / max(abs(n.x) + abs(n.y) + abs(n.z), 1.0e-6);
+    if (a.z >= 0.0) {
+        return a.xy;
+    }
+    return (vec2<f32>(1.0) - abs(a.yx)) * select(vec2<f32>(-1.0), vec2<f32>(1.0), a.xy >= vec2<f32>(0.0));
+}
+
+fn er_oct_decode(e: vec2<f32>) -> vec3<f32> {
+    var n = vec3<f32>(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    let t = max(-n.z, 0.0);
+    n.x += select(t, -t, n.x >= 0.0);
+    n.y += select(t, -t, n.y >= 0.0);
+    return normalize(n);
+}
+
 #ifdef ER_FRAGMENT
 @group(0) @binding(1) var<uniform> kh: KhParams;
 @group(1) @binding(0) var kh_t0: texture_2d<f32>;
@@ -205,11 +224,11 @@ struct VsIn {
 struct VsOut {
     @builtin(position) position: vec4<f32>,
     @location(0) @interpolate(perspective, sample) world: vec3<f32>,
-    @location(1) @interpolate(perspective, sample) normal: vec3<f32>,
+    @location(1) @interpolate(perspective, sample) normal: vec4<f32>,
     @location(2) @interpolate(perspective, sample) tangent: vec4<f32>,
     @location(3) @interpolate(perspective, sample) uv0: vec2<f32>,
     @location(4) @interpolate(perspective, sample) uv1: vec2<f32>,
-    @location(5) @interpolate(perspective, sample) uv2: vec2<f32>,
+    @location(5) @interpolate(perspective, sample) uv2: vec4<f32>,
     @location(6) @interpolate(perspective, sample) view_z: f32,
     @location(7) @interpolate(perspective, sample) cur: vec4<f32>,
     @location(8) @interpolate(perspective, sample) prev: vec4<f32>,
@@ -222,11 +241,16 @@ struct VsOut {
     @builtin(position) position: vec4<f32>,
     // World position, game space (cm).
     @location(0) world: vec3<f32>,
-    @location(1) normal: vec3<f32>,
+    // (BLOOD-RED, the user 2026-11-07: "make sure blood is not mirrored, it should look natural") normal.w and uv2.zw carry the
+    // vertex's REST-POSE position (the mesh's own bind space, game axes, cm: uv2.z, uv2.w, normal.w): the blood pattern is laid
+    // in it (kh_blood), unique over the body (KH3's UVs mirror the left and right halves and repeat islands), stuck to the
+    // skin, never swimming. Carried in the free components of two existing interpolants, so the interface keeps its registers:
+    // a pixel stage built before reads xyz / xy of the same registers and still links to this vertex stage.
+    @location(1) normal: vec4<f32>,
     @location(2) tangent: vec4<f32>,
     @location(3) uv0: vec2<f32>,
     @location(4) uv1: vec2<f32>,
-    @location(5) uv2: vec2<f32>,
+    @location(5) uv2: vec4<f32>,
     // View depth (m).
     @location(6) view_z: f32,
     // His clip position now and a frame ago (the game's own matrices: its jitter cancels out), for
@@ -315,6 +339,116 @@ fn blob_ps(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
         thrown = er_thrown(p, normalize(er.key_dir.xyz)) * er.blob_fade.w * lit;
     }
     return vec4<f32>(vec3<f32>((1.0 - s) * (1.0 - thrown)), 1.0);
+}
+#endif
+
+#ifdef ER_MIMIC_POOL
+// (MIMIC SORA, THE USER 2026-11-03: the Mimic Tear's arrival and its dissolve) THE LIQUID-SILVER POOL at his feet (mmpool.vs /
+// mmpool.ps, kh-shaderc `--only mimicpool`), written into the game's G-buffer with its own depth, so the game's light passes and
+// reflection probes shade it as they shade metal. (The coordinator's polish round 2026-11-03, after the in-game strips: "the pool
+// reads as a flat WHITE blob ... darker reflective metal that mirrors the surroundings, moving ripples, a SOFT EDGE into the
+// ground") A DARK CHROME MIRROR (kh-er-render src/mimic.rs MimicLook: OUR numbers, the host's r.mimic_pool_* keys), its normal
+// rippled by an outward ring and two crossing trains on the game clock (er.camera.w), its rim broken up into the ground over the
+// soft edge by a still world-space noise (no blending in a G-buffer writer: the game's TAA softens what is left), thinner and its
+// normal bent outward and down toward the rim (the meniscus). The CPU twin: MimicLook::pool_at (the tests, the offline picture).
+// The block, in the SKIN's slot (b2: the root parameter the vertex stage sees; the material's b1 is the pixel stage's), handed on
+// to the pixel stage flat: column [0] its centre (game space, cm) + its radius (cm); [1] the lift over the ground (cm), the rim's
+// ripple, the soft edge's share, the meniscus; [2] albedo (linear), gloss, ripple strength, ripple wavelength (cm); [3] x speed.
+struct MmPoolOut {
+    @builtin(position) position: vec4<f32>,
+    // the disc's own coordinates (-1 .. 1); the point from its centre (game cm)
+    @location(0) local: vec2<f32>,
+    @location(1) rel: vec2<f32>,
+    @location(2) @interpolate(flat) shape: vec4<f32>,
+    @location(3) @interpolate(flat) look: vec4<f32>,
+    @location(4) @interpolate(flat) motion: vec4<f32>,
+}
+
+@vertex
+fn mmpool_vs(@builtin(vertex_index) index: u32) -> MmPoolOut {
+    // two triangles over the disc's square
+    let corners = array<vec2<f32>, 6>(vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0));
+    let c = corners[index % 6u];
+    let at = sk.game_from_pack[0];
+    let shape = sk.game_from_pack[1];
+    let world = at.xyz + vec3<f32>(c * at.w, shape.x);
+    var o: MmPoolOut;
+    o.position = er.clip_from_game * vec4<f32>(world, 1.0);
+    o.local = c;
+    o.rel = c * at.w;
+    o.shape = shape;
+    o.look = sk.game_from_pack[2];
+    o.motion = sk.game_from_pack[3];
+    return o;
+}
+
+struct MmPoolGbuf {
+    @location(0) normal: vec4<f32>,
+    @location(1) params: vec4<f32>,
+    @location(2) albedo: vec4<f32>,
+    @location(3) sss: vec4<f32>,
+    @location(4) emissive: vec4<f32>,
+}
+
+// the soft edge's noise (src/mimic.rs pool_noise: the same hash and blend), its cell (cm: POOL_NOISE_CM)
+const MMPOOL_NOISE_CM: f32 = 3.0;
+
+fn mmpool_hash(q: vec2<f32>) -> f32 {
+    return abs(fract(sin(dot(q, vec2<f32>(127.1, 311.7))) * 43758.547));
+}
+
+fn mmpool_noise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = p - i;
+    let u = f * f * (vec2<f32>(3.0) - f * 2.0);
+    let a = mmpool_hash(i);
+    let b = mmpool_hash(i + vec2<f32>(1.0, 0.0));
+    let c = mmpool_hash(i + vec2<f32>(0.0, 1.0));
+    let d = mmpool_hash(i + vec2<f32>(1.0, 1.0));
+    return a + (b - a) * u.x + (c - a) * u.y + (a - b - c + d) * u.x * u.y;
+}
+
+@fragment
+fn mmpool_ps(in: MmPoolOut) -> MmPoolGbuf {
+    // a round pool with a slightly rippled rim
+    let a = atan2(in.local.y, in.local.x);
+    let rim = 1.0 - in.shape.y * (0.5 + 0.5 * sin(a * 7.0 + 1.3) * sin(a * 3.0));
+    let d = length(in.local) / rim;
+    if (d > 1.0) {
+        discard;
+    }
+    // the soft edge: broken up into the ground toward the rim
+    let edge = in.shape.z;
+    var e = 0.0;
+    if (edge > 0.0) {
+        e = clamp((d - (1.0 - edge)) / edge, 0.0, 1.0);
+    }
+    if (e > 0.0 && mmpool_noise(in.rel / MMPOOL_NOISE_CM) < e) {
+        discard;
+    }
+    // the ripples: one ring running outward and two crossing trains, their slopes (the game clock: er.camera.w)
+    let time = er.camera.w;
+    let k = 6.2831853 / max(in.look.w, 1.0);
+    let w = k * in.motion.x;
+    let r = max(length(in.rel), 0.001);
+    let out = in.rel / r;
+    var grad = out * cos(k * r - w * time);
+    let d1 = vec2<f32>(0.8, 0.6);
+    let d2 = vec2<f32>(-0.42, 0.91);
+    grad += d1 * (cos(k * 0.7 * dot(in.rel, d1) - w * 0.7 * time + 1.7) * 0.6);
+    grad += d2 * (cos(k * 1.3 * dot(in.rel, d2) - w * 1.3 * time + 1.7) * 0.4);
+    var n = vec3<f32>(-grad * in.look.z * 0.5, 1.0);
+    // the meniscus: the normal bends outward and down toward the rim
+    n += vec3<f32>(out * (in.shape.w * e), 0.0);
+    let n_host = normalize((er.host_from_game * vec4<f32>(normalize(n), 0.0)).xyz);
+    var o: MmPoolGbuf;
+    o.normal = vec4<f32>(n_host * 0.5 + vec3<f32>(0.5), 0.0);
+    // metal (WetAspectParam 18's metallic 255 at 1.0), the liquid's own gloss and albedo, thinner toward the rim
+    o.params = vec4<f32>(1.0, in.look.y * (1.0 - 0.3 * e), 0.0, 1.0);
+    o.albedo = vec4<f32>(vec3<f32>(in.look.x * (1.0 - 0.4 * e)), er.hy[3].w);
+    o.sss = vec4<f32>(0.0);
+    o.emissive = vec4<f32>(0.0);
+    return o;
 }
 #endif
 
@@ -553,7 +687,16 @@ fn dump_ps(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
 
 // (RSF2, probe4.ps.dxil) A probe tap that lands on a KH character drawn into the game's G-buffer (the hybrid writes his albedo
 // as exact WHITE, every KH character alike) measures the light on his body, not on the ground around his feet: it is left out.
-// Without ER_PROBE_SKIP_KH (probe / probe2 / probe3) every tap counts as before.
+// Without ER_PROBE_SKIP_KH (probe / probe2 / probe3) every tap counts as before. (Outside the ring block: `probe_ps` uses it in
+// every probe variant, so a build without ER_PROBE_RING must still see it; kh-shaderc failed on every character folder.)
+// (VIEWLIGHT, 2026-11-03, Roundtable Hold's east corridor: the probes at Sora's feet found no surface on its red carpet) A tap is
+// on a readable surface when its colour is not black (luminance above 0.02). It was "every channel above 0.02": a deeply coloured
+// surface (the carpet: blue near 0) was dropped whole, the probes read nothing there and the light level ran away. The host
+// divides channel by channel only where the channel itself is readable (light.rs ground_light).
+fn er_tap_colour(albedo: vec3<f32>) -> bool {
+    return dot(albedo, vec3<f32>(0.2126, 0.7152, 0.0722)) > 0.02;
+}
+
 fn er_kh_texel(albedo: vec3<f32>) -> bool {
 #ifdef ER_PROBE_SKIP_KH
     return min(albedo.x, min(albedo.y, albedo.z)) > 0.996;
@@ -574,7 +717,6 @@ fn ring_tap(k: u32) -> vec3<f32> {
     let r = select(120.0, 250.0, k >= 12u);
     return er.blob.xyz + vec3<f32>(cos(a), sin(a), 0.0) * r;
 }
-
 
 fn ring_probe(which: u32) -> vec4<f32> {
     let k = select(which - 16u, which - 40u, which >= 40u);
@@ -603,11 +745,11 @@ fn ring_probe(which: u32) -> vec4<f32> {
         return vec4<f32>(q - er.blob.xyz, 1.0);
     }
     let albedo = textureLoad(er_talbedo, texel, 0).xyz;
-    if (min(albedo.x, min(albedo.y, albedo.z)) <= 0.02 || er_kh_texel(albedo)) {
+    if (!er_tap_colour(albedo) || er_kh_texel(albedo)) {
         return vec4<f32>(0.0);
     }
     let direct = max(textureLoad(er_tdirect, texel, 0).xyz, vec3<f32>(0.0));
-    return vec4<f32>(direct / albedo, 1.0);
+    return vec4<f32>(direct / max(albedo, vec3<f32>(0.02)), 1.0); // (VIEWLIGHT) a coloured surface: no division by ~0
 }
 #endif
 
@@ -680,7 +822,7 @@ fn world_tap_at(k: u32) -> vec3<i32> {
         return vec3<i32>(0);
     }
     let albedo = textureLoad(er_talbedo, texel, 0).xyz;
-    if (min(albedo.x, min(albedo.y, albedo.z)) <= 0.02 || er_kh_texel(albedo)) {
+    if (!er_tap_colour(albedo) || er_kh_texel(albedo)) {
         return vec3<i32>(0);
     }
     return vec3<i32>(texel, 1);
@@ -699,13 +841,59 @@ fn world_probe(which: u32) -> vec4<f32> {
         let scene = max(textureLoad(er_tscene, texel, 0).xyz, vec3<f32>(0.0));
         n += 1.0;
         if (which == 0u) {
-            sum += vec4<f32>(scene / albedo, 1.0);
+            sum += vec4<f32>(scene / max(albedo, vec3<f32>(0.02)), 1.0);
         } else if (which == 1u) {
             sum += vec4<f32>(max(textureLoad(er_tdirect, texel, 0).xyz, vec3<f32>(0.0)), 1.0);
         } else if (which == 2u) {
             sum += textureLoad(er_tmask, texel, 0);
         } else if (which == 3u) {
             sum += vec4<f32>(scene, 1.0);
+        } else if (which == 5u) {
+            sum += vec4<f32>(max(textureLoad(er_tother, texel, 0).xyz, vec3<f32>(0.0)), 1.0);
+        } else {
+            sum += vec4<f32>(albedo, 1.0);
+        }
+    }
+    // (VIEWLIGHT round 3 of the corridor work: no switch to the body here any more: a switch at a tap count flickered (the user:
+    // "lighting is flickery on the KH models"); the body's light has texels of its own (8 + k, probe_ps) and the host BLENDS the two)
+    if (n < 0.5) {
+        return vec4<f32>(0.0);
+    }
+    if (which == 2u) {
+        return sum / n;
+    }
+    return vec4<f32>(sum.xyz / n, n);
+}
+
+// (VIEWLIGHT, 2026-11-03: the Stormveil interior, a close camera in a narrow corridor: no ground tap counted, the level fell to the
+// sun's) THE LIGHT ON HIS OWN BODY (texels 8..13 of the probe row; the host blends it with the ground's by how many ground taps count) (his feet's ground out of the picture, behind him or a friend from
+// the camera, on a stair): six points of his body (40 / 80 / 120 cm above his feet, 15 cm either side across the view) where the
+// G-buffer holds a KH character's white (the hybrid's G-buffer pass) read the game's light on a white surface there, which is
+// the light he receives. Same texels as the ground taps (texel 4: the white, so the host's division gives that light).
+fn body_probe(which: u32) -> vec4<f32> {
+    var sum = vec4<f32>(0.0);
+    var n = 0.0;
+    for (var k = 0u; k < 6u; k++) {
+        let p = er.blob.xyz + vec3<f32>(0.0, 0.0, 40.0 + 40.0 * f32(k / 2u)) + er.cam_right.xyz * select(-15.0, 15.0, (k & 1u) == 1u);
+        let c = er.clip_from_game * vec4<f32>(p, 1.0);
+        if (c.w <= 0.3) {
+            continue;
+        }
+        let uv = vec2<f32>(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5);
+        if (any(uv < vec2<f32>(0.01)) || any(uv > vec2<f32>(0.99))) {
+            continue;
+        }
+        let texel = vec2<i32>(uv * er.viewport.xy);
+        let albedo = textureLoad(er_talbedo, texel, 0).xyz;
+        if (min(albedo.x, min(albedo.y, albedo.z)) <= 0.996) {
+            continue;
+        }
+        let direct = max(textureLoad(er_tdirect, texel, 0).xyz, vec3<f32>(0.0));
+        n += 1.0;
+        if (which == 0u || which == 1u || which == 3u) {
+            sum += vec4<f32>(direct, 1.0);
+        } else if (which == 2u) {
+            sum += textureLoad(er_tmask, texel, 0);
         } else if (which == 5u) {
             sum += vec4<f32>(max(textureLoad(er_tother, texel, 0).xyz, vec3<f32>(0.0)), 1.0);
         } else {
@@ -757,6 +945,10 @@ fn probe_ps(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     if (er.probe.w == 2.0 && which >= 64u && which < 128u) {
         return world_tap_texel(which);
     }
+    // (VIEWLIGHT) texels 8..13: the light on his own body (body_probe), always, for the host's blend with the ground's
+    if (er.probe.w == 2.0 && which >= 8u && which <= 13u) {
+        return body_probe(which - 8u);
+    }
 #endif
     if (er.probe.w == 0.0 || which > 6u) {
         return vec4<f32>(0.0);
@@ -773,8 +965,8 @@ fn probe_ps(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
             continue;
         }
         if (which == 0u) {
-            if (min(albedo.x, min(albedo.y, albedo.z)) > 0.02) {
-                sum += vec4<f32>(scene / albedo, 1.0);
+            if (er_tap_colour(albedo)) {
+                sum += vec4<f32>(scene / max(albedo, vec3<f32>(0.02)), 1.0);
             }
         } else if (which == 1u) {
             sum += vec4<f32>(max(textureLoad(er_tdirect, texel, 0).xyz, vec3<f32>(0.0)), 1.0);
@@ -934,11 +1126,12 @@ fn vs_main(v: VsIn) -> VsOut {
 #endif
     var o: VsOut;
     o.world = world.xyz;
-    o.normal = (m * vec4<f32>(v.normal, 0.0)).xyz;
+    let rest = vec3<f32>(v.position.x, v.position.z, v.position.y) * 100.0; // (BLOOD-RED) the rest pose, game axes, cm
+    o.normal = vec4<f32>((m * vec4<f32>(v.normal, 0.0)).xyz, rest.z);
     o.tangent = vec4<f32>((m * vec4<f32>(v.tangent.xyz, 0.0)).xyz, v.tangent.w);
     o.uv0 = v.uv0;
     o.uv1 = v.uv1;
-    o.uv2 = v.uv2;
+    o.uv2 = vec4<f32>(v.uv2, rest.x, rest.y);
 #ifdef KH_PSP_OUT
     o.psp = vec3<f32>(v.position.x, v.position.z, v.position.y) * 100.0;
 #endif
@@ -1113,7 +1306,30 @@ struct HyTap {
     source: f32,
 }
 
+// (ER-NATIVE) the native mode (block row 3.y < 0) and its layout with the game's specular (row 3.y = -2: er_oct_encode)
+fn hy_native() -> bool {
+    return er.hy[0].x != 0.0 && er.hy[3].y < -0.5;
+}
+
+fn hy_native_spec() -> bool {
+    return er.hy[0].x != 0.0 && er.hy[3].y < -1.5;
+}
+
+// (ER-NATIVE) the game's specular light at this pixel (the texel hy_tap chose, scene units; 0 = none): kh_hybrid_light keeps it
+// for kh_hybrid_after, which adds it after KHS where KH3 adds its reflection
+var<private> hy_spec_px: vec3<f32> = vec3<f32>(0.0);
+// (EYES-SF round 2) the native mode's share of the material's indirect term: the subsurface colour on the game's light (kh_native_sss)
+var<private> hy_ind_px: vec3<f32> = vec3<f32>(0.0);
+
 fn hy_tap_ok(a: vec4<f32>, b: vec4<f32>, n_host: vec3<f32>, cos_min: f32) -> f32 {
+    if (hy_native_spec()) {
+        // (the native layout: captured where the octahedral normal is there (+ 2), any light colour, the specular in a.w / b.zw)
+        if (b.x < 0.5 || b.y < 0.5 || !(a.x >= 0.0) || !(a.y >= 0.0) || !(a.z >= 0.0)) {
+            return -2.0;
+        }
+        let c = dot(er_oct_decode(b.xy - vec2<f32>(2.0)), n_host);
+        return select(-2.0, c, c >= cos_min);
+    }
     let len = length(b.xyz);
     if (a.w <= 0.0 || len < 0.9 || len > 1.1 || !(a.x >= 0.0) || !(a.y >= 0.0) || !(a.z >= 0.0)) {
         return -2.0;
@@ -1161,8 +1377,11 @@ fn hy_tap(svpos: vec4<f32>, n_host: vec3<f32>) -> HyTap {
     // (RSF2 round 13) still none (the hair fringe's tips, up to tens of pixels from the core: it has no G-buffer of its own):
     // rings at 4, 8, 16 and 32 px, ANY captured KH texel (no normal check: the fringe takes its core's light), so a fringe never
     // falls back to the rig, which is black wherever the feet probe has no reading (a close camera, the feet out of the picture)
-    if (best < -1.5 && er.hy[8].w > 1.5) {
-        for (var q = 2; q <= 5; q++) {
+    // (HAIR-BLEED, PARTY-NATIVE item 1) in the native mode too (the user: no estimating), out to 64 px: a KH pixel without a
+    // captured texel of its own takes the game's light at the nearest captured KH surface, never the rig's
+    let last_ring = select(5, 6, hy_native());
+    if (best < -1.5 && (er.hy[8].w > 1.5 || hy_native())) {
+        for (var q = 2; q <= last_ring; q++) {
             let r = 1 << u32(q);
             for (var k = 0; k < 8; k++) {
                 let o = vec2<i32>(select(select(0, -r, k == 3 || k == 5 || k == 6), r, k == 0 || k == 4 || k == 7), select(select(0, -r, k == 2 || k == 6 || k == 7), r, k == 1 || k == 4 || k == 5));
@@ -1217,6 +1436,120 @@ fn hy_self_shadow(p: vec3<f32>, to_sun: vec3<f32>) -> f32 {
     return lit;
 }
 
+// (VERUMREX, 2026-11-03) THE REALISTIC FAMILY'S SCATTER TERM (an outfit drawn with its CG world's own set whose look file asks
+// for it: Verum Rex, KH3's realistic Sora p_dl001, own_look.json `hybrid.sss`, handed over as kh.look.w; every other material
+// reads 0 there and gets nothing). His hair (SQEX_KHHairBaseMat: HairSSColor), irises (SQEX_DLC_EyeBaseMat: EyelsisSSCMulti)
+// and cloth are UE 4.17 shading model 2 (Subsurface): KH3's light shader gives such a surface, for ANY light, the scatter term
+// subsurface colour x back_scatter per unit of the light's colour, without N.L (kh_light, KH_SUBSURFACE: back_scatter =
+// (N.H x opacity + 1 - opacity) / 2 pi). The hybrid below hands the game's light to the light buffer as DIFFUSE only and gives
+// the scatter term for the sun alone (inside its sun specular), so under the sky (overcast, shade, a cave, a torch) his hair
+// went near black and his irises dark. Here: the scatter term for the game's light at this pixel less its sun part (the sun's
+// own stays where it was), as KH3's light shader gives it for light from the front (per unit of a white surface's light:
+// back_scatter / (1 / pi) = (N.H x opacity + 1 - opacity) / 2, N.H of light spread over the front ~0.7), x the share.
+// `e`: the game's light here (KH units, after the lift), `sun_vis`: the sun's visibility x his own shadow.
+fn kh_real_sss(g: KhOut, e: vec3<f32>, n: vec3<f32>, to_sun: vec3<f32>, sun_vis: f32, k: f32) -> vec3<f32> {
+#ifdef KH_SUBSURFACE
+    let share = kh.look.w;
+    if (share <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+    var sky = e;
+    if (dot(er.hy[6].xyz, er.hy[6].xyz) > 0.5) {
+        sky = max(e - er.hy[7].xyz * k * max(dot(n, to_sun), 0.0) * sun_vis * max(er.hy[7].w, 0.0), vec3<f32>(0.0));
+    }
+    let opacity = g.o4.w;
+    let back_scatter = saturate(0.7 * opacity + 1.0 - opacity) * 0.5;
+    return g.o4.xyz * g.o4.xyz * sky * (back_scatter * share);
+#else
+    return vec3<f32>(0.0);
+#endif
+}
+
+// (EYES-SF round 2, the lighting rule: KH3's shaders stay KH3, only their LIGHT is Elden Ring's) THE SUBSURFACE COLOUR IN THE
+// NATIVE MODE, FOR EVERY SUBSURFACE MATERIAL (UE 4.17 shading model 2: Sora's and the party's skin, eyes, hair, cloth; Verum
+// Rex's irises carry their colour there, SQEX_DLC_EyeBaseMat EyelsisSSCMulti, base colour grey). KH3 lights such a surface
+// with diffuse colour + subsurface colour for its undirected light (UE 4.17 BasePassPixelShader: DiffuseColorForIndirect +=
+// SubsurfaceColor; the material's own indirect term, o0, read from the rig's SH bands) and with the scatter term for its
+// lights. The native mode takes the rig's SH bands out (the game's light carries the ambient and GI) and hands the game's
+// light to the diffuse colour alone: the subsurface colour got no light at all (it kept only the realistic family's share,
+// kh_real_sss, and the live Verum Rex look asks for none), so Verum Rex's irises came out grey in the Elden Ring Style.
+// The game's light reaches the light buffer undirected (its direction is folded in by the game's own N.L, d = the light a
+// white surface gets, KH units): KH3's rule for undirected light, the subsurface colour beside the diffuse one on the SAME
+// light d, IN KH3'S CHANNEL FOR IT: the material's indirect term (o0, which KHS composes apart from the light buffer:
+// char_common.wgsl adds kh_hybrid_indirect there). Whole: no share, no sun model, no lift, no estimate.
+fn kh_native_sss(g: KhOut, d: vec3<f32>) -> vec3<f32> {
+#ifdef KH_SUBSURFACE
+    return g.o4.xyz * g.o4.xyz * d;
+#else
+    return vec3<f32>(0.0);
+#endif
+}
+
+// (ER-NATIVE) The metalness the G-buffer pass writes at most (gb_main): the capture divides the game's diffuse light by
+// (1 - metalness) again (GXLightCmbAlbedo multiplied by it), so a full metal would leave nothing to divide; its specular F0 is
+// then lerp(0.04, white, this) = 0.856, and hy_f0_ratio takes the material's own F0 over it.
+const HY_GB_METAL_MAX: f32 = 0.85;
+
+// (ER-NATIVE) The game's specular is computed for the G-buffer's F0 (lerp(0.04, albedo = white, metalness): its light shaders);
+// KH3's material has its own (kh_light: lerp(0.08 x specular, base colour, metallic)). Schlick's Fresnel is linear in F0 (F0 +
+// (1 - F0) x the edge term, and the game's 0.96 - F0 the same), so the game's specular for the material's F0 is the captured one
+// x F0 (KH3) / F0 (the G-buffer), exact where the F0 term leads (all but the grazing rim).
+fn hy_f0_ratio(g: KhOut) -> vec3<f32> {
+    let metal = clamp(g.o2.x, 0.0, 1.0);
+    let f0_kh = mix(vec3<f32>(0.08 * g.o2.y), g.o3.xyz, metal);
+    let f0_gb = mix(vec3<f32>(0.04), vec3<f32>(1.0), min(metal, HY_GB_METAL_MAX));
+    return max(f0_kh, vec3<f32>(0.0)) / f0_gb;
+}
+
+// (ER-NATIVE, the user 2026-11-03: "no estimating, it MUST be Elden Ring's lighting being applied to Sora"; "make sure all of the
+// shaders still work exactly like KH3") THE LIGHT BUFFER IN THE NATIVE MODE: what KH3's light shader puts there for a light,
+// diffuse colour x the light a white surface gets (kh_light: base x (1 - metallic) / pi x N.L x the light), with ELDEN RING'S
+// LIGHT AT THIS TEXEL in place of KH3's lights: the capture (every light, shadow, occlusion and GI term of the game, raw) x the
+// one fixed factor of the units (hy_k: KH3's reference white where the game's tone mapper gets 1.0, light.rs `native_k`).
+// Nothing else: no staircase, no rig, no level, no lift, no world factor. KH3's post-process material (KHS: its colour table,
+// shadow colour, rims), emissive, eyes, hair and every outfit then compose the pixel as they always do. KH3's
+// subsurface colour of every subsurface material (kh_native_sss, EYES-SF round 2) takes the same light. The game's
+// specular at the texel (native layout) is kept for kh_hybrid_after (after KHS, where KH3 adds its reflection; the stand-in cube is off then: gfx.rs env level 0); without it (an older capture
+// shader) KH3's sun specular stands in as before.
+fn kh_native_light(g: KhOut, n: vec3<f32>, v: vec3<f32>, tap: HyTap, debug: f32) -> vec3<f32> {
+    let k = hy_k();
+    let d = min(max(tap.light.xyz, vec3<f32>(0.0)), vec3<f32>(6.0e4)) * k;
+    let diffuse = g.o3.xyz - g.o3.xyz * g.o2.x;
+    var out = d * diffuse;
+    hy_ind_px = kh_native_sss(g, d); // (EYES-SF round 2) KH3's subsurface colour on the same light: its indirect term (char_common)
+    if (hy_native_spec()) {
+        let s = min(max(vec3<f32>(tap.geo.z, tap.geo.w, tap.light.w), vec3<f32>(0.0)), vec3<f32>(6.0e4));
+        hy_spec_px = s * k * hy_f0_ratio(g);
+    } else if (er.hy[0].w > 0.0 && dot(er.hy[6].xyz, er.hy[6].xyz) > 0.5) {
+        // (an older capture shader: no specular captured) KH3's own sun specular, shadowed by the game's sun visibility here
+        let to_sun = normalize(er.hy[6].xyz);
+        let shadow = clamp(tap.geo.w, 0.0, 1.0);
+        let both = kh_light(g, n, v, to_sun, shadow, 0.08);
+        let plain = diffuse * 0.318310 * clamp(dot(n, to_sun), 0.0, 1.0) * shadow;
+        out += max(both - plain, vec3<f32>(0.0)) * er.hy[7].xyz * k * 3.141593 * er.hy[0].w;
+    }
+    if (debug == 1.0) {
+        hy_dbg = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 1.0, 0.0), tap.source > 0.5);
+    } else if (debug == 2.0) {
+        hy_dbg = d / max(er.hy[3].x, 1.0e-6);
+    } else if (debug == 7.0) {
+        hy_dbg = hy_spec_px / max(er.hy[3].x, 1.0e-6);
+    }
+    return out;
+}
+
+// (ER-NATIVE, char_common.wgsl calls it after KHS and the reflection) the game's specular at this pixel for the material's F0, in
+// KH3's units (0 outside the native mode with the specular, and for a pixel without a captured texel)
+fn kh_hybrid_after(g: KhOut, n: vec3<f32>, v: vec3<f32>) -> vec3<f32> {
+    return hy_spec_px;
+}
+
+// (EYES-SF round 2, char_common.wgsl adds it to the material's emissive + indirect term, o0, before KHS) what the game's light gives
+// the subsurface colour in the native mode (kh_native_sss; 0 in every other mode and for a pixel without a captured texel)
+fn kh_hybrid_indirect() -> vec3<f32> {
+    return hy_ind_px;
+}
+
 // (char_common.wgsl calls it after the rig's lights, before the extra lights) THE LIGHT BUFFER KH3's post-process material
 // composes (its 16-step colour table makes the toon bands, its boards the rims): KH3 keeps the DIRECT light here and the
 // undirected light in the indirect term (the rig's SH, kept by fs_main at its share x the game's occlusion). So: the game's
@@ -1236,6 +1569,9 @@ fn kh_hybrid_light(g: KhOut, n: vec3<f32>, v: vec3<f32>, key_dir: vec3<f32>, key
             hy_dbg = vec3<f32>(1.0, 0.0, 0.0);
         }
         return rig_lit;
+    }
+    if (hy_native()) {
+        return kh_native_light(g, n, v, tap, debug);
     }
     let k = hy_k();
     let ao = clamp(tap.light.w, 0.05, 1.0);
@@ -1264,6 +1600,8 @@ fn kh_hybrid_light(g: KhOut, n: vec3<f32>, v: vec3<f32>, key_dir: vec3<f32>, key
     let scale = select(0.0, toned / max(l, 1.0e-5), l > 1.0e-5);
     let diffuse = g.o3.xyz - g.o3.xyz * g.o2.x;
     var out = e * scale * diffuse * er.hy[0].y + rig_lit * er.hy[0].z;
+    // (VERUMREX) the realistic family's scatter term on the game's light less the sun's (kh_real_sss; 0 for every other material)
+    out += kh_real_sss(g, e, n, to_sun, vis * self_lit, k) * er.hy[0].y;
     if (er.hy[0].w > 0.0) {
         // KH3's own sun specular (its light shader less its diffuse part), shadowed by the game's mask and his own shadow
         let shadow = vis * self_lit;
@@ -1293,6 +1631,16 @@ fn kh_hybrid_light(g: KhOut, n: vec3<f32>, v: vec3<f32>, key_dir: vec3<f32>, key
     return out;
 }
 #else
+// (ER-NATIVE) the older hybrids have no native mode: nothing after KHS
+fn kh_hybrid_after(g: KhOut, n: vec3<f32>, v: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(0.0);
+}
+
+// (EYES-SF round 2) no native mode: nothing added to the material's indirect term
+fn kh_hybrid_indirect() -> vec3<f32> {
+    return vec3<f32>(0.0);
+}
+
 // (char_common.wgsl calls it after the rig's lights, before the extra lights) The light buffer KH3's post-process material
 // composes: the game's light at this pixel (KH units), AO to its strength, the staircase on its brightness (hue kept),
 // times the diffuse colour; + a share of the rig's light; + KH3's specular from the sun, shadowed by the game's mask here.
@@ -1321,48 +1669,143 @@ fn kh_hybrid_light(g: KhOut, n: vec3<f32>, v: vec3<f32>, key_dir: vec3<f32>, key
 #endif
 #endif
 
+// (FREEZE-FX, the user 2026-11-07: "make sure frozen effects are applied to anything that gets frozen by blizzard") KH3'S ICE
+// ON A MATERIAL WITHOUT ITS OWN "Ice" PARAMETER (kh-shaderc defines KH_ICE_EXTRA for those owners: an NPC base material of an
+// outfit, a visor, a DLC face; kh-look `needs_ice_extra`): the slot's "Ice" drive (kh.m[157].w, kh-look ICE_EXTRA_ROW) applied
+// as KH3's character materials apply theirs (the compiled DisneyOrg_Basemat base pass, outfits/kh1 materials.wgsl KH_C7): the
+// ice tile of the LibraryTiling16a atlas at fract(uv x IceTileMulti 2) x 0.0625 + (0.78125, 0.15625) when the material binds
+// the atlas (KH_ICE_M<texture>: its mask's alpha), KH3's ice colour mask x (0.192609, 0.346788, 0.395) + (0.192791, 0.310386,
+// 0.425), its share A = f^3 + (1 - f^3) x 0.75 (f = 1 - N.V; 0.75: sheet kh3-freeze-look shell.facing_share), base colour,
+// specular and roughness taken toward the ice by A x Ice, and KH3's glow Ice x lerp(base, ice, A) x ice.
+#ifdef KH_ICE_EXTRA
+fn kh_ice_tile(uv: vec2<f32>) -> vec2<f32> {
+    let t = fract(uv * 2.0) * 0.0625 + vec2<f32>(0.78125, 0.15625);
+    var m = vec2<f32>(0.5, 0.0);
+#ifdef KH_ICE_M0
+    m.x = textureSampleLevel(kh_t0, kh_swrap, t, 0.0).w;
+#endif
+#ifdef KH_ICE_M1
+    m.x = textureSampleLevel(kh_t1, kh_swrap, t, 0.0).w;
+#endif
+#ifdef KH_ICE_M2
+    m.x = textureSampleLevel(kh_t2, kh_swrap, t, 0.0).w;
+#endif
+#ifdef KH_ICE_M3
+    m.x = textureSampleLevel(kh_t3, kh_swrap, t, 0.0).w;
+#endif
+#ifdef KH_ICE_M4
+    m.x = textureSampleLevel(kh_t4, kh_swrap, t, 0.0).w;
+#endif
+#ifdef KH_ICE_M5
+    m.x = textureSampleLevel(kh_t5, kh_swrap, t, 0.0).w;
+#endif
+#ifdef KH_ICE_M6
+    m.x = textureSampleLevel(kh_t6, kh_swrap, t, 0.0).w;
+#endif
+#ifdef KH_ICE_M7
+    m.x = textureSampleLevel(kh_t7, kh_swrap, t, 0.0).w;
+#endif
+#ifdef KH_ICE_M8
+    m.x = textureSampleLevel(kh_t8, kh_swrap, t, 0.0).w;
+#endif
+#ifdef KH_ICE_M9
+    m.x = textureSampleLevel(kh_t9, kh_swrap, t, 0.0).w;
+#endif
+#ifdef KH_ICE_M10
+    m.x = textureSampleLevel(kh_t10, kh_swrap, t, 0.0).w;
+#endif
+#ifdef KH_ICE_M11
+    m.x = textureSampleLevel(kh_t11, kh_swrap, t, 0.0).w;
+#endif
+#ifdef KH_ICE_M12
+    m.x = textureSampleLevel(kh_t12, kh_swrap, t, 0.0).w;
+#endif
+#ifdef KH_ICE_M13
+    m.x = textureSampleLevel(kh_t13, kh_swrap, t, 0.0).w;
+#endif
+    return m;
+}
+
+fn kh_ice_extra(g_in: KhOut, v: vec3<f32>, uv: vec2<f32>) -> KhOut {
+    var g = g_in;
+    let ice = clamp(kh.m[157].w, 0.0, 1.0);
+    if (ice <= 0.0) {
+        return g;
+    }
+    let mask = kh_ice_tile(uv).x;
+    let n = normalize(g.o1.xyz * 2.0 - vec3<f32>(1.0));
+    let f = 1.0 - max(dot(n, v), 0.0);
+    let f3 = f * f * f;
+    let a = f3 + (1.0 - f3) * 0.75;
+    let col = mask * vec3<f32>(0.192609, 0.346788, 0.395) + vec3<f32>(0.192791, 0.310386, 0.425);
+    let base = g.o3.xyz;
+    let mixed = mix(base, col, a);
+    g.o3 = vec4<f32>(mix(base, mixed, ice), g.o3.w);
+    g.o2 = vec4<f32>(g.o2.x, mix(g.o2.y, a, ice), mix(g.o2.z, 0.4 * a + 0.1, ice), g.o2.w);
+    g.o0 = vec4<f32>(g.o0.xyz + ice * mixed * col, g.o0.w);
+    return g;
+}
+#endif
+
 #ifdef KH_BLOOD
 // (IMPL_ER60) THE BLOOD LAYER (char_common.wgsl calls it on the material's G-buffer values, BEFORE any light): a
-// splatter mask in the mesh's own UV space (so it stays on the cloth and the blade as he moves), more of it where the
+// splatter mask in the mesh's REST POSE (BLOOD-RED: was its UV space, which KH3 mirrors; it stays on the cloth and the blade as
+// he moves), more of it where the
 // region asks first (boots and legs, the hands, the Keyblade toward its tip; the rest of him only with more blood);
-// inside the mask the base colour is multiplied toward a dark crimson (brown when dried), the diffuse part of the
-// emissive + indirect term with it, and the surface turns smooth, non-metallic and a little more specular (wet).
+// inside the mask the base colour becomes Elden Ring's blood paint (BLOOD-RED: its albedo, one colour fresh or dried), the
+// emissive + indirect term with it, and the surface turns smooth, non-metallic and a little more specular (wet; less dried).
 // No blood (both amounts 0): the values come back untouched.
-fn bl_hash(p: vec2<f32>) -> f32 {
-    var q = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
-    q += dot(q, q.yzx + vec3<f32>(33.33));
+// (BLOOD-RED) ELDEN RING'S BLOOD PAINT ON CHARACTERS (src/blood.rs `ER_BLOOD_*` = these numbers, its test reads them here;
+// sheet rows blood.look.* with the evidence): DecalParam 600109000..600109004 (regulation 2.7.2.0: usePaintDecal 1,
+// bloodTypeEnable 1) = diffuse texture 100000 (/other/decaltex.tpf dp000100000_a: grey, BC1 sRGB) x diffuseColor
+// (255, 15, 15). BL_ER_COLOR: that colour, its bytes read as sRGB, in linear light (the convention of src/mimic.rs);
+// BL_ER_TEX_THIN / _THICK: the texture's 90th / 10th percentile in linear light (its mean is 0.0526).
+const BL_ER_COLOR: vec3<f32> = vec3<f32>(1.0, 0.004777, 0.004777);
+const BL_ER_TEX_THIN: f32 = 0.0782;
+const BL_ER_TEX_THICK: f32 = 0.0307;
+// (BLOOD-RED) this pixel's rest-pose position (VsOut uv2.zw + normal.w, set by er_kh_in): where the blood pattern is laid
+var<private> bl_rest: vec3<f32>;
+// (BLOOD-RED) the splat cell (cm) and the droplets' cell (cm) in the rest pose
+const BL_CELL_CM: f32 = 9.0;
+const BL_DROP_CELL_CM: f32 = 2.1;
+fn bl_hash3(p: vec3<f32>) -> f32 {
+    var q = fract(p * 0.1031);
+    q += dot(q, q.zyx + vec3<f32>(31.32));
     return fract((q.x + q.y) * q.z);
 }
 
-fn bl_noise(p: vec2<f32>) -> f32 {
+fn bl_noise3(p: vec3<f32>) -> f32 {
     let c = floor(p);
     let f = fract(p);
-    let u = f * f * (vec2<f32>(3.0) - 2.0 * f);
-    let a = bl_hash(c);
-    let b = bl_hash(c + vec2<f32>(1.0, 0.0));
-    let d = bl_hash(c + vec2<f32>(0.0, 1.0));
-    let e = bl_hash(c + vec2<f32>(1.0, 1.0));
-    return mix(mix(a, b, u.x), mix(d, e, u.x), u.y);
+    let u = f * f * (vec3<f32>(3.0) - 2.0 * f);
+    let x0 = mix(mix(bl_hash3(c), bl_hash3(c + vec3<f32>(1.0, 0.0, 0.0)), u.x), mix(bl_hash3(c + vec3<f32>(0.0, 1.0, 0.0)), bl_hash3(c + vec3<f32>(1.0, 1.0, 0.0)), u.x), u.y);
+    let x1 = mix(mix(bl_hash3(c + vec3<f32>(0.0, 0.0, 1.0)), bl_hash3(c + vec3<f32>(1.0, 0.0, 1.0)), u.x), mix(bl_hash3(c + vec3<f32>(0.0, 1.0, 1.0)), bl_hash3(c + vec3<f32>(1.0, 1.0, 1.0)), u.x), u.y);
+    return mix(x0, x1, u.z);
 }
 
-// Splats: a few octaves of value noise (0..1, stretched round 0.5).
-fn bl_splat(p: vec2<f32>) -> f32 {
-    let n = 0.5 * bl_noise(p) + 0.25 * bl_noise(p * 2.03 + vec2<f32>(17.1, 3.7)) + 0.125 * bl_noise(p * 4.07 + vec2<f32>(5.3, 41.9)) + 0.0625 * bl_noise(p * 8.11 + vec2<f32>(29.4, 13.2));
+// (BLOOD-RED) Splats in the rest pose: octaves of 3D value noise, each turned and shifted (no axis-aligned or mirrored
+// repeats), 0..1 stretched round 0.5.
+fn bl_splat3(p: vec3<f32>) -> f32 {
+    let r1 = mat3x3<f32>(vec3<f32>(0.00, 0.80, 0.60), vec3<f32>(-0.80, 0.36, -0.48), vec3<f32>(-0.60, -0.48, 0.64));
+    let p1 = r1 * p * 2.03 + vec3<f32>(17.1, 3.7, 9.2);
+    let p2 = r1 * p1 * 2.01 + vec3<f32>(5.3, 41.9, 2.8);
+    let p3 = r1 * p2 * 2.02 + vec3<f32>(29.4, 13.2, 7.7);
+    let n = 0.5 * bl_noise3(p) + 0.25 * bl_noise3(p1) + 0.125 * bl_noise3(p2) + 0.0625 * bl_noise3(p3);
     return saturate((n / 0.9375 - 0.5) * 2.4 + 0.5);
 }
 
-// Droplets: one round drop of random size and place per cell, kept by `keep` (0..1 of the cells).
-fn bl_drops(p: vec2<f32>, keep: f32) -> f32 {
+// (BLOOD-RED) Droplets in the rest pose: one ball of random size and place per cell (kept by `keep`), the surface cuts it in a
+// round drop.
+fn bl_drops3(p: vec3<f32>, keep: f32) -> f32 {
     let c = floor(p);
     let f = fract(p);
     var best = 0.0;
-    for (var k = 0; k < 9; k++) {
-        let o = vec2<f32>(f32(k % 3) - 1.0, f32(k / 3) - 1.0);
+    for (var k = 0; k < 27; k++) {
+        let o = vec3<f32>(f32(k % 3) - 1.0, f32((k / 3) % 3) - 1.0, f32(k / 9) - 1.0);
         let cell = c + o;
-        let h = bl_hash(cell + vec2<f32>(91.7, 11.3));
-        if (h < keep) {
-            let centre = o + vec2<f32>(bl_hash(cell + vec2<f32>(3.1, 7.9)), bl_hash(cell + vec2<f32>(13.7, 5.3)));
-            let radius = 0.08 + 0.22 * bl_hash(cell + vec2<f32>(23.9, 61.1));
+        if (bl_hash3(cell + vec3<f32>(91.7, 11.3, 4.1)) < keep) {
+            let centre = o + vec3<f32>(bl_hash3(cell + vec3<f32>(3.1, 7.9, 1.3)), bl_hash3(cell + vec3<f32>(13.7, 5.3, 8.9)), bl_hash3(cell + vec3<f32>(2.2, 17.5, 6.6)));
+            let radius = 0.12 + 0.3 * bl_hash3(cell + vec3<f32>(23.9, 61.1, 3.3));
             best = max(best, 1.0 - smoothstep(radius * 0.7, radius, length(f - centre)));
         }
     }
@@ -1375,11 +1818,54 @@ fn bl_segment(p: vec3<f32>, a: vec3<f32>, b: vec3<f32>) -> vec2<f32> {
     return vec2<f32>(length(p - (a + ab * t)), t);
 }
 
+// (F-RAGE) KH3'S RAGE FORM ON AN OUTFIT whose wear form 7 is baked (src/rage.rs): kh.m[159] = (AntiVolume, the pulse's phase,
+// (F-RAGE) the shade factor, 7777 = ours), kh.m[158] = the head point (game space, cm) + AntiVolumeGradeLength, kh_t13 = the
+// (F-RAGE) slot's glow mask (red). KH3's own terms (PACK/materials/materials.wgsl KH_C8): the grade front from the head, the
+// (F-RAGE) pattern emitted as AntiMaskEmissiv (10, 15, 30) * x (1 - x), x = fract(time * AntiMaskEmissivSpeed 0.2 + 1 - d / 170).
+fn er_rage_glow(g_in: KhOut, world: vec3<f32>, uv: vec2<f32>) -> KhOut { // (F-RAGE)
+    var g = g_in; // (F-RAGE)
+    let r = kh.m[159]; // (F-RAGE)
+    let mask_tex = textureSample(kh_t13, kh_swrap, uv).x; // (F-RAGE) (AUDIT-C) renamed
+    if ((r.w != 7777.0 && r.w != 7778.0) || r.x <= 0.0) { // (F-RAGE) (AUDIT-C) 7778: the spreading front below
+        return g; // (F-RAGE)
+    } // (F-RAGE)
+    // (AUDIT-C) tag 7778: m[158].w is the slot's mode (0 a baked body slot, -F a baked face slot whose bake took the face
+    // (AUDIT-C) darkness F, 2 a hair slot without KH3's anti mode: never baked); the grade length is KH3's 170 cm
+    let spread = r.w == 7778.0; // (AUDIT-C)
+    let mode = select(0.0, kh.m[158].w, spread); // (AUDIT-C)
+    let hair = mode > 1.5; // (AUDIT-C)
+    let face_bake = -min(mode, 0.0); // (AUDIT-C) F of a face slot's bake, 0 elsewhere
+    let mask = select(mask_tex, 0.0, hair); // (AUDIT-C) a hair slot has no glow mask bound
+    let d = distance(world, kh.m[158].xyz) / select(max(kh.m[158].w, 1.0), 170.0, spread); // (F-RAGE) (AUDIT-C)
+    var a = saturate((1.0 - d - (1.0 - 2.0 * r.x)) * (r.x * 2.0 + 5.0)); // (F-RAGE)
+    a = (a * (1.0 - a) + a) * saturate(2.0 * r.x); // (F-RAGE)
+    let fd = face_bake; // (AUDIT-C) the bake's face darkness (tools/sora_outfit_formcolours.js FACE_DARK), so the bake continues it
+    let luma = vec3<f32>(0.3, 0.59, 0.11); // (AUDIT-C)
+    let dark = vec3<f32>(0.04, 0.5, 1.0); // (AUDIT-C) AntiDarknessColorMulti
+    // (AUDIT-C) KH3'S STEP 1 ON THE SLOT'S OWN COLOURS, by the grade: (1) a baked slot until the bake is bound (rage.rs SNAP 0.6,
+    // (AUDIT-C) where this grade is 1 down to 170 cm), so the darkness SPREADS FROM THE HEAD and the bound bake continues it;
+    // (AUDIT-C) (2) a hair slot at every volume: KH3 runs step 1 on the hair's FINAL colour (KH_C0 ~470: after the cuticle /
+    // (AUDIT-C) RGBTable mix), so the cuticle band of the KH hair material (its RGBTable colour, independent of HairColor) is
+    // (AUDIT-C) darkened too. The pattern's hue (1/3, 1/2, 1) by the mask, as the bake (tools/lib/rage_bake.js).
+    if (hair || (spread && r.x < 0.6)) { // (AUDIT-C)
+        let hue = vec3<f32>(1.0 / 3.0, 0.5, 1.0); // (AUDIT-C)
+        let l3 = dot(g.o3.xyz, luma) * (1.0 - fd) + 0.008 * fd; // (AUDIT-C)
+        g.o3 = vec4<f32>(mix(g.o3.xyz, mix(l3 * dark, hue, mask), a), g.o3.w); // (AUDIT-C)
+        let l4 = dot(g.o4.xyz, luma) * (1.0 - fd) + 0.008 * fd; // (AUDIT-C)
+        g.o4 = vec4<f32>(mix(g.o4.xyz, l4 * dark, a), g.o4.w); // (AUDIT-C)
+        let l0 = dot(g.o0.xyz, luma) * (1.0 - fd) + 0.008 * fd; // (AUDIT-C)
+        g.o0 = vec4<f32>(mix(g.o0.xyz, l0 * dark, a), g.o0.w); // (AUDIT-C)
+    } // (AUDIT-C)
+    let x = fract(r.y + 1.0 - d); // (F-RAGE)
+    let k = mix(1.0, mix(r.z, 1.0, mask), a); // (F-RAGE) the baked shade's factor off the pattern (rage.rs BAKED_SHADE)
+    g.o3 = vec4<f32>(g.o3.xyz * k, g.o3.w); // (F-RAGE)
+    g.o4 = vec4<f32>(g.o4.xyz * k, g.o4.w); // (F-RAGE)
+    g.o0 = vec4<f32>(g.o0.xyz * k + vec3<f32>(10.0, 15.0, 30.0) * (x * (1.0 - x) * mask * a), g.o0.w); // (F-RAGE)
+    return g; // (F-RAGE)
+} // (F-RAGE)
+
 fn kh_blood(g_in: KhOut, world: vec3<f32>, uv: vec2<f32>) -> KhOut {
-    var g = g_in;
-    // (the mesh's UV islands are of very different sizes: the splats' scale in UV follows how many cm one UV unit spans
-    // here, in whole octaves so that it holds still; taken before any branch)
-    let span = (length(dpdx(world)) + length(dpdy(world))) / max(length(dpdx(uv)) + length(dpdy(uv)), 1.0e-7);
+    var g = er_rage_glow(g_in, world, uv); // (F-RAGE) was g_in
     let body = er.bl_head.x;
     let blade_amount = er.bl_head.y;
     if (body <= 0.0 && blade_amount <= 0.0) {
@@ -1389,9 +1875,15 @@ fn kh_blood(g_in: KhOut, world: vec3<f32>, uv: vec2<f32>) -> KhOut {
     // (the translucent parts: eyes' highlights, lashes; no blood on them)
     return g;
 #endif
-    // (a part whose UV hardly changes over its surface (one UV unit over more than 20 m) has no usable pattern: none)
-    if (span > 2000.0) {
-        return g;
+    // (BLOOD-RED, the user: "the whites of Donald and Goofy's eyes should not be able to display blood") THE EYE WHITES ON THE
+    // HEAD (src/blood.rs eye_whites, from KH3's colour mask): bl_face = their mask island in UV (u0, v0, u1, -(1 + v1)) and
+    // bl_blade_b = their rest-pose ball, while the block has no blade (bl_blade_a.w = 0); a pixel in both takes no blood
+    if (er.bl_face.w < 0.0 && er.bl_blade_a.w <= 0.0) {
+        let v1 = -er.bl_face.w - 1.0;
+        let t = fract(uv);
+        if (t.x >= er.bl_face.x && t.x <= er.bl_face.z && t.y >= er.bl_face.y && t.y <= v1 && length(bl_rest - er.bl_blade_b.xyz) < er.bl_blade_b.w) {
+            return g;
+        }
     }
     let fresh = saturate(er.bl_head.z);
     // ---- the region: how early this place takes blood (0 = only with a lot, 1 = first)
@@ -1425,27 +1917,32 @@ fn kh_blood(g_in: KhOut, world: vec3<f32>, uv: vec2<f32>) -> KhOut {
         return g;
     }
     // ---- the mask: splats grow from their cores as the cover rises; droplets around them
-    // (a splat cell of about 9 cm)
-    let freq = exp2(round(log2(clamp(span / 9.0, 4.0, 128.0))));
-    let q = uv * freq + vec2<f32>(er.bl_head.w * 7.31, er.bl_head.w * 3.17);
-    let n = bl_splat(q);
+    // (BLOOD-RED) laid in the REST POSE (bl_rest, cm), not in UV space: KH3's UVs mirror the left and right halves and repeat
+    // islands, so a UV pattern came out mirrored; the rest pose is unique over the body, follows the skin as it moves and
+    // never swims. A splat cell of about 9 cm; the character's / wash's seed shifts the whole field.
+    let seed = vec3<f32>(er.bl_head.w * 7.31, er.bl_head.w * 3.17, er.bl_head.w * 5.71);
+    let q = bl_rest / BL_CELL_CM + seed;
+    let n = bl_splat3(q);
     let threshold = 1.0 - c;
     // (the head (face, hair): droplets only, no splats: a splat there covers half the face)
     var m = smoothstep(threshold - 0.04, threshold + 0.04, n) * splat_ok;
     let core = smoothstep(threshold, threshold + 0.3, n);
-    m = max(m, bl_drops(uv * (freq * 4.3) +vec2<f32>(er.bl_head.w * 1.9, 0.0), saturate(c * 1.4 - 0.05)) * 0.85);
+    m = max(m, bl_drops3(bl_rest / BL_DROP_CELL_CM + seed * 1.9, saturate(c * 1.4 - 0.05)) * 0.85);
     if (m <= 0.0) {
         return g;
     }
-    // ---- the colour: a multiply toward dark crimson (thin) .. near black-red (thick); dried blood browner and darker
-    let thin = mix(vec3<f32>(0.34, 0.12, 0.08), vec3<f32>(0.40, 0.06, 0.04), fresh);
-    let thick = mix(vec3<f32>(0.15, 0.05, 0.03), vec3<f32>(0.20, 0.018, 0.012), fresh);
-    let tint = mix(thin, thick, core);
-    let own = mix(vec3<f32>(0.045, 0.014, 0.009), vec3<f32>(0.07, 0.005, 0.003), fresh);
+    // ---- the colour: (BLOOD-RED, the user 2026-11-07: "a bit redder it's very brown right now") ELDEN RING'S OWN BLOOD PAINT
+    // on characters (src/blood.rs `ER_BLOOD_*`, sheet rows blood.look.*): its albedo replaces the cloth's under the mask, as
+    // the game's paint decal does (no multiply with the cloth: yellow / white cloth no longer turns it orange / brick), from
+    // the texture's light end where the splat is thin to its dark end in the core; one colour fresh or dried (the game's
+    // paint keeps its colour for its whole life: drying only takes the wet gloss below). Was an own palette multiplied
+    // over the cloth, its green / blue 15..35 % of its red, dried toward brown (0.34, 0.12, 0.08): read brown.
+    let bloody = BL_ER_COLOR * mix(BL_ER_TEX_THIN, BL_ER_TEX_THICK, core);
     let base = g.o3.xyz;
-    let bloody = mix(base * tint, own, 0.35 + 0.35 * core);
     g.o3 = vec4<f32>(mix(base, bloody, m), g.o3.w);
-    g.o0 = vec4<f32>(g.o0.xyz * mix(vec3<f32>(1.0), tint, m), g.o0.w);
+    // (the material's emissive + indirect term follows its albedo: scaled by the blood's albedo over the cloth's)
+    let ratio = clamp(bloody / max(base, vec3<f32>(1.0e-3)), vec3<f32>(0.0), vec3<f32>(4.0));
+    g.o0 = vec4<f32>(g.o0.xyz * mix(vec3<f32>(1.0), ratio, m), g.o0.w);
     g.o4 = vec4<f32>(g.o4.xyz * (1.0 - 0.75 * m), g.o4.w);
     // ---- wet: smooth, a little more specular (fresh blood shines, dried hardly); metal stays metal under a thin film (its
     // reflection takes the red of the multiplied base colour), not under a thick one
@@ -1463,6 +1960,9 @@ fn er_srgb(c: vec3<f32>) -> vec3<f32> {
 
 // The harness inputs of one pixel from the vertex stage's interpolants and the frame (fs_main and, IMPL_ER78, gb_main).
 fn er_kh_in(in: VsOut, is_front: bool) -> KhIn {
+#ifdef KH_BLOOD
+    bl_rest = vec3<f32>(in.uv2.z, in.uv2.w, in.normal.w); // (BLOOD-RED) the rest-pose position for kh_blood
+#endif
     var i: KhIn;
     let time = er.camera.w;
     let camera = er.camera.xyz;
@@ -1475,9 +1975,9 @@ fn er_kh_in(in: VsOut, is_front: bool) -> KhIn {
 #ifdef KH_INTERIOR
     // (ER79, the user's 54.jpg: KH1's shorts looked hollow from below) a cloth slot drawn two-sided for its inside (kh.khs.w =
     // its interior factor, gfx.rs / outfit.rs `apply_cloth_twosided`): a back face is the cloth's inside, its normal turned in
-    let n = select(normalize(in.normal), -normalize(in.normal), !is_front && kh.khs.w > 0.0);
+    let n = select(normalize(in.normal.xyz), -normalize(in.normal.xyz), !is_front && kh.khs.w > 0.0);
 #else
-    let n = normalize(in.normal);
+    let n = normalize(in.normal.xyz);
 #endif
     let t = normalize(in.tangent.xyz);
     // pack -> game space is a reflection: the sign of the basis turns round.
@@ -1485,7 +1985,7 @@ fn er_kh_in(in: VsOut, is_front: bool) -> KhIn {
     i.tc11 = vec4<f32>(n, -in.tangent.w);
     i.tc0 = vec4<f32>(in.uv0, 0.0, 0.0);
     i.tc1 = vec4<f32>(in.uv1, 0.0, 0.0);
-    i.tc2 = vec4<f32>(in.uv2, 0.0, 0.0);
+    i.tc2 = vec4<f32>(in.uv2.xy, 0.0, 0.0);
     i.tc3 = i.tc2;
 #ifdef KH_PSP
     // (ER party S4) the owner's TEXCOORD3 = the pre-skinned local position; no third UV set then (kh-app's rule)
@@ -1522,7 +2022,15 @@ fn er_kh_in(in: VsOut, is_front: bool) -> KhIn {
     i.v137 = vec4<f32>(0.0);                               // temporal dither offset
     i.v142 = vec4<f32>(1.0);                               // IndirectLightingColorScale
     i.v160 = vec4<f32>(1.0);                               // .w the fork's exposure scale
-    i.v161 = vec4<f32>(1.0, 1.0, time, 0.0);               // eye adaptation fixed at 1
+    // (HAIR-BLEED) KH3's EyeAdaptation (v161.y): its materials divide a reverse-adapted emissive by it and its KHS judges a
+    // brightness blend on luminance x it. The route's units put KH3's reference white at the tone mapper's 1.0, i.e. KH3 at an eye
+    // adaptation of 1 / reference white: v161.y = tune.x x lit_ambient.w, where gfx.rs `eye_row` writes (1 / reference white) /
+    // tune.x, so v161.y = 0.306 in both styles and every scene. 1 when the row is 0 (`r.kh_eye_adapt = 0`, an older DLL).
+    var kh_eye = 1.0;
+    if (er.lit_ambient.w > 0.0 && er.tune.x > 0.0) {
+        kh_eye = er.tune.x * er.lit_ambient.w;
+    }
+    i.v161 = vec4<f32>(1.0, kh_eye, time, 0.0);
     // ---- Primitive
     i.p4 = kh.w2l[0];
     i.p5 = kh.w2l[1];
@@ -1570,7 +2078,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) is_front: bool) -> ErFrag {
     i.svpos = vec4<f32>((in.cur.xy / in.cur.w * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5)) * er.viewport.xy, i.svpos.zw);
 #endif
     let camera = er.camera.xyz;
-    let n = normalize(in.normal);
+    let n = normalize(in.normal.xyz);
 #ifdef KH_HYBRID
 #ifndef KH_TRANSLUCENT
     // (IMPL_ER78) lit by the game: the rig's indirect light only at its share (the game's light carries its ambient / GI)
@@ -1734,7 +2242,33 @@ struct ErGbuf {
     @location(0) normal: vec4<f32>,
     @location(1) params: vec4<f32>,
     @location(2) albedo: vec4<f32>,
+#ifdef KH_MIMIC
+    // (MIMIC SORA) the mimic writes the two targets the others leave to hygb.ps.dxil itself: no subsurface, no emissive
+    @location(3) sss: vec4<f32>,
+    @location(4) emissive: vec4<f32>,
+#endif
 }
+
+#ifdef KH_MIMIC
+// (MIMIC SORA, THE USER 2026-11-02: "Make sure mimic Sora uses the shaders that mimic should use from Elden Ring.") THE MIMIC
+// TEAR'S SURFACE in the game's G-buffer (`<variant>_gb3_mm`, kh-shaderc `--only mimic`): WetAspectParam 18 (regulation 2.7.2.0,
+// kh-er-render src/mimic.rs MIMIC_WET) over the KH material's own base colour (KhOut.o3): the colour goes 0.8 of the way to the
+// row's grey (200, 200, 200; sRGB, mixed in linear light), metalness 255 at 1.0, shininess 255 at 0.85 over the hybrid's gloss.
+// His KH colour pass is not drawn over these pixels: Elden Ring's own light passes and composite shade the liquid silver.
+const MM_WET_GREY: f32 = 200.0 / 255.0;
+const MM_WET_BASE_RATE: f32 = 0.8;
+const MM_WET_METAL: f32 = 255.0 / 255.0;
+const MM_WET_METAL_RATE: f32 = 1.0;
+const MM_WET_SHINE: f32 = 255.0 / 255.0;
+const MM_WET_SHINE_RATE: f32 = 0.85;
+
+fn mm_wet_linear(c: f32) -> f32 {
+    if (c <= 0.04045) {
+        return c / 12.92;
+    }
+    return pow((c + 0.055) / 1.055, 2.4);
+}
+#endif
 
 @fragment
 fn gb_main(in: VsOut, @builtin(front_facing) is_front: bool) -> ErGbuf {
@@ -1742,6 +2276,15 @@ fn gb_main(in: VsOut, @builtin(front_facing) is_front: bool) -> ErGbuf {
     if (!er_camfade_keep(in.position.xy)) {
         discard;
     }
+#ifdef KH_MIMIC_FORM
+    // (MIMIC SORA, THE USER 2026-11-03: "mimic sora, upon first being summoned, needs to play the proper mimic tear animation
+    // transforming into Sora") HIS FORMING (`<variant>_gb3_mf`, drawn by the mimic's own depth + G-buffer pass while he rises out
+    // of the pool or melts into it): nothing of him above the cut (game z, cm: the material block's fade.w); the band just
+    // under it (misc.x cm) is the liquid
+    if (in.world.z > kh.fade.w) {
+        discard;
+    }
+#endif
     var i = er_kh_in(in, is_front);
 #ifdef KH_MASKED
 #ifdef KH_HAIR91
@@ -1794,15 +2337,51 @@ fn gb_main(in: VsOut, @builtin(front_facing) is_front: bool) -> ErGbuf {
 #endif
     i.v137 = vec4<f32>(0.0);
 #endif
+#ifdef KH_ICE_EXTRA
+    let g = kh_ice_extra(kh_material(i), normalize(-i.twp), i.tc0.xy); // (FREEZE-FX)
+#else
     let g = kh_material(i);
+#endif
     // (IMPL_ER78b) a degenerate normal (zero length, NaN) is written as straight up, never as NaN
     let n_raw = (er.host_from_game * vec4<f32>(g.o1.xyz * 2.0 - vec3<f32>(1.0), 0.0)).xyz;
     let n_len = length(n_raw);
     let n_world = select(vec3<f32>(0.0, 1.0, 0.0), n_raw / max(n_len, 1.0e-6), n_len > 1.0e-6 && n_len < 1.0e6);
     var o: ErGbuf;
     o.normal = vec4<f32>(n_world * 0.5 + vec3<f32>(0.5), 0.0);
+#ifdef KH_MIMIC
+    // (MIMIC SORA) WetAspectParam 18 on his own surface (above): metal, glossy, a fifth of his own colour left in the grey
+    let mm_albedo = mix(clamp(g.o3.xyz, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(mm_wet_linear(MM_WET_GREY)), MM_WET_BASE_RATE);
+    let mm_metal = mix(0.0, MM_WET_METAL, MM_WET_METAL_RATE);
+    let mm_gloss = mix(er.hy[5].z, MM_WET_SHINE, MM_WET_SHINE_RATE);
+#ifdef KH_MIMIC_FORM
+    // (the liquid band: toward the POOL'S liquid (src/mimic.rs MimicLook: albedo misc.y, gloss misc.z), fully at the cut)
+    let mm_liquid = clamp(1.0 - (kh.fade.w - in.world.z) / max(kh.misc.x, 0.001), 0.0, 1.0);
+    o.params = vec4<f32>(mm_metal, mix(mm_gloss, kh.misc.z, mm_liquid), 0.0, 1.0);
+    o.albedo = vec4<f32>(mix(mm_albedo, vec3<f32>(kh.misc.y), mm_liquid), er.hy[3].w);
+#else
+    o.params = vec4<f32>(mm_metal, mm_gloss, 0.0, 1.0);
+    o.albedo = vec4<f32>(mm_albedo, er.hy[3].w);
+#endif
+    o.sss = vec4<f32>(0.0);
+    o.emissive = vec4<f32>(0.0);
+#else
     o.params = vec4<f32>(0.0, er.hy[5].z, er.hy[3].z, 1.0);
     o.albedo = vec4<f32>(1.0, 1.0, 1.0, er.hy[3].w);
+#ifdef KH_HY3
+    // (ER-NATIVE, er.hy[3].y < 0) THE MATERIAL'S OWN SURFACE for the game's light passes: its metalness (at most HY_GB_METAL_MAX:
+    // the capture divides the diffuse light by 1 - metalness again) and its gloss, so that the game's specular (its lights and its
+    // environment) is worked out for KH3's roughness: the game's GGX takes alpha = (1 - 0.95 sqrt(gloss))^2 (GXLightAcc_DDirLight1),
+    // UE 4.17's alpha = roughness^2, so gloss = ((1 - roughness) / 0.95)^2. The colour stays WHITE: the game's light passes work
+    // out light WITHOUT albedo (only GXLightCmbAlbedo multiplies by it, and the capture takes that out again), so the white changes
+    // nothing they compute and keeps the division exact for a black cloth; the material's colour enters KH3's own shading (and its
+    // F0 the specular: hy_f0_ratio).
+    if (er.hy[0].x != 0.0 && er.hy[3].y < -0.5) {
+        let rough = clamp(g.o2.z, 0.0, 1.0);
+        let gloss = clamp((1.0 - rough) / 0.95, 0.0, 1.0);
+        o.params = vec4<f32>(clamp(g.o2.x, 0.0, HY_GB_METAL_MAX), gloss * gloss, 0.0, 1.0);
+    }
+#endif
+#endif
     return o;
 }
 #endif
@@ -1836,12 +2415,37 @@ fn gb_main(in: VsOut, @builtin(front_facing) is_front: bool) -> ErGbuf {
 // (RSF round 19) THE LIGHT PROBES OF THE KH SURFACES (gfx.rs `HyProbe`): an array of 6 slices (one per direction, +x -x +y -y +z -z
 // of the host's axes), level 0 a texel per 8 x 8 px tile, 4 levels more each a 2 x 2 average; a texel = (sum of the light / its
 // occlusion x the direction's weight over the tile's KH texels, sum of the weights) / the tile's texel count. A null view when
-// the files are not in the pack (reads 0: hycap keeps hc_blur).
+// the files are not in the pack (reads 0: hycap keeps hc_blur). (VIEWLIGHT) With r.hybrid_normal_probes (er.hy[17].w, on by default) the same slices hold the
+// normal-keyed clusters instead (see hc_keyed).
 @group(1) @binding(9) var hc_probe: texture_2d_array<f32>;
+// (ER-NATIVE) the game's SPECULAR light accumulation (the second target of the pair whose first is its diffuse one: its light
+// passes' SV_Target1, already x F0, + its environment specular x AO x the environment BRDF; IMPL_ER78_STATE.md A), read only
+// in the native mode with the specular (er.hy[3].y = -2: gfx.rs binds it; else white and never read)
+@group(1) @binding(10) var hc_spec: texture_2d<f32>;
 
 struct HyCapOut {
     @location(0) light: vec4<f32>,
     @location(1) geo: vec4<f32>,
+}
+
+// (HAIR-BLEED, hycensus.ps.dxil) THE SAFETY NET'S COUNT: drawn over the capture's box after every KH colour draw of the colour list
+// (gfx.rs census_count), under an occlusion query, no target. A pixel stays (is counted) where a KH draw changed the scene target
+// (t11 now, t12 the copy taken right before the KH draws) and the capture texel there (t13, the capture's geometry target)
+// holds no KH surface: such a pixel was shaded with a neighbour's texel, the 4..64 px rings or the rig (hy_tap), not its own.
+@group(1) @binding(11) var hcn_after: texture_2d<f32>;
+@group(1) @binding(12) var hcn_before: texture_2d<f32>;
+@group(1) @binding(13) var hcn_geo: texture_2d<f32>;
+
+@fragment
+fn hycensus_ps(@builtin(position) position: vec4<f32>) {
+    let t = vec2<i32>(position.xy);
+    if (all(textureLoad(hcn_after, t, 0).xyz == textureLoad(hcn_before, t, 0).xyz)) {
+        discard;
+    }
+    let g = textureLoad(hcn_geo, t, 0);
+    if (dot(g.xyz, g.xyz) > 0.25) {
+        discard;
+    }
 }
 
 // (RSF2 round 11, hygb.ps.dxil) THE REST OF HIS G-BUFFER. The G-buffer pass writes targets 0..2 only (IMPL_ER78b); targets 3
@@ -2119,6 +2723,8 @@ fn hc_wide(t: vec2<i32>, n_t: vec3<f32>, full: bool) -> HcWide {
 // visibility is the finest cascade's at its own place (hc_vis_tap). Returns (ratio, trust 0..1): trust grows with the number of
 // samples in each class; no class pair = trust 0. Returns (KH ratio, its trust, ground ratio, its trust): in game (rsf13) the
 // game's own light on the KH G-buffer keeps far less of the sun's contrast (lit / shade 1.3 - 1.8) than the ground (about 6).
+var<private> hc_kh_lit: f32 = -1.0;
+
 fn hc_shade_ratio(t: vec2<i32>, n_t: vec3<f32>) -> vec4<f32> {
     let size = vec2<i32>(textureDimensions(hc_gb2));
     let msize = vec2<i32>(textureDimensions(hc_mask));
@@ -2194,6 +2800,10 @@ fn hc_shade_ratio(t: vec2<i32>, n_t: vec3<f32>) -> vec4<f32> {
     let tg = smoothstep(0.5, 2.0, min(gr.y, gr.w));
     let rk = select(1.0, (kh.z / max(kh.w, 1.0e-6)) / max(kh.x / max(kh.y, 1.0e-6), 1.0e-9), tk > 0.0);
     let rg = select(1.0, (gr.z / max(gr.w, 1.0e-6)) / max(gr.x / max(gr.y, 1.0e-6), 1.0e-9), tg > 0.0);
+    // (VIEWLIGHT round 2) the lit share of the KH texels facing this way (hc_kh_lit; < 0: none counted)
+    if (kh.y + kh.w > 0.5) {
+        hc_kh_lit = kh.y / (kh.y + kh.w);
+    }
     return vec4<f32>(clamp(rk, 0.03, 1.0), tk, clamp(rg, 0.03, 1.0), tg);
 }
 
@@ -2288,6 +2898,65 @@ fn hc_dir_w(n: vec3<f32>, b: i32) -> f32 {
     return c * c;
 }
 
+// (VIEWLIGHT, 2026-11-03, the user: "lighting on the KH characters still changes with the camera's movements. Like if there's light
+// behind them then the side of them facing the camera lights up too") THE CAUSE: the six-direction cube above (fit 6). A texel reads
+// each direction by cos^2 of its normal, and each direction holds the mean light of EVERY texel leaning that way. With a light
+// behind a KH character the only visible texels it reaches are his silhouette's (their normals across the view, leaning toward
+// it); they fill the side directions (+-x, +-z across the view) with its light, and every camera-facing texel at 30 - 60 degrees
+// reads a side direction by 0.25 - 0.75: the light behind him lit the side facing the camera. What a side direction holds depends
+// on which of his texels the camera sees, so the light turned with the camera. Any smooth function of the normal does the same (a
+// least-squares fit L = a + b . n, tried first, lifts the side facing away from a light to the reach's mean: offline, rsf20/off).
+// THE FIX (er.hy[17].w = 1 with fit 6 or 7: r.hybrid_normal_probes, ON by default): A NORMAL-KEYED PYRAMID. Each block of each level holds up to three CLUSTERS of the KH texels it
+// covers, each the texels facing the same way (within HC_CLUSTER_COS, about 18 degrees): their mean light (occlusion out), their
+// share of the block, their mean normal and depth. Level 0: an 8 x 8 tile, the clusters seeded by its centre texel, then by the
+// texel least like the seeds; each level above: the 12 clusters of its 2 x 2 blocks merged into three, keyed by the largest one's normal and the normals least like the keys (a silhouette's small rim cluster is kept).
+// hycap reads the 7 x 7 blocks over 30 cm of his surface (as round 19, so the print is still averaged away) with each cluster
+// weighted by cos^16 between its normal and the texel's: a texel takes the light of the surfaces of his that FACE THE SAME WAY,
+// which Elden Ring evaluated at their own world place and normal; a light behind him reaches only the texels that face it.
+// Clusters of another KH character (a depth far from the texel's) are left out. Layout (6 slices): 2k = cluster k's (light rgb,
+// share), 2k + 1 = (its normal, its depth m); share 0 = no cluster.
+const HC_CLUSTER_COS: f32 = 0.95;
+const HC_CLUSTER_POW: f32 = 16.0;
+
+fn hc_keyed() -> bool {
+    return er.hy[17].w > 0.5 && er.hy[8].w > 5.5;
+}
+
+// (round 2) er.hy[17].w = 2 (the default): the clusters read as a local-linear fit in normal space (hc_probe_clusters); 1 = their
+// weighted mean (round 1)
+fn hc_local_linear() -> bool {
+    return er.hy[17].w > 1.5;
+}
+
+const HC_LL_RIDGE: f32 = 0.005;
+
+// (round 3) er.hy[17].w = 3 (the default): the game's light per pixel where it agrees with the clusters (hycap, the print discriminator)
+fn hc_px_trust() -> bool {
+    return er.hy[17].w > 2.5;
+}
+
+const HC_PX_SIGMA: f32 = 0.35;
+
+// (round 3) THE REGION TEST of the print discriminator: the squared variation (CV^2) of the game's light among the texels of the
+// clusters that lit this texel (hc_probe_clusters). Clean surfaces facing one way get nearly one light (creases, normal maps: a little);
+// a print of the background splits them into its own bright and dark shapes. The per-pixel light is trusted by exp(-CV^2 / this).
+// Measured (rsf20/off/cvstat.js, median among the same-facing texels within reach): in game 0.03 - 0.08 (RT MAX / OFF, day, night,
+// brazier); the print stand-in 0.7 - 2.2.
+const HC_REGION_CV2: f32 = 0.2;
+// (round 4) a cluster's weight in the read x exp(-its own CV^2 / this)
+const HC_CLUSTER_CV2: f32 = 0.3;
+var<private> hc_region_cv2: f32 = 0.0;
+
+struct HcCluster {
+    light: vec3<f32>,
+    share: f32,
+    n: vec3<f32>,
+    z: f32,
+    // (round 3) the mean squared luminance of its texels' light over the square of their mean luminance (slice 6; 1 = all alike,
+    // scale-free so the 16-bit texture holds it): how much the game's light varies among the texels facing that way
+    m2: f32,
+}
+
 struct HcProbeOut {
     @location(0) p0: vec4<f32>,
     @location(1) p1: vec4<f32>,
@@ -2295,6 +2964,8 @@ struct HcProbeOut {
     @location(3) p3: vec4<f32>,
     @location(4) p4: vec4<f32>,
     @location(5) p5: vec4<f32>,
+    @location(6) p6: vec4<f32>,
+    @location(7) p7: vec4<f32>,
 }
 
 fn hc_probe_out(s: array<vec4<f32>, 6>) -> HcProbeOut {
@@ -2305,15 +2976,248 @@ fn hc_probe_out(s: array<vec4<f32>, 6>) -> HcProbeOut {
     o.p3 = s[3];
     o.p4 = s[4];
     o.p5 = s[5];
+    o.p6 = vec4<f32>(0.0);
+    o.p7 = vec4<f32>(0.0);
     return o;
 }
 
-// level 0: a tile of 8 x 8 texels of the capture's inputs
-@fragment
-fn hcprobe_ps(@builtin(position) position: vec4<f32>) -> HcProbeOut {
+// (VIEWLIGHT) a cluster's two texels (slices 2k, 2k + 1)
+fn hc_cluster_out(c: array<HcCluster, 3>) -> HcProbeOut {
+    var s: array<vec4<f32>, 6>;
+    for (var k = 0; k < 3; k++) {
+        s[2 * k] = vec4<f32>(c[k].light, c[k].share);
+        s[2 * k + 1] = vec4<f32>(c[k].n, c[k].z);
+    }
+    var o = hc_probe_out(s);
+    o.p6 = vec4<f32>(c[0].m2, c[1].m2, c[2].m2, 0.0);
+    return o;
+}
+
+// (VIEWLIGHT) level 0 of the normal-keyed pyramid: the tile's KH texels in up to three clusters (see hc_keyed)
+fn hc_cluster_tile(base: vec2<i32>) -> HcProbeOut {
     let size = vec2<i32>(textureDimensions(hc_gb2));
     let msize = vec2<i32>(textureDimensions(hc_mask));
+    var tn: array<vec3<f32>, 64>;
+    var tl: array<vec3<f32>, 64>;
+    var tz: array<f32, 64>;
+    var ok: array<bool, 64>;
+    var seed = -1;
+    var near = 1.0e9;
+    for (var q = 0; q < 64; q++) {
+        ok[q] = false;
+        let p = base + vec2<i32>(q & 7, q >> 3);
+        if (p.x >= size.x || p.y >= size.y || !hc_kh(textureLoad(hc_gb2, p, 0).xyz)) {
+            continue;
+        }
+        let nn = textureLoad(hc_gb0, p, 0).xyz * 2.0 - vec3<f32>(1.0);
+        let ln = length(nn);
+        if (!(ln > 0.5 && ln < 1.5)) {
+            continue;
+        }
+        let m = textureLoad(hc_mask, min(p, msize - vec2<i32>(1)), 0);
+        let ao_s = clamp(min(m.x, m.y), 0.05, 1.0);
+        ok[q] = true;
+        tn[q] = nn / ln;
+        tl[q] = min(min(max(textureLoad(hc_light, p, 0).xyz, vec3<f32>(0.0)), vec3<f32>(6.0e4)) / ao_s, vec3<f32>(6.0e4));
+        tz[q] = clamp(hc_view_m(p), 0.0, 200.0);
+        let d = length(vec2<f32>(f32(q & 7), f32(q >> 3)) - vec2<f32>(3.5));
+        if (d < near) {
+            near = d;
+            seed = q;
+        }
+    }
+    var c: array<HcCluster, 3>;
+    for (var k = 0; k < 3; k++) {
+        c[k] = HcCluster(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0, 0.0);
+    }
+    if (seed < 0) {
+        return hc_cluster_out(c);
+    }
+    // the seeds: the centre texel's normal, then the texel least like the seeds so far (when it is not like any of them)
+    var reps: array<vec3<f32>, 3>;
+    reps[0] = tn[seed];
+    var count = 1;
+    for (var k = 1; k < 3; k++) {
+        var worst = -1;
+        var low = HC_CLUSTER_COS;
+        for (var q = 0; q < 64; q++) {
+            if (!ok[q]) {
+                continue;
+            }
+            var best = -2.0;
+            for (var r = 0; r < count; r++) {
+                best = max(best, dot(reps[r], tn[q]));
+            }
+            if (best < low) {
+                low = best;
+                worst = q;
+            }
+        }
+        if (worst < 0) {
+            break;
+        }
+        reps[count] = tn[worst];
+        count += 1;
+    }
+    // each texel into the nearest seed (a texel like none of them is left out)
+    for (var q = 0; q < 64; q++) {
+        if (!ok[q]) {
+            continue;
+        }
+        var at = -1;
+        var best = HC_CLUSTER_COS;
+        for (var r = 0; r < count; r++) {
+            let v = dot(reps[r], tn[q]);
+            if (v >= best) {
+                best = v;
+                at = r;
+            }
+        }
+        if (at < 0) {
+            continue;
+        }
+        c[at].light += tl[q];
+        c[at].share += 1.0;
+        c[at].n += tn[q];
+        c[at].z += tz[q];
+        let lq = dot(tl[q], vec3<f32>(0.2126, 0.7152, 0.0722));
+        c[at].m2 += lq * lq;
+    }
+    for (var k = 0; k < 3; k++) {
+        if (c[k].share > 0.0) {
+            c[k].light /= c[k].share;
+            c[k].z /= c[k].share;
+            let lm = dot(c[k].light, vec3<f32>(0.2126, 0.7152, 0.0722));
+            c[k].m2 = min(c[k].m2 / c[k].share / max(lm * lm, 1.0e-12), 1.0e3);
+            c[k].n = normalize(c[k].n);
+            c[k].share /= 64.0;
+        }
+    }
+    return hc_cluster_out(c);
+}
+
+// (VIEWLIGHT) a level of the normal-keyed pyramid from the one below: the 12 clusters of the 2 x 2 blocks merged into three (the
+// largest one's normal and the normals least like the keys so far are the keys; each cluster joins the nearest key)
+fn hc_cluster_down(t: vec2<i32>) -> HcProbeOut {
+    let below = vec2<i32>(textureDimensions(hc_probe, 0));
+    var cand: array<HcCluster, 12>;
+    var used: array<bool, 12>;
+    for (var q = 0; q < 4; q++) {
+        let p = t + vec2<i32>(q & 1, q >> 1);
+        let inside = p.x < below.x && p.y < below.y;
+        for (var k = 0; k < 3; k++) {
+            let i = q * 3 + k;
+            cand[i] = HcCluster(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0, 0.0);
+            used[i] = true;
+            if (!inside) {
+                continue;
+            }
+            let a = textureLoad(hc_probe, p, 2 * k, 0);
+            let b = textureLoad(hc_probe, p, 2 * k + 1, 0);
+            let s2 = textureLoad(hc_probe, p, 6, 0);
+            if (a.w > 0.0) {
+                cand[i] = HcCluster(a.xyz, a.w, b.xyz, b.w, select(select(s2.z, s2.y, k == 1), s2.x, k == 0));
+                used[i] = false;
+            }
+        }
+    }
+    // the keys: the largest cluster's normal, then the candidate least like the keys so far (when it is like none of them): a
+    // small cluster facing another way (a silhouette's rim, lit by a light behind him) is kept as its own, not outvoted
+    var keys: array<vec3<f32>, 3>;
+    var count = 0;
+    var top = -1;
+    var most = 0.0;
+    for (var i = 0; i < 12; i++) {
+        if (!used[i] && cand[i].share > most) {
+            most = cand[i].share;
+            top = i;
+        }
+    }
+    if (top >= 0) {
+        keys[0] = cand[top].n;
+        count = 1;
+    }
+    for (var k = 1; k < 3; k++) {
+        if (count < k) {
+            break;
+        }
+        var pick = -1;
+        var low = HC_CLUSTER_COS;
+        for (var i = 0; i < 12; i++) {
+            if (used[i]) {
+                continue;
+            }
+            var near = -2.0;
+            for (var r = 0; r < count; r++) {
+                near = max(near, dot(keys[r], cand[i].n));
+            }
+            if (near < low) {
+                low = near;
+                pick = i;
+            }
+        }
+        if (pick < 0) {
+            break;
+        }
+        keys[count] = cand[pick].n;
+        count += 1;
+    }
+    // each candidate into the nearest key (one like none of them is left out)
+    var l: array<vec3<f32>, 3>;
+    var n: array<vec3<f32>, 3>;
+    var z: array<f32, 3>;
+    var w: array<f32, 3>;
+    var q2: array<f32, 3>;
+    for (var k = 0; k < 3; k++) {
+        l[k] = vec3<f32>(0.0);
+        n[k] = vec3<f32>(0.0);
+        z[k] = 0.0;
+        w[k] = 0.0;
+        q2[k] = 0.0;
+    }
+    for (var i = 0; i < 12; i++) {
+        if (used[i]) {
+            continue;
+        }
+        var at = -1;
+        var best = HC_CLUSTER_COS;
+        for (var r = 0; r < count; r++) {
+            let v = dot(keys[r], cand[i].n);
+            if (v >= best) {
+                best = v;
+                at = r;
+            }
+        }
+        if (at < 0) {
+            continue;
+        }
+        l[at] += cand[i].light * cand[i].share;
+        n[at] += cand[i].n * cand[i].share;
+        z[at] += cand[i].z * cand[i].share;
+        let lc = dot(cand[i].light, vec3<f32>(0.2126, 0.7152, 0.0722));
+        q2[at] += cand[i].m2 * lc * lc * cand[i].share;
+        w[at] += cand[i].share;
+    }
+    var c: array<HcCluster, 3>;
+    for (var k = 0; k < 3; k++) {
+        c[k] = HcCluster(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0, 0.0);
+        if (w[k] > 0.0) {
+            let lm = dot(l[k] / w[k], vec3<f32>(0.2126, 0.7152, 0.0722));
+            c[k] = HcCluster(l[k] / w[k], w[k] * 0.25, normalize(n[k]), z[k] / w[k], min(q2[k] / w[k] / max(lm * lm, 1.0e-12), 1.0e3));
+        }
+    }
+    return hc_cluster_out(c);
+}
+
+// level 0: a tile of 8 x 8 texels of the capture's inputs ((VIEWLIGHT) hc_keyed: its clusters)
+@fragment
+fn hcprobe_ps(@builtin(position) position: vec4<f32>) -> HcProbeOut {
     let base = vec2<i32>(position.xy) * i32(HC_TILE);
+    if (hc_keyed()) {
+        return hc_cluster_tile(base);
+    }
+    let size = vec2<i32>(textureDimensions(hc_gb2));
+    let msize = vec2<i32>(textureDimensions(hc_mask));
     var s: array<vec4<f32>, 6>;
     for (var k = 0; k < 6; k++) {
         s[k] = vec4<f32>(0.0);
@@ -2346,11 +3250,14 @@ fn hcprobe_ps(@builtin(position) position: vec4<f32>) -> HcProbeOut {
     return hc_probe_out(s);
 }
 
-// a level from the one below (bound alone at t9): the 2 x 2 average
+// a level from the one below (bound alone at t9): the 2 x 2 average ((VIEWLIGHT) hc_keyed: the clusters merged)
 @fragment
 fn hcprobedown_ps(@builtin(position) position: vec4<f32>) -> HcProbeOut {
-    let below = vec2<i32>(textureDimensions(hc_probe, 0));
     let t = vec2<i32>(position.xy) * 2;
+    if (hc_keyed()) {
+        return hc_cluster_down(t);
+    }
+    let below = vec2<i32>(textureDimensions(hc_probe, 0));
     var s: array<vec4<f32>, 6>;
     for (var k = 0; k < 6; k++) {
         var a = vec4<f32>(0.0);
@@ -2411,6 +3318,127 @@ fn hc_probe_light(t: vec2<i32>, n_t: vec3<f32>, z_t: f32) -> vec4<f32> {
     return vec4<f32>(num / max(den, 1.0e-9), den);
 }
 
+// (VIEWLIGHT, hc_keyed) the light at texel t facing n_t from the normal-keyed pyramid: the 7 x 7 blocks of the level whose block is a
+// third of the reach (as hc_probe_light), each cluster weighted by the tent x its share x cos^16 between its normal and n_t, clusters
+// of another depth left out. A texel whose normal no cluster near shares (cos^16 sums to almost nothing) takes the broad cos^2
+// weighting, mixed in at 1 %; (light, weight) (weight 0: no probes bound or no KH texel near)
+fn hc_probe_clusters(t: vec2<i32>, n_t: vec3<f32>, z_t: f32) -> vec4<f32> {
+    let d0 = vec2<i32>(textureDimensions(hc_probe, 0));
+    if (d0.x < 2 || d0.y < 2) {
+        return vec4<f32>(0.0);
+    }
+    let size = vec2<i32>(textureDimensions(hc_gb2));
+    var reach = max(er.hy[9].w - er.hy[9].y, 0.0) / 4.0;
+    if (z_t > 0.01 && er.proj.y > 1.0e-4) {
+        reach = HC_PROBE_REACH_M * 0.5 * f32(size.y) / (er.proj.y * z_t);
+    }
+    reach = clamp(reach, 64.0, 0.5 * f32(size.y));
+    let level = clamp(i32(round(log2(reach / (3.0 * HC_TILE)))), 0, HC_PROBE_LEVELS - 1);
+    let tile = HC_TILE * exp2(f32(level));
+    let dl = vec2<i32>(textureDimensions(hc_probe, level));
+    let c = (vec2<f32>(t) + vec2<f32>(0.5)) / tile;
+    let ci = vec2<i32>(floor(c));
+    // (round 2: the weighted moments for the local-linear read, d = the cluster's normal - the texel's)
+    var sw = 0.0;
+    var sd = vec3<f32>(0.0);
+    var sxx = vec3<f32>(0.0);
+    var sxy = vec3<f32>(0.0);
+    var sl = vec3<f32>(0.0);
+    var sdr = vec3<f32>(0.0);
+    var sdg = vec3<f32>(0.0);
+    var sdb = vec3<f32>(0.0);
+    var lo = vec3<f32>(6.0e4);
+    var hi = vec3<f32>(0.0);
+    var broad_w = 0.0;
+    var cv_sum = 0.0;
+    for (var j = -3; j <= 3; j++) {
+        for (var i = -3; i <= 3; i++) {
+            let p = ci + vec2<i32>(i, j);
+            if (p.x < 0 || p.y < 0 || p.x >= dl.x || p.y >= dl.y) {
+                continue;
+            }
+            let dc = (vec2<f32>(p) + vec2<f32>(0.5) - c) * tile / reach;
+            let g = max(1.0 - length(dc), 0.0);
+            if (g <= 0.0) {
+                continue;
+            }
+            var m2s = vec4<f32>(1.0);
+            if (hc_px_trust()) {
+                m2s = textureLoad(hc_probe, p, 6, level);
+            }
+            for (var k = 0; k < 3; k++) {
+                let a = textureLoad(hc_probe, p, 2 * k, level);
+                if (!(a.w > 0.0)) {
+                    continue;
+                }
+                let b = textureLoad(hc_probe, p, 2 * k + 1, level);
+                // (his own body only: a cluster whose depth lies far from this texel's is another KH character's)
+                if (z_t > 0.0 && b.w > 0.0 && abs(b.w - z_t) > 0.35 + 0.1 * z_t) {
+                    continue;
+                }
+                let cs = max(dot(b.xyz, n_t), 0.0);
+                let w0 = g * a.w;
+                let m2 = select(select(m2s.z, m2s.y, k == 1), m2s.x, k == 0);
+                var w = w0 * (pow(cs, HC_CLUSTER_POW) + 0.01 * cs * cs);
+                broad_w += w0 * cs * cs;
+                if (!(w > 0.0)) {
+                    continue;
+                }
+                cv_sum += max(m2 - 1.0, 0.0) * w;
+                // (round 4) a cluster whose own light varies a lot holds a print (in game: the bright patch at the neck with the sun
+                // behind him, absent on Elden Ring's own character at the same spot): it gives way to the clean clusters facing that way
+                if (hc_px_trust()) {
+                    w *= exp(-max(m2 - 1.0, 0.0) / HC_CLUSTER_CV2);
+                }
+                let d = b.xyz - n_t;
+                sw += w;
+                sd += d * w;
+                sxx += d * d * w;
+                sxy += vec3<f32>(d.x * d.y, d.x * d.z, d.y * d.z) * w;
+                sl += a.xyz * w;
+                sdr += d * (a.x * w);
+                sdg += d * (a.y * w);
+                sdb += d * (a.z * w);
+                // (the bound: the clusters that face this texel's way)
+                if (cs > 0.8) {
+                    lo = min(lo, a.xyz);
+                    hi = max(hi, a.xyz);
+                }
+            }
+        }
+    }
+    if (!(sw > 1.0e-9)) {
+        return vec4<f32>(0.0);
+    }
+    hc_region_cv2 = cv_sum / sw;
+    let mean = sl / sw;
+    if (!hc_local_linear() || !(hi.x >= lo.x)) {
+        return vec4<f32>(mean, broad_w);
+    }
+    // (round 2, VIEWLIGHT LOCAL-LINEAR) the clusters' light as a plane in normal space around the texel's own normal, L = a + b . d,
+    // weighted as above: a is the light AT THE TEXEL'S NORMAL (the weighted mean answers at the clusters' mean normal, which leans
+    // toward the majority: a texel on a fold or a normal-mapped detail took its neighbours' light). Ridge HC_LL_RIDGE; the result
+    // is kept within the lights of the clusters that face its way (no overshoot past what the game gave his surfaces).
+    let m = sd / sw;
+    let c0 = vec3<f32>(sxx.x / sw - m.x * m.x + HC_LL_RIDGE, sxy.x / sw - m.x * m.y, sxy.y / sw - m.x * m.z);
+    let c1 = vec3<f32>(c0.y, sxx.y / sw - m.y * m.y + HC_LL_RIDGE, sxy.z / sw - m.y * m.z);
+    let c2 = vec3<f32>(c0.z, c1.z, sxx.z / sw - m.z * m.z + HC_LL_RIDGE);
+    let det = dot(c0, cross(c1, c2));
+    if (!(det > 1.0e-12)) {
+        return vec4<f32>(mean, broad_w);
+    }
+    let i0 = cross(c1, c2) / det;
+    let i1 = cross(c2, c0) / det;
+    let i2 = cross(c0, c1) / det;
+    let rr = sdr / sw - m * mean.x;
+    let rg = sdg / sw - m * mean.y;
+    let rb = sdb / sw - m * mean.z;
+    let br = vec3<f32>(dot(i0, rr), dot(i1, rr), dot(i2, rr));
+    let bg = vec3<f32>(dot(i0, rg), dot(i1, rg), dot(i2, rg));
+    let bb = vec3<f32>(dot(i0, rb), dot(i1, rb), dot(i2, rb));
+    let at = mean - vec3<f32>(dot(br, m), dot(bg, m), dot(bb, m));
+    return vec4<f32>(clamp(at, lo, hi), broad_w);
+}
 fn hc_blur(t: vec2<i32>, n_t: vec3<f32>) -> vec4<f32> {
     let size = vec2<i32>(textureDimensions(hc_gb2));
     let msize = vec2<i32>(textureDimensions(hc_mask));
@@ -2756,6 +3784,21 @@ fn hycap_ps(@builtin(position) position: vec4<f32>) -> HyCapOut {
     let m = textureLoad(hc_mask, min(t, vec2<i32>(textureDimensions(hc_mask)) - vec2<i32>(1)), 0);
     var ao = clamp(min(m.x, m.y), 0.05, 1.0);
     var vis = clamp(m.w, 0.0, 1.0);
+    // (ER-NATIVE, er.hy[3].y < 0) THE GAME'S LIGHT AT THIS TEXEL, RAW: what its light passes put on the surface the G-buffer pass
+    // wrote here (the white, the albedo x (1 - metalness) of GXLightCmbAlbedo taken out again exactly: the same G-buffer values
+    // it multiplied with), every light, shadow, occlusion and GI term in it as the game made it. No fill, no probes, no means, no
+    // cascade lookup of ours: only KH texels are captured (the rule above, row 8.z = 1), each with its own light. With the
+    // specular (row 3.y = -2) the native layout (er_oct_encode) carries the game's specular accumulation at the texel too.
+    if (er.hy[0].x != 0.0 && er.hy[3].y < -0.5) {
+        o.light = vec4<f32>(min(light, vec3<f32>(6.0e4)), ao);
+        o.geo = vec4<f32>(n / len, vis);
+        if (er.hy[3].y < -1.5) {
+            let spec = min(max(textureLoad(hc_spec, t, 0).xyz, vec3<f32>(0.0)), vec3<f32>(6.0e4));
+            o.light = vec4<f32>(min(light, vec3<f32>(6.0e4)), spec.z);
+            o.geo = vec4<f32>(er_oct_encode(n / len) + vec2<f32>(2.0), spec.x, spec.y);
+        }
+        return o;
+    }
     // (RSF2 round 10) the printed dark shapes closed (see hc_close); the mask's
     // occlusion and the sun's visibility as their means (round 5)
     var fitted = false;
@@ -2788,6 +3831,20 @@ fn hycap_ps(@builtin(position) position: vec4<f32>) -> HyCapOut {
             // (no measured pair: er.hy[17].y for the KH texels, er.hy[17].x for the ground, through the trust)
             game_shade = mix(1.0, mix(clamp(er.hy[17].y, 0.03, 1.0), sr.x, sr.y), 1.0 - own_vis);
             world = mix(1.0, mix(clamp(er.hy[17].x, 0.03, 1.0), sr.z, sr.w), 1.0 - own_vis);
+            // (VIEWLIGHT round 2, the coordinator: "the RT OFF ~40 % overbright") THE SHADE COUNTED ONCE. The probes average the game's own
+            // light on his surfaces, which already holds the sun's shadow where it falls (in game, rsf20/ig: Elden Ring's own character,
+            // the Tarnished, shown at the same spot is in the same shade). Round 13 divided by the KH ratio and multiplied by the
+            // GROUND's: a body in uniform shade came out at 0.35 / 0.65 = 0.54 x the game's light, in RT MAX and RT OFF alike
+            // (level x0.43 - 0.55 against the game's own light per pixel). Now, with rho the KH texels' own shade ratio, the light held
+            // as if in the sun is the probes' over rho + (1 - rho) x the lit share of the KH texels around (hc_kh_lit), and the world
+            // factor is rho + (1 - rho) x this texel's own visibility: in uniform shade (or sun) the result is the game's light; across
+            // a shadow edge on his body the edge is his own, sharp, from the cascades.
+            if (hc_local_linear()) {
+                let rho = mix(clamp(er.hy[17].y, 0.03, 1.0), sr.x, sr.y);
+                let vbar = select(own_vis, hc_kh_lit, hc_kh_lit >= 0.0);
+                game_shade = rho + (1.0 - rho) * vbar;
+                world = rho + (1.0 - rho) * own_vis;
+            }
         }
         world = mix(1.0, world, clamp(er.hy[16].w, 0.0, 1.0));
         light = y_px / max(game_shade, 0.15) * ao_m;
@@ -2804,12 +3861,37 @@ fn hycap_ps(@builtin(position) position: vec4<f32>) -> HyCapOut {
         // In game (rsf16, the Gatefront tower wall, low camera, RT MAX and OFF): fit 3 printed leaf-shaped mottling on the trousers
         // (r.hybrid_debug=2), fit 5 none; frame-to-frame flicker standing 0.07-0.13 (fit 3 0.03-0.19), orbiting 0.05-0.08 (fit 3 0.07-0.25)
         // (RSF round 19, fit 6, THE DEFAULT) the probes (hc_probe_light): no printed shape of the background at any size or distance
+        // (VIEWLIGHT, er.hy[17].w, THE DEFAULT) the normal-keyed probes (hc_probe_clusters): no light from behind a
+        // KH character on the side facing the camera; r.hybrid_normal_probes 0 = round 19's six-direction cube (it did that), a testing aid
         var probed = false;
         if (er.hy[8].w > 5.5) {
-            let pr = hc_probe_light(t, n / len, hc_view_m(t));
+            var pr = vec4<f32>(0.0);
+            if (hc_keyed()) {
+                pr = hc_probe_clusters(t, n / len, hc_view_m(t));
+            } else {
+                pr = hc_probe_light(t, n / len, hc_view_m(t));
+            }
             if (pr.w > 1.0e-4) {
                 light = pr.xyz / max(game_shade, 0.15) * ao_m;
                 probed = true;
+                // (VIEWLIGHT round 3, the coordinator: "use ER's per-pixel light where it is provably ours and the clusters elsewhere")
+                // THE PRINT DISCRIMINATOR. The game's own light at this texel (y_px x its occlusion: every light, shadow, rim and crease
+                // Elden Ring worked out at his own place and normal) is taken where it AGREES with the print-free reconstruction of the
+                // clusters (its final value, the world factor in): a weight exp(-(ln(game / clusters) / HC_PX_SIGMA)^2). A real crease, a
+                // rim, a normal-map detail differ from the clusters by a little and come through; the background printed into the
+                // screen-space terms (a pillar's shade x0.1, a candle x2.5, a window's bars) differs by a lot and is left to the
+                // clusters. Stored so that the colour shaders' world factor gives back the game's own value.
+                if (hc_px_trust()) {
+                    let luma = vec3<f32>(0.2126, 0.7152, 0.0722);
+                    let game_px = y_px * ao;
+                    let lp = dot(game_px, luma);
+                    let lk = dot(light, luma) * world;
+                    if (lp > 1.0e-6 && lk > 1.0e-6) {
+                        let q = log(lp / lk) / HC_PX_SIGMA;
+                        let w = exp(-q * q) * exp(-hc_region_cv2 / HC_REGION_CV2);
+                        light = mix(light, game_px / max(world, 0.15), w);
+                    }
+                }
             }
             // (testing aid, r.hybrid_fit 7: the probes' weight as the light)
             if (er.hy[8].w > 6.5) {
@@ -4178,5 +5260,26 @@ fn finale_disp_ps(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f
         discard;
     }
     return vec4<f32>(select(fz_srgb(look.xyz), clamp(look.xyz, vec3<f32>(0.0), vec3<f32>(1.0)), fz.f[42].x > 0.5), look.w);
+}
+#endif
+
+#ifdef ER_BLUEHOUR
+// (AUDIT-C TF, bluehour.ps.dxil, kh-er-render bluehour.rs) DOUBLE FORM'S ULTIMATE FINISH, THE BLUE HOUR (KH3's state-event
+// camera BP_TresPlayerStateEventCamera_Oath_keeper @495 .. @1750: SetActorVisibleOff on the map, the background, the gimmicks,
+// the NPCs and the props; the enemies and the players stay): over the full screen, every pixel whose stencil class is NOT the
+// characters' (the pipeline's stencil test: upper four bits != 0x5, Elden Ring's characters 0x50 and the KH characters' early
+// depth 0x50 pass through untouched) becomes empty: black and the farthest depth (reversed Z: 0), so the sky dome
+// vw_so220_fin_fsg0 drawn after it (depth-tested) is the background. No bindings.
+struct BlueHourOut {
+    @location(0) color: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+}
+
+@fragment
+fn bluehour_ps(@builtin(position) position: vec4<f32>) -> BlueHourOut {
+    var o: BlueHourOut;
+    o.color = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    o.depth = 0.0;
+    return o;
 }
 #endif

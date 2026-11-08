@@ -5,7 +5,7 @@
 
 use kh_core::abilities::xs::{self, X};
 use kh_core::enums::{ETresAbilityKind as A, ETresDamageKind};
-use kh_core::host::{BodyReaction, EventKind, HitRecord, TargetBody};
+use kh_core::host::{BodyReaction, HitRecord, TargetBody};
 use kh_core::magic::View;
 use kh_core::states::HitOnPlayer;
 use kh_core::status::LoadoutValue;
@@ -280,12 +280,14 @@ fn xsi_spectral_rays_is_the_shotlock_when_chosen_and_its_beams_refract() {
     let out = b.step(&[PadButton::RightShoulder]);
     assert_eq!(out.state, StateId::Shootflow);
     b.until(400, &[], |o, _| o.state != StateId::Shootflow);
+    b.run(30);
+    // (SHOT-A laser) KH3's kind 11 (magic/shotlocks/laser.rs, tests/shotlock_laser.rs): one SF_REFLECTIVELASER ray per
+    // lock at its target, no refraction (XSI's own schedule asserted ">= total beams, each refracted at half damage").
     let direct = b.hits_of("SF_REFLECTIVELASER");
-    assert!(direct.len() as i32 >= total, "{} beam hits for {total} locks", direct.len());
-    // Each beam refracts to the other dummy at half the damage (the same stats on both).
+    assert_eq!(direct.len() as i32, total, "{} ray hits for {total} locks", direct.len());
     let full = direct.iter().map(|h| h.damage).fold(0.0, f32::max);
-    let half = direct.iter().map(|h| h.damage).fold(f32::INFINITY, f32::min);
-    assert!((half - full * X.spectral_refract_scale).abs() <= 1.0, "full {full}, refracted {half}");
+    let least = direct.iter().map(|h| h.damage).fold(f32::INFINITY, f32::min);
+    assert!(full - least <= 1.0, "no refracted (weaker) rays: {least} .. {full}");
     assert!(b.sora.combat().history.is_empty() || !b.sora.combat().history.contains(&0));
     // Not chosen (or chosen without the ability): the Keyblade's own King of Hearts.
     let mut b = Bench::new(level99(&[]), &foes);
@@ -323,7 +325,6 @@ fn xsi_critical_counter_just_guard_wears_a_strong_bodys_endurance() {
     let row = kh_core::status::tables::ability_row(A::CriticalCounter).unwrap();
     assert_eq!((row.ap, row.owner), (Some(5), "sora"));
     assert_eq!((kh_core::status::tables::level_ability(18, 2), kh_core::status::tables::level_ability(18, 0)), (Some(A::CriticalCounter), Some(A::WaterUp)));
-    let _ = EventKind::AimMode { open: false, reason: 0 };
 }
 
 // ------------------------------------------------------------------------------------ the finishers (2.3 - 2.6, 2.12)
@@ -581,7 +582,8 @@ fn xsi_rage_raid_answers_a_revenge_and_ends_it() {
 }
 
 /// (ER90, XSI request 2) the guard's own counter prompt (Revenge Slash) no longer pushes Raid out of slot B in the step the
-/// block offers it: Y gives Rage Raid, as Attack does; without Rage Raid (or a body without revenge) Y gives the counter.
+/// block offers it: Y gives Rage Raid, as Attack does; without Rage Raid (or a body without revenge) Attack gives the counter
+/// (INT-F: the counter window is never a situation entry, KH3 1:1).
 #[test]
 fn xsi_rage_raid_keeps_slot_b_so_y_gives_raid() {
     let foe = dummy(1, Vec3::new(150.0, 0.0, 0.0));
@@ -592,7 +594,8 @@ fn xsi_rage_raid_keeps_slot_b_so_y_gives_raid() {
     assert_eq!(b.sora.combat().situation.slot_b.map(|e| e.kind), Some(raid), "slot B holds Raid: {:?}", b.sora.combat().situation);
     b.step(&[PadButton::SITUATION]);
     b.until(60, &[], |_, s| s.combat().history.last() == Some(&xs::rage::RAGE_RAID));
-    // The plain guard counter: slot B shows the guard's prompt (not Raid) and Y plays a counter, not Raid.
+    // The plain guard counter: (INT-F, KH3 1:1) the guard's prompt is on the Attack slot, not in slot B (no Raid there
+    // either), and Attack plays a counter, not Raid.
     for (abilities, revenge) in [(&[][..], true), (&[A::RageRaid][..], false)] {
         let mut b = Bench::new(level99(abilities), &[foe]);
         if revenge {
@@ -600,8 +603,8 @@ fn xsi_rage_raid_keeps_slot_b_so_y_gives_raid() {
         }
         guarded_hit(&mut b, &foe);
         let shown = b.sora.combat().situation.slot_b.map(|e| e.kind);
-        assert!(shown.is_some() && shown != Some(raid), "{abilities:?} revenge {revenge}: slot B {shown:?}");
-        b.step(&[PadButton::SITUATION]);
+        assert!(shown != Some(raid) && b.sora.actions().counter_window > 0.0, "{abilities:?} revenge {revenge}: slot B {shown:?}");
+        b.step(&[PadButton::ATTACK]);
         b.run(30);
         assert!(!b.sora.combat().history.contains(&xs::rage::RAGE_RAID), "{:?}", b.kinds());
     }

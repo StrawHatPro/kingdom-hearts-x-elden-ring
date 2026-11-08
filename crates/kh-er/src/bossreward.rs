@@ -38,6 +38,12 @@
 //! WRONGLY INCLUDE: a named boss whose flag guess is wrong (it then gives an item instead of its row's reward:
 //! the log says so, `boss.grant` gives the row), any non-boss the game shows a boss bar for.
 //!
+//! (P9b ACQUISITION, documentation/KH3_WEAPONS_PLAN.md 6b / 6c) THE SAME POLL GIVES KH3's WEAPONS AND RAISES THE MOOGLE
+//! LEVEL: a `kb.<boss>` row's Keyblade once per save when its boss row's verified defeat flag is set (record `kb:<boss>`),
+//! a P9a `chest.<KEY>` row's weapon once when the chest lot's getItemFlagId is set (record `wsrc:<flag>`), both at the
+//! catch-up time for flags set before, whoever leads; an owned Keyblade refused by the weapons' door, its source recorded.
+//! The Moogle level (P6a's steps by defeat flags) is raised at every poll, never lowered. The rare drops: weaponsrc.rs.
+//!
 //! THE LOG (prefix `boss:`): the table's summary at start; every boss-bar death with its chr id, NpcParam id, max
 //! HP and map block; every flag of the block's own range (`<map>0800` .. `<map>0899`) that BECOMES SET within 30 s
 //! of it (this is what turns a `guess` into `verified`); every grant, refusal and held-back reward.
@@ -55,7 +61,7 @@ pub fn region_depth() -> Option<u8> {
 use std::collections::VecDeque;
 
 use kh_core::Sora;
-use kh_host::bossrewards::{self, Claim, SmallReward, Table};
+use kh_host::bossrewards::{self, Claim, SmallReward, Table, WeaponSources};
 
 use crate::control::{Control, OneShot};
 use crate::erlog;
@@ -85,6 +91,21 @@ pub struct Env<'a> {
     pub held: &'a dyn Fn(&str) -> u32,
     /// Hands Sora a KH item (the item popup, the stock). False: no such item.
     pub give: &'a mut dyn FnMut(u32) -> bool,
+    /// (P9b) Hands over one weapon through the weapons' door (`kh_host::bossrewards::give_one`): a Keyblade owned is refused.
+    pub weapon: &'a mut dyn FnMut(u32) -> kh_host::weapons::Gift,
+    /// (P9b) Raises the Moogle level to what the defeat flags reach (never lowers it): (the level before, after).
+    pub moogle: &'a mut MoogleRaise<'a>,
+}
+
+/// (P9b) The Moogle level's raise by the defeat flags (a reader of a flag being set): (the level before, after).
+pub type MoogleRaise<'a> = dyn FnMut(&dyn Fn(u32) -> bool) -> (u8, u8) + 'a;
+
+/// (P9b, plan 6c) The running record's Moogle level raised by the flags (P6a's `raise_shop_level`): (before, after).
+pub fn raise_moogle(flags: &dyn Fn(u32) -> bool) -> (u8, u8) {
+    kh_host::weapons::with_workshop(|ws| {
+        let before = ws.moogle_level;
+        (before, kh_host::workshop::raise_shop_level(ws, flags))
+    })
 }
 
 struct Candidate {
@@ -144,6 +165,10 @@ pub struct ErBossRewards {
     watch: Option<Watch>,
     depth: u8,
     grant: Option<OneShot>,
+    /// (P9b) P9a's chest / drop rows (kh_host::bossrewards::weapon_sources).
+    sources: WeaponSources,
+    /// (P9b) The Moogle level was told at the first poll.
+    moogle_told: bool,
     /// The latest log lines (the tests read them).
     pub said: VecDeque<String>,
 }
@@ -152,12 +177,14 @@ impl ErBossRewards {
     pub fn new(control: &Control) -> ErBossRewards {
         let mut out = ErBossRewards::with_table(Table::load());
         out.grant = Some(OneShot::new("boss.grant", control));
+        out.sources = bossrewards::weapon_sources().clone(); // (P9b) the sheet on disk
         out
     }
 
     pub fn with_table(table: Table) -> ErBossRewards {
         let seen = vec![None; table.rows.len()];
-        ErBossRewards { table, loot: None, told: false, off_told: false, age: 0.0, calm: 0.0, poll_in: 0.0, polled: false, flags_ok: false, seen, since_rise: 1.0e6, catch_up: Vec::new(), xs_caught: false, due: Vec::new(), small: Vec::new(), watch: None, depth: 0, grant: None, said: VecDeque::new() }
+        let sources = WeaponSources::parse(bossrewards::WEAPON_SOURCES_SHEET); // (P9b)
+        ErBossRewards { table, loot: None, told: false, off_told: false, age: 0.0, calm: 0.0, poll_in: 0.0, polled: false, flags_ok: false, seen, since_rise: 1.0e6, catch_up: Vec::new(), xs_caught: false, due: Vec::new(), small: Vec::new(), watch: None, depth: 0, grant: None, sources, moogle_told: false, said: VecDeque::new() }
     }
 
     fn say(&mut self, line: String) {
@@ -174,7 +201,8 @@ impl ErBossRewards {
         let grant = self.grant.as_mut().and_then(|g| g.fired(control));
         let mut records = crate::hud::records();
         let before = records.len();
-        let env = Env { flag: &game_flag, block, busy, dt, deaths, held: &kh_host::items::held, give: &mut |item_id| kh_host::items::give(item_id, 1) };
+        crate::weaponsrc::aids(control); // (P9b) the test profile's test.wsrc_* one-shots
+        let env = Env { flag: &game_flag, block, busy, dt, deaths, held: &kh_host::items::held, give: &mut |item_id| kh_host::items::give(item_id, 1), weapon: &mut bossrewards::give_one, moogle: &mut raise_moogle };
         self.frame_with(on, grant, &mut records, sora, env);
         // (ER party S6, U3) the friends' victory bonuses of the bosses this character has beaten (party rows)
         #[cfg(feature = "party")]
@@ -190,7 +218,7 @@ impl ErBossRewards {
             if !std::mem::replace(&mut self.off_told, true) {
                 self.say("boss rewards are OFF (boss.rewards = 0): no boss gives anything; nothing is recorded".to_string());
             }
-            (self.due.clear(), self.catch_up.clear(), self.small.clear());
+            self.due.clear(); self.catch_up.clear(); self.small.clear();
             (self.polled, self.told, self.age) = (false, false, 0.0);
             return;
         }
@@ -261,8 +289,11 @@ impl ErBossRewards {
                 for k in 0..self.table.rows.len() {
                     let (id, name) = (self.table.rows[k].id.clone(), self.table.rows[k].name.clone());
                     let Some((flag, _)) = self.table.rows[k].flag else { continue };
+                    if self.table.rows[k].reserved {
+                        continue; // (BOSSFLAGS) no reward yet: it stays a small boss
+                    }
                     let now = (env.flag)(flag).unwrap_or(false);
-                    let before = std::mem::replace(&mut self.seen[k], Some(now));
+                    let before = self.seen[k].replace(now);
                     if !now {
                         continue;
                     }
@@ -292,11 +323,21 @@ impl ErBossRewards {
                     self.say(format!(
                         "AT SORA'S START: {} of {} defeat flags are set ({}); {} reward(s) recorded for this character; {}",
                         set_names.len(),
-                        self.table.rows.iter().filter(|r| r.flag.is_some()).count(),
+                        self.table.rows.iter().filter(|r| r.flag.is_some() && !r.reserved).count(),
                         if set_names.is_empty() { "none".to_string() } else { set_names.join("; ") },
                         had,
                         if self.catch_up.is_empty() { "nothing to catch up".to_string() } else { format!("CATCH-UP: {} boss(es) beaten before and not rewarded yet: {}", self.catch_up.len(), self.catch_up.join(", ")) }
                     ));
+                }
+            }
+            // (P9b, plan 6c) THE MOOGLE LEVEL from the defeat flags (P6a's steps; only ever raised), at the first poll (the
+            // loaded save) and whenever a flag rises. KH3 shows no notification for it (no such string in its tables: the
+            // merchants' stock simply grows; the log says it)
+            if self.flags_ok {
+                let (before, after) = (env.moogle)(&|f| (env.flag)(f) == Some(true));
+                if after > before || !self.moogle_told {
+                    self.say(format!("THE MOOGLE LEVEL {}: {after} (it was {before}; plan 6c: 1 start, 2 Godrick, 3 / 4 the second / third Great Rune holder, 5 Morgott, 6 Maliketh, 7 Godfrey / Hoarah Loux): the merchants sell KH3's Moogle stock up to it", if after > before { "RISES" } else { "is" }));
+                    self.moogle_told = true;
                 }
             }
             self.polled = true;
@@ -327,6 +368,14 @@ impl ErBossRewards {
                     self.say(format!("row {} = {} ({}): {} | {} | {}", row.id, row.name, row.region, row.reward_text(), state, if bossrewards::recorded(records, &row.id) { "REWARDED" } else { "not rewarded" }));
                 }
                 self.say(format!("small bosses rewarded for this character: {}", bossrewards::small_count(records)));
+                // (P9b) the boss Keyblades and the chests' weapons with their flags and records
+                for k in self.table.kb.clone() {
+                    let state = k.flag.map_or("no verified flag".to_string(), |f| format!("flag {f} {}", match (env.flag)(f) { Some(true) if self.flags_ok => "SET", Some(false) if self.flags_ok => "clear", _ => "not readable" }));
+                    self.say(format!("keyblade kb.{} = {}: {} | {state} | {}", k.boss, k.name, k.tokens.iter().map(|t| t.label()).collect::<Vec<_>>().join(", "), if bossrewards::kb_recorded(records, &k.boss) { "GIVEN" } else { "not given" }));
+                }
+                for c in self.sources.chests.clone() {
+                    self.say(format!("chest {} ({}): flag {} {} | {}", c.id, c.place, c.flag, if (env.flag)(c.flag) == Some(true) { "SET" } else { "clear / not readable" }, if bossrewards::wsrc_recorded(records, c.flag) { "GIVEN" } else { "not given" }));
+                }
             } else {
                 match self.table.row(&value).map(|r| (r.id.clone(), r.name.clone())) {
                     None => self.say(format!("boss.grant = {value}: NO SUCH ROW (boss.grant = list lists the row ids)")),
@@ -421,6 +470,31 @@ impl ErBossRewards {
                 Claim::Unknown => self.say(format!("row {id}: no such row")),
             }
         }
+        // ---- (P13 ORE, documentation/KH3_WEAPONS_PLAN.md 3.1) the fixed Orichalcum / Orichalcum+ placements (sheet
+        // kh-ore-placements, kh_host::bossrewards::placements_due): an active placement whose flag is set gives its item once
+        // per save (record ore:<id>; a save past it at the catch-up time), whatever the boss row's own record; never random
+        if self.flags_ok && self.age >= CATCH_UP_AFTER {
+            for p in bossrewards::placements_due(bossrewards::placements(), records, env.flag) {
+                if let Some(g) = bossrewards::claim_placement(records, p) {
+                    self.say(format!("ORE PLACEMENT: {} (ore.{}, flag {}): {}; recorded ore:{}", p.place, p.id, p.flag.unwrap_or(0), g.text, p.id));
+                }
+            }
+            // ---- (P9b ACQUISITION, plan 6b / Q8) THE BOSS KEYBLADES (`kb.*`) and THE CHESTS' WEAPONS (P9a's `chest.*`): once per
+            // save when the flag is set (records kb:<boss>, wsrc:<flag>), whoever leads; a save past them gets them now (the
+            // catch-up); an owned Keyblade is refused by the weapons' door and its source recorded all the same; KH3's
+            // OBTAINED popup when the weapon reaches the stock (the HUD)
+            let kb: Vec<bossrewards::KbRow> = bossrewards::kb_due(&self.table, records, env.flag).into_iter().cloned().collect();
+            for row in kb {
+                let Some(given) = bossrewards::claim_kb_with(records, &row, &mut *env.weapon) else { continue };
+                let what = given.iter().map(bossrewards::WeaponGiven::text).collect::<Vec<_>>().join(", ");
+                self.say(format!("KEYBLADE of {} (kb.{}, defeat flag {}): {what}; recorded kb:{}", row.name, row.boss, row.flag.unwrap_or(0), row.boss));
+            }
+            let chests: Vec<bossrewards::ChestSource> = bossrewards::chests_due(&self.sources, records, env.flag).into_iter().cloned().collect();
+            for chest in chests {
+                let Some(given) = bossrewards::claim_chest_with(records, &chest, &mut *env.weapon) else { continue };
+                self.say(format!("CHEST WEAPON: {} ({}, item flag {}): {}; recorded wsrc:{}", chest.place, chest.id, chest.flag, given.text(), chest.flag));
+            }
+        }
     }
 }
 
@@ -461,7 +535,7 @@ pub mod party {
                 for token in value[c.name().to_ascii_lowercase()].as_array().map_or(&[][..], |a| a.as_slice()) {
                     match token.as_str().and_then(FriendReward::parse) {
                         Some(r) => rewards.push((c, r)),
-                        None => problems.push(format!("{id}: {} reward {token} not understood (bonus:<ETresVictoryBonusKind> | ability:<game name> | kit:<kit ability> | don:<Donald's ability>)", c.name())),
+                        None => problems.push(format!("{id}: {} reward {token} not understood (ability:<game name> | kit:<kit ability> | don:<Donald's ability>; HP, MP and slots are the don. / gof. rows')", c.name())),
                     }
                 }
             }
@@ -497,41 +571,14 @@ pub mod party {
             FriendReward::Ability(k) => kh_core::status::tables::ABILITIES.iter().find(|row| row.kind == *k).map_or_else(|| k.name().to_string(), |row| row.name.to_string()),
             FriendReward::Kit(_) => r.label(), // (party X3D) a kit ability: its own name ("Aero Float")
             FriendReward::Don(_) => r.label(), // (DON-PROG) one of Donald's overhaul abilities ("Aero Float")
-            FriendReward::Bonus(_) => {
-                let raw = r.label();
-                let n = raw.rsplit("UP").next().and_then(|n| n.parse::<i32>().ok()).unwrap_or(1);
-                match raw.split('_').next().unwrap_or("") {
-                    "HP" => format!("Max HP +{n}"),
-                    "MP" => format!("Max MP +{n}"),
-                    "ITEM" => "Item Slot +1".to_string(),
-                    "DEF" => "Armor Slot +1".to_string(),
-                    "ACC" => "Accessory Slot +1".to_string(),
-                    _ => raw,
-                }
-            }
         }
     }
 
     /// (BN) THE BONUS! PANEL'S LINE OF A FRIEND'S REWARD AS KH3 WRITES IT (0x141596150): an ability (KH3's or his kit's)
-    /// its name after the ability sparkle; a max HP / MP bonus or a slot KH3's own stat line, no icon ("Maximum HP
-    /// increased!", "Item slot unlocked!").
+    /// its name after the ability sparkle.
     pub fn panel_line(r: &FriendReward) -> String {
         use kh_ui::hud_side::{icon_line, LineIcon};
-        match r {
-            FriendReward::Ability(_) | FriendReward::Kit(_) | FriendReward::Don(_) /* (DON-PROG) */ => icon_line(LineIcon::Ability, &label(r)),
-            FriendReward::Bonus(_) => {
-                let side = kh_ui::hud_side::SideStrings::default();
-                let raw = r.label();
-                match raw.split('_').next().unwrap_or("") {
-                    "HP" => side.bonus_lines[0].clone(),
-                    "MP" => side.bonus_lines[1].clone(),
-                    "DEF" => side.bonus_lines[2].clone(),
-                    "ACC" => side.bonus_lines[3].clone(),
-                    "ITEM" => side.bonus_lines[4].clone(),
-                    _ => label(r),
-                }
-            }
-        }
+        icon_line(LineIcon::Ability, &label(r))
     }
 
     fn rows() -> &'static (Vec<PartyRow>, Vec<String>) {
@@ -581,8 +628,8 @@ pub mod party {
             assert!(rows.len() >= 20, "{}", rows.len());
             // (party X3D) the playable kits' port abilities (`kit:` tokens) are counted apart from KH3's rows
             let count = |c: PartyChara| rows.iter().flat_map(|r| &r.rewards).filter(|r| r.0 == c && !matches!(r.1, FriendReward::Kit(_) | FriendReward::Don(_))).count(); // (DON-PROG) + Donald's overhaul abilities
-            // KH3's own friend rows: Donald 13 rows (16 rewards), Goofy 14 rows (15 rewards)
-            assert_eq!((count(PartyChara::Donald), count(PartyChara::Goofy)), (16, 15));
+            // (GF-STATS) KH3's own friend rows, their HP and slot bonuses moved to the don. / gof. rows: the docs' abilities
+            assert_eq!((count(PartyChara::Donald), count(PartyChara::Goofy)), (9, 8));
             // (party X3D) Red Wolf of Radagon gives Donald Aero Float (XD decision 7); (DON-PROG) his overhaul ability now
             let red = rows.iter().find(|r| r.boss == "red_wolf").expect("party.red_wolf");
             assert_eq!(red.rewards, vec![(PartyChara::Donald, FriendReward::Don(kh_party::donald::DonAbility::AeroFloat))]);
@@ -603,16 +650,15 @@ pub mod party {
                 records.push(record_key(&r.boss, *c));
             }
             assert!(due(&rows, &records, &[PartyChara::Donald]).is_empty(), "once");
-            // Goofy joins later (unlocked by Leonine): both bosses' rewards for him now
+            // Goofy joins later (unlocked by Leonine): the Tree Sentinel's ability for him now (GF-STATS: Leonine's HP is his roster
+            // record's, joined or not, so no party row of his is left there)
             let late = due(&rows, &records, &[PartyChara::Donald, PartyChara::Goofy]);
-            assert_eq!(late.iter().map(|(r, c)| (r.boss.as_str(), *c)).collect::<Vec<_>>(), vec![("tree_sentinel", PartyChara::Goofy), ("leonine", PartyChara::Goofy)]);
+            assert_eq!(late.iter().map(|(r, c)| (r.boss.as_str(), *c)).collect::<Vec<_>>(), vec![("tree_sentinel", PartyChara::Goofy)]);
             assert!(due(&rows, &records, &[PartyChara::Sora]).is_empty(), "Sora has his own rows");
-            assert_eq!(label(&FriendReward::parse("bonus:HP_UP10").unwrap()), "Max HP +10");
-            assert_eq!(label(&FriendReward::parse("bonus:ITEM_SLOT_UP1").unwrap()), "Item Slot +1");
+            assert_eq!(FriendReward::parse("bonus:HP_UP10"), None, "HP and slots are raw amounts of the roster's record");
         }
 
-        /// (BN) A friend's BONUS! lines as KH3 writes them: abilities (KH3's and his kit's) after the sparkle; max HP / MP
-        /// and slots KH3's own stat lines with no icon. Roster boosts: the boost item after the camp-item icon + the
+        /// (BN) A friend's BONUS! lines as KH3 writes them: abilities (KH3's and his kit's) after the sparkle. Roster boosts: the boost item after the camp-item icon + the
         /// stat line; an Elden Ring item's permanent stat the KH3 line alone.
         #[test]
         fn bn_friend_panel_lines_carry_kh3_icons() {
@@ -620,10 +666,6 @@ pub mod party {
             assert_eq!(p("ability:FIRE_UP"), "<icon(Ability)>Fire Boost");
             assert!(p("kit:AERO_FLOAT").starts_with("<icon(Ability)>"), "{}", p("kit:AERO_FLOAT"));
             assert_eq!(p("don:AERO_FLOAT"), "<icon(Ability)>Aero Float"); // (DON-PROG)
-            assert_eq!(p("bonus:HP_UP10"), "Maximum HP increased!");
-            assert_eq!(p("bonus:ITEM_SLOT_UP1"), "Item slot unlocked!");
-            assert_eq!(p("bonus:ACC_SLOT_UP1"), "Accessory slot unlocked!");
-            assert_eq!(p("bonus:DEF_SLOT_UP1"), "Armor slot unlocked!");
             use kh_party::boosts::Boost;
             assert_eq!(crate::partyui::boost_panel(Boost::Strength, "small boss x"), vec!["<icon(CampItem)>Strength Boost".to_string(), "Strength +1".to_string()]);
             assert_eq!(crate::partyui::boost_panel(Boost::Ap(1), "the Elden Ring item's reward ap:1"), vec!["Maximum AP increased!".to_string()]);
@@ -632,7 +674,7 @@ pub mod party {
     }
 }
 
-fn game_flag(id: u32) -> Option<bool> {
+pub(crate) fn game_flag(id: u32) -> Option<bool> {
     use eldenring::cs::CSEventFlagMan;
     use fromsoftware_shared::FromStatic;
     // SAFETY: game thread; the singleton lives as long as the game; the flag blocks are the game's own tables
@@ -666,6 +708,11 @@ mod tests {
         flags: RefCell<HashSet<u32>>,
         readable: bool,
         given: RefCell<Vec<u32>>,
+        /// (P9b) the weapons handed over (item ids), and the Keyblades owned (the mock weapons' door refuses a second)
+        weapons: RefCell<Vec<u32>>,
+        owned: RefCell<HashSet<u32>>,
+        /// (P9b) the mock Moogle level
+        moogle: std::cell::Cell<u8>,
         rewards: ErBossRewards,
         records: Vec<String>,
         sora: Sora,
@@ -675,14 +722,27 @@ mod tests {
         fn new(set: &[u32]) -> Game {
             let mut flags: HashSet<u32> = set.iter().copied().collect();
             flags.insert(6001);
-            Game { flags: RefCell::new(flags), readable: true, given: RefCell::new(Vec::new()), rewards: ErBossRewards::with_table(Table::parse(bossrewards::SHEET)), records: Vec::new(), sora: new_sora() }
+            Game { flags: RefCell::new(flags), readable: true, given: RefCell::new(Vec::new()), weapons: RefCell::new(Vec::new()), owned: RefCell::new(HashSet::new()), moogle: std::cell::Cell::new(1), rewards: ErBossRewards::with_table(Table::parse(bossrewards::SHEET)), records: Vec::new(), sora: new_sora() }
         }
 
         fn run(&mut self, seconds: f32, block: i32, busy: bool, deaths: &[(i32, i32, i32)], grant: Option<&str>) {
             let frames = (seconds / DT).round().max(1.0) as u32;
             for k in 0..frames {
-                let (flags, readable, given) = (&self.flags, self.readable, &self.given);
-                let env = Env { flag: &|id| readable.then(|| flags.borrow().contains(&id)), block, busy, dt: DT, deaths: if k == 0 { deaths } else { &[] }, held: &|_| 0, give: &mut |id| { given.borrow_mut().push(id); true } };
+                let (flags, readable, given, weapons, owned, moogle) = (&self.flags, self.readable, &self.given, &self.weapons, &self.owned, &self.moogle);
+                let weapon = &mut |id: u32| {
+                    let keyblade = kh_host::weapons::by_id(id).is_some_and(kh_host::weapons::Weapon::is_keyblade);
+                    if keyblade && !owned.borrow_mut().insert(id) {
+                        return kh_host::weapons::Gift::AlreadyOwned;
+                    }
+                    weapons.borrow_mut().push(id);
+                    kh_host::weapons::Gift::Given(1)
+                };
+                let raise = &mut |f: &dyn Fn(u32) -> bool| {
+                    let before = moogle.get();
+                    moogle.set(before.max(kh_host::workshop::shop_level_of(f)));
+                    (before, moogle.get())
+                };
+                let env = Env { flag: &|id| readable.then(|| flags.borrow().contains(&id)), block, busy, dt: DT, deaths: if k == 0 { deaths } else { &[] }, held: &|_| 0, give: &mut |id| { given.borrow_mut().push(id); true }, weapon, moogle: raise };
                 self.rewards.frame_with(true, grant.filter(|_| k == 0).map(str::to_string), &mut self.records, &mut self.sora, env);
             }
         }
@@ -699,7 +759,7 @@ mod tests {
     #[test]
     fn the_flag_ranges_of_the_map_blocks() {
         assert_eq!(flag_base(STORMVEIL), Some(10000800));
-        assert_eq!(flag_base((14 << 24) | 0), Some(14000800));
+        assert_eq!(flag_base(14 << 24), Some(14000800));
         assert_eq!(flag_base((39 << 24) | (20 << 16)), Some(39200800));
         assert_eq!(flag_base(LIMGRAVE), Some(1042360800));
         assert_eq!(flag_base((61 << 24) | (48 << 16) | (44 << 8)), Some(2048440800));
@@ -726,18 +786,18 @@ mod tests {
         game.run(1.0, STORMVEIL, false, &[], None);
         assert_eq!(game.thunder(), 0);
         game.run(1.0, STORMVEIL, false, &[], None);
-        assert_eq!((game.thunder(), game.records.clone()), (1, vec!["boss:margit".to_string()]));
+        assert_eq!((game.thunder(), game.records.clone()), (1, vec!["boss:margit".to_string(), "kb:margit".to_string()])); // (P9b) + Hero's Origin
         assert_eq!(game.said("GRANT: Margit, the Fell Omen"), 1);
         assert!(game.sora.command().magic_slots.contains(&Element::Thunder.command(1)));
         game.run(10.0, STORMVEIL, false, &[], None);
-        assert_eq!((game.thunder(), game.records.len(), game.given.borrow().len()), (1, 1, 0), "no small-boss item for a named boss");
+        assert_eq!((game.thunder(), game.records.len(), game.given.borrow().len()), (1, 2, 0), "no small-boss item for a named boss"); // (P9b) boss:margit, kb:margit
         // THE NEXT SESSION (the record is in the save, the flag is set): nothing
         let (records, flags, sora) = (game.records.clone(), game.flags.borrow().clone(), std::mem::replace(&mut game.sora, new_sora()));
         let mut next = Game::new(&[]);
         (next.records, next.sora) = (records, sora);
         *next.flags.borrow_mut() = flags;
         next.run(8.0, STORMVEIL, false, &[], None);
-        assert_eq!((next.thunder(), next.records.len(), next.said("nothing to catch up")), (1, 1, 1));
+        assert_eq!((next.thunder(), next.records.len(), next.said("nothing to catch up")), (1, 2, 1)); // (P9b) + kb:margit
         // the re-encounter outside Leyndell (the same model, the open world) and Morgott's arena (map area 11): the
         // chr rule does not match; Morgott's own flag gives Morgott's own row
         next.run(20.0, (60 << 24) | (43 << 16) | (53 << 8), false, &[(2130, 21300534, 4000)], None);
@@ -749,6 +809,18 @@ mod tests {
     }
 
     /// A boss identified by its flag only (no chr id in the sheet): the flag rising is the defeat.
+    /// (BOSSFLAGS) A reserved row (a flag with no reward yet): its flag rising claims nothing, the boss stays a small boss.
+    #[test]
+    fn a_reserved_row_stays_a_small_boss() {
+        let open = (60 << 24) | (42 << 16) | (37 << 8);
+        let mut game = Game::new(&[]);
+        game.run(8.0, open, false, &[], None);
+        game.flags.borrow_mut().insert(1042370800); // Crucible Knight (Stormhill)
+        game.run(20.0, open, false, &[(2500, 25000000, 4000)], None);
+        assert!(game.records.iter().all(|r| !r.starts_with("boss:")), "{:?}", game.records);
+        assert_eq!(game.given.borrow().len(), 1, "its small-boss item");
+    }
+
     #[test]
     fn a_flag_that_rises_is_a_defeat_and_claims_the_boss_bar_death() {
         let mut game = Game::new(&[]);
@@ -761,7 +833,7 @@ mod tests {
         assert_eq!(game.said("DEFEATED: the defeat flag 14000800 of Rennala, Queen of the Full Moon BECAME SET"), 1);
         assert_eq!(game.sora.status().magic_tier(Element::Blizzard), 0, "held while the finish runs");
         game.run(20.0, 14 << 24, false, &[], None);
-        assert_eq!((game.sora.status().magic_tier(Element::Blizzard), game.records.clone(), game.given.borrow().len()), (1, vec!["boss:rennala".to_string()], 0));
+        assert_eq!((game.sora.status().magic_tier(Element::Blizzard), game.records.clone(), game.given.borrow().len()), (1, vec!["boss:rennala".to_string(), "kb:rennala".to_string()], 0)); // (P9b) + Shooting Star
         // not during a cutscene / menu either: Godrick's flag while busy for a long time
         game.flags.borrow_mut().insert(10000800);
         game.run(30.0, STORMVEIL, true, &[], None);
@@ -811,6 +883,43 @@ mod tests {
         assert_eq!((next.said("SORA'S OVERHAUL MAGIC GIVEN LATE"), next.sora.status().magic_tier(Element::Aero)), (0, 1));
     }
 
+    /// (P9b ACQUISITION) THE BOSS KEYBLADES AND THE CHESTS THROUGH THE FLAG POLL, MOCKED FLAGS: an older save past Margit (its
+    /// record boss:margit, no kb: record: P1's migration) with Starlight's chest taken (STARLIGHT-SPOT: the Demi-Human Forest
+    /// Ruins cellar chest; the Gatefront carriage chest, taken too, is no source any more): at the catch-up time Hero's
+    /// Origin and Starlight come once (kb:margit, wsrc:1043347100); the Moogle level is told; Godrick's flag raises it to 2;
+    /// Rennala beaten in play with Shooting Star owned already: refused, recorded all the same; the next session nothing.
+    #[test]
+    fn p9b_boss_keyblades_and_chests_once_per_save_with_the_catch_up() {
+        let mut game = Game::new(&[10000850, 1042377070, 1043347100]); // (STARLIGHT-SPOT) Gatefront's flag + the new chest's
+        game.records.push("boss:margit".to_string());
+        game.run(2.0, LIMGRAVE, false, &[], None);
+        assert!(game.weapons.borrow().is_empty(), "not before 3 s");
+        game.run(2.0, LIMGRAVE, false, &[], None);
+        assert_eq!(*game.weapons.borrow(), vec![770, 786], "Hero's Origin, Starlight: {:?}", game.rewards.said);
+        assert!(game.records.contains(&"kb:margit".to_string()) && game.records.contains(&"wsrc:1043347100".to_string()) && !game.records.contains(&"wsrc:1042377070".to_string()));
+        assert_eq!((game.said("KEYBLADE of Margit, the Fell Omen (kb.margit, defeat flag 10000850): Hero's Origin"), game.said("CHEST WEAPON: Demi-Human Forest Ruins")), (1, 1)); // (STARLIGHT-SPOT)
+        assert_eq!((game.said("THE MOOGLE LEVEL is: 1"), game.moogle.get()), (1, 1));
+        // Godrick: the Moogle level 2
+        game.flags.borrow_mut().insert(10000800);
+        game.run(3.0, STORMVEIL, false, &[], None);
+        assert_eq!((game.moogle.get(), game.said("THE MOOGLE LEVEL RISES: 2")), (2, 1));
+        // Rennala in play, Shooting Star owned already: refused, recorded
+        game.owned.borrow_mut().insert(771);
+        game.flags.borrow_mut().insert(14000800);
+        game.run(3.0, 14 << 24, false, &[], None);
+        assert_eq!(game.weapons.borrow().len(), 2, "no second Shooting Star");
+        assert!(game.records.contains(&"kb:rennala".to_string()));
+        assert_eq!(game.said("Shooting Star: already owned: no duplicate"), 1);
+        assert_eq!((game.moogle.get(), game.said("THE MOOGLE LEVEL RISES: 3")), (3, 1), "the second Great Rune holder");
+        // the next session of the same save: nothing
+        let records = game.records.clone();
+        let mut next = Game::new(&[10000850, 1042377070, 1043347100, 10000800, 14000800]); // (STARLIGHT-SPOT)
+        next.records = records;
+        next.run(6.0, LIMGRAVE, false, &[], None);
+        assert!(next.weapons.borrow().is_empty() && next.said("KEYBLADE of") == 0 && next.said("CHEST WEAPON") == 0);
+        assert_eq!(next.moogle.get(), 3, "the level the flags reach, at the load");
+    }
+
     /// AN EXISTING CHARACTER: the flags already set at Sora's start are caught up once, together.
     #[test]
     fn the_catch_up_at_start() {
@@ -822,10 +931,10 @@ mod tests {
         assert_eq!(game.thunder(), 0, "not before 3 s");
         game.run(2.0, LIMGRAVE, false, &[], None);
         // (XSI) + xs:tree_sentinel: the Tree Sentinel's XS reward (Spiral Rush), given late to the record boss:tree_sentinel
-        assert_eq!((game.thunder(), game.sora.status().magic_tier(Element::Cure), game.records.len()), (1, 1, 4));
+        assert_eq!((game.thunder(), game.sora.status().magic_tier(Element::Cure), game.records.len()), (1, 1, 5)); // (P9b) + kb:margit
         assert_eq!((game.said("CATCH-UP GRANT:"), game.said("CATCH-UP: 2 boss(es) rewarded together, one panel (\"Rewards of 2 bosses obtained\" / \"Thunder, Cure +3 more\")")), (2, 1), "{:?}", game.rewards.said);
         game.run(10.0, LIMGRAVE, false, &[], None);
-        assert_eq!((game.records.len(), game.said("GRANT:")), (4, 2)); // (XSI) xs:tree_sentinel
+        assert_eq!((game.records.len(), game.said("GRANT:")), (5, 2)); // (XSI) xs:tree_sentinel; (P9b) kb:margit
         // FLAGS NOT READABLE: said plainly, no catch-up; the key gives a row by hand
         let mut blind = Game::new(&[10000850]);
         blind.readable = false;
@@ -851,7 +960,7 @@ mod tests {
         let table = Table::parse(bossrewards::SHEET);
         let mut game = Game::new(&[10000850, 10000800]);
         game.run(5.0, LIMGRAVE, false, &[], None);
-        assert_eq!(game.records, vec!["boss:margit".to_string(), "boss:godrick".to_string()]);
+        assert_eq!(game.records, vec!["boss:margit".to_string(), "boss:godrick".to_string(), "kb:margit".to_string()]); // (P9b) + Hero's Origin
         // the party host of an older save (no donald_magic: the start, flagged)
         let mut rt = kh_partyhost::PartyRuntime::new(kh_partyhost::RuntimeConfig { wanted: true, test: kh_partyhost::PartyTest::from_rows(&[]), weapons: Vec::new(), ai_pack: None, ai_pack_source: None });
         rt.set_progression(true);
@@ -869,6 +978,38 @@ mod tests {
         assert_eq!((game.sora.status().magic_tier(Element::Blizzard.to_sora()), rt.don_learned().tier(Element::Blizzard)), (1, 1));
         // the next session: the records hold don:, nothing again
         assert!(rt.don_claim_due(&table.don, &mut game.records).is_empty());
+    }
+
+    /// (GF-STATS, PLAN.md R10) THE GROUP RULE WITH THE GAME'S FLAGS: a Crucible Knight's defeat flag gives Goofy's rank once, read
+    /// directly (its row stays reserved for Sora: no boss: record, its small-boss item as before); a second Knight gives nothing
+    /// more; a character with the flag set before the overhaul catches up from it; Donald's raw steps ride boss: records, and a
+    /// don: record of an old save does not hide them.
+    #[cfg(feature = "party")]
+    #[test]
+    fn gf_the_first_crucible_knight_counts_for_goofy_and_stays_a_small_boss() {
+        use kh_party::growth::RankLine;
+        let table = Table::parse(bossrewards::SHEET);
+        let open = (60 << 24) | (42 << 16) | (37 << 8);
+        let mut game = Game::new(&[]);
+        game.run(8.0, open, false, &[], None);
+        game.flags.borrow_mut().insert(1042370800); // Crucible Knight (Stormhill)
+        game.run(20.0, open, false, &[(2500, 25000000, 4000)], None);
+        assert!(game.records.iter().all(|r| !r.starts_with("boss:")), "{:?}", game.records);
+        assert_eq!(game.given.borrow().len(), 1, "its small-boss item");
+        let mut rt = kh_partyhost::PartyRuntime::new(kh_partyhost::RuntimeConfig { wanted: true, test: kh_partyhost::PartyTest::from_rows(&[]), weapons: Vec::new(), ai_pack: None, ai_pack_source: None });
+        rt.set_progression(true);
+        let flags = game.flags.borrow().clone();
+        let got = rt.gof_claim_due(&table, &mut game.records, &|f| flags.contains(&f));
+        assert_eq!(got.iter().map(|g| g.0.as_str()).collect::<Vec<_>>(), ["crucible_knights"]);
+        assert_eq!(rt.growth_of(kh_host::party::PartyChara::Goofy).ranks.rank(RankLine::PinningGuard), 2);
+        game.flags.borrow_mut().insert(1051360800); // the Caelid Knight
+        let flags = game.flags.borrow().clone();
+        assert!(rt.gof_claim_due(&table, &mut game.records, &|f| flags.contains(&f)).is_empty(), "only the first one counts");
+        // an old save: the Tree Sentinel's magic step is recorded for Donald, its raw step is still due
+        let mut old = vec!["boss:tree_sentinel".to_string(), "don:tree_sentinel".to_string()];
+        let got = rt.don_stat_claim_due(&table.don, &mut old);
+        assert_eq!(got.len(), 1);
+        assert_eq!(rt.growth_of(kh_host::party::PartyChara::Donald).hp, 9);
     }
 
     /// SMALL BOSSES: one item per boss, once; the tier capped by the region; a boost every third.
@@ -926,7 +1067,9 @@ mod tests {
             let fired = shot.fired(&control);
             (fired, shot.fired(&control), control.flag("boss.rewards"))
         };
-        assert_eq!(change("boss.grant = godrick\n"), (Some("godrick".to_string()), None, Some(true)));
+        // (release) `boss.grant` is a development aid: a build without the cargo feature `dev-aids` never reads it (control.rs)
+        let granted = cfg!(feature = "dev-aids").then(|| "godrick".to_string());
+        assert_eq!(change("boss.grant = godrick\n"), (granted, None, Some(true)));
         assert_eq!(change("boss.grant = godrick\nboss.rewards = 0\n"), (None, None, Some(false)));
         assert_eq!(change("boss.rewards = 0\n"), (None, None, Some(false)), "the key removed: nothing");
         let _ = std::fs::remove_file(&path);
@@ -934,7 +1077,7 @@ mod tests {
         let mut game = Game::new(&[10000850]);
         for _ in 0..600 {
             let flags = &game.flags;
-            let env = Env { flag: &|id| Some(flags.borrow().contains(&id)), block: STORMVEIL, busy: false, dt: DT, deaths: &[(2130, 21300014, 4174)], held: &|_| 0, give: &mut |_| true };
+            let env = Env { flag: &|id| Some(flags.borrow().contains(&id)), block: STORMVEIL, busy: false, dt: DT, deaths: &[(2130, 21300014, 4174)], held: &|_| 0, give: &mut |_| true, weapon: &mut |_| kh_host::weapons::Gift::NotAWeapon, moogle: &mut |_| (1, 1) };
             game.rewards.frame_with(false, Some("margit".to_string()), &mut game.records, &mut game.sora, env);
         }
         assert_eq!((game.thunder(), game.records.len(), game.said("boss rewards are OFF")), (0, 0, 1));

@@ -91,13 +91,19 @@ pub(crate) struct Shared {
     pub events: Vec<(usize, usize)>,
     /// (SHOP) the merchants' windows and the smiths' prompts (talkkh/shop.rs).
     pub shop: super::shop::ShopTalk,
+    /// (THE USER 2026-11-02: "Move the Outfits selection to Boc") Boc's alteration window -> the KH Outfits screen
+    /// (talkkh/alter.rs).
+    pub alter: super::alter::AlterTalk,
+    /// (THE USER 2026-11-02: Roderika's spirit tuning opens a KH3-style screen) her spirit-tuning window -> the KH Spirit
+    /// Tuning screen (talkkh/tuning.rs).
+    pub tuning: super::tuning::TuningTalk,
 }
 
 pub(crate) static SHARED: Mutex<Option<Shared>> = Mutex::new(None);
 
 pub(crate) fn with_shared<R>(f: impl FnOnce(&mut Shared) -> R) -> Option<R> {
     let mut g = SHARED.try_lock().ok()?;
-    let s = g.get_or_insert_with(|| Shared { talks: Talks::new(), lines: Vec::new(), events: Vec::new(), shop: Default::default() /* (SHOP) */ });
+    let s = g.get_or_insert_with(|| Shared { talks: Talks::new(), lines: Vec::new(), events: Vec::new(), shop: Default::default() /* (SHOP) */, alter: Default::default() /* (THE USER 2026-11-02) Boc */, tuning: Default::default() /* (THE USER 2026-11-02) Roderika */ });
     Some(f(s))
 }
 
@@ -127,7 +133,7 @@ fn wanted_command(id: i32) -> bool {
 /// (SHOP) The commands of the merchants' windows and of the reinforcement menu (sheet sora-er-shop `talk.commands`).
 fn shop_wanted(id: i32) -> bool {
     let n = kh_host::shop::rules().talk;
-    id == n.open_buy || id == n.open_sell || id == n.open_enhance
+    id == n.open_buy || id == n.open_sell || id == n.open_enhance || id == super::alter::OPEN_ALTER /* (THE USER 2026-11-02) Boc's alteration window */ || id == super::tuning::OPEN_TUNING /* (THE USER 2026-11-02) Roderika's spirit tuning */ || super::smith::rules().swallow.contains(&id) /* (P7 SMITHS) the safety net in a smith's talk */
 }
 
 /// The game's texts and flags for the rules (game thread).
@@ -172,7 +178,23 @@ unsafe extern "C" fn event_hook(this: *mut u8, ev: *mut u8) {
     let args: Vec<Val> = (1..n).map(|k| value_at(arg_fn(ev, k))).collect();
     let talk_id = std::ptr::read_unaligned(this.add(EVENT_TALK) as *const i32);
     let ins = std::ptr::read_unaligned(this.add(EVENT_INS) as *const usize);
+    // (ER-TWEAKS, the user 2026-11-06: "Remove Rennala's respec and cosmetic change options.") her "Rebirth" / "Cosmetics"
+    // AddTalkListData is not run (talkkh/rennala.rs): decided before the shared lock, so a busy lock never lets one through
+    // (ER-TWEAKS follow-up 2026-11-07, the user: "Remove it") nor the Roundtable Hold mirror's "Apply cosmetics"
+    if let Some(msg) = super::rennala::trimmed(talk_id, id, &args) {
+        let (who, key) = if super::rennala::is_mirror_talk(talk_id) { ("the Roundtable Hold mirror's", "mirror.trim") } else { ("Rennala's", "rennala.trim") };
+        with_shared(|s| s.talks.notes.push(format!("talk {talk_id}: {who} option text {msg} not added (ER-TWEAKS {key})")));
+        return;
+    }
     let decision = with_shared(|s| {
+        // (THE USER 2026-11-02) Boc's "Alter garments" -> the KH Outfits screen (Elden Ring's window never opens)
+        if let Some(d) = s.alter.on_event(talk_id, ins, id, &args) {
+            return d;
+        }
+        // (THE USER 2026-11-02) Roderika's "Spirit Tuning" -> the KH Spirit Tuning screen (Elden Ring's window never opens)
+        if let Some(d) = s.tuning.on_event(talk_id, ins, id) {
+            return d;
+        }
         // (SHOP) a merchant's buy / sell window -> the KH shop; a smith's reinforcement menu never opens
         if let Some(d) = s.shop.on_event(talk_id, ins, id, &args) {
             return d;
@@ -221,6 +243,26 @@ unsafe extern "C" fn env_hook(this: *mut u8, result: *mut u8, query: *mut u8) ->
     }
     let id_fn: unsafe extern "C" fn(*mut u8) -> i32 = std::mem::transmute(std::ptr::read(vt.add(1)));
     let id = id_fn(query);
+    // (OUTFIT-UNLOCK, the user 2026-11-05: the Gold Sewing Needle without Elden Ring's other requirements) Boc's GetEventFlag
+    // (query 15: `case 0xf` of this function, argument 1 = the flag, the answer an int): the game answered; for the needle's
+    // offer flags the user's rule answers instead (crate::boc::talk_flag_read; None = the game's answer stands)
+    if id == crate::boc::needles::QUERY_GET_EVENT_FLAG {
+        let talk_id = std::ptr::read_unaligned(this.add(ENV_TALK) as *const i32);
+        if crate::boc::is_boc_talk(talk_id) {
+            let count_fn: unsafe extern "C" fn(*mut u8) -> i32 = std::mem::transmute(std::ptr::read(vt.add(2)));
+            let arg_fn: unsafe extern "C" fn(*mut u8, *mut u8, i32) -> *const u8 = std::mem::transmute(std::ptr::read(vt.add(3)));
+            if count_fn(query) >= 2 {
+                let mut buf = [0u8; 16];
+                if let Val::Int(flag) = value_at(arg_fn(query, buf.as_mut_ptr(), 1)) {
+                    if let Some(v) = crate::boc::talk_flag_read(talk_id, flag as u32) {
+                        std::ptr::write_unaligned(result as *mut i32, i32::from(v));
+                        std::ptr::write_unaligned(result.add(8) as *mut i32, 2);
+                    }
+                }
+            }
+        }
+        return r;
+    }
     if !matches!(id, DIALOG_RESULT | LIST_RESULT | DIALOG_OPEN | MENU_OPEN) {
         return r;
     }
@@ -237,7 +279,7 @@ unsafe extern "C" fn env_hook(this: *mut u8, result: *mut u8, query: *mut u8) ->
         }
     }
     let talk_id = std::ptr::read_unaligned(this.add(ENV_TALK) as *const i32);
-    if let Some(Some(v)) = with_shared(|s| s.shop.on_env(talk_id, id, &args).or_else(|| s.talks.on_env(talk_id, id, &args)) /* (SHOP) the KH shop stands for the window */) {
+    if let Some(Some(v)) = with_shared(|s| s.alter.on_env(talk_id, id, &args).or_else(|| s.tuning.on_env(talk_id, id, &args)).or_else(|| s.shop.on_env(talk_id, id, &args)).or_else(|| s.talks.on_env(talk_id, id, &args)) /* (SHOP) the KH shop stands for the window; (THE USER 2026-11-02) the Outfits screen for Boc's */) {
         std::ptr::write_unaligned(result as *mut i32, v);
         std::ptr::write_unaligned(result.add(8) as *mut i32, 2);
     }

@@ -88,6 +88,34 @@ fn thrown(cache: &mut Cache, pack: &Path, model: &str, s: &kh_party::projectile:
 }
 
 /// Goofy's rush pitch on his actor (kh-app `team_mesh_pitch`): his mesh turned about his feet in his actor frame.
+/// (GRABS) A CAUGHT FRIEND (the leader or an AI friend): his own KH3 `CatchStart` / `CatchLoop` / `CatchEnd` (his AnimSet's
+/// rows, his own clips: n_ex001 / n_ex002 0227, 0228, 0213) laid over his pose (grabs.rs `friend_step`: one sequence per
+/// character, stepped once a frame here), his face his own, his weapon kept in his hand. False: not caught.
+fn catch_pose(chara: PartyChara, held: bool, member: Option<&kh_partyhost::poser::PosedMember>, posed: &mut PosedChar, dt: f32) -> bool {
+    let Some(m) = member else { return false };
+    if !held && !crate::grabs::friend_caught(chara) {
+        return false;
+    }
+    let seq = |row: &str| kh_partyhost::poser::row_samples(m, row, 0.0, 0.0).ok().and_then(|s| s.into_iter().next()).map(|(s, _)| s);
+    let len = |row: &str| seq(row).and_then(|s| m.animator.clip_info(&s).map(|i| i.length)).unwrap_or(0.0);
+    let lengths = crate::grabs::Lengths { start: len(crate::grabs::CATCH_START), hold: len(crate::grabs::CATCH_LOOP), end: len(crate::grabs::CATCH_END) };
+    let Some(shown) = crate::grabs::friend_step(chara, held, dt, lengths) else { return false };
+    let Some(sequence) = seq(shown.row) else { return false };
+    let pose = m.animator.sample(&sequence, shown.time);
+    if pose.len() != posed.local.len() {
+        return false;
+    }
+    let skeleton = m.animator.skeleton();
+    crate::party::leader::blend_body(skeleton, &pose, 1.0, &mut posed.local);
+    posed.component = kh_anim::pose::component_space(skeleton, &posed.local);
+    if let (Some(w), Some(mount)) = (posed.weapon.as_mut(), m.weapon.as_ref()) {
+        if let Some(c) = posed.component.get(mount.socket.bone) {
+            w.1 = mount.socket.local.then(c);
+        }
+    }
+    true
+}
+
 fn pitch_actor(c2w: &mut Trs, pitch: Option<f32>) {
     let Some(p) = pitch.filter(|p| p.is_finite() && *p != 0.0) else { return };
     let mesh_yaw = Quat::from_rotation_z((-90.0f32).to_radians());
@@ -112,6 +140,18 @@ fn tip_of(core: &crate::party::glue::PartyCore, id: u8, w: &PartyWeapon) -> Vec3
     w.to_world.translation + w.to_world.rotation * Vec3::X * 50.0
 }
 
+/// (HEROLIGHT-KB) The hero light's place on a friend's weapon: its row's line between the two sockets (as drawn), at the
+/// Kingdom Key's fraction (kh-er-render herolight.rs); a weapon without a row or a socket: the tip (`tip_of`).
+fn hero_point(core: &crate::party::glue::PartyCore, id: u8, w: &PartyWeapon) -> Vec3 {
+    let member = core.poser.members.get(&id);
+    let line = kh_er_render::herolight::weapon(&w.model).and_then(|row| row.line_sockets.clone());
+    let at = |name: &str| member.and_then(|m| m.weapon_socket_world(name)).map(|t| t.translation);
+    match line.and_then(|(a, b)| at(&a).zip(at(&b))) {
+        Some((a, b)) => a.lerp(b, kh_er_render::herolight::blade_fraction(&kh_er_render::pointlight::settings())),
+        None => tip_of(core, id, w),
+    }
+}
+
 /// (ZETTA round 5c) Donald's wand-tip socket (the test level feeds the same one: kh-app zetta_crumble.rs).
 pub const ZETTA_TIP_SOCKET: &str = "vfx_call";
 
@@ -121,7 +161,6 @@ pub fn feed_zetta_tip(at: Option<Vec3>) {
 }
 
 /// ONCE A DRAWN FRAME (sora.rs, right after Sora's own `submit`): the party's list for the renderer.
-#[allow(clippy::too_many_arguments)]
 pub fn frame(slot: &mut crate::party::PartySlot, lead: &mut crate::party::leader::LeaderBody, control: &Control, alpha: f32, dt: f32, cutscene: bool) {
     kh_er_render::party::set_enabled(control.flag("r.party") != Some(false));
     kh_er_render::party::set_probes(control.flag("r.party_probes") != Some(false)); // (ER party I) each friend's own light probe
@@ -134,7 +173,10 @@ pub fn frame(slot: &mut crate::party::PartySlot, lead: &mut crate::party::leader
     // (ZETTA 2026-10-23) his staff as drawn (Zettaflare's down leaves it where it fell) (UNTESTED IN GAME)
     kh_party::donald::zettaflare::feed_staff(0, slot.core().and_then(|core| core.poser.members.get(&draw_id(PartyChara::Donald))?.weapon_world()).map(|t| (t.translation, t.rotation)));
     let Some(core) = slot.core() else {
-        kh_er_render::party::clear_party();
+        match crate::moogle::draw(control.flag("r.party_glow_mask") != Some(false)).filter(|_| !cutscene) {
+            Some(m) => kh_er_render::party::submit_party(vec![m]), // (P8) the Moogle without a party core
+            None => kh_er_render::party::clear_party(),
+        }
         kh_er_render::party::set_hero_carrier(None);
         kh_er_render::party::set_lead_feet(None); // (ERT4)
         kh_er_render::camfade::set_lead(None); // (NF) Sora leads (no party)
@@ -171,11 +213,16 @@ pub fn frame(slot: &mut crate::party::PartySlot, lead: &mut crate::party::leader
             if !posed.component_to_world.translation.is_finite() {
                 continue;
             }
-            pitch_actor(&mut posed.component_to_world, core.rt.team.mesh_pitch(v.id).or_else(|| core.rt.party.pad_mesh_pitch(v.id))); // (ER party I, X3G) or the pad's own pitch (Goofy's solo Bombardier Dive), as kh-app
+            pitch_actor(&mut posed.component_to_world, core.rt.team.mesh_pitch(v.id)); // (ER party I, X3G) or the pad's own pitch (Goofy's solo Bombardier Dive), as kh-app
             if leader == Some(chara) {
                 lead.overlay(chara, &mut posed);
                 lead.walk_pose(chara, core.poser.members.get(&id), &mut posed); // (ANIMS) walked through an action: his own walk
                 lead_feet = Some(posed.component_to_world.translation); // (ERT4)
+            }
+            // (GRABS) KH3's caught sequence (grabs.rs) on the friend leader held by the body's throw (an AI friend plays it on his
+            // own pawn: kh-partyhost caught.rs, KH3's NPC-motion request with the same rows)
+            if leader == Some(chara) {
+                catch_pose(chara, crate::grabs::leader_held(), core.poser.members.get(&id), &mut posed, dt);
             }
             let weapon = match core.rt.party.thrown_shield(v.id) {
                 Some(s) => posed.weapon.as_ref().map(|(model, ..)| thrown(cache, pack, model, s, alpha, dt, v.yaw)),
@@ -185,11 +232,14 @@ pub fn frame(slot: &mut crate::party::PartySlot, lead: &mut crate::party::leader
                     posed.weapon.as_ref().map(|(model, ..)| PartyWeapon { model: model.clone(), to_world: Trs { translation: at, rotation: rot, scale: Vec3::ONE }, component: Vec::new(), opacity: 1.0 })
                 }
                 None if core.rt.party.weapon_hidden(v.id) => None,
-                None => weapon_of(&posed),
+                // (PARTY-WEAPONS) in his hand at its appear / put-away fade (kh-party weapon_draw: KH3's rule, the leader's hold)
+                None => weapon_of(&posed).map(|w| PartyWeapon { opacity: core.rt.party.weapon_view(v.id).map_or(1.0, |g| g.opacity), ..w }).filter(|w| w.opacity > 0.0),
             };
-            if leader == Some(chara) && lead.light == Some(chara) && kh_er_render::pointlight::keyblade_wanted() {
+            if leader == Some(chara) && lead.light.is_some_and(|l| kh_core::weapon_gate::hold(chara == l, kh_er_render::pointlight::keyblade_wanted())) /* (HEROLIGHT-KB, PARTY-WEAPONS) the carrier's hold */ {
                 // (INT) the hero light at his DRAWN feet (between the steps, as his body and weapon tip)
-                carrier = Some(kh_er_render::party::HeroCarrier { feet: posed.component_to_world.translation, tip: weapon.as_ref().map(|w| (tip_of(core, id, w), w.opacity)) });
+                // (HEROLIGHT-KB) on his weapon's own line (sheets/port/sora-herolight.json: vfx_bottom -> vfx_top, else ATK_00 ->
+                // ATK_01, at the Kingdom Key's fraction), else its tip as before
+                carrier = Some(kh_er_render::party::HeroCarrier { feet: posed.component_to_world.translation, tip: weapon.as_ref().map(|w| (hero_point(core, id, w), w.opacity)) });
             }
             draws.push(CharDraw { chara: id, body: Some(body_of(posed)), weapon, props: Vec::new(), glow_mask, blood: blood_of(chara) });
         }
@@ -214,6 +264,10 @@ pub fn frame(slot: &mut crate::party::PartySlot, lead: &mut crate::party::leader
             let weapon = weapon_of(&posed);
             draws.push(CharDraw { chara: draw_id(s.chara), body: Some(body_of(posed)), weapon, props: Vec::new(), glow_mask, blood: blood_of(s.chara) });
         }
+    }
+    if !cutscene {
+        draws.extend(crate::moogle::draw(glow_mask)); // (P8) the Synthesis Moogle, drawn by the same path
+        draws.extend(crate::mimic_boss::friend_draws(alpha, glow_mask)); // (MIMIC-BOSS) a Mimic Tear boss's copy of a friend leader
     }
     if !cache.told && !draws.is_empty() {
         cache.told = true;
@@ -283,8 +337,7 @@ fn next_count(state: &mut u32) -> u32 {
 
 /// ONCE A HUD FRAME, after Sora's portrait (hud.rs): the friends' pictures on their camp panels (`panels`: the camp's top
 /// panels by character, `member`: the party slot a sub screen shows; `camp`: the camp layer's counters, as Sora's).
-#[allow(clippy::too_many_arguments)]
-pub fn camp(control: &Control, movie: Option<&kh_ui::Movie>, root: &kh_ui::Matrix, output: (u32, u32), dt: f32, pack: Option<&Path>, panels: &[PartyChara], member: usize, camp: (u64, u64, bool)) {
+pub fn camp(control: &Control, crate::portrait::CampPicture { movie, root, output, dt, pack, camp }: crate::portrait::CampPicture<'_>, panels: &[PartyChara], member: usize) {
     let off = control.flag("menu.portrait") == Some(false) || control.flag("menu.party_portraits") == Some(false);
     let Some(movie) = movie.filter(|_| !off) else {
         if SHOWN.swap(false, std::sync::atomic::Ordering::Relaxed) {

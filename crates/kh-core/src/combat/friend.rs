@@ -82,11 +82,16 @@ pub struct FriendState {
     /// (D3) Sora is AI-controlled (a friend leads; stream P sets it each step): his own combos
     /// never roll a unison (the user's rule: team attacks are started only by the player's leader).
     pub sora_is_ai: bool,
+    /// (HUD-REVIVE, THE USER 2026-11-07: "for Sora's downed animation as a party member, have him actually use his game over
+    /// animation, hovering in place") AI Sora AS A PARTY MEMBER (a friend leads; lead.rs sets it each step with `sora_is_ai`):
+    /// his KO is KH3's GAMEOVER pose hovering where he went down (states/die.rs). The Mimic copies (their AI sets only
+    /// `sora_is_ai`) keep the lying member KO.
+    pub ko_game_over_pose: bool,
 }
 
 impl Default for FriendState {
     fn default() -> FriendState {
-        FriendState { gauge: FriendGauge::default(), unison: 0, unison_chance: 100, unison_used: [false; 5], friends: [None; 2], running: 0, input: (Vec3::ZERO, false, false, false), rng: 0x1234_5678, offers_taken: 0, unisons: 0, leader_unison: 0.0, sora_is_ai: false }
+        FriendState { gauge: FriendGauge::default(), unison: 0, unison_chance: 100, unison_used: [false; 5], friends: [None; 2], running: 0, input: (Vec3::ZERO, false, false, false), rng: 0x1234_5678, offers_taken: 0, unisons: 0, leader_unison: 0.0, sora_is_ai: false, ko_game_over_pose: false }
     }
 }
 
@@ -313,7 +318,7 @@ pub(crate) fn unison_roll(cx: &mut Ctx) {
     let rate_of = |d: f32| if d <= COMBO_FINISH_RANGE[1] { if d <= COMBO_FINISH_RANGE[2] { COMBO_FINISH_ADD_RATE_RANGE[2] } else { COMBO_FINISH_ADD_RATE_RANGE[1] } } else { COMBO_FINISH_ADD_RATE_RANGE[0] };
     let mut rate = 0;
     // Donald: `Range <= d && d != Range` is out.
-    let donald = fs.friend(11).filter(|f| !f.ko && c[0] + c[1] + c[2] >= 1).map(|f| (f.position - me).length()).filter(|d| !(*d > COMBO_FINISH_RANGE[0]));
+    let donald = fs.friend(11).filter(|f| !f.ko && c[0] + c[1] + c[2] >= 1).map(|f| (f.position - me).length()).filter(|d| (*d).partial_cmp(&COMBO_FINISH_RANGE[0]).is_none_or(std::cmp::Ordering::is_le));
     if let Some(d) = donald {
         rate = rate_of(d);
     }

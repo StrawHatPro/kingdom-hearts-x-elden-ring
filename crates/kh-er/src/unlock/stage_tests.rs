@@ -56,7 +56,7 @@ fn goofy_fights_the_staged_boss_and_nothing_takes_damage() {
         core.frame(FrameIn { on: true, fresh: std::mem::take(&mut fresh), relocated: false, hidden: None, body_action: false, body: None, pose: false, trace: false, dt: STEP, now: k as f64 * STEP as f64 });
         let out = stand_in.output();
         let _ = core.route(&mut stand_in, &Input::default(), STEP, &world, &targets, k as f64 * STEP as f64);
-        core.step(&mut stand_in, &out, STEP, TargetId::NONE, &world, &kh_anim::NoIkWorld, &mut targets, &mut null.audio, &mut null.effects, None, k as f64 * STEP as f64);
+        core.step(&mut stand_in, crate::party::glue::CoreStep { out: &out, dt: STEP, lock_on: TargetId::NONE, world: &world, ik: &kh_anim::NoIkWorld, targets: &mut targets, audio: &mut null.audio, effects: &mut null.effects, sora_look: None, now: k as f64 * STEP as f64 });
         if k == 1 {
             // his stage spot (the host's teleport after the first step)
             let id = core.rt.id(PartyChara::Goofy).expect("Goofy is spawned in his stage runtime");

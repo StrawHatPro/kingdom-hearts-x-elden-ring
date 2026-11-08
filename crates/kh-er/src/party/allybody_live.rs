@@ -138,6 +138,8 @@ impl Spec {
 
 struct Slot {
     chara: Option<PartyChara>,
+    /// (MIMIC SORA) Mimic Sora's body (`chara` Sora): never AI Sora's, never found by `handle(Sora)`.
+    mimic: bool,
     state: SlotState,
     ptr: usize,
     handle: u64,
@@ -179,16 +181,25 @@ struct Slot {
 }
 
 impl Slot {
-    fn placeholder(chara: Option<PartyChara>, spec: Spec, now: f32) -> Slot {
-        Slot { chara, state: SlotState::Spawning, ptr: 0, handle: 0, in_debug_set: true, spec, own_base: 0, own_max: 0, written_base: 0, settle: 4, raise_checked: false, hp_written: None, target: None, written: None, validated: 0, born: now, check_at: now + 0.5, target_no: 0, can: None, dots: Vec::new(), dots_at: 0.0, hits: 0, resets: 0, throw_on: false, throw_drift: 0.0, drift_max: 0.0, ko: None, ko_checked: false, revived_at: None, ground: rules::GroundRead::default() /* (ER party I) */, ai_said: None, ai_resets: 0, ai_now: None }
+    fn placeholder(chara: Option<PartyChara>, mimic: bool, spec: Spec, now: f32) -> Slot {
+        Slot { chara, mimic, state: SlotState::Spawning, ptr: 0, handle: 0, in_debug_set: true, spec, own_base: 0, own_max: 0, written_base: 0, settle: 4, raise_checked: false, hp_written: None, target: None, written: None, validated: 0, born: now, check_at: now + 0.5, target_no: 0, can: None, dots: Vec::new(), dots_at: 0.0, hits: 0, resets: 0, throw_on: false, throw_drift: 0.0, drift_max: 0.0, ko: None, ko_checked: false, revived_at: None, ground: rules::GroundRead::default() /* (ER party I) */, ai_said: None, ai_resets: 0, ai_now: None }
     }
     fn who(&self) -> &'static str {
+        if self.mimic && self.chara.is_some() {
+            return "Mimic Sora";
+        }
         self.chara.map_or("(free)", |c| c.name())
+    }
+
+    /// (MIMIC SORA) This slot is the body of party member `c` (never the mimic's for `Sora`).
+    fn is_of(&self, c: PartyChara) -> bool {
+        self.chara == Some(c) && !self.mimic
     }
 }
 
 struct Pending {
     chara: Option<PartyChara>,
+    mimic: bool,
     spec: Spec,
     before_last: usize,
     before_set: Vec<usize>,
@@ -264,10 +275,17 @@ static POOL: Mutex<Option<Pool>> = Mutex::new(None);
 
 const MAX_PTRS: usize = 8;
 static BODY_PTRS: [AtomicUsize; MAX_PTRS] = [const { AtomicUsize::new(0) }; MAX_PTRS];
+/// (ER-HITSFX) The same bodies' handles (bits), for `is_body_handle` (the hit-sound filter runs on the game's hit threads).
+static BODY_HANDLES: [std::sync::atomic::AtomicU64; MAX_PTRS] = [const { std::sync::atomic::AtomicU64::new(0) }; MAX_PTRS];
 
 /// targets.rs: this character object is one of our bodies (never one of Sora's targets).
 pub fn is_body(ptr: usize) -> bool {
     ptr != 0 && BODY_PTRS.iter().any(|p| p.load(Ordering::Relaxed) == ptr)
+}
+
+/// (ER-HITSFX) This handle (`game::handle_bits`) is one of our bodies' (lock-free: ersound.rs's hit-sound filter).
+pub fn is_body_handle(bits: u64) -> bool {
+    bits != 0 && BODY_HANDLES.iter().any(|h| h.load(Ordering::Relaxed) == bits)
 }
 
 /// The hits the bodies took since the last call.
@@ -283,6 +301,13 @@ pub fn deliver(core: &mut crate::party::glue::PartyCore, sora_hp: i32, sora_max:
     let hits = take_hits();
     let mut n = 0;
     for h in &hits {
+        // (MIMIC SORA) a hit on Mimic Sora's body: his own core's (spirit_mimic.rs: his maximum, / the Mimic Tear's defense)
+        if h.mimic {
+            if crate::spirit_mimic::body_hit(h, params) {
+                n += 1;
+            }
+            continue;
+        }
         // (ER party S8) a STAGED friend's body (a not yet unlocked friend fighting a boss): his hits are S8's, at 0 damage
         if crate::unlock::is_staged(h.chara) {
             crate::unlock::stage_body_hit(h, params);
@@ -298,7 +323,10 @@ pub fn deliver(core: &mut crate::party::glue::PartyCore, sora_hp: i32, sora_max:
             }
             PartyChara::Sora => {
                 if sora_hp > 0 && sora_max > 0 {
-                    let hit = h.sora_hit(params, sora_max);
+                    let mut hit = h.sora_hit(params, sora_max);
+                    if crate::grabs::ally_held(PartyChara::Sora) {
+                        hit.reaction_type = 1; // (GRABS) caught: the HP without a reaction (KH3's caught state holds him)
+                    }
                     core.queue_hit(AllyHitIn::Sora(hit));
                     n += 1;
                     erlog!("party-body: AI Sora is hit for {:.1} ({}) from {} of {} Elden Ring HP ({})", hit.amount, h.kind(params).map_or("no reaction".to_string(), |k| format!("{k:?}")), h.lost, h.ref_max, "his body");
@@ -306,7 +334,12 @@ pub fn deliver(core: &mut crate::party::glue::PartyCore, sora_hp: i32, sora_max:
             }
             c => match core.rt.view(c) {
                 Some(v) if !v.ko => {
-                    let record = h.record(params, v.hp_max, v.position);
+                    // (GF-STATS) the same rule as a leader's: the share of the sheet's reference x his Defense factor (kh-party balance.rs)
+                    let reach = core.rt.party.incoming_reference(v.id).map_or(v.hp_max, |r| r.round() as i32);
+                    let mut record = h.record(params, reach, v.position);
+                    if crate::grabs::ally_held(c) {
+                        record.info.victim_result = kh_core::host::ReactionResult::NoReaction; // (GRABS) caught: no reaction
+                    }
                     core.queue_hit(AllyHitIn::Friend(c, record));
                     n += 1;
                     erlog!("party-body: {} is hit for {:.1} of his {} HP ({}) from {} of {} Elden Ring HP ({})", c.name(), record.damage, v.hp_max, h.kind(params).map_or("no reaction".to_string(), |k| format!("{k:?}")), h.lost, h.ref_max, "his body");
@@ -323,14 +356,21 @@ pub fn deliver(core: &mut crate::party::glue::PartyCore, sora_hp: i32, sora_max:
 pub fn handle(chara: PartyChara) -> Option<FieldInsHandle> {
     let g = POOL.lock().ok()?;
     let p = g.as_ref()?;
-    p.slots.iter().find(|s| s.chara == Some(chara) && matches!(s.state, SlotState::Live | SlotState::Parked)).map(|s| from_bits(s.handle))
+    p.slots.iter().find(|s| s.is_of(chara) && matches!(s.state, SlotState::Live | SlotState::Parked)).map(|s| from_bits(s.handle))
 }
 
 /// (AGGRO) The body of a friend while it is LIVE (placed at him, hittable: an enemy can attack him), validated this frame.
 pub fn live_handle(chara: PartyChara) -> Option<FieldInsHandle> {
     let g = POOL.lock().ok()?;
     let p = g.as_ref()?;
-    p.slots.iter().find(|s| s.chara == Some(chara) && s.state == SlotState::Live && s.validated == p.frame_no).map(|s| from_bits(s.handle))
+    p.slots.iter().find(|s| s.is_of(chara) && s.state == SlotState::Live && s.validated == p.frame_no).map(|s| from_bits(s.handle))
+}
+
+/// (MIMIC SORA) Mimic Sora's body while it is LIVE, validated this frame (the aggro director's hate hits from it).
+pub fn mimic_live_handle() -> Option<FieldInsHandle> {
+    let g = POOL.lock().ok()?;
+    let p = g.as_ref()?;
+    p.slots.iter().find(|s| s.mimic && s.chara.is_some() && s.state == SlotState::Live && s.validated == p.frame_no).map(|s| from_bits(s.handle))
 }
 
 /// (ER party I, S5's request) THE GROUND UNDER A FRIEND'S BODY (Elden Ring `hit_material`) for his footsteps
@@ -338,7 +378,7 @@ pub fn live_handle(chara: PartyChara) -> Option<FieldInsHandle> {
 pub fn ground_material(chara: PartyChara) -> Option<i32> {
     let g = POOL.try_lock().ok()?;
     let p = g.as_ref()?;
-    p.slots.iter().find(|s| s.chara == Some(chara) && s.state == SlotState::Live).and_then(|s| s.ground.ground())
+    p.slots.iter().find(|s| s.is_of(chara) && s.state == SlotState::Live).and_then(|s| s.ground.ground())
 }
 
 /// One line on the pool (the `party:` status of S1, the test's report).
@@ -349,9 +389,8 @@ pub fn status() -> String {
 }
 
 /// Stage 2 (targets.rs `apply_hit`): a friend's hit is fired by his own body when `party.bullet_owner` takes him;
-/// every other hit (and any failure) is the player's bullet as before.
-#[allow(clippy::too_many_arguments)]
-pub fn fire_hit(bullets: &mut crate::bullet::Bullets, owner: FieldInsHandle, hit: &kh_core::HitRecord, target: Option<FieldInsHandle>, from: Vec3, dir: Vec3, attack: crate::bullet::Attack, shape: crate::bullet::Shape) -> Result<u32, String> {
+/// every other hit (and any failure) is the player's bullet as before. `(from, dir)`: the bullet's start and direction.
+pub fn fire_hit(bullets: &mut crate::bullet::Bullets, owner: FieldInsHandle, hit: &kh_core::HitRecord, target: Option<FieldInsHandle>, (from, dir): (Vec3, Vec3), attack: crate::bullet::Attack, shape: crate::bullet::Shape) -> Result<u32, String> {
     if let Some((chara, body)) = owner_of(hit) {
         match bullets.fire_owned(body, target, from, dir, attack, shape) {
             Ok(row) => {
@@ -374,6 +413,18 @@ fn owner_of(hit: &kh_core::HitRecord) -> Option<(PartyChara, FieldInsHandle)> {
         return None;
     }
     let m = p.sheet.owner_match;
+    // (MIMIC SORA) Mimic Sora's own hits (his core's step marks them, spirit_mimic.rs `firing`): fired by HIS body, so the
+    // enemy's hate goes to him as to a spirit; a hit that may kill stays the player's (the game's own kill credit, the runes)
+    if crate::spirit_mimic::firing() {
+        let body = p.slots.iter().find(|s| s.mimic && s.chara.is_some() && s.state == SlotState::Live && s.validated == p.frame_no).map(|s| (PartyChara::Sora, from_bits(s.handle)));
+        // (an enemy an ability holds gives his hate to that member, as every party hit does)
+        let live = |c: PartyChara| p.slots.iter().find(|s| s.is_of(c) && s.state == SlotState::Live && s.validated == p.frame_no).map(|s| (c, from_bits(s.handle)));
+        return match crate::party::aggro::credit(hit.target, Some(crate::party::aggro::Who::Mimic), hit.damage) {
+            crate::party::aggro::Credit::Leader => None,
+            crate::party::aggro::Credit::To(c) => c.chara().map_or(body, live),
+            crate::party::aggro::Credit::Own => body,
+        };
+    }
     // (AGGRO) who made the hit: Donald's magic carries his flag (its attacker point is the spell's, not his capsule);
     // else the AI ally whose capsule the attacker point is in; none = the leader (the player's own body)
     let donald = hit.flags & kh_party::donald::magic_fx::DON_HIT_FLAG != 0 && p.wants.iter().any(|w| w.chara == PartyChara::Donald);
@@ -382,19 +433,24 @@ fn owner_of(hit: &kh_core::HitRecord) -> Option<(PartyChara, FieldInsHandle)> {
     } else if hit.attacker.valid {
         p.wants
             .iter()
-            .filter(|w| (hit.attacker.radius - w.capsule.0).abs() < 2.0 && (hit.attacker.position - (w.feet + Vec3::Z * w.capsule.2)).length() <= m)
+            .filter(|w| !w.mimic && (hit.attacker.radius - w.capsule.0).abs() < 2.0 && (hit.attacker.position - (w.feet + Vec3::Z * w.capsule.2)).length() <= m)
             .min_by(|a, b| (hit.attacker.position - a.feet).length().total_cmp(&(hit.attacker.position - b.feet).length()))
             .map(|w| w.chara)
     } else {
         None
     };
-    let live = |c: PartyChara| p.slots.iter().find(|s| s.chara == Some(c) && s.state == SlotState::Live && s.validated == p.frame_no).map(|s| (c, from_bits(s.handle)));
+    let live = |c: PartyChara| p.slots.iter().find(|s| s.is_of(c) && s.state == SlotState::Live && s.validated == p.frame_no).map(|s| (c, from_bits(s.handle)));
     // (AGGRO) an enemy held by an ability (Over Here!, Taunt Pass, Donald's aggro abilities, Zettaflare: party/aggro.rs)
     // takes the hate of every party hit to the member the ability names; a hit that may kill stays the player's (the
     // game's own kill credit)
-    match crate::party::aggro::credit(hit.target, hitter, hit.damage) {
+    // (MIMIC SORA) an enemy the director gave to Mimic Sora takes the hate to his body
+    let mimic = || p.slots.iter().find(|s| s.mimic && s.chara.is_some() && s.state == SlotState::Live && s.validated == p.frame_no).map(|s| (PartyChara::Sora, from_bits(s.handle)));
+    match crate::party::aggro::credit(hit.target, hitter.map(crate::party::aggro::Who::from), hit.damage) {
         crate::party::aggro::Credit::Leader => None,
-        crate::party::aggro::Credit::To(c) => live(c),
+        crate::party::aggro::Credit::To(c) => match c.chara() {
+            Some(c) => live(c),
+            None => mimic(),
+        },
         crate::party::aggro::Credit::Own => hitter.filter(|c| p.owner.takes(*c)).and_then(live),
     }
 }
@@ -576,7 +632,7 @@ impl Pool {
         let facing = coords::dir_er_to_kh(coords::facing_er(ctx.leader_yaw));
         let right = facing.cross(Vec3::Z).normalize_or_zero();
         let off = self.sheet.test_offset * CM_PER_M;
-        let stand_in = |chara, side: f32, capsule| AllyWant { chara, feet: ctx.leader_feet + right * side * off, yaw: ctx.leader_yaw, capsule, hittable: true, invulnerable: false, ko: false };
+        let stand_in = |chara, side: f32, capsule| AllyWant { chara, feet: ctx.leader_feet + right * side * off, yaw: ctx.leader_yaw, capsule, hittable: true, invulnerable: false, ko: false, mimic: false };
         (vec![stand_in(PartyChara::Donald, 1.0, (30.0, 49.0, 51.0)), stand_in(PartyChara::Goofy, -1.0, (40.0, 89.0, 91.0))], false)
     }
 
@@ -633,14 +689,14 @@ impl Pool {
         // ---- 3. who needs a body
         let (wants, real) = self.effective_wants(ctx);
         let cutscene = crate::hud::in_cutscene();
-        let want_views: Vec<WantView> = if mode == Mode::Bodies || self.test.is_some() { wants.iter().map(|w| WantView { chara: w.chara, hittable: w.hittable && !cutscene }).collect() } else { Vec::new() };
+        let want_views: Vec<WantView> = if mode == Mode::Bodies || self.test.is_some() { wants.iter().map(|w| WantView { chara: w.chara, hittable: w.hittable && !cutscene, mimic: w.mimic }).collect() } else { Vec::new() };
         if self.all_failed && self.clock >= self.retry_at {
             self.all_failed = false;
             self.route_failed = [false; 3];
             erlog!("party-body: every body route had failed: trying again now (the friends could not be hit meanwhile)");
         }
         let spawn_ok = self.pending.is_none() && !ctx.paused && !cutscene && game::player_age() >= 60 && self.clock >= self.next_spawn_at && !self.all_failed && (mode == Mode::Bodies || self.test.is_some());
-        let views: Vec<SlotView> = self.slots.iter().map(|s| SlotView { chara: s.chara, state: s.state }).collect();
+        let views: Vec<SlotView> = self.slots.iter().map(|s| SlotView { chara: s.chara, state: s.state, mimic: s.mimic }).collect();
         let actions = rules::plan(&views, &want_views, spawn_ok, self.sheet.max);
         let mut drops = Vec::new();
         for a in actions {
@@ -649,15 +705,21 @@ impl Pool {
                 Action::Release(i) => {
                     let s = &mut self.slots[i];
                     erlog!("party-body: {} left the wanted list: his body is parked and free for any friend (never despawned)", s.who());
-                    s.chara = None;
+                    (s.chara, s.mimic) = (None, false);
                     if s.state == SlotState::Live {
                         s.state = SlotState::Parked;
                     }
                 }
                 Action::Reuse(i, c) => {
                     erlog!("party-body: the free body {} is given to {}", self.slots[i].spec.label(), c.name());
-                    self.slots[i].chara = Some(c);
+                    (self.slots[i].chara, self.slots[i].mimic) = (Some(c), false);
                 }
+                // (MIMIC SORA) the fourth key: AI Sora's body route, his own slot
+                Action::ReuseMimic(i) => {
+                    erlog!("party-body: the free body {} is given to Mimic Sora", self.slots[i].spec.label());
+                    (self.slots[i].chara, self.slots[i].mimic) = (Some(PartyChara::Sora), true);
+                }
+                Action::SpawnMimic => self.spawn_for(Some(PartyChara::Sora), true, ctx, &set),
                 Action::Activate(i) => {
                     if self.slots[i].state == SlotState::Parked {
                         self.slots[i].state = SlotState::Live;
@@ -668,7 +730,7 @@ impl Pool {
                     self.slots[i].state = SlotState::Parked;
                     erlog!("party-body: {}'s body is parked (KO or a cutscene: unhittable, neutral team)", self.slots[i].who());
                 }
-                Action::Spawn(c) => self.spawn_for(Some(c), ctx, &set),
+                Action::Spawn(c) => self.spawn_for(Some(c), false, ctx, &set),
             }
         }
         drops.sort_unstable();
@@ -678,7 +740,7 @@ impl Pool {
         // ---- 3b. cures asked for the friends (S2's queue: Donald's Cure on Goofy, a status-clearing item, the save point):
         // the game's own cure effects on the friend's BODY (`status::cure_chr`)
         for (c, reason) in crate::status::take_ally_cures() {
-            match self.slots.iter_mut().find(|s| s.chara == Some(c) && matches!(s.state, SlotState::Live | SlotState::Parked) && s.validated == self.frame_no) {
+            match self.slots.iter_mut().find(|s| s.is_of(c) && matches!(s.state, SlotState::Live | SlotState::Parked) && s.validated == self.frame_no) {
                 Some(s) => {
                     // SAFETY: validated in the game's sets this frame (`valid`).
                     let chr = unsafe { &mut *(s.ptr as *mut ChrIns) };
@@ -768,7 +830,7 @@ impl Pool {
     }
 
     /// Asks the debug creator for a body (the first route of the sheet's order that has not failed).
-    fn spawn_for(&mut self, chara: Option<PartyChara>, ctx: &Ctx, set: &[usize]) {
+    fn spawn_for(&mut self, chara: Option<PartyChara>, mimic: bool, ctx: &Ctx, set: &[usize]) {
         let order = self.sheet.order.clone();
         let mut why = Vec::new();
         for route in order {
@@ -783,13 +845,13 @@ impl Pool {
                     continue;
                 }
             };
-            let feet = chara.and_then(|c| self.effective_wants(ctx).0.into_iter().find(|w| w.chara == c)).map_or(ctx.leader_feet, |w| w.feet);
+            let feet = chara.and_then(|c| self.effective_wants(ctx).0.into_iter().find(|w| w.chara == c && w.mimic == mimic)).map_or(ctx.leader_feet, |w| w.feet);
             match ask(&spec, ctx.frame.pos_kh_to_er(feet) + Vec3::Y * 0.05) {
                 Ok(before_last) => {
-                    erlog!("party-body: a body for {} is asked of the game's debug character creator: {} at his feet", chara.map_or("(item 2 probe)", |c| c.name()), spec.label());
+                    erlog!("party-body: a body for {} is asked of the game's debug character creator: {} at his feet", if mimic { "Mimic Sora" } else { chara.map_or("(item 2 probe)", |c| c.name()) }, spec.label());
                     self.set_item(1, St::Wait(format!("asked for {} at {:.1} s; waiting for the creator", spec.label(), self.clock)));
-                    self.slots.push(Slot::placeholder(chara, spec.clone(), self.clock));
-                    self.pending = Some(Pending { chara, spec, before_last, before_set: set.to_vec(), asked: self.clock, frames: 0 });
+                    self.slots.push(Slot::placeholder(chara, mimic, spec.clone(), self.clock));
+                    self.pending = Some(Pending { chara, mimic, spec, before_last, before_set: set.to_vec(), asked: self.clock, frames: 0 });
                     return;
                 }
                 Err(e) => {
@@ -825,7 +887,7 @@ impl Pool {
                     if game::chr_complete(chr) && !self.dead.contains(&game::handle_bits(&chr.field_ins_handle)) {
                         let spec = self.adopt_spec.clone().unwrap_or(Spec { route: BodyRoute::Copy, chr_id: chr.npc_id, npc_param: chr.npc_param_id, think: -1, init: -1, team: self.team.unwrap_or(0), buddy: None });
                         erlog!("party-body: a LATE body appeared in the debug set (c{:04}, NpcParam {}): adopted as a free, parked body (a spawn given up earlier came after all)", chr.npc_id, chr.npc_param_id);
-                        let mut s = Slot::placeholder(None, spec, self.clock);
+                        let mut s = Slot::placeholder(None, false, spec, self.clock);
                         self.adopt_until = 0.0;
                         setup(&mut s, chr, ptr, set.contains(&ptr));
                         s.state = SlotState::Parked;
@@ -864,7 +926,7 @@ impl Pool {
                     unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(chr.block_id) as *const u32) },
                     if in_set { "in the debug set" } else { "NOT in the debug set (found through last_created_chr)" }, creator.spawn
                 );
-                erlog!("party-body: BODY MADE for {} after {} frame(s) ({waited:.2} s): {} -> {facts}", p.chara.map_or("(item 2 probe)", |c| c.name()), p.frames, p.spec.label());
+                erlog!("party-body: BODY MADE for {} after {} frame(s) ({waited:.2} s): {} -> {facts}", if p.mimic { "Mimic Sora" } else { p.chara.map_or("(item 2 probe)", |c| c.name()) }, p.frames, p.spec.label());
                 self.set_item(1, St::Pass(format!("the first body appeared {} frame(s) ({waited:.2} s) after the request; last_created_chr {:#x} -> {:#x}", p.frames, p.before_last, last)));
                 if let Some(t) = self.test.as_mut() {
                     t.route(p.spec.label(), Ok(waited));
@@ -905,7 +967,8 @@ impl Pool {
     fn body_frame(&mut self, i: usize, ctx: &mut Ctx, wants: &[AllyWant], real: bool, cutscene: bool) {
         // SAFETY: validated this frame (`valid`).
         let chr = unsafe { &mut *(self.slots[i].ptr as *mut ChrIns) };
-        let want = self.slots[i].chara.and_then(|c| wants.iter().find(|w| w.chara == c)).copied();
+        let mimic = self.slots[i].mimic;
+        let want = self.slots[i].chara.and_then(|c| wants.iter().find(|w| w.chara == c && w.mimic == mimic)).copied();
         let parked = self.slots[i].state == SlotState::Parked || cutscene || want.is_none() || self.mode == Mode::Off;
         let hittable = !parked && want.is_some_and(|w| w.hittable);
         let invulnerable = want.is_some_and(|w| w.invulnerable);
@@ -979,6 +1042,16 @@ impl Pool {
             HpRead::Lost(n) if self.slots[i].settle == 0 => lost_now = n,
             _ => {}
         }
+        // (GF-INGAME) WHAT REACHES THE BODY. The game's own hits never land on a friend's body: in every log of the game, the user's
+        // too, not one body lost HP, and bullets fired at one from 1.5 m pass (its Havok proxy does not follow our writes; the
+        // proxy's own place reads (-32, 0, 0)). So the sensor judges it: a swing of an enemy that aims at him, or a bullet at him.
+        if lost_now == 0 && !invulnerable && self.sheet.swing_on && ctx.control.flag("party.body_swings") != Some(false) {
+            if let Some(w) = want.filter(|_| hittable) {
+                let rules = crate::telegraph::SwingRules { reach: self.sheet.swing_reach, arc: self.sheet.swing_arc, height: self.sheet.swing_height, aim: self.sheet.swing_aim, bullet: self.sheet.swing_bullet };
+                let power = crate::telegraph::body_hit(self.slots[i].handle, ctx.frame.pos_kh_to_er(w.feet), w.feet, &rules);
+                lost_now = power.map_or(0, |p| (p * self.sheet.swing_scale).round().max(1.0) as i32);
+            }
+        }
         if lost_now > 0 {
             if let Some(w) = want.filter(|_| hittable) {
                 self.body_loss(i, chr, &w, lost_now, ctx, real);
@@ -1013,7 +1086,7 @@ impl Pool {
         if resets > 0 {
             let s = &mut self.slots[i];
             s.resets += resets;
-            if s.resets <= 3 || s.resets % 600 == 0 {
+            if s.resets <= 3 || s.resets.is_multiple_of(600) {
                 erlog!("party-body: {resets} switch(es) of {}'s body had been reset by the game (written again; {} so far)", s.who(), s.resets);
             }
         }
@@ -1031,7 +1104,7 @@ impl Pool {
                 let written = crate::sdkx::set_ai_on(chr, want_on);
                 if before.is_some() && s.ai_said == Some(want_on) {
                     s.ai_resets += 1;
-                    if s.ai_resets <= 3 || s.ai_resets % 600 == 0 {
+                    if s.ai_resets <= 3 || s.ai_resets.is_multiple_of(600) {
                         erlog!("party-body: the game set {}'s body's AI switch back to {:?}: written {} again ({} so far)", s.who(), before, if want_on { "ON" } else { "OFF" }, s.ai_resets);
                     }
                 } else if s.ai_said != Some(want_on) {
@@ -1071,18 +1144,42 @@ impl Pool {
                 s.throw_drift = s.throw_drift.max(d);
             }
         }
-        write(chr, er, yaw);
-        self.slots[i].target = Some((er, yaw));
-        self.slots[i].written = Some(er);
-        // ---- throws (item 8)
+        // (GRABS) A THROW HOLDS THIS BODY (its throw node: 4 InThrowTarget, 6 DeathTarget): the game moves it with the
+        // thrower's paired animation, so it is NOT written to the friend; the friend is seated on it instead and plays KH3's
+        // caught sequence (grabs.rs; sora.rs `seat_caught_allies`, partydraw.rs `catch_pose`). `grab.ally = 0`: as before
+        // (written to him regardless). The Mimic copy keeps the old rule (spirit_mimic.rs moves him).
         let throw = throw_state(chr);
+        // (GRABS, MIMIC SORA) Mimic Sora's body the same way: his own word (`grabs::note_mimic`), his core seated and caught
+        let mimic = self.slots[i].mimic;
+        let chara = self.slots[i].chara.filter(|_| !mimic);
+        let caught = matches!(throw, Some(4 | 6)) && ctx.control.flag("grab.ally") != Some(false) && (chara.is_some() || mimic);
+        if caught {
+            let body_yaw = crate::coords::yaw_kh_of_er_dir(game::quat(&chr.modules.physics.orientation) * Vec3::NEG_Z);
+            let held = crate::grabs::AllyHeld { chara: chara.unwrap_or(PartyChara::Sora), feet: ctx.frame.pos_er_to_kh(now), yaw: body_yaw, held: true };
+            if mimic {
+                crate::grabs::note_mimic(held);
+            } else {
+                crate::grabs::note_ally(held);
+            }
+            self.slots[i].target = None;
+        } else {
+            if mimic {
+                crate::grabs::note_mimic(crate::grabs::AllyHeld { chara: PartyChara::Sora, feet, yaw, held: false });
+            } else if let Some(chara) = chara {
+                crate::grabs::note_ally(crate::grabs::AllyHeld { chara, feet, yaw, held: false });
+            }
+            write(chr, er, yaw);
+            self.slots[i].target = Some((er, yaw));
+            self.slots[i].written = Some(er);
+        }
+        // ---- throws (item 8)
         let held = throw == Some(4);
         if held != self.slots[i].throw_on {
             let s = &mut self.slots[i];
             s.throw_on = held;
             if held {
                 s.throw_drift = 0.0;
-                erlog!("party-body: {}'s body is HELD BY A THROW (throw node state 4): it is written to him every frame regardless; the throw's blows arrive as HP", s.who());
+                erlog!("party-body: {}'s body is HELD BY A THROW (throw node state 4): {}; the throw's blows arrive as HP, without a reaction", s.who(), if caught { "(GRABS) the game moves it, he is seated on it in KH3's caught sequence" } else { "it is written to him every frame regardless" });
             } else {
                 let text = format!("{}'s body was held by a throw; the largest move the game made against our writes meanwhile: {:.2} m", s.who(), s.throw_drift);
                 let fights = s.throw_drift > 0.3;
@@ -1171,6 +1268,7 @@ impl Pool {
     /// A body lost HP: the hit on its friend (Sora's damage-in rule, by the reference maximum).
     fn body_loss(&mut self, i: usize, chr: &ChrIns, w: &AllyWant, lost: i32, ctx: &mut Ctx, real: bool) {
         let control = ctx.control;
+        crate::sensorlab::on_hit(chr, lost, "an ally body"); // (GF-SENSOR)
         let s = &self.slots[i];
         let ref_max = if self.sheet.ref_hp > 0 { self.sheet.ref_hp } else { s.own_max.max(1) };
         let body_max = chr.modules.data.max_hp;
@@ -1183,7 +1281,9 @@ impl Pool {
             sr::classify_with(lost, ref_max, body_max, active, &dots, control.f32("status.tick_cap").unwrap_or(0.05), &sr::ProcSign { fresh: &fresh, ailment: None, guess_pct: None })
         };
         let tick = matches!(class, Loss::Tick { .. });
-        let by = ctx.targets.id_of(&chr.last_hit_by).and_then(|id| ctx.targets.get(id)).cloned();
+        // (GF-SENSOR) R4: the sensor's reading names the attacker where `last_hit_by` names nobody (telegraph.rs)
+        let read = if tick { None } else { crate::telegraph::hit_read(w.feet, ctx.frame.pos_kh_to_er(w.feet)) };
+        let by = ctx.targets.id_of(&chr.last_hit_by).or(read.map(|r| r.attacker)).and_then(|id| ctx.targets.get(id)).cloned();
         let known = by.is_some();
         let attacker = if tick { None } else { by.or_else(|| ctx.targets.hostiles_by_distance().into_iter().map(|(_, e)| e.clone()).filter(|e| (e.pos - w.feet).length() <= 800.0).min_by(|a, b| (a.pos - w.feet).length().total_cmp(&(b.pos - w.feet).length()))) };
         let (causer, from, yaw, radius) = match &attacker {
@@ -1191,7 +1291,7 @@ impl Pool {
             None => (TargetId::NONE, w.feet + coords::dir_er_to_kh(coords::facing_er(w.yaw)) * 100.0, w.yaw + 180.0, 40.0),
         };
         let direction = ((w.feet - from) * Vec3::new(1.0, 1.0, 0.0)).normalize_or_zero();
-        let hit = AllyHit { chara: w.chara, lost, ref_max, class, causer, from, causer_yaw: yaw, causer_radius: radius, known, direction, burn_flinch: control.flag("status.burn_flinch") != Some(false) };
+        let hit = AllyHit { chara: w.chara, mimic: w.mimic, lost, ref_max, class, causer, from, causer_yaw: yaw, causer_radius: radius, known, direction, burn_flinch: control.flag("status.burn_flinch") != Some(false), info: read.map_or(kh_core::host::AttackInfo { attacker: (causer != TargetId::NONE).then_some(causer), ..kh_core::host::AttackInfo::NONE }, |r| r.info) };
         if let Some(e) = attacker.as_ref().filter(|_| known) {
             ctx.targets.note_attack(e.id);
         }
@@ -1318,7 +1418,7 @@ impl Pool {
                         self.route_failed = [true; 3];
                         self.route_failed[r.index()] = false;
                         let (set, _) = debug_set();
-                        self.spawn_for(None, ctx, &set);
+                        self.spawn_for(None, false, ctx, &set);
                         self.route_failed = saved;
                         self.all_failed = false;
                         erlog!("party-body-test: item 2: the {} route is tried as a probe (one route at a time; set kinds again for the next)", r.name());
@@ -1567,6 +1667,21 @@ fn ask(spec: &Spec, at: Vec3) -> Result<usize, String> {
     Ok(before)
 }
 
+/// (MIMIC-BOSS) A BODY FOR A MIMIC TEAR BOSS'S SUMMON (mimic_boss.rs): the same creator route as the party's bodies (`ask`),
+/// only while the pool asks nothing. Returns the creator's last character before the request (the new one differs from it:
+/// [`last_created`]).
+pub(crate) fn ask_foe(chr_id: i32, npc_param: i32, think: i32, init: i32, at_er: Vec3) -> Result<usize, String> {
+    if !creator_free() {
+        return Err("the party's body pool is using the creator".to_string());
+    }
+    ask(&Spec { route: BodyRoute::Buddy, chr_id, npc_param, think, init, team: 0, buddy: None }, at_er)
+}
+
+/// (MIMIC-BOSS) The creator's last character (0: no creator).
+pub(crate) fn last_created() -> usize {
+    creator().map_or(0, |c| word!(c.last_created_chr))
+}
+
 /// (ER party S8) THE CREATOR IS FREE for S8's staged-boss double: no body request of ours is pending, none adoptable.
 pub fn creator_free() -> bool {
     let Ok(g) = POOL.try_lock() else { return false };
@@ -1575,9 +1690,22 @@ pub fn creator_free() -> bool {
 
 /// The bodies' pointers for `is_body`.
 fn publish(slots: &[Slot]) {
+    // (ER-HITSFX round 2) a body that leaves (given up, parked out, dead, a load) stays a stand-in for a while: its death cry
+    // or despawn on a teleport is still muted (standin.rs)
+    let old: Vec<(usize, u64)> = BODY_PTRS.iter().zip(BODY_HANDLES.iter()).map(|(p, h)| (p.load(Ordering::Relaxed), h.load(Ordering::Relaxed))).collect();
+    for (p, h) in old.iter().copied().filter(|(p, _)| *p != 0) {
+        if !slots.iter().any(|s| s.ptr == p && matches!(s.state, SlotState::Live | SlotState::Parked)) {
+            crate::standin::left(p, h, crate::standin::Who::Body);
+        }
+    }
     for (k, p) in BODY_PTRS.iter().enumerate() {
         let v = slots.get(k).filter(|s| matches!(s.state, SlotState::Live | SlotState::Parked)).map_or(0, |s| s.ptr);
         p.store(v, Ordering::Relaxed);
+    }
+    for (k, h) in BODY_HANDLES.iter().enumerate() {
+        // (ER-HITSFX) the same rule, the handles
+        let v = slots.get(k).filter(|s| matches!(s.state, SlotState::Live | SlotState::Parked)).map_or(0, |s| s.handle);
+        h.store(v, Ordering::Relaxed);
     }
 }
 

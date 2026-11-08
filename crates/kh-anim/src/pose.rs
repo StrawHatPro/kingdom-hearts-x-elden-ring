@@ -30,9 +30,15 @@ use std::collections::BTreeMap;
 use crate::blend::{key_rotation, key_scale, slot, weighted};
 use crate::bonamik::{Bonamik, BonamikHost, BonamikOptions};
 use crate::kine::KineDriver;
-use crate::legik::{IkWorld, LegIk, LegIkReport};
+use crate::legik::{IkInput, IkWorld, LegIk, LegIkReport};
 use crate::pack::{Clip, ClipInfo, Notify, Pack, Skeleton};
 use crate::Trs;
+
+/// (FACE) A notify play a held face slot did not take: (name, type, same check, blend-in).
+type DeferredFacePlay = (Option<String>, String, bool, f32);
+
+/// (IMPL_ER16) The overlay of [`Animator::step_with`]: may rewrite the local pose.
+pub type PoseOverlay<'a> = Option<&'a mut (dyn FnMut(&Skeleton, &mut [Trs]) + 'a)>;
 
 /// What to run. Everything on is the game.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -211,6 +217,8 @@ impl LegAlpha {
 /// The only clip whose Bonamik notify states have an effect with Sora's asset (the fall loop).
 const BONAMIK_NOTIFY_CLIP: &str = "0033";
 const BONAMIK_GROUP_PARAMS: &str = "TresAnimNotifyState_Bonamik_ChangeGroupParams";
+/// (KEYCHAIN-DUAL)
+const CHILD_SPEED_RATE: &str = "TresAnimNotifyState_Bonamik_SpeedRate";
 const BONAMIK_CHARA_WIND: &str = "TresAnimNotifyState_Bonamik_CharaWind";
 /// (party A) handled for the friends' packs only (format kh3-party-pack/).
 const BONAMIK_RESET_AND_PRE_ROLL: &str = "TresAnimNotify_Bonamik_ResetAndPreRoll";
@@ -232,7 +240,7 @@ pub struct Animator {
     /// later, not played (KH3's play priority: a higher play blocks the lower ones while it runs, eye play 0x14055D270).
     face_hold: [bool; 2],
     /// (FACE) The latest notify play a held slot did not take: (name, type, same check, blend-in).
-    face_deferred: [Option<(Option<String>, String, bool, f32)>; 2],
+    face_deferred: [Option<DeferredFacePlay>; 2],
     /// (FACE) The slots a body notify asked to play in the latest step (held or not).
     face_notified: [bool; 2],
     subtree: [Vec<usize>; 2],
@@ -272,6 +280,9 @@ pub struct Animator {
     /// rate it saved at its begin (0x140562780 stores `FUN_143b5e170` = the current rate at +0x60).
     party_cloth: Vec<(String, usize)>,
     party_speed_saved: Vec<((String, usize), f32)>,
+    /// (KEYCHAIN-DUAL) Sora's CharaWind / SpeedRate states active in the clips he plays (sequence, notify index), for the
+    /// weapons' keychains ([`Animator::child_bonamik_states`])
+    children: Vec<(String, usize)>,
     /// (party A2) The ground the Bonamik's Step clamps against (owner vf10, 0x143B57E80: the CMC floor or a trace
     /// under the root): world (point, normal), set by the host before each step; `None` = no ground.
     bonamik_ground: Option<(glam::Vec3, glam::Vec3)>,
@@ -317,7 +328,7 @@ impl Animator {
 
     /// From a pack read by [`Pack::load`].
     pub fn new(pack: Pack, settings: Settings) -> Result<Animator, String> {
-        let Pack { manifest, skeleton, clips, lazy, info, leg_ik, kine_driver, bonamik, look_at } = pack;
+        let Pack { manifest, skeleton, clips, lazy, info, leg_ik, kine_driver, bonamik, look_at, face_rows_extra } = pack;
         let reference = skeleton.reference_pose();
         let mut bound = BTreeMap::new();
         for (name, clip) in clips {
@@ -395,7 +406,9 @@ impl Animator {
         let subtree = [indices("G_eye"), indices("G_mouth")];
         let face = runtime.get("face");
         let stem = |file: &str| file.rsplit('/').next().unwrap_or(file).trim_end_matches(".glb").to_string();
-        let rows = face.get("rows").items().iter().filter_map(|r| Some((r.get("name").as_str()?.to_string(), stem(r.get("file").as_str()?)))).collect();
+        let mut rows: Vec<(String, String)> = face.get("rows").items().iter().filter_map(|r| Some((r.get("name").as_str()?.to_string(), stem(r.get("file").as_str()?)))).collect();
+        // (AUDIT-C) face/face_extra.json's rows (Rage Form's ANTI_01 / ANTI_02)
+        rows.extend(face_rows_extra.into_iter().filter(|(n, _)| !rows.iter().any(|(m, _)| m.eq_ignore_ascii_case(n))).collect::<Vec<_>>());
         let types = face.get("type_to_row").members().iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect();
         // The saved pose starts as `m_CacheStartPoseAnimName` = IdleN at t = 0 (spec 6).
         let initial = manifest
@@ -412,6 +425,7 @@ impl Animator {
             coll_ik,
             party_cloth: Vec::new(),
             party_speed_saved: Vec::new(),
+            children: Vec::new(),
             bonamik_ground: None,
             unported_cloth: Vec::new(),
             look_at,
@@ -516,6 +530,20 @@ impl Animator {
     /// The bones Bonamik may write (the bones with a Bonamik weight); empty without it.
     pub fn bonamik_bones(&self) -> &[usize] {
         &self.bonamik_bones
+    }
+
+    /// (KEYCHAIN-DUAL) THE CHARAWIND / SPEEDRATE STATES ACTIVE IN THE CLIPS HE PLAYS (the latest step) for the weapons'
+    /// keychains (`Keychain::route_states`; KH3's "children" calls): each (a key naming the state: its clip and index, its
+    /// class, its properties). Every clip's, not only 0033's: a wind that names `KEY` finds the weapon's group.
+    pub fn child_bonamik_states(&self) -> Vec<(u64, &str, &crate::json::Json)> {
+        self.children
+            .iter()
+            .filter_map(|(sequence, k)| {
+                let n = self.clips.get(sequence)?.info.notifies.get(*k)?;
+                let key = format!("{sequence}/{k}").bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+                Some((key, n.class.as_str(), &n.properties))
+            })
+            .collect()
     }
 
     /// The Bonamik solver, when the pack has its data.
@@ -656,10 +684,10 @@ impl Animator {
             return (0..self.reference.len()).map(|bone| weighted(&poses.iter().zip(&list).map(|(p, (_, w))| (p[bone], *w)).collect::<Vec<_>>())).collect();
         }
         let [(first, first_weight), (second, second_weight)] = body.samples;
-        if !(second_weight > 0.0) {
+        if second_weight.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
             return self.sample(first, body.time);
         }
-        if !(first_weight > 0.0) {
+        if first_weight.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
             return self.sample(second, body.time);
         }
         let (a, b) = (self.sample(first, body.time), self.sample(second, body.time));
@@ -1014,6 +1042,7 @@ impl Animator {
         let state = |begin: f32, end: f32| pieces.iter().any(|&(a, b)| begin <= b && end > a);
         let mut listed: Vec<(String, usize)> = Vec::new();
         let mut cloth: Vec<(String, usize)> = Vec::new();
+        let mut children: Vec<(String, usize)> = Vec::new();
         let mut plays: Vec<Notify> = Vec::new();
         let mut resets: Vec<(bool, bool, i32)> = Vec::new();
         let mut party_cloth: Vec<(String, usize)> = Vec::new();
@@ -1021,6 +1050,11 @@ impl Animator {
         for sequence in body.notify_sequences {
             let Some(bound) = self.clips.get(*sequence) else { continue };
             for (k, notify) in bound.info.notifies.iter().enumerate() {
+                // (KEYCHAIN-DUAL) every clip's CharaWind / SpeedRate states: KH3's "children" calls hand them to the KBD
+                // components below his mesh, the weapons' (kh-anim keychain.rs ROUTED NOTIFIES)
+                if !self.party && (notify.class == BONAMIK_CHARA_WIND || notify.class == CHILD_SPEED_RATE) && state(notify.trigger, notify.end) {
+                    children.push((sequence.to_string(), k));
+                }
                 if notify.class == "TresAnimNotifyState_IK" {
                     if state(notify.trigger, notify.end) {
                         listed.push((sequence.to_string(), k));
@@ -1076,6 +1110,7 @@ impl Animator {
         if self.party {
             self.party_cloth_states(party_cloth);
         }
+        self.children = children; // (KEYCHAIN-DUAL)
         let property = |this: &Animator, key: &(String, usize), name: &str, default: f32| this.clips.get(&key.0).and_then(|b| b.info.notifies[key.1].properties.get(name).as_f32()).unwrap_or(default);
         for old in self.ik_states.clone() {
             if !listed.contains(&old) {
@@ -1158,7 +1193,7 @@ impl Animator {
     /// (IMPL_ER16) `step` with an OVERLAY: after the saved pose (never fed back into it) and before leg IK, KineDriver
     /// and Bonamik, `overlay` may rewrite the local pose (a pose taken from elsewhere: a retargeted cutscene figure).
     /// The helper bones and the cloth then follow the overlaid body.
-    pub fn step_with(&mut self, frame: &Frame, world: &dyn IkWorld, overlay: Option<&mut dyn FnMut(&Skeleton, &mut [Trs])>) -> &Pose {
+    pub fn step_with(&mut self, frame: &Frame, world: &dyn IkWorld, overlay: PoseOverlay<'_>) -> &Pose {
         let dt = frame.dt;
         // The face montages that exist advance: weight in real time from the first update on;
         // position as the body's (spec 8).
@@ -1251,13 +1286,13 @@ impl Animator {
         if self.settings.leg_ik {
             if let Some(node) = &mut self.leg_ik {
                 let component = component_space(&self.skeleton, &local);
-                node.evaluate(&self.skeleton, &mut local, &component, alpha, dt, &frame.component_to_world, world);
+                node.evaluate(IkInput { skeleton: &self.skeleton, component: &component, c2w: &frame.component_to_world, world }, &mut local, alpha, dt);
             }
             // (party A2) Donald's graph: CollTwoBoneIK R_ashi1 then L_ashi1, each on the previous node's output (node
             // 8 <- L2C 24, node 9 <- node 8; n_ex001_Anim), both with Alpha <- m_LegIKAlpha (not capped).
             for node in &mut self.coll_ik {
                 let component = component_space(&self.skeleton, &local);
-                node.evaluate(&self.skeleton, &mut local, &component, alpha, dt, &frame.component_to_world, world);
+                node.evaluate(IkInput { skeleton: &self.skeleton, component: &component, c2w: &frame.component_to_world, world }, &mut local, alpha, dt);
             }
         }
         // (party I2) ExLookAt (#12) after the leg IK, before the ModifyBone pair (pass-throughs: blend weights 0) and

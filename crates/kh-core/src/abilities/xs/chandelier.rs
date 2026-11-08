@@ -77,6 +77,8 @@ pub struct Chandelier {
 /// None): the pawn's actor (where it stands, turned by its yaw). One-shots (the first, vw_so088_fin_rsn01, is a notify state
 /// 0 .. 1.619 s). The pawn is shown from its clip time `pawn_attack_start - end_time` (3.4 s): the ones before are not
 /// played (their time is before the move begins).
+/// (AUDIT-B W-FIN) Superseded: socket None attaches to the mesh component (0x141765EC0 -> 0x14411B7A0), the data's roll is 0,
+/// and the pieces' emitter roll is undone by kh-vfx's fragment rule (sim.rs), so the hahen rows below carry the data's 0.
 /// (XW-d) The shatter hahen00..03 (TypeDataSQEX_FragmentMesh, drawn since XW-d) get roll -90 [?]: their node sits at z -300 / -400
 /// cm and their fragment emitters are turned roll +90 (the pawn skeleton root kh_sk's Y-up -> Z-up turn, roll -90, undone):
 /// in the actor's own frame every piece lay 3-4 m under the ground; in the root bone's frame the pieces assemble the
@@ -94,11 +96,11 @@ pub const PAWN_FX: [(f32, &str, [f32; 3], f32); 17] = [
     (4.554, "vw_so088_fin_han00", [0.0, 0.0, 0.0], 0.0),
     (4.554, "vw_so088_fin_han01", [0.0, 0.0, 0.0], 0.0),
     (4.830, "vw_so088_fin_han01", [0.0, 0.0, 0.0], 0.0),
-    (4.837, "vw_so088_fin_hahen00", [0.0, 0.0, 0.0], -90.0),
-    (4.990, "vw_so088_fin_hahen01", [0.0, 0.0, 0.0], -90.0),
-    (5.105, "vw_so088_fin_hahen02", [0.0, 0.0, 0.0], -90.0),
+    (4.837, "vw_so088_fin_hahen00", [0.0, 0.0, 0.0], 0.0), // (AUDIT-B W-FIN) the data's roll 0 (kh-vfx fragment rule)
+    (4.990, "vw_so088_fin_hahen01", [0.0, 0.0, 0.0], 0.0), // (AUDIT-B W-FIN) the data's roll 0 (kh-vfx fragment rule)
+    (5.105, "vw_so088_fin_hahen02", [0.0, 0.0, 0.0], 0.0), // (AUDIT-B W-FIN) the data's roll 0 (kh-vfx fragment rule)
     (5.226, "vw_so088_fin_han01", [0.0, 0.0, 0.0], 0.0),
-    (5.233, "vw_so088_fin_hahen03", [0.0, 0.0, 0.0], -90.0),
+    (5.233, "vw_so088_fin_hahen03", [0.0, 0.0, 0.0], 0.0), // (AUDIT-B W-FIN) the data's roll 0 (kh-vfx fragment rule)
     (5.494, "vw_so088_fin_mat", [0.0, 0.0, 0.0], 0.0),
 ];
 

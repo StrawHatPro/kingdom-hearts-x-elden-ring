@@ -139,7 +139,7 @@ fn something_on(s: &State) -> bool {
 
 /// The core's events of a step and his status after it: Cure landing on him, and the effects of the KH3 items whose
 /// own text says they remove status effects, ask for the clearing.
-#[cfg_attr(feature = "party", allow(dead_code))]
+#[cfg(not(feature = "party"))]
 pub fn on_events(events: &[Event], status: &Status) {
     on_events_of(events, status, kh_host::party::PartyChara::Sora, kh_host::party::PartyChara::Sora);
 }
@@ -302,10 +302,10 @@ pub fn frame(player: &mut PlayerIns, control: &Control, dt: f32) {
             (s.gauges, s.gauge_max, s.timers, s.seen_data) = (gauges, max, timers, true);
         }
         let mut trusted = s.timers;
-        for i in 0..7 {
+        for (i, t) in trusted.iter_mut().enumerate() {
             s.timer_rested[i] |= s.seen_data && s.timers[i] <= 0.0;
             if !s.timer_rested[i] {
-                trusted[i] = 0.0;
+                *t = 0.0;
             }
         }
         s.active = rules::over_time_active(&trusted);
@@ -368,9 +368,9 @@ fn clear(player: &mut PlayerIns, control: &Control, data_ok: bool, reason: &str)
         // SAFETY: as in `frame`; plain u32 fields of the player's game data.
         let pgd = unsafe { player.player_game_data.as_mut() };
         let rest = with(|s| s.rest);
-        for i in 0..7 {
+        for (i, name) in AILMENTS.iter().enumerate() {
             if let Some(v) = rest.reset_value(i, pgd.resistance_gauges[i], pgd.resistance_gauge_max[i]) {
-                reset.push(format!("{} {} -> {v}", AILMENTS[i], pgd.resistance_gauges[i]));
+                reset.push(format!("{name} {} -> {v}", pgd.resistance_gauges[i]));
                 pgd.resistance_gauges[i] = v;
             }
         }
@@ -387,12 +387,10 @@ fn clear(player: &mut PlayerIns, control: &Control, data_ok: bool, reason: &str)
 
 /// (ER party S2) Cures asked for the AI allies' bodies (S3's pool takes them: `take_ally_cures`, then `cure_chr` on each
 /// body): Donald's Cure on Goofy clears Goofy's body; the save point clears every member's (ER_PHASE_NOTES).
-#[allow(dead_code)] // (ER party S2) called by S3 / S5 / S6
 static ALLY_CURES: Mutex<Vec<(kh_host::party::PartyChara, String)>> = Mutex::new(Vec::new());
 
 /// (ER party S2) A CURE FOR ONE MEMBER: the leader's is the player body's (`request`), an AI ally's goes to his body
 /// (S3). `leader`: who leads now (Sora when the party is off).
-#[allow(dead_code)] // (ER party S2) called by S3 / S5 / S6
 pub fn request_member(member: kh_host::party::PartyChara, leader: kh_host::party::PartyChara, reason: &str) {
     if member == leader {
         request(reason);
@@ -404,19 +402,9 @@ pub fn request_member(member: kh_host::party::PartyChara, leader: kh_host::party
     }
 }
 
-/// (ER party S2) EVERY ACTIVE MEMBER'S AILMENTS (the save point's rule in ER: the user's "save points should also cure all
-/// status effects", for the whole party): the player body's and each ally body's.
-#[allow(dead_code)] // (ER party S2) called by S3 / S5 / S6
-pub fn request_all(members: &[kh_host::party::PartyChara], leader: kh_host::party::PartyChara, reason: &str) {
-    request(reason);
-    for m in members.iter().filter(|m| **m != leader) {
-        request_member(*m, leader, reason);
-    }
-}
-
 /// (ER party S2) A party effect spawned on a member (`Attach::Party`; S5 / S1 call it with the effect's name): a Cure
 /// landing on him clears his body's ailments (the leader's: the player body).
-#[allow(dead_code)] // (ER party S2) called by S3 / S5 / S6
+#[cfg(feature = "party")]
 pub fn on_party_effect(name: &str, member: kh_host::party::PartyChara, leader: kh_host::party::PartyChara) {
     if let Some(tier) = rules::cure_tier(name) {
         request_member(member, leader, &format!("{} landed on {}", ["Cure", "Cura", "Curaga"][tier], member.name()));
@@ -425,7 +413,7 @@ pub fn on_party_effect(name: &str, member: kh_host::party::PartyChara, leader: k
 
 /// (ER party S2) A KH3 item a member used on a member (kh-party `PartyEventKind::ItemUsed`): its own text says whether it
 /// clears status effects (as Sora's items: `on_events`).
-#[allow(dead_code)] // (ER party S2) called by S3 / S5 / S6
+#[cfg(feature = "party")]
 pub fn on_party_item(item: ItemKind, member: kh_host::party::PartyChara, leader: kh_host::party::PartyChara) {
     let clears = with(|s| {
         let clearing = s.clearing.get_or_insert_with(|| load_clearing(s.pack.as_deref()));
@@ -437,7 +425,7 @@ pub fn on_party_item(item: ItemKind, member: kh_host::party::PartyChara, leader:
 }
 
 /// (ER party S2, for S3) The ally cures asked since the last call.
-#[allow(dead_code)] // (ER party S2) called by S3 / S5 / S6
+#[cfg(feature = "party")]
 pub fn take_ally_cures() -> Vec<(kh_host::party::PartyChara, String)> {
     std::mem::take(&mut *ALLY_CURES.lock().unwrap_or_else(|e| e.into_inner()))
 }
@@ -445,7 +433,7 @@ pub fn take_ally_cures() -> Vec<(kh_host::party::PartyChara, String)> {
 /// (ER party S2, for S3) THE GAME'S CURE ON ANY CHARACTER (an AI ally's body): the Boluses' special effects through the
 /// game's own "apply special effect" (as `clear` does for the player). An NPC body keeps its build-up meters elsewhere
 /// (not in player game data): only the effects are given. Returns how many were applied. NOT TESTED IN THE GAME.
-#[allow(dead_code)] // (ER party S2) called by S3 / S5 / S6
+#[cfg(feature = "party")]
 pub fn cure_chr(chr: &mut eldenring::cs::ChrIns, reason: &str) -> usize {
     let cures = with(|s| s.cures.get_or_insert_with(cure_items).clone());
     let Some(f) = apply_fn() else {

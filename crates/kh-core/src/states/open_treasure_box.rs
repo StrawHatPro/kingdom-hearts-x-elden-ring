@@ -170,7 +170,7 @@ impl PlayerState for OpenTreasureBox {
                 self.open_in = OPEN_AT_LARGE;
                 self.sub = 4;
             }
-            4 | 5 | 6 => {
+            4..=6 => {
                 if self.sub == 4 {
                     // (the placement and the camera animation are the host's) Draw(1, 1, 1.0)
                     actions::draw(cx, true);

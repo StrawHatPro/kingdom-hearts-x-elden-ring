@@ -1,7 +1,6 @@
 //! Recovery and combat styles on the real trees.
 
-mod common;
-use common::*;
+use crate::common::*;
 use glam::Vec3;
 use kh_ai::*;
 
@@ -19,7 +18,7 @@ fn donald_cures_sora_below_threshold() {
     for l in p.ais[0].trace().log.iter().take(40) {
         println!("   {l}");
     }
-    assert!(cures.iter().any(|c| *c == AiCommand::Cure { target: ActorRef::Player }), "Donald did not cast Cure on Sora");
+    assert!(cures.contains(&AiCommand::Cure { target: ActorRef::Player }), "Donald did not cast Cure on Sora");
 }
 
 #[test]
@@ -49,7 +48,7 @@ fn goofy_drinks_potion_when_low() {
     for l in p.ais[1].trace().log.iter().take(20) {
         println!("   {l}");
     }
-    assert!(items.iter().any(|c| *c == AiCommand::UseItem { item: "POTION", target: ActorRef::Member(1) }), "Goofy did not drink a Potion");
+    assert!(items.contains(&AiCommand::UseItem { item: "POTION", target: ActorRef::Member(1) }), "Goofy did not drink a Potion");
 }
 
 #[test]

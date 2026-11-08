@@ -102,6 +102,17 @@ pub struct PoseInput<'a> {
     pub member: u8,
 }
 
+/// [`PosedMember::set_pose_view`]'s member this step: who he is, where he stands (`PoseInput`'s fields of the same names),
+/// weapon shown, on the ground.
+#[derive(Clone, Copy, Debug)]
+pub struct PoseState {
+    pub member: u8,
+    pub position: Vec3,
+    pub yaw: f32,
+    pub weapon_visible: bool,
+    pub grounded: bool,
+}
+
 /// One member as of the latest step, KH3 space (kh-app party_fx `MemberTap` without `visible`).
 #[derive(Clone, Debug, Default)]
 pub struct MemberTap {
@@ -340,8 +351,8 @@ impl PosedMember {
     /// (F's request) One fixed step from B's `AnimView` (anim-set ROW names): the row resolved to its sequences at the
     /// view's blend input, the notify window from the previous call (a new clip: its first update). The previous clip
     /// is in the animator's saved pose: `weight` blends the new one over it, as the game's slot does.
-    #[allow(clippy::too_many_arguments)]
-    pub fn set_pose_view(&mut self, member: u8, position: Vec3, yaw: f32, dt: f32, anim: &kh_party::AnimView, weapon_visible: bool, grounded: bool, world: &dyn kh_anim::IkWorld) -> Option<MemberTap> {
+    pub fn set_pose_view(&mut self, state: PoseState, dt: f32, anim: &kh_party::AnimView, world: &dyn kh_anim::IkWorld) -> Option<MemberTap> {
+        let PoseState { member, position, yaw, weapon_visible, grounded } = state;
         // a debug pose (`party-word A pose ...`) owns the member until `pose <who> off`
         if anim.clip.is_empty() || self.debug.is_some() {
             return None;
@@ -631,7 +642,7 @@ pub fn grid_samples_2d(r: &Value, x: f32, y: f32) -> Option<Vec<(String, f32)>> 
     }
     weights.retain(|(_, w)| *w > 0.0);
     let total: f32 = weights.iter().map(|(_, w)| w).sum();
-    if !(total > 0.0) {
+    if total.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
         return None;
     }
     weights.iter_mut().for_each(|(_, w)| *w /= total);
@@ -796,7 +807,6 @@ impl PartyPoser {
 
 /// (party P) The speed-matched locomotion pose of a pad-driven friend (dec016): the run samples by the lean, the walk
 /// cycle on its own time, blended by the speed (kh-anim's `BodySlot::blend_with`, as Sora's speed-matched loop).
-#[allow(clippy::too_many_arguments)]
 pub fn pose_loco(loco_time: &mut [f32; 3], m: &mut PosedMember, v: &kh_party::MemberView, loco: &kh_party::pad::LocoPose, dt: f32, weapon_visible: bool, world: &dyn kh_anim::IkWorld) -> MemberTap {
     let i = (v.chara as usize + 1).min(2);
     let from = loco_time[i];
@@ -866,6 +876,8 @@ impl crate::runtime::PartyRuntime {
                 continue;
             }
             let weapon = self.party.status(v.id).map(|s| s.weapon).unwrap_or("");
+            // (PARTY-WEAPONS) in his hand only while KH3's rule has it out (kh-party weapon_draw: hidden out of combat)
+            let shown = !weapon.is_empty() && self.party.weapon_view(v.id).is_some_and(|w| w.opacity > 0.0);
             // (party B5) the slides' body pitch (MemberView.pitch) for this step's pose: the actor rotation (pitch, yaw, 0)
             poser.members.get_mut(&id).unwrap().set_body_pitch(v.pitch);
             // (party I2) the head look-at: the controller focus's focal point (GetFocalPointOnActor 0x141263BF0 = the
@@ -884,11 +896,11 @@ impl crate::runtime::PartyRuntime {
             // (party P) a pad-driven friend in the speed-matched loop (dec016): both cycles on one phase
             // (party K1) and an AI member in the Move state's speed-matched loop (kh-party locomotion)
             if let Some(loco) = self.party.pad_state(v.id).and_then(|p| p.loco).or_else(|| self.party.ai_loco(v.id)) {
-                taps.push(pose_loco(&mut self.loco_time, m, v, &loco, dt, !weapon.is_empty(), world));
+                taps.push(pose_loco(&mut self.loco_time, m, v, &loco, dt, shown, world));
                 continue;
             }
             // A resolves the anim-set rows (blend spaces at the axis) and keeps the notify window (contract A.3)
-            if let Some(tap) = m.set_pose_view(v.id.0, v.position, v.yaw, dt, &v.anim, !weapon.is_empty(), v.on_ground, world) {
+            if let Some(tap) = m.set_pose_view(PoseState { member: v.id.0, position: v.position, yaw: v.yaw, weapon_visible: shown, grounded: v.on_ground }, dt, &v.anim, world) {
                 taps.push(tap);
             }
         }

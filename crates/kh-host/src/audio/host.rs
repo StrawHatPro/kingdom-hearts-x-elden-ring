@@ -21,6 +21,7 @@ use glam::Vec3;
 use kh_audio::{Engine, Language, Listener, Pack};
 use kh_core::Attach;
 
+use super::anchors::Points; // (AUDIT-A SOUND)
 use super::pose::PoseTap;
 use super::session::{self, Alarm, Attaches, Tick};
 use super::threaded::Output;
@@ -72,11 +73,30 @@ pub struct HostAudio {
     /// (ui gain) The linear gain of the voices of sounds started through [`HostAudio::ui_commands`] (a host whose
     /// menus must be heard over another game's audio; 1 = as authored), the engine keys of those sounds and their voices.
     pub ui_gain: f32,
+    /// (THE USER 2026-11-02: "...shotlock's startup sfx is way too loud") The peak (0 .. 1 of full scale, before the
+    /// output's master gain) `ui_gain` may raise a HUD sound to, never below its authored level (`session::ui_voice_gain`;
+    /// the Elden Ring host's sheet row `sound.ui_peak_ceiling`). 1 by default: never raised into clipping.
+    pub ui_peak_ceiling: f32,
     ui_keys: Vec<kh_audio::SoundKey>,
-    ui_voices: Vec<kh_audio::VoiceId>,
+    /// The voices of those sounds: (voice, its sound, the gain it was started with: its updates keep it).
+    ui_voices: Vec<(kh_audio::VoiceId, kh_audio::SoundKey, f32)>,
+    /// (THE USER 2026-11-02) The largest gain a HUD sound got since the last `take_ui_raised` (1 = none raised): a host's
+    /// per-second log line.
+    ui_raised: f32,
     /// (ER77) The outfit voice lines of the engine (which clip stood for which KH3 line, or why nothing was played), for a
     /// host's log: taken by the host (at most 64 kept).
     pub voice_notes: Vec<String>,
+    /// (GOS) [`HostAudio::set_silence`] is in force: every sound but the menus' started under it is silent.
+    silenced: bool,
+    /// (AUDIT-A SOUND) THE WEAPONS' / PAWNS' OWN POINTS of the coming step (world, cm): `kb:<model>:<mount>:<bone>` and
+    /// `pawn:<row>` anchors (super::anchors) as the host's effect side resolves them (`EffectHost::socket_point`), for the
+    /// names [`HostAudio::weapon_anchors`] asks for. Set by the host before `step`; a name without a point sounds at its
+    /// mount.
+    pub anchors: Vec<(&'static str, Vec3)>,
+    /// (AUDIT-A SOUND) Where each seam play of the latest step was put (handle, world point): for the audits.
+    pub placed: Vec<(u32, Vec3)>,
+    /// (AUDIT-A SOUND) Sora's clip time of the latest step (a `pawn:` anchor's fallback track).
+    anchor_time: f32,
 }
 
 impl HostAudio {
@@ -89,10 +109,18 @@ impl HostAudio {
         n
     }
 
+    /// (AUDIT-A) Sora's engine: the pack's routes plus the random voice lists of the core's clips the pack lacks
+    /// (`core_lists`: the formchanges' anim sets).
+    fn sora_engine(pack: Arc<Pack>, seed: u32, language: Language) -> Engine {
+        let mut engine = Engine::new(pack, seed, language);
+        super::core_lists::add_core_random_voices(&mut engine.routes);
+        engine
+    }
+
     pub fn new(pack: Arc<Pack>, out: Output, seed: u32, language: Language) -> HostAudio {
         HostAudio {
             queue: AudioQueue::default(),
-            engine: Engine::new(pack, seed, language),
+            engine: Self::sora_engine(pack, seed, language), // (AUDIT-A)
             out,
             tap: PoseTap::default(),
             attaches: Attaches::default(),
@@ -106,9 +134,15 @@ impl HostAudio {
             missing: 0,
             auto_events: 0,
             ui_gain: 1.0,
+            ui_peak_ceiling: 1.0,
             ui_keys: Vec::new(),
             ui_voices: Vec::new(),
+            ui_raised: 1.0,
             voice_notes: Vec::new(),
+            silenced: false,
+            anchors: Vec::new(), // (AUDIT-A SOUND)
+            placed: Vec::new(),
+            anchor_time: 0.0,
             surface: 0,
             last_auto: None,
             unknown: Vec::new(),
@@ -127,23 +161,69 @@ impl HostAudio {
     pub fn restart(&mut self, seed: u32) {
         let (pack, language) = (self.engine.pack().clone(), self.engine.language);
         self.out.stop_all();
-        self.engine = Engine::new(pack, seed, language);
+        self.engine = Self::sora_engine(pack, seed, language); // (AUDIT-A)
         self.queue.0.clear();
         self.attaches.clear();
+        // (THE USER 2026-11-02: "sometimes Audio from specifically our mod will become very loud") the new engine counts
+        // its sound keys and voices from 1 again: the menus' keys and voices of the old one must not stay, or the first
+        // of Sora's own sounds after a load / respawn with the same numbers were played at the menus' gain (+12 dB)
+        self.ui_keys.clear();
+        self.ui_voices.clear();
         self.tap = PoseTap::default();
         self.hud_owns_alarm = false;
         self.paused = false;
+        // (GOS) a silence in force holds for the new engine too (a respawn under the game over's black plate)
+        if self.silenced {
+            self.engine.driver.set_silence(0.0, 0.0);
+        }
+    }
+
+    /// (GOS, THE USER 2026-11-03: "silence all music and other SFX when on death screen" / "(except for menu SFX, dont
+    /// silence that)") THE HOST'S SILENCE: `on` = every sound of the engine (Sora's and the party's voices, battle and
+    /// world sounds, the alarm) fades to nothing over `fade` s, and so does every one started later, EXCEPT the menus'
+    /// sounds started through [`HostAudio::ui_commands`] while it holds (marked by their sound, whatever category they
+    /// share with the world); `on = false` gives everything back over `fade` s. Idempotent. True: the state changed.
+    pub fn set_silence(&mut self, on: bool, fade: f32) -> bool {
+        if self.silenced == on {
+            return false;
+        }
+        self.silenced = on;
+        self.engine.driver.set_silence(if on { 0.0 } else { 1.0 }, fade.max(0.0));
+        true
+    }
+
+    /// (GOS) The host's silence is in force.
+    pub fn silenced(&self) -> bool {
+        self.silenced
     }
 
     /// Where an attach is now: a bone or a socket of Sora from the latest pose when there is
     /// one (the offset in the bone's own frame), else the host's answer.
-    fn place(tap: &PoseTap, pack: &Pack, at: &Attach, host: &dyn Fn(&Attach) -> Vec3) -> Vec3 {
+    /// (AUDIT-A SOUND) + a weapon's / pawn's own point (`points`: the host's answers for `kb:` / `pawn:` anchors).
+    fn place(tap: &PoseTap, pack: &Pack, points: &Points, at: &Attach, host: &dyn Fn(&Attach) -> Vec3) -> Vec3 {
+        if let Some(position) = points.place(at, tap, &pack.sockets, host) {
+            return position;
+        }
         if let Attach::Sora { bone: Some(bone), offset } = at {
             if let Some(position) = tap.point(bone, *offset, &pack.sockets) {
                 return position;
             }
         }
         host(at)
+    }
+
+    /// (AUDIT-A SOUND) The weapon / pawn anchors (`kb:` / `pawn:`) whose points the coming step needs: those of the plays
+    /// queued (`self.queue` and `commands`, the host's own queue not yet handed over), of the step's effect spawns
+    /// (`effects`: their carried sounds) and of the live seam sounds and effects (followed). The host answers them in
+    /// [`HostAudio::anchors`] before `step`.
+    pub fn weapon_anchors(&self, commands: &[AudioCommand], effects: &[EffectCommand]) -> Vec<&'static str> {
+        let mut names = super::anchors::wanted(&self.queue.0, effects, self.attaches.seam.values().chain(self.attaches.effect.values()));
+        for name in super::anchors::wanted(commands, &[], std::iter::empty()) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        names
     }
 
     /// After one simulation step and its pose.
@@ -168,6 +248,10 @@ impl HostAudio {
         let pack = self.engine.pack().clone();
         let anim = (s.out.anim_ticked.name.name(), s.out.anim_ticked.time);
         let reflected = session::reflected_hit_sounds(&s.out.events);
+        self.anchor_time = s.out.anim_ticked.body_samples()[0].2; // (AUDIT-A SOUND)
+        self.placed.clear();
+        let anchors = std::mem::take(&mut self.anchors);
+        let points = Points { points: &anchors, time: self.anchor_time };
         for command in std::mem::take(&mut self.queue.0) {
             match command {
                 AudioCommand::Play(handle, play) => {
@@ -175,7 +259,8 @@ impl HostAudio {
                     if reflected.contains(&handle.0) {
                         continue;
                     }
-                    let position = Self::place(&self.tap, &pack, &play.at, s.place);
+                    let position = Self::place(&self.tap, &pack, &points, &play.at, s.place);
+                    self.placed.push((handle.0, position)); // (AUDIT-A SOUND)
                     if !session::seam_play(&mut self.engine, &mut self.attaches, &mut self.hud_owns_alarm, handle.0, &play, position, anim) {
                         self.missing += 1;
                     }
@@ -186,7 +271,7 @@ impl HostAudio {
         }
         {
             let tap = &self.tap;
-            let place = |at: &Attach| Self::place(tap, &pack, at, s.place);
+            let place = |at: &Attach| Self::place(tap, &pack, &points, at, s.place);
             for command in s.effects {
                 session::effect_command(&mut self.engine, &mut self.attaches, command, &place);
             }
@@ -203,6 +288,7 @@ impl HostAudio {
             None => Alarm::Hp { low: false },
         };
         before_run(&mut self.engine); // (ER party S5)
+        self.anchors = anchors; // (AUDIT-A SOUND) kept for the engine step's following (and `idle`) until the host's next ones
         self.run(s.dt, false, sample.as_ref(), s.surface, alarm, s.place);
         self.out.advance(FRAMES_PER_STEP);
     }
@@ -219,6 +305,11 @@ impl HostAudio {
                     self.played += 1;
                     if let Some(key) = session::seam_play_key(&mut self.engine, &mut self.attaches, &mut self.hud_owns_alarm, handle.0, &play, position, ("", 0.0)) {
                         started += 1;
+                        // (GOS) a menu's sound started under the silence is not silenced (the game over's loop, its
+                        // menu, the Load screen); one started before it is (an alarm the HUD began in the fight)
+                        if self.silenced {
+                            self.engine.driver.set_exempt(key);
+                        }
                         if self.ui_keys.len() >= 64 {
                             self.ui_keys.remove(0);
                         }
@@ -254,7 +345,8 @@ impl HostAudio {
     fn run(&mut self, dt: f32, standing: bool, sample: Option<&super::pose::BoneSample>, surface: u32, alarm: Alarm, host_place: &dyn Fn(&Attach) -> Vec3) {
         let pack = self.engine.pack().clone();
         let tap = &self.tap;
-        let place = |at: &Attach| Self::place(tap, &pack, at, host_place);
+        let points = Points { points: &self.anchors, time: self.anchor_time }; // (AUDIT-A SOUND)
+        let place = |at: &Attach| Self::place(tap, &pack, &points, at, host_place);
         let listener = self.listener;
         let (commands, detected) = session::tick(&mut self.engine, &self.attaches, &Tick { dt, standing, sample, surface: &|_| surface, alarm, listener: &listener, tap, place: &place });
         for (event, surface) in &detected {
@@ -262,22 +354,33 @@ impl HostAudio {
             self.last_auto = Some(format!("{} {} volume {:.2} surface {surface}", event.motion.name(), event.part.bone(), event.volume));
         }
         // (ui gain) the menus' voices at the host's gain
+        // (THE USER 2026-11-02: "...shotlock's startup sfx is way too loud") ... capped per sound by its authored peak
+        // (`session::ui_voice_gain`), fixed for the voice at its start; the keys and voices of sounds that have ended go
         let mut commands = commands;
-        if self.ui_gain != 1.0 && !(self.ui_keys.is_empty() && self.ui_voices.is_empty()) {
+        if !(self.ui_keys.is_empty() && self.ui_voices.is_empty()) {
             for command in &mut commands {
                 match command {
                     kh_audio::VoiceCommand::Start { voice, sound, params, .. } if self.ui_keys.contains(sound) => {
-                        params.volume *= self.ui_gain;
+                        let gain = session::ui_voice_gain(self.ui_gain, self.ui_peak_ceiling, self.engine.driver.peak_level(*sound));
+                        params.volume *= gain;
+                        self.ui_raised = self.ui_raised.max(gain);
                         if self.ui_voices.len() >= 64 {
                             self.ui_voices.remove(0);
                         }
-                        self.ui_voices.push(*voice);
+                        self.ui_voices.push((*voice, *sound, gain));
                     }
-                    kh_audio::VoiceCommand::Update { voice, params } if self.ui_voices.contains(voice) => params.volume *= self.ui_gain,
-                    kh_audio::VoiceCommand::Stop { voice } => self.ui_voices.retain(|v| v != voice),
+                    kh_audio::VoiceCommand::Update { voice, params } => {
+                        if let Some((_, _, gain)) = self.ui_voices.iter().find(|v| v.0 == *voice) {
+                            params.volume *= gain;
+                        }
+                    }
+                    kh_audio::VoiceCommand::Stop { voice } => self.ui_voices.retain(|v| v.0 != *voice),
                     _ => {}
                 }
             }
+            let driver = &self.engine.driver;
+            self.ui_keys.retain(|k| driver.is_playing(*k));
+            self.ui_voices.retain(|v| driver.is_playing(v.1));
         }
         self.out.send(&commands);
         let lines = self.engine.take_log();
@@ -302,6 +405,12 @@ impl HostAudio {
 
     pub fn steps(&self) -> u64 {
         self.steps
+    }
+
+    /// (THE USER 2026-11-02) The largest gain a HUD sound was started with since the last call (1 = none was raised),
+    /// and how many HUD sounds are live now: for a host's per-second log line.
+    pub fn take_ui_raised(&mut self) -> (f32, usize) {
+        (std::mem::replace(&mut self.ui_raised, 1.0), self.ui_keys.len())
     }
 
     pub fn flush(&mut self) {

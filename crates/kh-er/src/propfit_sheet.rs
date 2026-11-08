@@ -15,7 +15,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::figure::ROWS;
-use crate::propfit::{self, Dims, Fit, Kind, Profile};
+use crate::propfit::{self, Dims, Fit, Kind, Measures, Profile};
 
 const DT: f32 = 1.0 / 60.0;
 
@@ -185,7 +185,9 @@ fn read_targets() -> Option<Vec<Target>> {
     let sora = animator.skeleton().clone();
     let base = animator.sample(kh_core::AnimId::IdleN.sequences()[0], 0.0);
     let base = if base.len() == sora.len() { base } else { sora.reference_pose() };
-    let mut out = vec![Target { name: "Sora", skeleton: sora, base, profile: Profile::SORA, colour: "#d23", #[cfg(feature = "party")] member: None }];
+    let out = vec![Target { name: "Sora", skeleton: sora, base, profile: Profile::SORA, colour: "#d23", #[cfg(feature = "party")] member: None }];
+    #[cfg(feature = "party")]
+    let mut out = out;
     #[cfg(feature = "party")]
     {
         let party = root.join("party");
@@ -289,7 +291,7 @@ struct Frame {
     chest: Vec3,
 }
 
-fn solve(t: &Target, retarget: &(kh_anim::retarget::Retarget, Vec<usize>), sdims: &Dims, tdims: &Dims, fit: Option<&mut Fit>, kind: Kind, root: Vec3, src: &[(Vec3, Quat)]) -> Frame {
+fn solve(t: &Target, retarget: &(kh_anim::retarget::Retarget, Vec<usize>), (sdims, tdims): (&Dims, &Dims), fit: Option<&mut Fit>, kind: Kind, root: Vec3, src: &[(Vec3, Quat)]) -> Frame {
     let to_world = Trs { translation: root, rotation: Quat::IDENTITY, scale: Vec3::ONE };
     let rows: Vec<(Vec3, Quat)> = retarget.1.iter().map(|k| src[*k]).collect();
     let mut local = t.base.clone();
@@ -305,10 +307,10 @@ fn solve(t: &Target, retarget: &(kh_anim::retarget::Retarget, Vec<usize>), sdims
             }
         }
         Some(fit) => {
-            let plan = fit.plan(src, sdims, tdims, retarget.0.ratio, &t.profile, root, floor, kind, DT);
+            let plan = fit.plan(src, Measures { s: sdims, t: tdims, ratio: retarget.0.ratio, prof: &t.profile }, root, floor, kind, DT);
             if std::env::var("KH_PROOF_PLAN").is_ok_and(|v| v == t.name) { eprintln!("plan {}: pelvis {:?} shift {:?} limbs {:?} | src hips {:?} {:?}", t.name, plan.pelvis, plan.shift, plan.limbs, src[14].0, src[18].0); }
             let own = local.clone();
-            propfit::apply(&retarget.0, &t.skeleton, &rows, &plan, &to_world, 1.0, 1.0, &mut local);
+            propfit::apply(&retarget.0, &t.skeleton, &rows, &plan, &to_world, (1.0, 1.0), &mut local);
             // (as in the game: a plan the sanity refuses, or a drawn pose past the limits, shows his own pose)
             {
                 let bad = if plan.sane { propfit::limits(&t.skeleton, &kh_anim::pose::component_space(&t.skeleton, &own), &kh_anim::pose::component_space(&t.skeleton, &local)).err() } else { Some("the plan's sanity") };
@@ -360,8 +362,8 @@ fn errors(a: &Action, f: &Frame, tdims: &Dims, src: &[(Vec3, Quat)], root: Vec3,
             }
         }
         Contact::Points(pts) => {
-            for k in 0..2 {
-                if let Some(p) = pts[k] {
+            for (k, pt) in pts.iter().enumerate() {
+                if let Some(p) = pt {
                     hand = hand.max((f.ends[k] - (p + Vec3::new(root.x, root.y, 0.0))).length());
                 }
             }
@@ -488,8 +490,8 @@ fn propfit_sheet() {
             let mut prev_a: Option<Frame> = None;
             let mut shown_frames = (Frame::default(), Frame::default());
             for (fi, (root, s)) in a.frames.iter().enumerate() {
-                let before = solve(t, rig, &sdims, tdims, None, a.kind, *root, s);
-                let after = solve(t, rig, &sdims, tdims, Some(&mut fit), a.kind, *root, s);
+                let before = solve(t, rig, (&sdims, tdims), None, a.kind, *root, s);
+                let after = solve(t, rig, (&sdims, tdims), Some(&mut fit), a.kind, *root, s);
                 let swinging = [fit.swinging(0), fit.swinging(1)];
                 let still: [bool; 4] = std::array::from_fn(|k| fi == 0 && a.frames.len() == 1 || fi > 0 && { let e = propfit::rows::LIMBS[k][2]; (s[e].0 - a.frames[fi - 1].1[e].0).length() < 0.3 });
                 let (hb, fb, pb) = errors(&a, &before, tdims, s, *root, [false, false], still);

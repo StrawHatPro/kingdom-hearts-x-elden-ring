@@ -357,11 +357,8 @@ pub fn decide(p: &mut NpcPawn, action: Option<super::menu::MenuAction>, target: 
     use super::menu::MenuAction;
     match action {
         Some(MenuAction::DonCast { cmd, target: member }) => {
-            let t = match member {
-                Some(m) => Some(CastTarget::Member(m)),
-                None => None,
-            };
-            let _ = wants_cast(p, cmd, t.map_or(target_of(target), |t| t));
+            let t = member.map(CastTarget::Member);
+            let _ = wants_cast(p, cmd, t.unwrap_or(target_of(target)));
         }
         Some(MenuAction::DonAttune(e)) => {
             if !begin_attune(p, e) {
@@ -369,11 +366,10 @@ pub fn decide(p: &mut NpcPawn, action: Option<super::menu::MenuAction>, target: 
             }
         }
         // (DON-UI) Unattune (the Attunement submenu's last row / a shortcut)
-        Some(MenuAction::DonUnattune) => {
-            if !begin_unattune(p) {
+        Some(MenuAction::DonUnattune)
+            if !begin_unattune(p) => {
                 refused(p, "unattune");
             }
-        }
         _ => {}
     }
     // Y: the Y list's selected Arcane spell (DON-UI); else Y stays the team attacks' (Sora's queue)
@@ -612,11 +608,10 @@ pub fn pre_move(p: &mut NpcPawn, cx: &StepCtx, host: &mut PartyHost) -> bool {
     let free = matches!(p.state, NpcStateId::Idle | NpcStateId::Pad(RUN)) || (p.state == NpcStateId::Pad(JUMP) && p.pad.as_ref().is_some_and(|d| d.jump.sub >= 10));
     let airborne = !p.on_ground() && p.state == NpcStateId::Pad(JUMP);
     // ---- X: the dodge (stick) / Magic Block (neutral)
-    if kit_ref(p).is_some_and(|k| k.buffered_x > 0.0) && (free || airborne) {
-        if moves::press_x(p, host) {
+    if kit_ref(p).is_some_and(|k| k.buffered_x > 0.0) && (free || airborne)
+        && moves::press_x(p, host) {
             return true;
         }
-    }
     // ---- a dodge kept for the end of its cooldown
     if kit_ref(p).is_some_and(|k| k.dodge_buffered) && (free || airborne) && moves::dodge_ready(p) {
         if let Some(k) = kit(p) {

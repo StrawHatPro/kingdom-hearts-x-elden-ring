@@ -4,7 +4,7 @@
 //! ([`HudTargets`]), the command model, the debug words of `hud-cmd`, and the Menu button's flow with the Pause
 //! screen and the camp menu (tier 3). The host supplies a [`Frame`] and draws the movies (hud_layers.rs).
 //!
-//! LOCAL stand-ins (as in the test app): "in battle" look = `hud-cmd battle N`; MP / focus gauges always shown;
+//! LOCAL stand-ins (as in the test app): MP / focus gauges always shown;
 //! form id 0; the portrait's damage flash = HP went down between snapshots.
 
 use std::collections::HashMap;
@@ -16,7 +16,7 @@ use kh_core::{Attach, EventKind, SoundHandle, SoundId, SoundPlay, TargetId, UiSn
 use kh_core::config::{Choices, Storage, UserConfig, OPTIONS};
 use kh_ui::camp::{AbilityIn, CampAction, CampKey, CampMenu, CampScreen, OptionRow, StatsIn};
 use kh_ui::camp_custom::{CommandEntry, CustomizeIn, GROUP_ITEM, GROUP_MAGIC};
-use kh_ui::camp_equip::{EquipIn, EquipSlot, InvEntry, Piece, StockEntry, CAT_ACCESSORY, CAT_ARMOUR, CAT_ITEM, CAT_KEY, CAT_MATERIAL, CAT_WEAPON, KIND_ACCESSORY, KIND_ARMOUR, KIND_ITEM, KIND_WEAPON};
+use kh_ui::camp_equip::{EquipIn, EquipSlot, InvEntry, Piece, StockEntry, CAT_ACCESSORY, CAT_ARMOUR, CAT_ITEM, CAT_KEY, CAT_MATERIAL, CAT_WEAPON, KIND_ACCESSORY, KIND_ARMOUR, KIND_ITEM, KIND_SPIRIT, KIND_WEAPON};
 use kh_ui::camp_menu::CampMenuView;
 use kh_ui::command::{CommandDisplay, CommandStrings};
 use kh_ui::menu::{FlowEvent, GateInput, MenuFlow, PauseScreen, Phase, Screen};
@@ -24,7 +24,7 @@ use kh_ui::command_debug::DebugCommandSystem;
 use kh_ui::hud_command::HudCommand;
 use kh_ui::hud_side::{EnemyGauge, EnemyValues, HudLeft, HudRight, SideStrings, SE_ITEM, SE_LEVEL_UP};
 use kh_ui::hud_status::{HudStatus, SlotValues, StatusDriver, StatusValues};
-use kh_ui::hud_target::{HudTarget, TargetDriver, LOCKON_TYPE_AUTO, LOCKON_TYPE_FLOWSHOTATTACK, LOCKON_TYPE_FLOWSHOTFOCUSCHARGE, LOCKON_TYPE_FLOWSHOTMOVE, LOCKON_TYPE_NORMAL, SFSS_OUT, SFSS_OUT_ATHLETIC_FLOW0, SFSS_OUT_SHOOT_FLOW0};
+use kh_ui::hud_target::{HudTarget, TargetDriver, LOCKON_TYPE_AUTO, LOCKON_TYPE_FLOWSHOTATTACK, LOCKON_TYPE_FLOWSHOTFOCUSCHARGE, LOCKON_TYPE_ACTION, LOCKON_TYPE_FLOWSHOTMOVE, LOCKON_TYPE_NORMAL, SFSS_OUT, SFSS_OUT_ATHLETIC_FLOW0, SFSS_OUT_SHOOT_FLOW0};
 use kh_ui::{Fonts, Movie, Pack, UiSound};
 
 use kh_core::Sora;
@@ -42,6 +42,10 @@ mod obtained;
 // (ALLYJOIN) a new ally's question "join the party?" (KH3's Dialog window, Yes / No; Yes opens the Party Formation screen)
 #[path = "hud_ally.rs"]
 mod ally;
+// (ER-POPUPS) Elden Ring's own pop-up boxes (the event scripts' questions and messages) as KH3's Dialog window
+#[path = "hud_erdialog.rs"]
+mod erdialog;
+pub use erdialog::ErButtons;
 
 // (EQ) a friend's camp-menu edits by Sora's rules (item slots' Auto-Reload and refill, the weapon family, the benefit)
 #[path = "hud_eq.rs"]
@@ -52,6 +56,17 @@ pub use obtained::ObtainedKind;
 #[path = "hud_shop.rs"]
 mod shop_ui;
 pub use shop_ui::ShopOpen;
+// (THE USER 2026-11-02) the Spirit Tuning screen that stands in for a host's spirit-ash upgrade (Roderika's in Elden Ring)
+#[path = "hud_tuning.rs"]
+mod tuning_ui;
+pub use tuning_ui::TuneCharge;
+// (OF) THE USER 2026-11-03: "make sure Sora's HUD changes for his costumes": the worn outfit's KH3 HUD face (a child module)
+#[path = "hud_outfit.rs"]
+mod outfit;
+// (PROMPT-UI) the Y-command owner's prompts: KH3's button notice ("ATTACK!") and the style-point gauge row (">>")
+#[path = "hud_yprompt.rs"]
+mod yprompt;
+pub use outfit::{sora_face_movie, SORA_OUTFIT_FACES};
 
 /// One target as the HUD needs it (cursor position, the enemy gauge's values).
 #[derive(Clone, Copy, Debug)]
@@ -74,6 +89,11 @@ pub trait HudTargets {
     /// before the hit at that moment answers `None` (the gauge starts from what it reads).
     fn hit_prev_hp(&self, _id: TargetId, hp_after: f32, damage_dealt: f32) -> Option<i32> {
         Some((hp_after + damage_dealt) as i32)
+    }
+
+    /// (GOOFY) The top of its body, CORE space (cm): the red "!" sits over it. The default: its centre.
+    fn top(&self, id: TargetId) -> Option<kh_core::Vec3> {
+        self.target(id).map(|t| t.center)
     }
 }
 
@@ -161,7 +181,9 @@ pub struct Hud {
     loops: HashMap<u32, SoundHandle>,
     next_handle: u32,
     overrides: Overrides,
-    battle: i32,
+    /// (BC) `hud-cmd battle N`: a test's fixed battle colour (0 field, 1 battle, 2 special battle); `None` (the default,
+    /// and `hud-cmd battle live`) = the leader's own combat state ([`Hud::battle_mode`]).
+    battle: Option<i32>,
     /// `None`: LIBRA as his status has it; `Some`: the debug override.
     libra: Option<bool>,
     debug_cursors: Vec<(u32, usize)>,
@@ -199,10 +221,22 @@ pub struct Hud {
     /// bar with the Y icon: what Y does now), the others stack under it as KH3's situation commands (unselected rows). Set
     /// with [`Hud::set_host_reactions`]; `set_host_command` is the one-entry form.
     host_reactions: Vec<HostReaction>,
+    /// (INTERACT-MARK, the user 2026-11-05: "Add this green effect from KH3 onto what the interact prompt is focused on")
+    /// KH3's reaction-target marker: what the first host reaction is about, as (the target's identity, its point in the
+    /// snapshot's world space); set with [`Hud::set_host_reaction_target`]. `react_mark_shown`: the identity its cursor is on.
+    react_mark: Option<(u64, kh_core::Vec3)>,
+    react_mark_shown: Option<u64>,
     /// (integration pass) The shotlock aim as shown (UI spec 7.3, from `UiSnapshot::aim`): the
     /// scope is open, the mark type of this aim (2 shotlock, 3 focus syphon), marks shown per
     /// cursor key, the lock total last sent, the airstep marks on screen.
     aim_open: bool,
+    /// (THE USER 2026-11-02: "shotlock's startup sound effect continues to play its audio even after it's cancelled,
+    /// make it stop if shotlock gets cancelled") THE AIM'S OWN SOUND (static SE 18 / 25, KH3's `m_FocusModeAudio`): its
+    /// handle while it may sound, the scope having just asked for it (the next Play of SE 18 / 25 is it), and whether
+    /// this frame's HUD reached the aim at all (`scope_sound_rule`).
+    scope_sound: Option<SoundHandle>,
+    scope_sound_asked: bool,
+    aim_reached: bool,
     /// (cleanup pass) The shotlock was fired and its state still runs: the shotlock marks stay
     /// on their targets until the controller's mode leaves 2.
     aim_fired: bool,
@@ -214,6 +248,9 @@ pub struct Hud {
     air_marks: Vec<u64>,
     /// (integration pass) The push-button prompt on screen (`UiSnapshot::prompt`).
     prompt: Option<kh_core::ui_model::ButtonPrompt>,
+    /// (PROMPT-UI) The notice's state between frames and the style-point gauge row (hud_yprompt.rs).
+    notice: yprompt::NoticeState,
+    gauge: yprompt::GaugeLock,
     play_seconds: u32,
     /// HOST HOOK, called while the camp menu is open after its own frame (the test app: the settings guide's
     /// glyph and the character picture's clip, menu_model.rs).
@@ -247,11 +284,35 @@ pub struct Hud {
     /// [`Hud::take_title_request`] answers true once. The save-point menu's Title Screen asks KH3's question first.
     pub title_entry: bool,
     title_request: bool,
-    /// (er-host, IMPL_ER59) Sora's outfits in the camp menu: (id, shown name) and the one worn; `None` = no such entry.
+    /// (er-host, IMPL_ER59) Sora's outfits: (id, shown name) and the one worn; `None` = none offered.
     /// A choice is handed to the host once by [`Hud::take_outfit_choice`].
+    /// (THE USER 2026-11-02: "Move the Outfits selection to Boc") NOT AN ENTRY OF THE CAMP MENU ANY MORE: the list is
+    /// shown only by [`Hud::open_outfits`] (Elden Ring: Boc's "Alter garments").
     pub outfit_menu: Option<(Vec<(String, String)>, String)>,
+    /// (OUTFIT-UNLOCK, the user 2026-11-05: "once you have the sewing kit, you can access the costume menu ... but it costs
+    /// 50,000 munny") the camp menu's Outfits entry is shown (the host: Elden Ring's Tailoring Tools owned; hidden otherwise, as
+    /// KH3 hides an entry not open yet), and the munny one change costs on the Outfits screen (0 = free; the one worn is free).
+    pub outfits_entry: bool,
+    pub outfit_price: i32,
+    /// (OUTFIT-UNLOCK) the paid changes (outfit, price) to charge at the next `apply_actions`.
+    outfit_charges: Vec<(String, i32)>,
     outfit_choice: Option<String>,
+    /// (THE USER 2026-11-02) Boc's Outfits screen: asked for, up, closed (once, for the host).
+    outfits_request: bool,
+    outfits_open: bool,
+    outfits_closed: bool,
     system_menu: bool,
+    /// (CAMP-OPTIONS) THE TABBED CONFIG SCREEN'S HOST (kh-host er_options.rs: Elden Ring's options through the game's own code;
+    /// `None` = KH3's own rows); the screen on its own (Elden Ring's title SYSTEM / its System entry): asked for, up, closed.
+    pub options_host: Option<Box<dyn crate::er_options::OptionsHost + Send + Sync>>,
+    /// (CAMP-OPTIONS) only the settings screen is drawn (the title's frames: nothing of the in-game HUD there)
+    pub settings_only: bool,
+    /// (CAMP-OPTIONS) the camp menu was opened for its Config page (Elden Ring's in-game System entry)
+    camp_settings_request: bool,
+    camp_settings_open: bool,
+    options_request: bool,
+    options_open: bool,
+    options_closed: bool,
     /// THE GAME-OVER MENU (docs/sora-gameover-spec.md): the host's switch; the screen; stage frames since his
     /// Die state began; the button chosen (for the host); the choice was made and he is still dead.
     pub gameover_on: bool,
@@ -289,6 +350,8 @@ pub struct Hud {
     chara_names: Vec<(crate::party::PartyChara, String)>,
     /// (ALLYJOIN) a new ally's question (hud_ally.rs)
     ally: ally::AllyAsk,
+    /// (ER-POPUPS) Elden Ring's boxes as KH3's Dialog window (hud_erdialog.rs)
+    er_dialog: erdialog::ErAsk,
     cutscene_pause_result: Option<kh_ui::cutscene_pause::CutscenePauseResult>,
     cutscene_skip_wait: u32,
     /// (new game) THE NEW-GAME CHOICE MENU (kh_ui::newgame; build/sora_tmp/IMPL_NEWGAME_STATE.md): the two
@@ -353,11 +416,22 @@ pub struct Hud {
     sora_in: bool,
     chara_faces: Vec<(crate::party::PartyChara, Option<std::sync::Arc<kh_ui::def::MovieDef>>)>, // (PF2) by roster row
     sora_npc_face: Option<std::sync::Arc<kh_ui::def::MovieDef>>,
+    /// (OF) the outfit Sora wears (its id, `kh3` = his own) and KH3's HUD face movie of each outfit the pack has (hud_outfit.rs)
+    sora_outfit: String,
+    sora_outfit_faces: Vec<outfit::OutfitFace>,
     /// (party P) the leader switch in progress: (new leader, Sora in the party, stage frames of the shrink left)
     leader_anim: Option<(crate::party::PartyChara, bool, u32)>,
     /// (GOOFY-GG) Goofy's GUARD bar above MP (kh_ui::hud_guard) and this frame's values + look from the host.
     guard_bar: kh_ui::hud_guard::GuardBar,
     guard: Option<(kh_ui::hud_guard::GuardValues, kh_ui::hud_guard::GuardLook)>,
+    /// (SUMMON) the summoned spirit's KH gauge (kh_ui::hud_spirit: KH3's guest slot 3) and its look.
+    spirit: kh_ui::hud_spirit::SpiritGauge,
+    spirit_look: kh_ui::hud_spirit::SpiritLook,
+    /// (GOOFY) Goofy's other HUD pieces: this frame's view from the host and their drivers.
+    goofy: Option<crate::party::GoofyHudView>,
+    gof_pips: kh_ui::hud_guard::ResolvePips,
+    gof_stagger: kh_ui::hud_goofy::StaggerGauge,
+    gof_peril: kh_ui::hud_goofy::PerilMarks,
     /// (DON-UI) Donald's HUD pieces (kh_ui::hud_resonance / hud_arcane): this frame's view from the host, the look, the
     /// art (KH3's IconText, the style gauge's chevrons) and the three drivers.
     don: Option<crate::party::DonHudView>,
@@ -369,12 +443,23 @@ pub struct Hud {
     don_ycost: kh_ui::hud_arcane::YCostStars,
     don_icons: kh_ui::hud_arcane::TargetIcons,
     don_glow: Option<usize>,
+    /// (ALLY-BUFF) Every member's helpful statuses (Donald's Aero Barrier, Ball Lightning, Sanctuary), whoever leads: this
+    /// frame's view from the host and its driver (kh_ui::hud_buffs).
+    ally_buffs: crate::party::AllyBuffsView,
+    buff_icons: kh_ui::hud_buffs::BuffIcons,
     /// The leader slot's focus gauge is hidden for Donald (he has no shotlock: the user, 2026-10-22).
     don_ex_hidden: bool,
     /// The Donald list the command HUD shows (`DonHudView::list`) and whether a re-open is under way.
     don_list: std::sync::atomic::AtomicU8,
     /// (SHOP) the KH shop (hud_shop.rs): its screen, the trades of the frame, its log.
     shop: shop_ui::ShopState,
+    /// (THE USER 2026-11-02) the Spirit Tuning screen (hud_tuning.rs): its screen, the host's rows, requests and charges.
+    tuning: tuning_ui::TuneState,
+    /// (weapons P6b) KH3's Workshop (hud_workshop.rs): the Moogle's Workshop, a smith's Keyblade Forge.
+    workshop: crate::hud_workshop::WorkshopState,
+    /// (F-HUD, INT-F) the formchange HUD (hud_forms.rs): ShooterMode's scope / guide, the multi-lock markers, the form style,
+    /// Counter Shield's ride gauge, the counter window's Attack text.
+    forms: crate::hud_forms::FormsHud,
     /// (party) The friends' level-ups of this frame (level, chara, lines), shown right after Sora's: the cockpit's
     /// array of windows (HudRight +0x1D8; `0x141589330` takes the first free one or updates the one already showing
     /// that character).
@@ -383,7 +468,23 @@ pub struct Hud {
     /// (`formation::ROSTER`) and the save-load pack's faces; and the friends' bonus panels of this frame.
     panel_charas: Vec<(crate::party::PartyChara, kh_ui::hud_side::PanelChara)>,
     party_bonuses: std::collections::VecDeque<(crate::party::PartyChara, Vec<String>)>,
+    /// (THE USER 2026-11-03: "right stick scroll") description lines the host's right stick asked for (`scroll_help`).
+    help_scroll: i32,
+    /// (THE TESTER 2026-11-03) the save-point menu's entry a screen of its was opened from, when the host is told to go
+    /// back to the menu (`take_formation_closed`): the menu's next open comes back on it (`SavePointMenu::back_at`) if it
+    /// opens within [`SAVEPOINT_BACK_SECONDS`].
+    savepoint_back: Option<(kh_ui::savepoint::SavePointCommand, std::time::Instant)>,
+    /// (weapons P2, INT) the Keyblade switches seen (`Status::keyblade_switches`; None before the first frame) and the
+    /// Attack slot's Keyblade name with its time left (KH3's ATTACK_TEXT_CHANGE, 60 frames).
+    kb_switches_seen: Option<u32>,
+    kb_text: Option<(String, f32)>,
 }
+
+/// (weapons P2, INT) How long the Attack slot shows the new Keyblade's name after a switch (KH3: 60 frames at 60 fps).
+const KB_TEXT_SECONDS: f32 = 1.0;
+
+/// How long after the host was told to go back to the save-point menu its next open still counts as that way back.
+const SAVEPOINT_BACK_SECONDS: f32 = 5.0;
 
 /// (BN) KH3'S ICON FOR A REWARD LINE (0x141596150 with 0x14157D0E0 / 0x14157D620 / 0x1415B2130): an ability (kind 7)
 /// the sparkle; a command (kind 8) its category's icon, and every command a reward line carries is a magic command (a
@@ -416,6 +517,8 @@ fn print_line(line: &str) {
 /// Cursor keys of level points (airstep marks): this bit plus the point's id; a target's key is
 /// its id.
 const POINT_KEY: u64 = 1 << 40;
+/// (INTERACT-MARK) The cursor key of the reaction-target marker (never a target id or an aim point).
+const REACT_MARK_KEY: u64 = 1 << 41;
 
 fn mark_key(mark: &kh_core::ui_model::AimMark) -> u64 {
     if mark.target != TargetId::NONE { mark.target.0 as u64 } else { POINT_KEY | mark.point as u64 }
@@ -438,6 +541,7 @@ const AI_MEMBER_BASE: usize = 100;
 
 impl Hud {
     pub fn load(dir: &Path) -> Result<(Hud, Fonts), String> {
+        crate::items::table(); // (THE USER 2026-11-03) the items wearing an Elden Ring icon are registered before any screen loads
         let mut pack = Pack::open(dir).map_err(|e| e.to_string())?;
         let fonts = Fonts::load(&mut pack).map_err(|e| e.to_string())?;
         let mut movie = |name: &str| pack.movie(name).map_err(|e| e.to_string());
@@ -449,6 +553,7 @@ impl Hud {
         let cutscene_pause = kh_ui::cutscene_pause::CutscenePauseMenu::load(&mut pack, fonts.clone()).map_err(|e| e.to_string())?; // (cutscene)
         let key_item = obtained::load(&mut pack, &fonts); // (HUD2)
         let ally = ally::AllyAsk::load(&mut pack, &fonts); // (ALLYJOIN)
+        let er_dialog = erdialog::ErAsk::load(&mut pack, &fonts); // (ER-POPUPS)
         let chara_names = obtained::chara_names(&mut pack); // (HUD2)
         // (new game) an older UI pack (without the CutsceneText movie) keeps its HUD: only this menu is missing
         // (ER party S8) the talk window (its own copy of the Dialog movie)
@@ -471,6 +576,8 @@ impl Hud {
             }
         };
         let side = SideStrings::load(&mut pack);
+        // (KH3TEXT) the settings menu's button-table rows: KH3's key-config texts from the player's pack (never compiled in)
+        crate::remap::set_labels(pack.string_table("kh3_settings"));
         // (game over) the hint texts of the game-over menu's panel
         let gameover_hints: HashMap<String, String> = pack.string_table("kh3_system").into_iter().filter_map(|(key, text)| key.strip_prefix("kh3_system.gameoverhint.").map(|id| (id.to_string(), text))).collect();
         let strings = CommandStrings::load(&mut pack);
@@ -518,6 +625,7 @@ impl Hud {
                         }
                     }
                 }
+                kh_ui::item_art::add_alias_icons(&mut pack, &mut left.item_icons); // (THE USER 2026-11-03) the gloveworts: Elden Ring's own icons
                 left
             },
             right: HudRight::new(right, fonts.clone(), &side),
@@ -528,7 +636,7 @@ impl Hud {
             loops: HashMap::new(),
             next_handle: UI_SOUND_HANDLES,
             overrides: Overrides::default(),
-            battle: 0,
+            battle: None,
             libra: None,
             debug_cursors: Vec::new(),
             last_board: PopupBoard::default(),
@@ -553,7 +661,12 @@ impl Hud {
             debug_commands: false,
             host_command: None, // (SP2)
             host_reactions: Vec::new(), // (RC)
+            react_mark: None, // (INTERACT-MARK)
+            react_mark_shown: None,
             aim_open: false,
+            scope_sound: None,
+            scope_sound_asked: false,
+            aim_reached: false,
             aim_fired: false,
             aim_airstep: false,
             aim_mark_type: LOCKON_TYPE_FLOWSHOTATTACK,
@@ -561,6 +674,8 @@ impl Hud {
             aim_total: 0,
             air_marks: Vec::new(),
             prompt: None,
+            notice: yprompt::NoticeState::default(), // (PROMPT-UI)
+            gauge: yprompt::GaugeLock::default(),
             play_seconds: 0,
             camp_hook: None,
             force_camp: 0,
@@ -579,7 +694,20 @@ impl Hud {
             title_request: false,
             outfit_menu: None,
             outfit_choice: None,
+            outfits_entry: false, // (OUTFIT-UNLOCK)
+            outfit_price: 0,
+            outfit_charges: Vec::new(),
+            outfits_request: false, // (THE USER 2026-11-02) Boc's Outfits screen
+            outfits_open: false,
+            outfits_closed: false,
             system_menu: false,
+            options_host: None, // (CAMP-OPTIONS)
+            settings_only: false,
+            camp_settings_request: false,
+            camp_settings_open: false,
+            options_request: false,
+            options_open: false,
+            options_closed: false,
             gameover_on: false,
             gameover_disabled: Vec::new(),
             gameover,
@@ -599,6 +727,7 @@ impl Hud {
             cutscene_pause,
             key_item, // (HUD2)
             ally, // (ALLYJOIN)
+            er_dialog, // (ER-POPUPS)
             obtained_on: false,
             obtained_wait: Default::default(),
             chara_names,
@@ -635,9 +764,17 @@ impl Hud {
             sora_in: true,
             chara_faces: Vec::new(), // (PF2)
             sora_npc_face: None,
+            sora_outfit: outfit::KH3.to_string(), // (OF)
+            sora_outfit_faces: Vec::new(),
             leader_anim: None,
             guard_bar: Default::default(), // (GOOFY-GG)
+            spirit: Default::default(), // (SUMMON)
+            spirit_look: Default::default(),
             guard: None,
+            goofy: None, // (GOOFY)
+            gof_pips: Default::default(),
+            gof_stagger: Default::default(),
+            gof_peril: Default::default(),
             // (DON-UI) Donald's HUD pieces: KH3's IconText (the fonts' icons) and the style gauge's chevrons
             don: None,
             don_look: Default::default(),
@@ -647,10 +784,23 @@ impl Hud {
             don_ycost: Default::default(),
             don_icons: Default::default(),
             don_glow: None,
+            ally_buffs: Default::default(), // (ALLY-BUFF)
+            buff_icons: Default::default(),
             don_ex_hidden: false,
             don_list: std::sync::atomic::AtomicU8::new(0),
             shop: shop_ui::ShopState::load(&mut pack, &fonts), // (SHOP)
+            tuning: tuning_ui::TuneState::load(&mut pack, &fonts), // (THE USER 2026-11-02) Spirit Tuning
+            workshop: crate::hud_workshop::WorkshopState::load(&mut pack, &fonts), // (weapons P6b)
+            forms: crate::hud_forms::FormsHud::load(&mut pack, &fonts), // (F-HUD, INT-F)
+            help_scroll: 0,
+            savepoint_back: None,
+            kb_switches_seen: None, // (weapons P2, INT)
+            kb_text: None,
         };
+        // (F-HUD, INT-F) the form logo movies the pack lacks
+        if !hud.forms.missing().is_empty() {
+            println!("hud: (F-HUD) form logo movie(s) NOT in the UI pack: {}", hud.forms.missing().join(", "));
+        }
         // (BN) the reward windows' look by roster row: colour label and the character's MenuFace bust (pack
         // build/sora_pack/saveload, the save slots' faces by roster key; a pack without it: the windows have no portrait)
         let faces = pack.data("../../saveload/saveload").ok();
@@ -680,6 +830,7 @@ impl Hud {
             hud.chara_faces.push((row.chara, face));
         }
         hud.sora_npc_face = pack.movie("FaceNpcExSora").ok();
+        hud.sora_outfit_faces = outfit::load_faces(&mut pack); // (OF)
         // The cockpit's show: status root `loop`, target plane `loop`, the menu enters.
         hud.status.set_status(0, 0);
         hud.target.native_root("loop");
@@ -692,8 +843,25 @@ impl Hud {
     }
 
     pub fn movie(&self, name: &str) -> Option<&Movie> {
+        // (CAMP-OPTIONS) the settings screen on its own (and every HUD frame of the title's): only it, never the HUD's gauges,
+        // command menu or other screens
+        if self.settings_only {
+            return match name {
+                "CampMenu" if self.camp_view.is_open() => Some(&self.camp_view.movie),
+                "Dialog" => self.camp_view.dialog_movie(),
+                _ => None,
+            };
+        }
         // (SHOP) the KH shop is a full screen of its own, on the camp menu's layers (the camp menu is never up with it)
         if let Some(movie) = self.shop_movie(name) {
+            return movie;
+        }
+        // (THE USER 2026-11-02) the Spirit Tuning screen: on the camp menu's layers too (never up with the camp menu or the shop)
+        if let Some(movie) = self.tuning_movie(name) {
+            return movie;
+        }
+        // (weapons P6b) the Workshop: its screen on "CampMenu", KH3's system window on "Dialog", the item-get popup on "Pause"
+        if let Some(movie) = self.workshop.movie(name) {
             return movie;
         }
         if let Some(screen) = self.saveload.as_ref().filter(|s| s.is_open()) {
@@ -741,12 +909,13 @@ impl Hud {
             "HudTarget" => &self.target.movie,
             "HudLeft" => &self.left.movie,
             "HudRight" => &self.right.movie,
+            "HudOperation" => return self.forms.operation_movie(), // (F-HUD, INT-F) the operation guide ("<RT hold> Auto-Shot")
             "Pause" if self.obtained_movie().is_some() => return self.obtained_movie(), // (HUD2) the OBTAINED popup on the pause menu's layer
             "Pause" if self.pause.is_open() => &self.pause.movie,
             "CampMenu" if self.camp_view.is_open() => &self.camp_view.movie,
             "GameHelp" => return self.camp_view.page_movie(),
             // (ALLYJOIN) ... or the ally question's window (never up with the camp menu)
-            "Dialog" => return self.camp_view.dialog_movie().or_else(|| self.ally_movie()),
+            "Dialog" => return self.camp_view.dialog_movie().or_else(|| self.ally_movie()).or_else(|| self.er_dialog_movie()), // (ER-POPUPS) ... or one of Elden Ring's boxes
             // (ER party S8) the talk window / prompt / banner on the layer the new-game menu uses (never up together)
             "NewGameDialog" => return self.talk.as_ref().filter(|w| w.is_open()).map(|w| &w.dialog),
             // (CV1) the speech bubble over the play (not over a menu of ours)
@@ -784,10 +953,42 @@ impl Hud {
             if looping {
                 self.loops.insert(index, handle);
             }
+            // (THE USER 2026-11-02) the scope's own sound: kept for `scope_sound_rule`
+            if self.scope_sound_asked && (index == kh_ui::hud_target::SE_SCOPE || index == kh_ui::hud_target::SE_SCOPE_EMPTY) {
+                self.scope_sound_asked = false;
+                if let Some(old) = self.scope_sound.replace(handle) {
+                    out.push((AudioCommand::Stop(old, 0.0), "static SE of the shotlock aim stops (a new aim)".to_string()));
+                }
+            }
             let play = SoundPlay { id: SoundId(UI_SOUND_IDS + number), name, at: Attach::SORA, volume: 1.0, pitch: 1.0, looping, spatial: false };
             out.push((AudioCommand::Play(handle, play), format!("static SE {index} \"{name}\"{}", if looping { " LOOP" } else { "" })));
         }
+        self.scope_sound_rule(&mut out);
         out
+    }
+
+    /// (THE USER 2026-11-02: "shotlock's startup sound effect continues to play its audio even after it's cancelled, make
+    /// it stop if shotlock gets cancelled") THE SHOTLOCK AIM'S SOUND ENDS WITH THE AIM, by ONE rule for every way out:
+    /// KH3 keeps it in `m_FocusModeAudio` and stops it on any later scope state (UI spec 7.3: cancel, shot, airstep); here
+    /// it stops as soon as the scope is not open any more (the core's aim mode left 1 / 4 for any reason: R1 let go, a
+    /// hit or flinch, death, the focus syphon's end, the command menu's slow option, a warp / teleport that dropped the
+    /// state, a leader swap; or the shot / the airstep was taken) OR this frame's HUD never reached the aim (a menu, the
+    /// pause, the game over, a cutscene, a save point, the shop, a popup or a load screen took the frame). The stop is
+    /// `Stop()` with fade 0, which the engine plays as the asset's own StopFadeTime, 0.6 s for se00000_039, KH3's fade.
+    /// Before, the 7.07 s sound was never stopped: it played out after every cancel.
+    fn scope_sound_rule(&mut self, out: &mut Vec<(AudioCommand, String)>) {
+        let reached = std::mem::take(&mut self.aim_reached);
+        if self.scope_sound.is_some() && !(reached && self.target_driver.scope_open()) {
+            if let Some(handle) = self.scope_sound.take() {
+                let why = if reached { "the aim was left" } else { "the HUD did not show the aim this frame" };
+                out.push((AudioCommand::Stop(handle, 0.0), format!("static SE of the shotlock aim stops ({why}): its own fade")));
+            }
+        }
+    }
+
+    /// (THE USER 2026-11-02) The shotlock aim's sound is live (between its play and the rule's stop): for tests and logs.
+    pub fn scope_sound_live(&self) -> bool {
+        self.scope_sound.is_some()
     }
 
     fn dummy_key(targets: &dyn HudTargets, number: u32) -> Option<u64> {
@@ -891,9 +1092,12 @@ impl Hud {
                 }
             }
             ["stylemax"] => self.target_driver.set_style_ratio(1.0),
+            // (BC) `battle N` fixes the colour for a test; `battle live` gives it back to the leader's combat state
             ["battle", _] => {
-                self.battle = number(1).unwrap_or(0.0).clamp(0.0, 2.0) as i32;
-                self.run_system(text);
+                self.battle = number(1).map(|n| n.clamp(0.0, 2.0) as i32);
+                if self.battle.is_some() {
+                    self.run_system(text);
+                }
             }
             ["give", what, ..] => self.give(what, number(2).map_or(1, |n| n.max(1.0) as u32)),
             // (IMPL_ER28) `hud-cmd obtain NAME [N]`: any item of the item table (equipment too) THROUGH THE DOOR every
@@ -953,6 +1157,7 @@ impl Hud {
             self.run_system("show");
         }
         let (menu_words, words): (Vec<String>, Vec<String>) = f.words.iter().cloned().partition(|w| w == "menu" || w.starts_with("menu "));
+        let menu_words = self.help_scroll_frame(menu_words); // (THE USER 2026-11-03: "right stick scroll")
         let nav = std::mem::take(&mut f.nav);
         self.take_given_items(f.sora); // (loot)
         self.publish_held(f.sora); // (IMPL_ER28)
@@ -971,6 +1176,19 @@ impl Hud {
         if self.shop_frame(f, &nav, &menu_words) { // (SHOP) the KH shop has the pad and the frame
             return;
         }
+        if self.tuning_frame(f, &nav, &menu_words) { // (THE USER 2026-11-02) the Spirit Tuning screen has the pad and the frame
+            return;
+        }
+        // (weapons P6b) the Workshop (the Moogle / a smith's Keyblade Forge) has the pad and the frame
+        let blocked = self.shop.is_open() || self.tuning.is_open() || self.flow.paused() || self.gameover.is_open() || self.savepoint.is_open() || self.saveload_open() || self.newgame_choice_open() || self.cutscene_pause.is_open() || self.obtained_open();
+        let keys = crate::hud_workshop::keys(f.pressed, &nav, &menu_words);
+        let munny = f.sora.status().munny as i64;
+        if self.workshop.frame(&keys, f.ticks, munny, blocked, &mut self.sounds, &self.log) {
+            return;
+        }
+        if self.workshop.take_closed() {
+            self.status_actions.push(StatusAction::Unpause); // (weapons P6b) the pouch's refill, as after the shop
+        }
         if self.cutscene_frame(f, &nav, &menu_words) { // (cutscene)
             return;
         }
@@ -978,6 +1196,9 @@ impl Hud {
             return;
         }
         if self.ally_frame(f, &nav, &menu_words) { // (ALLYJOIN) a new ally's "join the party?" holds the world and the pad
+            return;
+        }
+        if self.er_dialog_frame(f, &nav, &menu_words) { // (ER-POPUPS) one of Elden Ring's boxes as KH3's window holds the world and the pad
             return;
         }
         self.talk_frame(f); // (ER party S8) the talk window: its frames; A goes on while a line is up
@@ -1002,7 +1223,8 @@ impl Hud {
         let mut values = StatusValues {
             focus: o.focus.unwrap_or(g.focus),
             focus_max: g.focus_max,
-            game_in_battle: self.battle == 2,
+            // (BC) KH3's 0x140EABA10: the special battle (G+0x8D4 bit 4), the battle colour's mode 2
+            game_in_battle: self.battle_mode(f) == 2,
             // LOCAL: the story flags are not in the snapshot; a level-99 Sora has both gauges.
             mp_gauge_unlocked: true,
             focus_gauge_unlocked: true,
@@ -1017,7 +1239,10 @@ impl Hud {
             mp_max: o.mp_max.unwrap_or(g.mp_max),
             mp_charging: o.charge.is_some() || g.mp_charging,
             mp_charge_value: o.charge.unwrap_or(g.mp_charge_value),
-            in_battle: self.battle == 2,
+            // (BC) THE PAWN'S OWN BATTLE FLAG (vt+0x1750, pawn+0x630 bit 1: the engaged enemies plus KH3's 1.0 s linger) picks
+            // his portrait's BATTLE LOOK, KH3's battle face (THE USER 2026-11-02: "make sure Sora's portrait changes to his
+            // battle portrait when he is party leader"); before, only `hud-cmd battle 2` did. A pinch / KO face still wins.
+            in_battle: self.battle.map_or(f.sora.actions().battle, |m| m > 0),
         };
         // (party P) the leader switch's shrink runs out: the swap (the slots grow back)
         if let Some((leader, sora_in, left)) = self.leader_anim {
@@ -1095,10 +1320,20 @@ impl Hud {
         let slot = &values.slots[0];
         self.system.set_status(slot.mp, slot.mp_max, slot.mp_charging);
         self.system.step(f.dt);
+        if self.battle.is_none() {
+            self.system.model.battle_mode = self.battle_mode(f); // (BC) the debug menu takes the same colour
+        }
         if self.debug_commands {
             self.display.update(&mut self.command, &self.system.model, &self.strings, f.dt, &mut self.sounds);
         } else {
-            let model = self.live_model(f);
+            let switched = self.keyblade_text_frame(f); // (weapons P2, INT)
+            let mut model = self.live_model(f);
+            if let Some((name, _)) = &self.kb_text {
+                model.main[0].text = name.clone();
+            }
+            if switched {
+                model.events.push(kh_ui::command::MenuEvent::AttackTextChange);
+            }
             self.display.update(&mut self.command, &model, &self.strings, f.dt, &mut self.sounds);
         }
 
@@ -1118,6 +1353,22 @@ if wanted.is_empty() {
                 wanted.push((f.snapshot.soft_target.0 as u64, LOCKON_TYPE_AUTO));
             }
         }
+        // (F-HUD, INT-F) ShooterMode's scope / guide / aim gauge, the multi-lock's markers (Sora's only)
+        let sora_leads = self.leader_anim.map_or(self.leader, |a| a.0) == crate::party::PartyChara::Sora;
+        let forms = self.forms.frame(f.sora, &mut self.target, !sora_leads);
+        for key in &forms.markers {
+            if !wanted.contains(&(*key, LOCKON_TYPE_AUTO)) {
+                wanted.push((*key, LOCKON_TYPE_AUTO));
+            }
+        }
+        if let (Some(key), true) = (forms.gauge_target, libra) {
+            self.enemy.point_at(key, false, None);
+        }
+        match forms.dim {
+            Some(kh_ui::forms_hud::CommandDim::Dark) => self.command.set_action_select(kh_ui::hud_command::ACTION_COMMAND_DISABLE, 0, 0),
+            Some(kh_ui::forms_hud::CommandDim::Back) => self.command.set_action_select(kh_ui::hud_command::ACTION_COMMAND_ENABLE, 0, 0),
+            None => {}
+        }
         let shown: Vec<(u64, usize)> = self.target_driver.cursors.iter().filter(|c| c.ty <= LOCKON_TYPE_NORMAL).map(|c| (c.key, c.ty)).collect();
         for (key, ty) in &shown {
             if !wanted.contains(&(*key, *ty)) {
@@ -1134,6 +1385,14 @@ if wanted.is_empty() {
                 self.enemy.point_at(*key, false, None);
             }
         }
+        // (INTERACT-MARK) KH3'S REACTION-TARGET MARKER: 0x1413F7410 adds the type-5 cursor on the reaction command's reactor
+        // (no sound), 0x141421CA0 removes it at once (no out animation) when the target changes or goes; one at a time
+        let mark_on = self.react_mark.filter(|_| !self.host_reactions.is_empty()).map(|(id, _)| id);
+        let mark_now = self.react_mark_shown.filter(|_| self.target_driver.has_cursor(REACT_MARK_KEY, LOCKON_TYPE_ACTION));
+        if mark_now != mark_on || self.react_mark_shown != mark_now {
+            self.target_driver.remove_cursor(&mut self.target, REACT_MARK_KEY, LOCKON_TYPE_ACTION, &mut self.sounds);
+            self.react_mark_shown = mark_on.filter(|_| self.target_driver.add_cursor(&mut self.target, REACT_MARK_KEY, LOCKON_TYPE_ACTION, false, &mut self.sounds).is_some());
+        }
         // ... and at the enemy he just damaged, with the HP before the hit.
         if libra {
             for event in f.events {
@@ -1146,10 +1405,11 @@ if wanted.is_empty() {
         }
         // ---- the shotlock aim and the push-button prompt (integration pass).
         self.aim(f);
-        self.push_prompt(f);
+        self.button_notice(f); // (PROMPT-UI) KH3's button notice (hud_yprompt.rs), for whoever's snapshot this is
         let (dummies, to_view) = (f.targets, f.to_view);
         let points: HashMap<u64, kh_core::Vec3> = f.snapshot.aim.airstep.iter().filter(|m| m.target == TargetId::NONE).map(|m| (mark_key(m), m.position)).collect();
-        let position_of = |key: u64| if key & POINT_KEY != 0 { points.get(&key).map(|p| to_view(*p)) } else { dummies.target(TargetId(key as u32)).map(|d| to_view(d.center)) };
+        let react_at = self.react_mark.map(|(_, p)| p); // (INTERACT-MARK)
+        let position_of = |key: u64| if key == REACT_MARK_KEY { react_at.map(to_view) } else if key & POINT_KEY != 0 { points.get(&key).map(|p| to_view(*p)) } else { dummies.target(TargetId(key as u32)).map(|d| to_view(d.center)) };
         let values_of = |key: u64| dummies.target(TargetId(key as u32)).map(|d| EnemyValues { hp: d.hp as i32, hp_max: d.hp_max as i32, large: d.large, alive: d.hp > 0.0 });
         self.enemy.update(&mut self.right, f.dt, &values_of, &mut self.sounds);
 
@@ -1168,6 +1428,7 @@ if wanted.is_empty() {
             self.target.tick();
             self.left.tick();
             self.right.tick(1.0 / 60.0);
+            self.forms.tick(); // (F-HUD, INT-F)
         }
         // (GOOFY-GG) THE GUARD BAR above MP while Goofy is the leader in the main slot (it replaces his focus bar). After
         // the stage frames: its colours and visibility override what the copied MP clips' timelines set this frame.
@@ -1178,6 +1439,34 @@ if wanted.is_empty() {
         }
         // (DON-UI) DONALD'S PIECES while he is the leader in the main slot (after the stage frames, as the GUARD bar)
         self.don_frame(f.dt, f.snapshot.command.state);
+        self.gof_frame(f, view.as_ref()); // (GOOFY)
+        self.buffs_frame(); // (ALLY-BUFF) the helpful statuses by each wearer's portrait, whoever leads (after his pieces)
+        self.spirit_frame(f); // (SUMMON)
+    }
+
+    /// (SUMMON) THE SUMMONED SPIRIT'S GAUGE (THE USER 2026-11-02: "For Spirit Ashes, give them their own KH-styled HUD
+    /// element instead of using Elden Ring's HUD for them."): KH3's guest slot of the status HUD (kh_ui::hud_spirit) from
+    /// Sora's `command().summon.out` (the host fills it every frame): it comes in on the summon, follows the spirit's HP
+    /// and timer, and goes out when it leaves, whoever leads. After the stage frames, as the GUARD bar.
+    fn spirit_frame(&mut self, f: &Frame) {
+        let in_battle = self.battle_mode(f) > 0;
+        let values = |o: &kh_core::command::summon::SpiritOut| kh_ui::hud_spirit::SpiritValues { name: o.name.clone(), hp: o.hp, hp_max: o.hp_max, left: o.left, full: o.full, mimic: o.mimic, icon: o.icon, in_battle };
+        let summon = &f.sora.command().summon;
+        let v = summon.out.as_ref().map(values);
+        // (THE USER 2026-11-03: "have the spirit ashes HUD element fade away after they either die or time out") the spirit
+        // that just left, on its last values (HP 0 when it died, time 0 when it timed out), while the host holds it: the
+        // gauge fades out on them (kh_ui::hud_spirit, KH3's slot `out`)
+        let leaving = summon.leaving.as_ref().and_then(|(o, reason)| kh_core::command::summon::final_values(o, *reason)).map(|o| values(&o));
+        let fonts = self.command.fonts.clone();
+        // (THE USER 2026-11-03: "For the spirit ashes HUD picture, use the Elden Ring picture of the spirit ash.") the ash's
+        // icon through the shared Elden Ring icon route: the camp menu's item pictures (`kh_ui::item_art`, the pack's er_icons)
+        let with = kh_ui::hud_spirit::SpiritArt { fonts: &fonts, art: &self.camp_view.art, look: &self.spirit_look };
+        self.spirit.update(&mut self.status, &with, v.as_ref(), leaving.as_ref(), f.dt);
+    }
+
+    /// (SUMMON) The spirit gauge as last drawn (tests, pictures): shown, and what it sent.
+    pub fn spirit_gauge_state(&self) -> (bool, kh_ui::hud_spirit::SpiritShown) {
+        (self.spirit.shown, self.spirit.last.clone())
     }
 
     /// THE SHOTLOCK AIM (UI spec 7.3) from `UiSnapshot::aim`: the scope opens with the aim time
@@ -1193,6 +1482,7 @@ if wanted.is_empty() {
     /// `hud-cmd scope ...` still drives the same clips by hand while no aim is open.
     fn aim(&mut self, f: &Frame) {
         let aim = &f.snapshot.aim;
+        self.aim_reached = true; // (THE USER 2026-11-02) `scope_sound_rule`
         // (fixes pass 1) AFTER AN AIRSTEP the scope clip was left on its `select2` label, whose
         // last frame still shows the full-screen aim filter (user report: "the shotlock screen
         // effects remain after you airstep"). The game sends the scope a second state when the
@@ -1213,6 +1503,7 @@ if wanted.is_empty() {
         if aim.open() && !self.aim_open {
             let syphon = aim.mode == 4;
             self.target_driver.open_scope(&mut self.target, aim.aim_time, syphon, &mut self.sounds);
+            self.scope_sound_asked = true; // (THE USER 2026-11-02) its SE 18 / 25 is the aim's own sound
             (self.aim_open, self.aim_total) = (true, 0);
             self.aim_mark_type = if syphon { LOCKON_TYPE_FLOWSHOTFOCUSCHARGE } else { LOCKON_TYPE_FLOWSHOTATTACK };
         }
@@ -1268,32 +1559,6 @@ if wanted.is_empty() {
             self.target_driver.remove_cursor(&mut self.target, key, LOCKON_TYPE_FLOWSHOTMOVE, &mut self.sounds);
         }
         self.aim_open = false;
-    }
-
-    /// THE PUSH-BUTTON PROMPT (`UiSnapshot::prompt`; HUD function 0x1416793E0, kh_core
-    /// ui_model/prompts.rs): "DODGE!" on the jump button while the risk-dodge window is open,
-    /// "ATTACK!" on the attack button at an airstep's enemy stop. The pad icons are the western
-    /// layout's (jump = Circle = B on an Xbox pad, attack = Cross = A).
-    fn push_prompt(&mut self, f: &Frame) {
-        use kh_core::ui_model::PromptKind;
-        let now = f.snapshot.prompt;
-        if now == self.prompt {
-            return;
-        }
-        if let Some(before) = self.prompt.take() {
-            let used = match before.kind {
-                PromptKind::RiskDodge => f.sora.risk_dodge().is_some(),
-                PromptKind::AirstepAttack => f.sora.airstep().is_some_and(|a| a.attack_latched) || f.state == kh_core::StateId::Attack,
-            };
-            self.target_driver.hide_push_mark(&mut self.target, used);
-        }
-        if let Some(prompt) = now {
-            let icon = if prompt.button() == kh_core::PadButton::JUMP { "<icon(Circle)>" } else { "<icon(Cross)>" };
-            let label = self.camp_view.string(prompt.label_key());
-            let key = (prompt.target != TargetId::NONE).then_some(prompt.target.0 as u64);
-            self.target_driver.show_push_mark(&mut self.target, icon, &label, key);
-            self.prompt = Some(prompt);
-        }
     }
 
     /// The order within one EXP award: level-up popup, EXP point, Next LV
@@ -1410,6 +1675,38 @@ if wanted.is_empty() {
 // TIER 3: the Menu button, the engine pause, the Pause screen and the camp menu
 // (docs/sora-ui-spec.md section 10; logic in kh_ui::menu / kh_ui::camp / camp_equip / camp_custom).
 
+/// (weapons INT) THE KEYBLADE LEVEL TIE, status -> record half: every OWNED Keyblade whose level in the core's status
+/// (`Status::keyblade_level`, P2) is higher than the running record's (`crate::weapons::level`, P1, what the save keeps)
+/// raises the record. Forge levels only go up (KH3 has no way down), so the higher one is the newer. The save's capture
+/// calls it (with `&Status` only) before `take_running_weapons`.
+pub fn keyblade_levels_into_record(status: &kh_core::status::Status) {
+    for owned in crate::weapons::keyblades() {
+        let Some(id) = kh_core::status::KeybladeId::from_key(&owned.key) else { continue };
+        let level = status.keyblade_level(id).min(crate::weapons::MAX_LEVEL);
+        if level > owned.level {
+            crate::weapons::set_level(&owned.key, level);
+        }
+    }
+}
+
+/// (weapons INT) THE KEYBLADE LEVEL TIE, both ways: [`keyblade_levels_into_record`], then every owned Keyblade whose
+/// record level is higher than the status's raises the status (the Forge writes the record: the current Keyblade's
+/// stats and abilities change at once). Run after a save is applied / a new game is built (the status then holds only
+/// the weapon in hand's level: the record brings the others) and every HUD frame ([`Hud::apply_actions`]). A status
+/// whose weapon is no Keyblade (a test's other weapon) is left alone (`set_keyblades` would put the slot's one in hand).
+pub fn tie_keyblade_levels(status: &mut kh_core::status::Status) {
+    keyblade_levels_into_record(status);
+    if !status.weapon.is_empty() && status.current_keyblade().is_none() {
+        return;
+    }
+    for owned in crate::weapons::keyblades() {
+        let Some(id) = kh_core::status::KeybladeId::from_key(&owned.key) else { continue };
+        if id.clamp_level(owned.level) > status.keyblade_level(id) {
+            status.set_keyblade_level(id, owned.level);
+        }
+    }
+}
+
 /// What the camp menu asks of the game while it is paused; applied by [`Hud::apply_actions`], the
 /// one place where the HUD layer writes to the simulation.
 pub enum StatusAction {
@@ -1430,6 +1727,8 @@ pub enum StatusAction {
     Unpause,
     /// (party X2-b) A friend's kit ability row (id `hud_x2::KIT_ID_BASE` + the row's index) worn / taken off.
     SetKit { id: i32, on: bool },
+    /// (GF-UI) Goofy's panel edited while he does not lead.
+    SetArtsShortcut { page: usize, slot: usize, kind: u8 },
 }
 
 /// What the save data holds beyond the core's status: the equipment stock and the Keyblade
@@ -1497,17 +1796,95 @@ fn piece_of(row: &kh_core::status::tables::EquipmentRow) -> Piece {
     // `m_AttrResist*` by ETresDamageAttribute: 1 fire, 2 blizzard, 3 thunder, 4 water, 5 aero, 6 dark.
     let resist = [1, 2, 3, 4, 5, 6].map(|a| row.resist.get(a).copied().unwrap_or(0));
     let abilities = row.abilities.iter().map(|id| kh_core::status::tables::ABILITIES.iter().find(|a| a.id == *id).map_or(id.to_string(), |a| a.name.to_string())).collect();
-    Piece { id: row.id.to_string(), name: row.name.to_string(), kind, ap: row.ap, attack: row.attack, magic: row.magic, defense: row.defense, resist, abilities, help: String::new() }
+    Piece { id: row.id.to_string(), name: row.name.to_string(), kind, ap: row.ap, attack: row.attack, magic: row.magic, defense: row.defense, resist, abilities, ..Piece::default() }
 }
 
 fn item_piece(item: kh_core::status::ItemKind) -> Piece {
     Piece { id: item.name().to_string(), name: item_display_name(item), kind: KIND_ITEM, ..Piece::default() }
 }
 
+/// (Summon, THE USER 2026-11-02: "In the equipment menu for Sora, make a new area for him to equip spirit ashes (4)") A
+/// spirit ash as the Equipment screen's piece: the host's name ("+N" included), its MP cost as he pays it (MP Thrift
+/// counted, as the Summon list's number shows it) in the stock's number column, and a help line for the item pane:
+/// COMPOSED first line (the timer, kh-core `summon::duration`) and KH3's own spell line "Costs {0} MP." in its colour.
+pub fn spirit_piece(ash: &kh_core::command::summon::AshSlot, status: &kh_core::Status) -> Piece {
+    use kh_core::command::summon;
+    let cost = status.effective_mp_cost(ash.mp, 0);
+    let seconds = summon::duration(ash.renowned, ash.level).round() as i32;
+    // (THE USER 2026-11-03: "mimic tear should make Sora instantly go into MP recharge") an ash that takes all his MP: a
+    // COMPOSED line for such a cost (KH3TEXT 2026-11-08: KH3's own Cure line is not compiled in) and "All" in the MP column
+    // (`summon::takes_all`)
+    let all = summon::takes_all(ash);
+    let cost_line = if all { "Spends all of Sora's MP.".to_string() } else { format!("Costs {cost} MP.") };
+    let mut help = format!("Calls this spirit to fight beside Sora for {seconds} seconds.\n<color(strong)>{cost_line}<color>");
+    if !ash.usable {
+        help.push_str("\nIt cannot be summoned here.");
+    }
+    // (THE USER 2026-11-03: "use the Elden Ring picture of the spirit ash") its Elden Ring icon for the item pane
+    Piece { id: kh_ui::camp_equip::spirit_id(ash.goods), name: ash.name.clone(), kind: KIND_SPIRIT, cost, help, icon: ash.icon, cost_all: all, ..Piece::default() }
+}
+
+/// (Summon) The ash he owns that equipped slot `base` (a level-0 goods id, `CommandState::spirit_ashes`) names: the owned
+/// row of that ash at whatever level he has it now (an upgrade keeps the slot). `None`: empty, or no longer owned.
+pub fn spirit_in_slot(view: &kh_core::command::summon::SummonView, base: u32) -> Option<&kh_core::command::summon::AshSlot> {
+    use kh_core::command::summon::base_of;
+    (base != 0).then(|| view.owned.iter().filter(|a| base_of(a.goods) == base).max_by_key(|a| a.level)).flatten()
+}
+
+/// (Summon) The Equipment screen's commit for a spirit-ash slot: `CommandState::spirit_ashes[slot]` = the ash's level-0
+/// goods id (`summon::base_of`: an upgrade keeps the slot), `None` = Remove (KH3's Square). Refused: a slot past the
+/// four, an id that is not an ash he owns, and THE DUPLICATE RULE (an ash already in another slot: the screen never offers
+/// one, this is the host's own guard). Saved with his KH save (save.rs `spirit_ashes`).
+pub fn equip_spirit(sora: &mut Sora, slot: usize, id: Option<&str>) -> Result<(), &'static str> {
+    use kh_core::command::summon::{base_of, SLOTS};
+    if slot >= SLOTS {
+        return Err("no such slot");
+    }
+    let base = match id {
+        None => 0,
+        Some(id) => {
+            let goods = kh_ui::camp_equip::spirit_goods(id).ok_or("not a spirit ash")?;
+            let command = sora.command();
+            if !command.summon.owned.iter().any(|a| base_of(a.goods) == base_of(goods)) {
+                return Err("not owned");
+            }
+            if command.spirit_ashes.iter().enumerate().any(|(k, b)| k != slot && *b == base_of(goods)) {
+                return Err("already in another slot");
+            }
+            base_of(goods)
+        }
+    };
+    sora.command_mut().spirit_ashes[slot] = base;
+    Ok(())
+}
+
+/// (Summon) A Summon list row's text and number (THE USER 2026-11-02: "these equipped spirit ashes are what appears in the
+/// Summon command menu"): the ash's name and its MP cost as he pays it, for a row of command kind 248 .. 251 (the core's
+/// rows say "Summon": the names are the host's). The number is the cost alone, "12" (COMPOSED: KH3's rows show no cost):
+/// KH3's sub-row number field is sized for an item's "x3" (two or three glyphs, as Goofy's recharge seconds found), so
+/// "MP 12" would overrun the plate; the MP is said by the Equipment screen's "MP" column and the item pane.
+pub fn summon_row_text(kind: u8, sora: &Sora) -> Option<(String, String)> {
+    let slot = kh_core::command::summon::slot_of_kind(kind)?;
+    let ash = sora.command().summon.slots.get(slot)?.as_ref()?;
+    // (THE USER 2026-11-03) the Mimic Tear takes all his MP: "All" (COMPOSED, `summon::TEXT_ALL_MP`)
+    let number = if kh_core::command::summon::takes_all(ash) { kh_core::command::summon::TEXT_ALL_MP.to_string() } else { sora.status().effective_mp_cost(ash.mp, 0).to_string() };
+    Some((ash.name.clone(), number))
+}
+
+/// (DON-UI) A box of Donald's pieces: left, top, right, bottom, `sttsPc` units.
+pub type DonBox = (f32, f32, f32, f32);
+
+/// (DON-UI) What [`Hud::don_state`] answers: the rings (fill frame, pips lit, MAX), the ultimate marks, the stars (lit,
+/// blinking, tracker lit, tracker size), the target icons (statuses, insight, position), shown flags.
+pub type DonState = (Vec<(u32, u8, bool)>, Vec<kh_ui::hud_resonance::UltLook>, (u8, bool, u8, u8), (usize, usize, (f32, f32)), [bool; 3]);
+
+/// (DON-UI) What [`Hud::don_layout`] answers: the badges' plates, the stars row's plate, the MP / HP track frames.
+pub type DonLayout = (Vec<DonBox>, Option<DonBox>, (i32, i32));
+
 impl Hud {
     /// True while a menu holds the engine pause.
     pub fn paused(&self) -> bool {
-        self.shop.is_open() /* (SHOP) the shop holds the world like the camp menu */ || self.flow.paused() || self.obtained_open() /* (HUD2) the OBTAINED popup pauses the game */ || self.ally_holds() /* (ALLYJOIN) the ally question, and a Yes until its Party Formation screen is up */ || self.savepoint.is_open() || self.cutscene_pause.is_open() || self.newgame_choice_open() || self.saveload_open() || self.gameover_seq.as_ref().is_some_and(|s| s.scene_on()) // (game over) the void scene holds the world; (saveload) the Save / Load screens too; (new game) the choice menu holds the world too; (savepoint) the save menu pauses like the camp menu; (cutscene) so does the cutscene pause menu
+        self.shop.is_open() /* (SHOP) the shop holds the world like the camp menu */ || self.tuning.is_open() /* (THE USER 2026-11-02) so does Spirit Tuning */ || self.workshop.is_open() || crate::hud_workshop::is_open() /* (weapons P6b) the Workshop holds the world */ || self.flow.paused() || self.obtained_open() /* (HUD2) the OBTAINED popup pauses the game */ || self.ally_holds() /* (ALLYJOIN) the ally question, and a Yes until its Party Formation screen is up */ || self.er_dialog_holds() /* (ER-POPUPS) one of Elden Ring's boxes */ || self.savepoint.is_open() || self.cutscene_pause.is_open() || self.newgame_choice_open() || self.saveload_open() || self.gameover_seq.as_ref().is_some_and(|s| s.scene_on()) // (game over) the void scene holds the world; (saveload) the Save / Load screens too; (new game) the choice menu holds the world too; (savepoint) the save menu pauses like the camp menu; (cutscene) so does the cutscene pause menu
     }
 
     /// (new game) OPENS THE NEW-GAME CHOICE MENU: the two questions of the opening of Kingdom Hearts III
@@ -1697,11 +2074,11 @@ impl Hud {
     ///   his pad, so the host steps him with [`crate::menu::cutscene_input`] (or not at all);
     /// - [`Hud::paused`] is true while the menu is up: the host holds the cutscene still for that long;
     /// - what the menu told comes once from [`Hud::take_cutscene_pause_result`].
-    /// A camp menu / Pause screen that was up when the cutscene began keeps the screen and the pad until it is
-    /// closed (it cannot be opened again). When the flag goes false under the open menu (the cutscene ended by
-    /// itself) the menu is taken off at once and the host is told `Resume`.
-    /// (SP2) The host's reaction command in the command menu's event button (`Some(76)`: a save point's "Save"; see
-    /// `host_command`), or none. Shown from the next frame; taken off with KH3's "out" when it goes.
+    ///   A camp menu / Pause screen that was up when the cutscene began keeps the screen and the pad until it is
+    ///   closed (it cannot be opened again). When the flag goes false under the open menu (the cutscene ended by
+    ///   itself) the menu is taken off at once and the host is told `Resume`.
+    ///   (SP2) The host's reaction command in the command menu's event button (`Some(76)`: a save point's "Save"; see
+    ///   `host_command`), or none. Shown from the next frame; taken off with KH3's "out" when it goes.
     pub fn set_host_command(&mut self, kind: Option<i64>) {
         self.host_command = kind;
         self.host_reactions = kind.map(HostReaction::kind).into_iter().collect(); // (RC) the one-entry form
@@ -1714,6 +2091,18 @@ impl Hud {
     pub fn set_host_reactions(&mut self, list: &[HostReaction]) {
         self.host_command = list.first().and_then(|r| r.kind);
         self.host_reactions = list.to_vec();
+    }
+
+    /// (INTERACT-MARK) What the first host reaction is about: (its identity, its point in the snapshot's world space, the
+    /// one `Frame::to_view` maps), or None. KH3's marker (HudTarget type-5 cursor `ActLockonMark`, the green triangle) is
+    /// put on it while a host reaction is offered; a new identity replays its `in` (0x1413F7410 / 0x141421CA0).
+    pub fn set_host_reaction_target(&mut self, target: Option<(u64, kh_core::Vec3)>) {
+        self.react_mark = target;
+    }
+
+    /// (INTERACT-MARK) The marker's cursor is on screen (tests).
+    pub fn reaction_mark_shown(&self) -> bool {
+        self.target_driver.has_cursor(REACT_MARK_KEY, LOCKON_TYPE_ACTION)
     }
 
     /// (RC) The names the host's Y interactions show now, in order (the first = the green event button).
@@ -1901,6 +2290,15 @@ impl Hud {
     pub fn set_saveload_options(&mut self, delete: bool, delete_current: bool, confirm_load: bool) {
         if let Some(screen) = self.saveload.as_mut() {
             (screen.delete_enabled, screen.delete_current, screen.confirm_load) = (delete, delete_current, confirm_load);
+            screen.delete_only = false; // (NG delete) only the new game's list asks for it, after these options
+        }
+    }
+
+    /// (NG delete) The next Load screen is the new game's delete-only list (`kh_ui::saveload::SaveLoadScreen::delete_only`):
+    /// set after [`Hud::set_saveload_options`], which clears it.
+    pub fn set_saveload_delete_only(&mut self, on: bool) {
+        if let Some(screen) = self.saveload.as_mut() {
+            screen.delete_only = on;
         }
     }
 
@@ -2019,8 +2417,19 @@ impl Hud {
         self.point_load_armed = false; // (SV)
         self.savepoint.confirm_title = self.title_entry;
         self.savepoint.open(&kh_ui::savepoint::SavePointCommand::ALL, disabled);
+        self.savepoint_came_back();
         self.sounds.push(UiSound::Play(kh_ui::menu::SE_MENU_OPEN));
         true
+    }
+
+    /// (THE TESTER 2026-11-03) A save-point menu that opens as the way back from one of its screens: `inBack`, the cursor
+    /// on the entry that screen came from (KH3's rule, `SavePointMenu::back_at`); any other open: as it was.
+    fn savepoint_came_back(&mut self) {
+        if let Some((command, at)) = self.savepoint_back.take() {
+            if at.elapsed().as_secs_f32() <= SAVEPOINT_BACK_SECONDS {
+                self.savepoint.back_at(command);
+            }
+        }
     }
 
     /// (er9) As [`Hud::open_savepoint`] for a host with its own list: `commands` from the top, and other
@@ -2033,12 +2442,18 @@ impl Hud {
         self.point_load_armed = false; // (SV)
         self.savepoint.confirm_title = self.title_entry;
         self.savepoint.open_with_texts(commands, disabled, texts);
+        self.savepoint_came_back();
         self.sounds.push(UiSound::Play(kh_ui::menu::SE_MENU_OPEN));
         true
     }
 
     pub fn savepoint_open(&self) -> bool {
         self.savepoint.is_open()
+    }
+
+    /// The save-point menu's entry under the cursor (`None`: the menu is not up).
+    pub fn savepoint_command(&self) -> Option<kh_ui::savepoint::SavePointCommand> {
+        self.savepoint.is_open().then(|| self.savepoint.commands().get(self.savepoint.cursor()).copied()).flatten()
     }
 
     /// (er-host, IMPL_ER26) THE SAVE-POINT MENU OF A HOST AT ANOTHER GAME'S RESTING PLACES (the module savepoint_menu): its entries
@@ -2301,19 +2716,53 @@ impl Hud {
         seq.scene_on()
     }
 
-    /// (er-host, IMPL_ER15) OPENS THE CAMP MENU DIRECTLY (not the battle Pause screen, whatever the battle flag or his
-    /// state say): what KH3`s "Prepare & Retry" leads to. It opens within the next two frames of [`Hud::frame`] (the
-    /// Menu button`s own flow with a clear gate). False: a menu or screen is up already.
-    /// (er-host, IMPL_ER17) ANOTHER SAVE WAS LOADED INSIDE THE SESSION: the popups of the old one (obtained items, munny, next
-    /// level, level up, bonus) and its enemy gauge are taken down at once; nothing else of the HUD is touched.
+    // /// (er-host, IMPL_ER15) OPENS THE CAMP MENU DIRECTLY (not the battle Pause screen, whatever the battle flag or his
+    // /// state say): what KH3`s "Prepare & Retry" leads to. It opens within the next two frames of [`Hud::frame`] (the
+    // /// Menu button`s own flow with a clear gate). False: a menu or screen is up already.
+    // /// (er-host, IMPL_ER17) ANOTHER SAVE WAS LOADED INSIDE THE SESSION: the popups of the old one (obtained items, munny, next
+    // /// level, level up, bonus) and its enemy gauge are taken down at once; nothing else of the HUD is touched.
     // ------------------------------------------------------------------------- (party) Donald and Goofy
-
     /// (party) THE FRIENDS IN THE STATUS HUD this frame (contract F.1): slots 1 - 2; empty = Sora alone (the solo
     /// layout). The HUD's driver does the rest (gauges, faces and their looks, the layout switch).
     /// (GOOFY-GG) GOOFY'S GUARD BAR this frame: his meter and the look (kh-partyhost `PartyRuntime::leader_guard_hud`);
     /// None = no bar. Drawn only while Goofy is the leader in the main slot.
     pub fn set_guard(&mut self, guard: Option<(kh_ui::hud_guard::GuardValues, kh_ui::hud_guard::GuardLook)>) {
         self.guard = guard;
+    }
+
+    /// (GOOFY) GOOFY'S HUD THIS FRAME (kh-partyhost `PartyRuntime::gof_hud_view`): his Resolve pips, the lock-on target's Stagger
+    /// gauge, the red "!" over a perilous attacker. None = he is not the controlled leader.
+    pub fn set_goofy(&mut self, goofy: Option<crate::party::GoofyHudView>) {
+        self.goofy = goofy;
+    }
+
+    /// (GOOFY) His pieces, after the stage frames. The Stagger gauge follows the lock-on target (else the soft one), with no
+    /// Scan rule: it is his gauge, not the HP gauge.
+    fn gof_frame(&mut self, f: &Frame, view: Option<&kh_ui::hud_target::View>) {
+        let g = self.goofy.take().filter(|_| self.leader == crate::party::PartyChara::Goofy);
+        self.gof_pips.update(&mut self.status, &self.don_art, g.as_ref().map(|g| (&g.resolve, &g.look.resolve)), f.dt);
+        let target = [f.snapshot.lock_on, f.snapshot.soft_target].into_iter().find(|t| *t != TargetId::NONE);
+        let stagger = g.as_ref().zip(target).map(|(g, t)| (t.0 as u64, g.stagger.iter().find(|s| s.0 == t).map_or(kh_ui::hud_goofy::StaggerValues { value: 0.0, max: 1.0, broken: false }, |s| s.1)));
+        let look = g.as_ref().map(|g| g.look.clone()).unwrap_or_default();
+        self.gof_stagger.update(&mut self.right, stagger.as_ref().map(|s| (s.0, &s.1)), &look.stagger, f.dt);
+        let (cues, extra) = g.as_ref().map_or((&[][..], 0.0), |g| (&g.peril[..], g.peril_extra));
+        self.gof_peril.step(cues, extra, &look.peril, f.dt);
+        if let Some(se) = self.gof_peril.take_se(&look.peril) {
+            self.sounds.push(UiSound::Play(se)); // (GF-POLISH) the "!" has a sound of its own
+        }
+        let (targets, to_view) = (f.targets, f.to_view);
+        self.gof_peril.update(&mut self.target, view, &|key| targets.top(TargetId(key as u32)).map(to_view), &look.peril);
+        self.goofy = g;
+    }
+
+    /// (GF-UI) The command movie's main cursor (tests).
+    pub fn command_cursor(&self) -> i32 {
+        self.command.main_cursor()
+    }
+
+    /// (GOOFY) What his pieces last applied (tests): the pips, the Stagger gauge, the marks.
+    pub fn gof_state(&self) -> (&kh_ui::hud_guard::ResolvePips, &kh_ui::hud_goofy::StaggerGauge, &kh_ui::hud_goofy::PerilMarks) {
+        (&self.gof_pips, &self.gof_stagger, &self.gof_peril)
     }
 
     /// (DON-UI) DONALD'S HUD THIS FRAME (kh-partyhost `PartyRuntime::don_hud_view`): his Resonance ring, stars,
@@ -2332,23 +2781,20 @@ impl Hud {
 
     /// (DON-UI) What Donald's pieces last applied (tests): the rings (fill frame, pips lit, MAX), the ultimate marks, the
     /// stars (lit, blinking, tracker lit, tracker size), the target icons (statuses, insight, position), shown flags.
-    #[allow(clippy::type_complexity)]
-    pub fn don_state(&self) -> (Vec<(u32, u8, bool)>, Vec<kh_ui::hud_resonance::UltLook>, (u8, bool, u8, u8), (usize, usize, (f32, f32)), [bool; 3]) {
+    pub fn don_state(&self) -> DonState {
         (self.don_ring.last.clone(), self.don_ring.last_ult.clone(), self.don_ring.last_stars, self.don_icons.last, [self.don_ring.shown, self.don_ring.last_stars_plate.is_some(), self.don_icons.shown])
     }
 
     /// (DON-UI) The layout drawn (tests): the badges' plates and the stars row's plate (left, top, right, bottom), `sttsPc`
     /// units, and the MP / HP track frames (where the bars start).
-    #[allow(clippy::type_complexity)]
-    pub fn don_layout(&self) -> (Vec<(f32, f32, f32, f32)>, Option<(f32, f32, f32, f32)>, (i32, i32)) {
+    pub fn don_layout(&self) -> DonLayout {
         let f = self.status_driver.frames();
         (self.don_ring.last_plates.iter().copied().chain(self.don_ring.last_zetta_plate).collect(), self.don_ring.last_stars_plate, (f.0 - 1, f.2 - 1))
     }
 
     /// (DON-UI) The Ready ultimate marks (tests): where their glow and glint visibly reach, and the marks' own boxes
     /// (left, top, right, bottom), `sttsPc` units.
-    #[allow(clippy::type_complexity)]
-    pub fn don_ult_glow(&self) -> (Vec<(f32, f32, f32, f32)>, Vec<(f32, f32, f32, f32)>) {
+    pub fn don_ult_glow(&self) -> (Vec<DonBox>, Vec<DonBox>) {
         (self.don_ring.last_glow.clone(), self.don_ring.last_ult_box.clone())
     }
 
@@ -2357,9 +2803,56 @@ impl Hud {
         self.don_ycost.last.clone()
     }
 
-    /// (DON-UI) The worn-spell icons drawn: (status slot, centre x, centre y) in `sttsPc` units (tests).
+    /// (DON-UI) The worn-spell icons drawn: (status slot, centre x, centre y) in `sttsPc` units (tests). (ALLY-BUFF) every
+    /// helpful-status icon now, whoever leads ([`Hud::ally_buff_icons`] has the icons and sizes).
     pub fn don_worn(&self) -> Vec<(usize, f32, f32)> {
-        self.don_ring.last_worn.clone()
+        self.buff_icons.last.iter().map(|b| (b.0, b.3, b.4)).collect()
+    }
+
+    /// (ALLY-BUFF) THE HELPFUL STATUSES THIS FRAME (kh-partyhost `PartyRuntime::ally_buffs_view`), WHOEVER LEADS (the user,
+    /// 2026-11-03: "Donald's helpful spells like Aero shield should appear on whoever has it in the HUD regardless of who
+    /// is party leader. Positioning should all match Donald."): each member's icons by his portrait. An empty view = none.
+    pub fn set_ally_buffs(&mut self, v: crate::party::AllyBuffsView) {
+        self.ally_buffs = v;
+    }
+
+    /// (ALLY-BUFF) The helpful-status icons drawn (tests): (status slot, index in the slot, icon, centre x, centre y, size),
+    /// `sttsPc` units.
+    pub fn ally_buff_icons(&self) -> &[(usize, usize, String, f32, f32, f32)] {
+        &self.buff_icons.last
+    }
+
+    /// (ALLY-BUFF) What the leader's own pieces left of Donald's place last frame (tests): the column's shift (0 = Donald's
+    /// place; negative = raised over Goofy's GUARD bar and Resolve pips) and the pieces beside it (Sora's focus gauge).
+    pub fn ally_buff_room(&self) -> &kh_ui::hud_buffs::LeaderRoom {
+        &self.buff_icons.last_room
+    }
+
+    /// (ALLY-BUFF) The helpful statuses by each wearer's portrait (after the stage frames, as Donald's pieces): his seat now
+    /// (0 the leader's slot, whoever leads; 1 / 2 the friends'), Donald's place (the view's look, else the sheet's last
+    /// look Donald's HUD gave). None during the leader switch's shrink / grow (the seats change under it).
+    fn buffs_frame(&mut self) {
+        let mut slots: Vec<kh_ui::hud_buffs::SlotBuffs> = Vec::new();
+        if self.leader_anim.is_none() {
+            for b in &self.ally_buffs.buffs {
+                let Some(seat) = self.seat_of(b.chara) else { continue };
+                match slots.iter_mut().find(|s| s.0 == seat) {
+                    Some(s) => s.1.push(b.icon.clone()),
+                    None => slots.push((seat, vec![b.icon.clone()])),
+                }
+            }
+        }
+        let look = self.ally_buffs.look.unwrap_or_else(|| self.don_look.ring.buff_look());
+        // the leader's column over his own rows in Donald's space (Goofy: the GUARD bar, the MP part's copy over the MP bar,
+        // and his Resolve pips over it): straight up, same x, so they never sit on his bar's label or his pips; and clear
+        // of his focus gauge beside it (Sora's; hidden for Donald): its track `pcExDodai`, the arc's own outline (the fills
+        // are masked shapes as wide as the whole ring), whose lower end comes down by his face just above Donald's place
+        const FOCUS_TRACK: &str = "sttsPc.pcEx.pcFocusGg.pcExDodai";
+        let m = &self.status.movie;
+        let bar_dy = self.guard_bar.shown.then(|| m.node(kh_ui::hud_guard::GUARD).zip(m.node("sttsPc.pcMp")).map(|(g, mp)| g.matrix.ty - mp.matrix.ty)).flatten();
+        let lift = look.leader_lift(bar_dy, self.gof_pips.shown.then_some(self.gof_pips.plate_box));
+        let room = kh_ui::hud_buffs::LeaderRoom { lift, beside: kh_ui::hud_buffs::shown_box(m, "sttsPc", FOCUS_TRACK).into_iter().collect() };
+        self.buff_icons.update(&mut self.status, self.don_art.icons.as_ref(), &slots, &look, &room);
     }
 
     /// (DON-UI) Each Resonance badge's (icon centre x, first pip's left x, centre y) in `sttsPc` units (tests).
@@ -2386,10 +2879,9 @@ impl Hud {
                 n.script_visible = None;
             }
         }
-        // the worn spells by each wearer's portrait: his seat now (0 the leader's slot, 1 / 2 the friends')
+        // (the worn spells by the portraits: `buffs_frame`, whoever leads)
         let ring = don.map(|d| {
             let mut r = d.ring.clone();
-            r.worn = d.worn.iter().filter_map(|(c, b, o)| self.seats.iter().position(|s| *s == Some(*c)).filter(|i| *i < 3).map(|i| (i, *b, *o))).collect();
             r.leader_hp_frames = self.status_driver.frames().0 - 1; // where his HP bar starts (the leader's worn icon)
             // the Arcane Flow stars and the Zettaflare tracker: in this cluster (the user, 2026-10-22: "move all of the
             // pips to the healthbar part of the HUD")
@@ -2441,7 +2933,13 @@ impl Hud {
     /// and gauges are swapped and every slot plays `in` (`setStatus(10, slot)`: they grow back); the camp menu's
     /// member-switch sound (static SE 2) goes with it. Sora's leaving / joining alone needs no swap: his slot's own
     /// `out` / `in` (the native rule when a slot's pawn goes or comes).
+    ///
+    /// (LEADER RESET) A NEW LEADER GETS HIS MENU AND PIECES FROM SCRATCH ([`Hud::new_character`]'s reset), the moment he is
+    /// asked for: whichever character he follows and by whatever route (the party menu, a load after a death, the title).
     pub fn set_leader(&mut self, leader: crate::party::PartyChara, sora_in: bool) {
+        if leader != self.leader_anim.map_or(self.leader, |a| a.0) {
+            self.reset_leader_hud();
+        }
         if self.leader_anim.is_some_and(|a| a.0 == leader && a.1 == sora_in) {
             return;
         }
@@ -2467,6 +2965,49 @@ impl Hud {
             return;
         }
         self.apply_leader(leader, sora_in);
+    }
+
+    /// (LEADER RESET, THE USER 2026-11-02: "Make it so this kind of thing never happens loading from any character after dying
+    /// as another character", with Donald's menu reading "Attack / Magicunement / (empty) / Items" after Goofy died and a Donald
+    /// save was loaded) A NEW CHARACTER: the host calls this for every load (the game-over menu's Continue / Load, the save
+    /// point's Load, the title's) and for every new character it starts; [`Hud::set_leader`] does the same for a new leader.
+    /// Nothing of the HUD's per-leader state outlives it: see `reset_leader_hud`.
+    pub fn new_character(&mut self) {
+        self.reset_leader_hud();
+    }
+
+    /// (LEADER RESET) THE ONE ROUTE every new leader and every new character goes through: the command menu is a new movie and
+    /// a new display, as when the HUD was loaded (its rows, texts, places, cursor, sub lists, shortcut panel and its cooldown
+    /// gauges, situation commands, battle colour: all set again from the next frame's menu, the first-in animation
+    /// included), and the old leader's pieces are put out and forgotten (Donald's stars and Y costs on that menu, his
+    /// Resonance badges and target statuses, Quick Cast's lit name, his hidden focus gauge given back; Goofy's GUARD bar,
+    /// Resolve pips, Stagger gauge, Danger Sense marks). The next frame's feed builds the new leader's own. Nothing in it is
+    /// per character: a new character's menu and pieces are rebuilt by the same lines.
+    fn reset_leader_hud(&mut self) {
+        let (def, fonts) = (self.command.movie.def.clone(), self.command.fonts.clone());
+        self.command = HudCommand::new(def, fonts);
+        self.command.native_root("off"); // hidden until the display brings the new menu in (it starts hidden)
+        self.display = CommandDisplay::new();
+        self.don_stars = Default::default();
+        self.don_ycost = Default::default();
+        self.don_glow = None;
+        self.don_list.store(0, std::sync::atomic::Ordering::Relaxed);
+        if std::mem::take(&mut self.don_ex_hidden) {
+            if let Some(n) = self.status.movie.node_mut("sttsPc.pcEx") {
+                n.script_visible = None;
+            }
+        }
+        self.don_ring.update(&mut self.status, &self.don_art, None, &self.don_look.ring, &self.don_look.arcane, 0.0);
+        self.don_ring = Default::default();
+        self.don_icons.update(&mut self.target, &self.don_art, None, None, &self.don_look.arcane);
+        self.don_icons = Default::default();
+        self.guard_bar.update(&mut self.status, None, 0.0);
+        self.guard_bar = Default::default();
+        self.gof_pips.update(&mut self.status, &self.don_art, None, 0.0);
+        self.gof_pips = Default::default();
+        self.gof_stagger.update(&mut self.right, None, &kh_ui::hud_goofy::StaggerLook::default(), 0.0);
+        self.gof_stagger = Default::default();
+        self.gof_peril.clear(&mut self.target);
     }
 
     /// (party P) The swap itself (the faces, the reload: every slot plays `in`).
@@ -2520,6 +3061,11 @@ impl Hud {
 
     /// (PF2) A character's face movie for a slot (roster row's face; Sora in a friend slot: his NPC face when the pack has it).
     fn face_of(&self, c: crate::party::PartyChara, slot: usize) -> Option<std::sync::Arc<kh_ui::def::MovieDef>> {
+        if c == crate::party::PartyChara::Sora {
+            if let Some(face) = self.outfit_face() {
+                return Some(face); // (OF) the worn outfit's own HUD face
+            }
+        }
         let own = self.chara_faces.iter().find(|f| f.0 == c).and_then(|f| f.1.clone());
         if c == crate::party::PartyChara::Sora && slot != 0 {
             self.sora_npc_face.clone().or(own)
@@ -2538,6 +3084,35 @@ impl Hud {
         self.seats
     }
 
+    /// (BC) THE COMMAND MENU'S BATTLE COLOUR (THE USER 2026-11-02: "make the HUD change to this colour during combat"), KH3's
+    /// rule (0x141631D90, every frame, `setBattleMode` on a change, docs/sora-ui-spec.md 5.3): mode 2 `cmdRed` while the
+    /// game's special battle flag is on (G+0x8D4 bit 4, `TresSetSpecialBattleMode`: kh-core's forced flag; bit 3 is not
+    /// ported), else mode 1 `cmdYellow` (KH3's battle look: the orange-gold menu) while the battle flag is on (bit 2: an
+    /// engaged enemy, kept 1.0 s after the last one), else mode 0 `cmdBlue`. KH3 has one battle flag for the game; the port
+    /// keeps one per leader (THE LEADER'S: Sora's pawn flag, a friend's the party flag kh-partyhost `battle_step` feeds his
+    /// slot, the same count-plus-linger rule), so whoever leads, a future character included, drives it by this one route.
+    /// `hud-cmd battle N` fixes it for a test.
+    pub fn battle_mode(&self, f: &Frame) -> i32 {
+        if let Some(mode) = self.battle {
+            return mode;
+        }
+        if f.sora.actions().battle_forced {
+            kh_ui::hud_command::TITLE_TOP_COMMAND_RED
+        } else if self.leader_in_battle(f) {
+            kh_ui::hud_command::TITLE_TOP_COMMAND_YELLOW
+        } else {
+            kh_ui::hud_command::TITLE_TOP_COMMAND_BLUE
+        }
+    }
+
+    /// (BC) The leader's battle flag (with KH3's linger): Sora's own, or the leading friend's slot as the party feeds it.
+    fn leader_in_battle(&self, f: &Frame) -> bool {
+        match self.leader {
+            crate::party::PartyChara::Sora => f.sora.actions().battle,
+            c => self.party.iter().find(|p| p.chara == c).is_some_and(|p| p.in_battle),
+        }
+    }
+
     /// (PF2) The status movie's interface calls since the last take (`setFaceState(slot, 1)` = the damage flash, `loadFace`
     /// ...): tests and harnesses.
     pub fn take_status_calls(&mut self) -> Vec<String> {
@@ -2548,7 +3123,12 @@ impl Hud {
     /// shown in this frame after Sora's, in a window of its own (see `party_levels`).
     pub fn party_level_up(&mut self, chara: crate::party::PartyChara, level: i32, lines: &[String]) {
         (self.log)(&format!("hud: level up of {} to {level}: {lines:?}", chara.name()));
-        self.party_levels.push_back((level, chara as usize, lines.to_vec()));
+        // (GF-UI) KH3's window has three lines: what a richer level teaches beyond them goes on a BONUS! panel, never lost
+        let (shown, more) = lines.split_at(lines.len().min(3));
+        self.party_levels.push_back((level, chara as usize, shown.to_vec()));
+        if !more.is_empty() {
+            self.party_bonuses.push_back((chara, more.to_vec()));
+        }
     }
 
     /// (BN) A CHARACTER'S BONUS! PANEL (KH3's `HudRightGetBonus`, 0x1415874F0): a reward obtained outside levelling (a boss
@@ -2740,17 +3320,6 @@ impl Hud {
             .collect()
     }
 
-    /// (party) Whose weapons a friend can equip: Donald the staffs, Goofy the shields (`m_EquipSubclass`
-    /// `n_ex001/w_do..` / `n_ex002/w_gu..` of TresEquipItemData [A]).
-    #[allow(dead_code)] // (EQ) replaced by eq::weapon_family (no per-name table)
-    fn friend_weapon_prefix(chara: crate::party::PartyChara) -> &'static str {
-        match chara {
-            crate::party::PartyChara::Donald => "WEP_DONALD",
-            crate::party::PartyChara::Goofy => "WEP_GOOFY",
-            crate::party::PartyChara::Sora => "WEP_KEYBLADE",
-        }
-    }
-
     /// (party) A friend's Equipment screen: one weapon slot, the open armour / accessory / item slots; the stock
     /// lists that friend's weapons, the shared armour / accessories and the battle items.
     fn friend_equip_in(&self, sora: &Sora, m: &crate::party::PartyMenuMember) -> EquipIn {
@@ -2857,6 +3426,7 @@ impl Hud {
                 // (EQ) Triangle on his item row: HIS slots (was: Sora's pouch's Auto-Reload)
                 StatusAction::AutoReload { item, on } => self.eq_auto_reload(index, &item, on),
                 StatusAction::UseItem { id } => {
+                    if self.eq_use_boost(sora, Some(index), &id) { continue; } // (weapons P11) a boost item on this friend
                     let Some(item) = ItemKind::from_name(&id) else { continue };
                     if take_item(sora, item) {
                         (self.log)(&format!("camp: used {} on {}", item.name(), chara.name()));
@@ -2902,6 +3472,7 @@ impl Hud {
         self.enemy = EnemyGauge::default();
         self.obtained_reset(); // (HUD2) the old session's OBTAINED popups go too
         self.ally_reset(); // (ALLYJOIN) and an ally question of the old session
+        self.er_dialog_reset(); // (ER-POPUPS) and Elden Ring's boxes of the old session
     }
 
     /// (ERUI) See `host_event`: while it is set, Start opens KH3's Pause screen (as in a battle), not the camp menu.
@@ -2940,6 +3511,78 @@ impl Hud {
     /// (er-host, IMPL_ER59) The outfit chosen in the camp menu (its id), once.
     pub fn take_outfit_choice(&mut self) -> Option<String> {
         self.outfit_choice.take()
+    }
+
+    /// (THE USER 2026-11-02: "Move the Outfits selection to Boc, replacing his armor alteration menu with it completely")
+    /// OPENS THE OUTFITS SCREEN ON ITS OWN (Elden Ring: Boc's "Alter garments"): the camp menu with the outfits of
+    /// [`Hud::outfit_menu`] as its only screen (kh_ui `CampMenu::open_outfits`), opened as the save point's Party
+    /// Formation is (the top while the camp's opening plays, then the screen); B / Menu close it and
+    /// [`Hud::take_outfits_closed`] answers true once. False: no outfits offered, or another menu is up.
+    pub fn open_outfits(&mut self) -> bool {
+        if self.outfit_menu.as_ref().is_none_or(|(list, _)| list.is_empty()) || self.flow.paused() || self.gameover.is_open() || self.gameover_seq.is_some() || self.savepoint.is_open() {
+            return false;
+        }
+        self.outfits_request = true;
+        self.force_camp = 2;
+        true
+    }
+
+    /// (CAMP-OPTIONS) OPENS THE CONFIG SCREEN ON ITS OWN (Elden Ring's title menu SYSTEM, its in-game System entry): the camp menu
+    /// with Config as its only entry and the options host's tabs, opened as Boc's Outfits screen is; B on its top closes it
+    /// and [`Hud::take_options_closed`] answers true once. False: no host, or another menu is up.
+    pub fn open_options(&mut self) -> bool {
+        if self.options_host.is_none() || self.flow.paused() || self.gameover.is_open() || self.gameover_seq.is_some() || self.savepoint.is_open() {
+            return false;
+        }
+        self.options_request = true;
+        self.force_camp = 2;
+        true
+    }
+
+    /// (CAMP-OPTIONS) THE CAMP MENU OPENED ON ITS CONFIG PAGE (Elden Ring's in-game System entry): the camp menu as the Menu
+    /// button opens it, then its Config entry chosen; B goes back to the camp's top as usual. False: another menu is up.
+    pub fn open_camp_settings(&mut self) -> bool {
+        if self.options_host.is_none() || self.flow.paused() || self.gameover.is_open() || self.gameover_seq.is_some() || self.savepoint.is_open() {
+            return false;
+        }
+        self.camp_settings_request = true;
+        self.force_camp = 2;
+        true
+    }
+
+    /// (CAMP-OPTIONS) The Config screen on its own is asked for or up.
+    pub fn options_up(&self) -> bool {
+        self.options_request || self.options_open
+    }
+
+    /// (CAMP-OPTIONS) It closed (once).
+    pub fn take_options_closed(&mut self) -> bool {
+        std::mem::take(&mut self.options_closed)
+    }
+
+    /// (CAMP-OPTIONS) A request that could not be served is dropped.
+    pub fn drop_options_request(&mut self) {
+        self.options_request = false;
+    }
+
+    /// (THE USER 2026-11-02) Boc's Outfits screen is asked for or up (false again once it has closed, or was given up).
+    pub fn outfits_up(&self) -> bool {
+        self.outfits_request || self.outfits_open
+    }
+
+    /// (THE USER 2026-11-02) Boc's Outfits screen is on screen (not only asked for).
+    pub fn outfits_shown(&self) -> bool {
+        self.outfits_open
+    }
+
+    /// (THE USER 2026-11-02) A request for Boc's Outfits screen that could not be served is dropped (the host gave up).
+    pub fn drop_outfits_request(&mut self) {
+        self.outfits_request = false;
+    }
+
+    /// (THE USER 2026-11-02) True once after Boc's Outfits screen closed (the host's talk with Boc goes on).
+    pub fn take_outfits_closed(&mut self) -> bool {
+        std::mem::take(&mut self.outfits_closed)
     }
 
     /// True once after the Config entry was chosen with `config_external` (the menu is closing).
@@ -2988,7 +3631,12 @@ impl Hud {
 
     /// (party P) True once after the Party Formation screen closed (a host goes back to its save-point menu).
     pub fn take_formation_closed(&mut self) -> bool {
-        std::mem::take(&mut self.formation_closed)
+        let closed = std::mem::take(&mut self.formation_closed);
+        if closed {
+            // (THE TESTER 2026-11-03) the save-point menu comes back on Party Formation, the entry the screen came from
+            self.savepoint_back = Some((kh_ui::savepoint::SavePointCommand::PartyFormation, std::time::Instant::now()));
+        }
+        closed
     }
 
     /// (party P) The characters of the camp menu's panels, panel order (`charaWindow01` ..): which picture goes where.
@@ -3151,7 +3799,15 @@ impl Hud {
                     owned: set.owned(row.kind),
                     equipped: set.equipped_mask(row.kind),
                     // (XSI) the port's own abilities are not in the UI pack's data: the sheet's help line
-                    help: extra.map_or_else(|| if row.help_text == "-" { String::new() } else { row.help_text.to_string() }, |e| e.1.clone()),
+                    help: {
+                        let help = extra.map_or_else(|| if row.help_text == "-" { String::new() } else { row.help_text.to_string() }, |e| e.1.clone());
+                        // (weapons P2) an ability that does nothing in Elden Ring (Harvester, Chef Extraordinaire) says so
+                        match kh_core::status::keyblade::help_note(row.kind) {
+                            Some(note) if help.is_empty() => note.to_string(),
+                            Some(note) => format!("{help} {note}"),
+                            None => help,
+                        }
+                    },
                 }
             })
             .collect()
@@ -3180,6 +3836,17 @@ impl Hud {
         }
         let mut stock: Vec<StockEntry> = self.inventory.equipment.iter().filter(|e| e.1 > 0).filter_map(|(id, count)| equipment_row(id).map(|row| StockEntry { piece: piece_of(row), count: *count })).collect();
         stock.extend(pouch.stock.iter().filter(|s| s.1 > 0 && kh_core::magic::items::command_of_item(s.0).is_some()).map(|(item, count)| StockEntry { piece: item_piece(*item), count: *count as u32 }));
+        // (Summon, THE USER 2026-11-02: "make a new area for him to equip spirit ashes (4)") the four spirit-ash slots after
+        // the pouch, while the host has spirits for him (`summon.allowed`); the slots are resolved here from the equipped
+        // ids and the owned ashes (not from `summon.slots`, which the host renews only on its next frame, after an equip);
+        // the stock is every ash he owns (camp_equip leaves out the ones in a slot: an ash sits in one slot only)
+        let command = sora.command();
+        if command.summon.allowed {
+            for (slot, base) in command.spirit_ashes.iter().enumerate() {
+                slots.push(EquipSlot { kind: KIND_SPIRIT, slot, piece: spirit_in_slot(&command.summon, *base).map(|a| spirit_piece(a, status)), ..EquipSlot::default() });
+            }
+            stock.extend(command.summon.owned.iter().map(|a| StockEntry { piece: spirit_piece(a, status), count: 1 }));
+        }
         EquipIn { slots, stock, ap_in_use: status.ap_in_use(), stock_max: STOCK_MAX }
     }
 
@@ -3207,9 +3874,18 @@ impl Hud {
             } else if let Some(item) = crate::items::by_key(id) {
                 // (loot) materials (the Materials tab) and camp items (Items; nothing uses them yet)
                 let category = if item.class == crate::items::Class::Material { CAT_MATERIAL } else { CAT_ITEM };
-                out.push(InvEntry { id: id.clone(), name: item.name.clone(), category, count: *count, ..InvEntry::default() });
+                // (THE USER 2026-11-02) a COMPOSED row (the gloveworts) brings its own help text
+                out.push(InvEntry { id: id.clone(), name: item.name.clone(), category, count: *count, help: crate::items::own_help(id), ..InvEntry::default() });
             }
         }
+        // (THE USER 2026-11-02: "have them appear alongside upgrade materials in the camp menu's item menus") THE MATERIALS IN THE
+        // ITEM TABLE'S ORDER (KH3's rows in the game's order, the gloveworts right after KH3's ores), after everything else
+        // of the stock (the order they came in, as before) and before the key items (KH3's tab order): a stable sort
+        out.sort_by_key(|e| match e.category {
+            CAT_MATERIAL => (1, crate::items::table_index(&e.id).unwrap_or(usize::MAX)),
+            CAT_KEY => (2, 0),
+            _ => (0, 0),
+        });
         // (IMPL_ER28) the host's key items (Elden Ring's): the Key Items tab, read-only rows
         // (IMPL_ER42) with the host's description for the item pane; (IMPL_ER43) and its picture: the row id carries the
         // icon number (`HOSTKEY_n.iconN`), `kh_ui::item_art` finds Elden Ring's picture of it in the pack
@@ -3252,13 +3928,18 @@ impl Hud {
         let names = (27u8..=68).map(|kind| (kind, spells::command_name(kind).to_string())).collect();
         // (XSI, 2026-10-16) THE SHOTLOCK CHOICE (XS 2.8): once Spectral Rays is owned, the Keyblade's own (Ragnarok, its MAX
         // form) and Spectral Rays; KH3's own names (kh3_system.command.sf_ragnarok_0 / sf_laser_0 / shootflow).
+        // (SHOT-A, INT-F) no double offer with Ever After (its own MAX kind is Spectral Rays: `choices_for`), and the
+        // Keyblade's own entry (0) is named after the held Keyblade's MAX kind (`keyblade_kinds`: base, MAX, ..)
+        let held = status.current_keyblade();
+        let choices = kh_core::abilities::xs::spectral::choices_for(true, held);
+        let own_name = held.map(kh_core::magic::shotlocks::keyblade_kinds).and_then(|k| k.get(1).or(k.first()).copied()).map_or("kh3_system.command.sf_ragnarok_0", kh_core::magic::shotlocks::name_id);
         let shotlock = (status.abilities.owned(kh_core::enums::ETresAbilityKind::ShotlockSpectralRays) > 0).then(|| kh_ui::camp_custom::ShotlockIn {
             label: self.camp_view.string("kh3_system.command.shootflow"),
-            choices: kh_core::abilities::xs::spectral::choices(true).into_iter().map(|k| (k, self.camp_view.string(if k == kh_core::abilities::xs::spectral::KIND { "kh3_system.command.sf_laser_0" } else { "kh3_system.command.sf_ragnarok_0" }))).collect(),
-            current: command.shotlock,
-            help: if status.has(kh_core::enums::ETresAbilityKind::ShotlockSpectralRays) { "Choose the shotlock R1 performs.".to_string() } else { "Choose the shotlock R1 performs (Spectral Rays needs its ability set on the Abilities screen).".to_string() },
+            choices: choices.iter().map(|&k| (k, self.camp_view.string(if k == kh_core::abilities::xs::spectral::KIND { "kh3_system.command.sf_laser_0" } else { own_name }))).collect(),
+            current: if choices.contains(&command.shotlock) { command.shotlock } else { 0 },
+            help: if status.has(kh_core::enums::ETresAbilityKind::ShotlockSpectralRays) { "Choose the shotlock <icon(R1)> performs.".to_string() } else { "Choose the shotlock <icon(R1)> performs (Spectral Rays needs its ability set on the Abilities screen).".to_string() }, // (BUTTON-ICONS) the button as its icon
         });
-        CustomizeIn { magic_slots: command.magic_slots, shortcuts: command.shortcuts, entries, names, friends: self.friends_in(), shotlock, ..CustomizeIn::default() } // (party X2) the leader's fields: none for Sora
+        CustomizeIn { magic_slots: command.magic_slots, shortcuts: command.shortcuts, entries, names, friends: self.friends_in(), shotlock, arts_page: self.x2_arts_page(sora), ..CustomizeIn::default() } // (party X2) the leader's fields: none for Sora
     }
 
     /// Supplies the open screen's data again (after an action changed the game).
@@ -3274,11 +3955,11 @@ impl Hud {
         let friend = self.friend(member).cloned();
         let data = match (screen, &friend) {
             (CampScreen::Abilities, Some(m)) => Some(CampData::Abilities(self.friend_ability_rows(m), m.ap_max)),
-            (CampScreen::Equipment, Some(m)) => Some(CampData::Equipment(self.friend_equip_in(sora, m))),
+            (CampScreen::Equipment, Some(m)) => Some(CampData::Equipment(self.eq_friend_finish(self.friend_equip_in(sora, m)))), // (weapons P11) KH3 ability names + help
             (CampScreen::Abilities, None) => Some(CampData::Abilities(self.ability_rows(sora), stats.ap_max)),
-            (CampScreen::Equipment, None) => Some(CampData::Equipment(self.equip_in(sora))),
-            (CampScreen::Items, _) => Some(CampData::Items(self.items_in(sora))),
-            (CampScreen::Customize, _) => Some(CampData::Customize(self.customize_in(sora))),
+            (CampScreen::Equipment, None) => Some(CampData::Equipment(self.eq_sora_finish(sora, self.equip_in(sora)))), // (weapons P11) the Keyblade slots, the owned Keyblades, ability help
+            (CampScreen::Items, _) => Some(CampData::Items(self.eq_items_finish(sora, self.items_in(sora)))), // (weapons P11) the boosts usable
+            (CampScreen::Customize, _) => Some(CampData::Customize(Box::new(self.customize_in(sora)))),
             _ => None,
         };
         // (AUD) the panels follow the active party while the menu is open (a member joins / leaves, the leader changes)
@@ -3287,10 +3968,13 @@ impl Hud {
         camp.set_party(party);
         camp.stats = stats;
         match data {
-            Some(CampData::Abilities(rows, max_ap)) => camp.set_abilities(&rows, max_ap),
+            Some(CampData::Abilities(rows, max_ap)) => {
+                camp.set_abilities(&rows, max_ap);
+                camp.set_parry(friend.and_then(|m| m.parry)); // (GOOFY, THE USER 2026-11-02) Goofy's Parry Techniques page
+            }
             Some(CampData::Equipment(data)) => camp.equipment.set(data),
             Some(CampData::Items(entries)) => camp.items.set(entries),
-            Some(CampData::Customize(data)) => camp.customize.set(data),
+            Some(CampData::Customize(data)) => camp.customize.set(*data),
             None => {}
         }
     }
@@ -3301,6 +3985,14 @@ impl Hud {
         use kh_core::command::customize;
         use kh_core::status::ItemKind;
         self.shop_apply(sora); // (SHOP) the shop's purchases and sales of the frame
+        self.tuning_apply(sora); // (THE USER 2026-11-02) the spirit tuning's charges (the host carried the upgrades out)
+        // (OUTFIT-UNLOCK) the Outfits screen's paid changes, on Sora's munny
+        for (id, price) in std::mem::take(&mut self.outfit_charges) {
+            let before = sora.status().munny;
+            sora.status_mut().munny = before.saturating_sub(price).max(0);
+            (self.log)(&format!("camp: (OUTFIT-UNLOCK) OUTFIT {id}: {price} munny charged ({before} -> {})", sora.status().munny));
+        }
+        tie_keyblade_levels(sora.status_mut()); // (weapons INT) the Forge's levels (record) and the core's (status) agree
         let actions = std::mem::take(&mut self.status_actions);
         // (party) the friends' actions: stock moves here, the status edits go to the host (`take_party_edits`)
         let party = std::mem::take(&mut self.party_pending);
@@ -3324,12 +4016,24 @@ impl Hud {
                 // The commit of 0x1415ECC00: the old piece goes back to the stock, the new one
                 // leaves it, the status is rebuilt.
                 StatusAction::Equip { kind, slot, id } => {
+                    // (Summon) a spirit-ash slot: Sora's command state, no stock to move (the ash stays in the inventory)
+                    if kind == KIND_SPIRIT {
+                        match equip_spirit(sora, slot, id.as_deref()) {
+                            Ok(()) => (self.log)(&format!("camp: spirit ash slot {slot} = {}", id.as_deref().unwrap_or("-"))),
+                            Err(refusal) => (self.log)(&format!("camp: spirit ash slot {slot}: refused ({refusal})")),
+                        }
+                        continue;
+                    }
                     if kind == KIND_ITEM {
                         let new = id.as_deref().and_then(ItemKind::from_name);
                         match customize::equip_item(sora, slot, new) {
                             Ok(()) => (self.log)(&format!("camp: item slot {slot} = {}", new.map_or("-", |i| i.name()))),
                             Err(refusal) => (self.log)(&format!("camp: item slot {slot}: refused ({refusal:?})")),
                         }
+                        continue;
+                    }
+                    // (weapons P11, P2's line 3) a Keyblade slot: the core's slots, the stock, P1's record
+                    if kind == KIND_WEAPON && self.eq_keyblade_equip(sora, slot, id.as_deref()) {
                         continue;
                     }
                     if let Some(new) = &id {
@@ -3369,12 +4073,14 @@ impl Hud {
                 // `0x140EBE1E0(GI, item, character, 1)`: the stock count drops, the item
                 // command's effect applies.
                 StatusAction::UseItem { id } => {
+                    if self.eq_use_boost(sora, None, &id) { continue; } // (weapons P11) a boost item on Sora
                     let Some(item) = ItemKind::from_name(&id) else { continue };
                     match customize::use_item_from_menu(sora, item) {
                         Ok(outcome) => (self.log)(&format!("camp: used {} (HP {:+}, MP {:+}, focus {:+})", item.name(), outcome.hp, outcome.mp, outcome.focus)),
                         Err(refusal) => (self.log)(&format!("camp: {} not used ({refusal:?})", item.name())),
                     }
                 }
+                StatusAction::Discard { id } if !kh_ui::camp_equip::can_discard(&id) => (self.log)(&format!("camp: {id} kept (a Keyblade cannot be discarded)")),
                 StatusAction::Discard { id } => {
                     match ItemKind::from_name(&id) {
                         Some(item) => drop(customize::discard(sora, item, u8::MAX)),
@@ -3392,7 +4098,7 @@ impl Hud {
                     (self.log)(&format!("camp: shortcut {} slot {slot} = {} ({})", ["A", "B", "C"][page.min(2)], if kind == 0 { "-" } else { kh_core::magic::spells::command_name(kind) }, if ok { "set" } else { "refused" }));
                 }
                 StatusAction::GiveItem(item, n) => sora.magic_mut().pouch.stock_add(item, n),
-                StatusAction::SetKit { .. } => {} // (party X2-b) friends only
+                StatusAction::SetKit { .. } | StatusAction::SetArtsShortcut { .. } => {} // (party X2-b) friends only
                 // (XSI) the Shotlock choice, in force at once
                 StatusAction::SetShotlock(kind) => {
                     sora.command_mut().shotlock = kind;
@@ -3440,6 +4146,20 @@ impl Hud {
     /// (`m_MaxNum`; nothing is added then).
     fn take_given_items(&mut self, sora: &Sora) {
         for (item_id, count) in crate::items::take_given() {
+            // (weapons P1) a Keyblade (crate::weapons::give owned it and refused a duplicate): into the camp menu's stock
+            // unless he has it in a slot or in the stock already; the item popup (P9b: the OBTAINED popup)
+            if let Some(w) = crate::weapons::by_id(item_id).filter(|w| w.is_keyblade()) {
+                let placed = sora.status().weapon == w.key || self.inventory.spare_weapons.iter().flatten().any(|k| *k == w.key) || self.inventory.equipment.iter().any(|e| e.0 == w.key && e.1 > 0);
+                if !placed {
+                    self.inventory.add(&w.key, 1);
+                }
+                (self.log)(&format!("item: obtained the Keyblade {} ({}, item {item_id:#x}, Forge level {})", w.name, w.key, crate::weapons::level(&w.key).unwrap_or(0)));
+                self.obtained.push((item_id, u32::from(!placed)));
+                if !self.obtained_weapon(&w.key) && self.left.show_item_icon(None, &w.name, false) { // (P9b) the OBTAINED popup
+                    self.sounds.push(UiSound::Play(SE_ITEM));
+                }
+                continue;
+            }
             // (ER party S6, U4) a friend's staff or shield: into the camp menu's stock under its equip key
             if let Some(key) = crate::items::party_weapon_key(item_id) {
                 let held = self.inventory.equipment.iter().find(|e| e.0 == key).map_or(0, |e| e.1);
@@ -3454,7 +4174,8 @@ impl Hud {
                 });
                 (self.log)(&format!("item: obtained {name} x{count} (a friend's weapon {key}, item {item_id:#x}){}", if added < count { format!(": STOCK FULL ({held} held, {added} added)") } else { String::new() }));
                 self.obtained.push((item_id, added));
-                if self.left.show_item_icon(None, &name, added < count) {
+                // (P9b) KH3's OBTAINED popup, as for a map (the item notification only without the popup)
+                if !self.obtained_weapon(&key) && self.left.show_item_icon(None, &name, added < count) {
                     self.sounds.push(UiSound::Play(SE_ITEM));
                 }
                 continue;
@@ -3505,6 +4226,12 @@ impl Hud {
             self.status_actions.push(StatusAction::GiveItem(item, n.min(99) as u8));
             return;
         }
+        // (weapons P1) a Keyblade or a friend's weapon (key, name or item id): through the weapons door (one of each Keyblade)
+        if let Some(w) = crate::weapons::find(what) {
+            let gift = crate::weapons::give(w.item_id, n);
+            (self.log)(&format!("hud-cmd give {what}: {} {gift:?}", w.key));
+            return;
+        }
         match kh_core::status::tables::EQUIPMENT.iter().find(|row| row.kind != "slot" && row.kind != "keyblade-upgrade" && (row.id.eq_ignore_ascii_case(what) || row.name.eq_ignore_ascii_case(&wanted))) {
             Some(row) => self.inventory.add(row.id, n),
             // (loot) a material or a camp item by key, name or item id: through the door every found item takes
@@ -3545,7 +4272,7 @@ impl Hud {
                 "menu l2" => CampKey::L2,
                 "menu r2" => CampKey::R2,
                 other => {
-                    println!("hud-cmd {other}: menu open | up | down | left | right | decide | cancel | triangle | square | l1 | r1 | l2 | r2");
+                    println!("hud-cmd {other}: menu open | up | down | left | right | decide | cancel | triangle | square | l1 | r1 | l2 | r2 | scroll up | scroll down");
                     continue;
                 }
             }, false));
@@ -3557,7 +4284,7 @@ impl Hud {
             // shotlock blocks the camp menu. The pending state, the jump phase and the attack
             // test are not exposed by the core (taken as clear).
             let aiming = f.sora.aim().mode != 0 || self.target_driver.scope_open();
-            let gate = GateInput { in_battle: self.battle == 2 || f.sora.actions().battle, in_event: self.host_event /* (ERUI) */, state: f.state.value(), command_blocked: aiming, ..GateInput::default() };
+            let gate = GateInput { in_battle: self.battle == Some(2) || f.sora.actions().battle, in_event: self.host_event /* (ERUI) */, state: f.state.value(), command_blocked: aiming, ..GateInput::default() };
             // (er-host, IMPL_ER15) a direct request for the CAMP menu (Prepare & Retry): as a Menu press with a clear gate
             let forced = self.force_camp > 0;
             let (menu_key, gate) = if forced { self.force_camp -= 1; (true, GateInput::default()) } else { (menu_key, gate) };
@@ -3575,7 +4302,43 @@ impl Hud {
                     self.formation_wait = FORMATION_OPEN_FRAMES;
                     self.camp = Some(camp);
                 }
+                // (THE USER 2026-11-02: "Move the Outfits selection to Boc") Boc's "Alter garments": the Outfits screen
+                // alone, opened as Party Formation is (the top while the camp's `in` plays, then the screen)
+                // (CAMP-OPTIONS) the Config screen alone, opened as Boc's Outfits screen is
+                Some(FlowEvent::Opened(Screen::Camp)) if std::mem::take(&mut self.options_request) && self.options_host.is_some() => {
+                    let tabs = self.options_host.as_mut().map(|h| h.open(&mut self.config)).unwrap_or_default();
+                    let mut camp = CampMenu::open_config(tabs, self.stats_in(f.sora), &mut self.sounds);
+                    camp.set_party(self.party_stats(f.sora));
+                    self.camp_panels = self.camp_roster();
+                    self.party_menu_dirty = false;
+                    self.options_open = true;
+                    // (the user: "the settings menu should go straight into the settings menu") the Config page from the first
+                    // frame: no camp top, no wait
+                    camp.show_config();
+                    self.camp_view.open(&camp);
+                    self.camp = Some(camp);
+                    (self.log)("camp: (CAMP-OPTIONS) the options screen opened on its own");
+                }
+                Some(FlowEvent::Opened(Screen::Camp)) if std::mem::take(&mut self.outfits_request) => {
+                    let (outfits, worn) = self.outfit_menu.clone().unwrap_or_default();
+                    let mut camp = CampMenu::open_outfits(outfits, &worn, self.stats_in(f.sora), &mut self.sounds);
+                    // (OUTFIT-UNLOCK, the user 2026-11-05: "using Boc makes costume change free") Boc's screen: price 0, no question
+                    camp.outfits.price = 0;
+                    camp.set_party(self.party_stats(f.sora));
+                    self.camp_panels = self.camp_roster();
+                    self.party_menu_dirty = false;
+                    self.outfits_open = true;
+                    self.camp_view.open(&camp);
+                    self.formation_wait = FORMATION_OPEN_FRAMES;
+                    self.camp = Some(camp);
+                    (self.log)("camp: OUTFITS (Boc's Alter garments) opened");
+                }
                 Some(FlowEvent::Opened(Screen::Camp)) => {
+                    // (CAMP-OPTIONS) Elden Ring's System entry: the Config entry is chosen once the opening has played
+                    if std::mem::take(&mut self.camp_settings_request) {
+                        self.camp_settings_open = true;
+                        self.formation_wait = FORMATION_OPEN_FRAMES;
+                    }
                     let mut camp = CampMenu::open(false, false, self.stats_in(f.sora), &mut self.sounds);
                     // (party) the party table `m_PartyParams` (0x14154C710): Sora, then the friends
                     camp.set_party(self.party_stats(f.sora));
@@ -3585,9 +4348,15 @@ impl Hud {
                     if self.title_entry {
                         camp.entries.push(kh_ui::camp::TopEntry::TitleScreen);
                     }
-                    // (er-host, IMPL_ER59) Sora's outfits, when the host offers them; (AUD) only while Sora is in the party
-                    if let Some((outfits, worn)) = self.outfit_menu.clone().filter(|_| self.camp_panels.contains(&crate::party::PartyChara::Sora)) {
-                        camp.set_outfits(outfits, &worn);
+                    // (THE USER 2026-11-02: "Move the Outfits selection to Boc ... only accessible by speaking with Boc")
+                    // no Outfits entry here any more (IMPL_ER59 appended it): Boc's "Alter garments" opens it (open_outfits)
+                    // (OUTFIT-UNLOCK, the user 2026-11-05: "once you have the sewing kit, you can access the costume menu") the
+                    // entry again while the host says so (Tailoring Tools owned), before Config; the needles' list, the price
+                    if let Some((list, worn)) = self.outfit_menu.clone().filter(|(l, _)| self.outfits_entry && !l.is_empty()) {
+                        let at = camp.entries.iter().position(|e| *e == kh_ui::camp::TopEntry::Config).unwrap_or(camp.entries.len());
+                        camp.entries.insert(at, kh_ui::camp::TopEntry::Outfits);
+                        camp.outfits.set(list, &worn);
+                        camp.outfits.price = self.outfit_price;
                     }
                     self.camp_view.open(&camp);
                     self.camp = Some(camp);
@@ -3607,15 +4376,41 @@ impl Hud {
             // (party P) the Party Formation screen goes to its character step when the camp's open has played
             let keys = if self.formation_wait > 0 {
                 self.formation_wait = self.formation_wait.saturating_sub(f.ticks.max(1));
+                let mut enter_config = false;
                 if self.formation_wait == 0 {
                     if let Some(camp) = self.camp.as_mut() {
-                        camp.screen = CampScreen::Character(kh_ui::camp::TopEntry::PartyFormation);
+                        // (CAMP-OPTIONS) Elden Ring's in-game System entry: the camp menu as usual, its Config entry chosen once
+                        // the opening has played (B on the Config page goes back to the camp's top)
+                        if std::mem::take(&mut self.camp_settings_open) {
+                            if let Some(i) = camp.entries.iter().position(|e| *e == kh_ui::camp::TopEntry::Config) {
+                                camp.top_cursor = i;
+                                enter_config = true;
+                            }
+                        } else if camp.outfits_only {
+                            camp.show_outfits(); // (THE USER 2026-11-02) Boc's Outfits screen
+                        } else if camp.config_only {
+                            camp.show_config(); // (CAMP-OPTIONS)
+                        } else {
+                            camp.screen = CampScreen::Character(kh_ui::camp::TopEntry::PartyFormation);
+                        }
                     }
                 }
-                Vec::new()
+                if enter_config {
+                    vec![(CampKey::Decide, false)]
+                } else {
+                    Vec::new()
+                }
             } else {
                 keys
             };
+            // (CAMP-OPTIONS) the options host's own answers (a captured button) while the tabbed Config screen is up
+            if self.camp.as_ref().is_some_and(|c| c.screen == CampScreen::Config && c.tabbed.is_some()) {
+                if let Some(reply) = self.options_host.as_mut().and_then(|h| h.tick(&mut self.config)) {
+                    if let Some(camp) = self.camp.as_mut() {
+                        camp.options_reply(reply.tabs, &reply.subs, reply.push, reply.ask, reply.capture);
+                    }
+                }
+            }
             for (key, repeat) in keys {
                 let Some(camp) = self.camp.as_mut() else { break };
                 if self.config_external && key == CampKey::Decide && camp.screen == CampScreen::Top && camp.focused_entry() == Some(kh_ui::camp::TopEntry::Config) {
@@ -3672,10 +4467,38 @@ impl Hud {
                                 self.status_actions.push(StatusAction::SetAbility { kind, copy, on });
                             }
                         }
+                        // (CAMP-OPTIONS) the options host's tabs when there is one (Elden Ring), else KH3's rows
+                        CampAction::Opened(CampScreen::Config) if self.options_host.is_some() => {
+                            let tabs = self.options_host.as_mut().map(|h| h.open(&mut self.config)).unwrap_or_default();
+                            if let Some(camp) = self.camp.as_mut() {
+                                camp.set_tabbed(tabs);
+                            }
+                        }
                         CampAction::Opened(CampScreen::Config) => {
                             let rows = option_rows(&self.config);
                             if let Some(camp) = self.camp.as_mut() {
                                 camp.set_options(rows, true);
+                            }
+                        }
+                        // (CAMP-OPTIONS) an event of the tabbed screen: the host writes through the game's own code and answers
+                        CampAction::Options(event) => {
+                            let reply = match self.options_host.as_mut() {
+                                Some(host) => host.event(&event, &mut self.config),
+                                None => crate::er_options::OptReply::default(),
+                            };
+                            if let Some(camp) = self.camp.as_mut() {
+                                camp.options_reply(reply.tabs, &reply.subs, reply.push, reply.ask, reply.capture);
+                            }
+                            if reply.kh_changed {
+                                self.apply_config();
+                                self.config_save = true;
+                            }
+                            if reply.close_menu {
+                                self.camp_view.close();
+                                self.flow.begin_close();
+                                if std::mem::take(&mut self.options_open) {
+                                    self.options_closed = true;
+                                }
                             }
                         }
                         CampAction::Opened(CampScreen::GameHelp) => {
@@ -3708,6 +4531,7 @@ impl Hud {
                         CampAction::SetMagicSlot { slot, kind } => self.status_actions.push(StatusAction::SetMagicSlot { slot, kind }),
                         CampAction::SwapMagicSlots(a, b) => self.status_actions.push(StatusAction::SwapMagicSlots(a, b)),
                         CampAction::SetShortcut { page, slot, kind } => self.status_actions.push(StatusAction::SetShortcut { page, slot, kind }),
+                        CampAction::SetArtsShortcut { page, slot, kind } => self.status_actions.push(StatusAction::SetArtsShortcut { page, slot, kind }), // (GF-UI)
                         CampAction::SetShotlock(kind) => self.status_actions.push(StatusAction::SetShotlock(kind)), // (XSI)
                         CampAction::Close => {
                             self.camp_view.close();
@@ -3716,6 +4540,16 @@ impl Hud {
                             // (ALLYJOIN) ... unless the ally question's Yes opened it (no save-point menu was up)
                             if std::mem::take(&mut self.formation_open) && !self.ally_formation_closed() {
                                 self.formation_closed = true;
+                            }
+                            // (CAMP-OPTIONS) the Config screen on its own closes
+                            if std::mem::take(&mut self.options_open) {
+                                self.options_closed = true;
+                                (self.log)("camp: (CAMP-OPTIONS) the options screen closed");
+                            }
+                            // (THE USER 2026-11-02) Boc's Outfits screen closes: the host's talk with him goes on
+                            if std::mem::take(&mut self.outfits_open) {
+                                self.outfits_closed = true;
+                                (self.log)("camp: OUTFITS (Boc's Alter garments) closed");
                             }
                         }
                         // (party P) Party Formation: the rules (kh_host::formation), the answer's sound and texts
@@ -3747,6 +4581,10 @@ impl Hud {
                         }
                         CampAction::SetOutfit(id) => {
                             (self.log)(&format!("camp: OUTFIT {id} chosen"));
+                            // (OUTFIT-UNLOCK) the camp menu's (Tailoring Tools) route only; Boc's screen (outfits_open) is free
+                            if self.outfit_price > 0 && !self.outfits_open {
+                                self.outfit_charges.push((id.clone(), self.outfit_price)); // (OUTFIT-UNLOCK) charged at apply_actions
+                            }
                             if let Some((_, worn)) = self.outfit_menu.as_mut() {
                                 worn.clone_from(&id);
                             }
@@ -3782,10 +4620,54 @@ impl Hud {
             if self.camp_view.tick() {
                 self.camp = None;
                 self.flow.closed();
+                // (THE USER 2026-11-02) Boc's Outfits screen gone by any other way: the host's talk goes on all the same
+                if std::mem::take(&mut self.outfits_open) {
+                    self.outfits_closed = true;
+                }
+                // (CAMP-OPTIONS) the Config screen on its own, gone by any other way
+                if std::mem::take(&mut self.options_open) {
+                    self.options_closed = true;
+                }
                 // The first unpaused frame: the pouch refill (magic spec J 7.5).
                 self.status_actions.push(StatusAction::Unpause);
             }
         }
+    }
+
+    /// (THE USER 2026-11-03: "right stick scroll") THE RIGHT STICK'S DESCRIPTION LINES of this frame (the host's
+    /// `MenuInput::take_scroll`: the stick and its two keyboard keys, KH3's key repeat), handed in before [`Hud::frame`].
+    pub fn scroll_help(&mut self, lines: i32) {
+        self.help_scroll = self.help_scroll.saturating_add(lines);
+    }
+
+    /// The frame's description scroll: the host's lines and the words `menu scroll up` / `menu scroll down` move the
+    /// windows of the descriptions that run past their box on the screen that is up (camp menu, KH shop, Spirit Tuning;
+    /// `kh_ui::Movie::scroll_fits`); nothing up: the lines are dropped. The other menu words go on.
+    fn help_scroll_frame(&mut self, menu_words: Vec<String>) -> Vec<String> {
+        let mut lines = std::mem::take(&mut self.help_scroll);
+        let words: Vec<String> = menu_words
+            .into_iter()
+            .filter(|w| match w.as_str() {
+                "menu scroll up" => {
+                    lines -= 1;
+                    false
+                }
+                "menu scroll down" => {
+                    lines += 1;
+                    false
+                }
+                _ => true,
+            })
+            .collect();
+        if lines != 0 {
+            if self.camp_view.is_open() {
+                self.camp_view.movie.scroll_fits(lines);
+            }
+            self.shop.scroll_help(lines);
+            self.tuning.scroll_help(lines);
+            self.workshop.scroll_help(lines); // (weapons P6b)
+        }
+        words
     }
 }
 
@@ -3793,21 +4675,56 @@ enum CampData {
     Abilities(Vec<AbilityIn>, i32),
     Equipment(EquipIn),
     Items(Vec<InvEntry>),
-    Customize(CustomizeIn),
+    Customize(Box<CustomizeIn>),
 }
 
 // ---------------------------------------------------------------------------------------------
 // The core's command system (kh_core::command, pad-driven) as the display's model.
 
 impl Hud {
+    /// (weapons P2, INT) KH3'S ATTACK-SLOT TEXT CHANGE ON A KEYBLADE SWITCH (0x1416220D0: `setMainCommand(10)`, then
+    /// 0x14162A610 sets the Attack slot's text to the new Keyblade's name, no flash): true in the frame a switch came
+    /// (`Status::keyblade_switches` rose; the caller pushes the event); the name stays [`KB_TEXT_SECONDS`], then
+    /// Attack's own text returns. Only while Sora leads (the switch is his).
+    fn keyblade_text_frame(&mut self, f: &Frame) -> bool {
+        let status = f.sora.status();
+        let seen = self.kb_switches_seen.replace(status.keyblade_switches);
+        if let Some((_, left)) = &mut self.kb_text {
+            *left -= f.dt;
+            if *left <= 0.0 {
+                self.kb_text = None;
+            }
+        }
+        if self.leader != crate::party::PartyChara::Sora {
+            self.kb_text = None;
+            return false;
+        }
+        if seen.is_none_or(|s| s == status.keyblade_switches) {
+            return false;
+        }
+        let Some(switch) = status.keyblade_switch else { return false };
+        let row = switch.to.row();
+        let text = self.camp_view.string(row.name_id);
+        let name = if text.is_empty() || text == row.name_id { row.name.to_string() } else { text };
+        self.kb_text = Some((name, KB_TEXT_SECONDS));
+        true
+    }
+
     /// `UiSnapshot::command` + `UiSnapshot::situation` -> the display model. The one-shot events
     /// are taken only in a frame that saw a new step (a frame with several steps shows the last
     /// step's events only).
     fn live_model(&self, f: &Frame) -> kh_ui::command::CommandModel {
         use kh_core::command as core;
         use kh_ui::command::{CloseKind, CommandModel, EventButton, MenuEvent, MenuRow, MenuState, ShootFlow, Situation};
-        let c = &f.snapshot.command;
-        let row = |r: &core::CommandRow| MenuRow { text: r.name.to_string(), enabled: r.enabled, mp_short: r.mp_short, quantity: r.quantity, flash: false };
+        // (NOCOMBAT) whoever's menu this is (Sora's, a leading friend's), it greys but Items where attacks are forbidden
+        let mut greyed = f.snapshot.command.clone();
+        kh_core::nocombat::grey(&mut greyed);
+        let c = &greyed;
+        // (Summon) a Summon list row (kinds 248 .. 251) shows the equipped ash's name and its MP cost (`summon_row_text`)
+        let row = |r: &core::CommandRow| {
+            let summon = summon_row_text(r.kind, f.sora);
+            MenuRow { text: summon.as_ref().map_or_else(|| r.name.to_string(), |s| s.0.clone()), enabled: r.enabled, mp_short: r.mp_short, quantity: r.quantity, flash: false, cooldown: r.cooldown, spirit_ash: summon.is_some(), number: summon.map(|s| s.1) } // (ASH-ROWS) the row flag
+        };
         // (XSI) the XS abilities' command without a KH3 text (Light Wave)
         let name_of = |kind: i64, fallback: &str| self.command_names.get(&kind).cloned().or_else(|| kh_core::abilities::xs::command_name(kind).map(str::to_string)).unwrap_or_else(|| fallback.to_string());
         let mut model = CommandModel {
@@ -3818,7 +4735,7 @@ impl Hud {
                 core::MenuState::ShootFlow => MenuState::ShootFlow,
             },
             simple_hud: self.system.model.simple_hud,
-            battle_mode: self.battle,
+            battle_mode: self.battle_mode(f), // (BC)
             link_none: c.link_none,
             main_cursor: c.main_cursor,
             list: c.list,
@@ -3839,7 +4756,17 @@ impl Hud {
             *to = row(from);
         }
         if let Some(panel) = &c.shoot_flow {
-            model.shoot_flow = Some(ShootFlow { rows: self.system.shoot_rows().to_vec(), enabled: panel.enabled, from_shortcut: false });
+            let mut rows = self.system.shoot_rows().to_vec();
+            // (SHOT-B 4, SHOT-C 3, INT-F) at MAX the shotlock row names the kind the held Keyblade fires (KH3's hud 0x14158C380:
+            // `kind.k<N>.name_id` of sheet sora-shotlocks, e.g. 42 kh3_system.command.sf_dual)
+            if panel.is_max && panel.kind != 0 {
+                let id = kh_core::magic::shotlocks::name_id(panel.kind);
+                let text = self.camp_view.string(id);
+                if let Some(row) = rows.first_mut().filter(|_| !text.is_empty() && text != id && id != "-") {
+                    row.0 = text;
+                }
+            }
+            model.shoot_flow = Some(ShootFlow { rows, enabled: panel.enabled, from_shortcut: false });
         }
         // Situation commands: the command snapshot's rows when its owner fills them, else the
         // combat queue's HUD list.
@@ -3848,10 +4775,16 @@ impl Hud {
         let friend_leads = self.leader_anim.map_or(self.leader, |a| a.0) != crate::party::PartyChara::Sora;
         let y = y_stack(c, s, friend_leads, &name_of);
         model.situations = y.situations;
+        let counted: Vec<u32> = model.situations.iter().map(|r| r.serial).collect(); // (PROMPT-UI) the owner's counted rows
         model.situation_selected = y.selected;
         model.situation_show_triangle = !model.situations.is_empty();
         if y.event_button.is_some() {
             model.event_button = y.event_button;
+        }
+        // (NOCOMBAT) the combat queue's Y rows grey and its finish / reaction button goes (the host's own Talk / Save below stay)
+        if kh_core::nocombat::zone() {
+            model.situations.iter_mut().for_each(|s| s.enabled = false);
+            model.event_button = None;
         }
         // (SP2) THE HOST'S REACTION COMMAND (a save point's Save, TRES_RCID_SAVE / command kind 76): KH3's reactor offers it
         // as the event button (slot A: the green bar over the command menu, `addActionSelectEventButton`), selected, with
@@ -3893,13 +4826,22 @@ impl Hud {
         } else {
             self.don_list.store(0, std::sync::atomic::Ordering::Relaxed);
         }
-        // (YHUD) Sora's formchange gauge and form timer (his Y commands' own gauges) are his: not while a friend leads
-        if s.gauge_ratio > 0.0 && !friend_leads {
+        // (PROMPT-UI) THE STYLE-POINT GAUGE ROW (">>", KH3 0x14162DC40) of whoever's snapshot this is: the gate
+        // (`kh_core::ui_model::YPrompts::apply`) puts a leading friend's own gauge here (Donald and Goofy: none), so
+        // Sora's never shows under a friend (the YHUD rule) and a later character's does with no code here
+        self.gauge_row(&mut model, s.gauge_ratio, &counted);
+        if s.gauge_ratio > 0.0 {
             model.style_ratio = Some(s.gauge_ratio.clamp(0.0, 0.999));
         }
         if let Some(form) = s.form.as_ref().filter(|_| !friend_leads) {
             model.form_gauge = Some((form.left, form.total));
         }
+        // (F-HUD, INT-F) the form style / logo, Counter Shield's ride gauge, the counter window's command on the Attack slot
+        // (KH3 0x1414145C0 -> setMainCommandText(0, name, flash): every guard counter, KH3 1:1)
+        if !friend_leads {
+            self.forms.fill_model(f.sora, s.form.as_ref(), &self.command_names, &mut model);
+        }
+        self.notice_attack_text(f, &mut model, &name_of); // (PROMPT-UI) the notice's command on the Attack slot
         if f.snapshot.step != self.last_step {
             for event in &c.events {
                 match event {
@@ -3910,6 +4852,8 @@ impl Hud {
                         core::CloseKind::Decide => CloseKind::Decide,
                     })),
                     core::MenuEvent::ShortcutExecuted => model.events.push(MenuEvent::ShortcutExecuted { style_change: false }),
+                    // (F-HUD, INT-F) a form's finish used: the logo's `finishIn` (the event button leaves as used)
+                    core::MenuEvent::Executed(kind) if kh_core::combat::form::is_finish_kind(i32::from(*kind)) => model.events.push(MenuEvent::EventButtonUsed { form_change: true }),
                     core::MenuEvent::SubOpened | core::MenuEvent::Executed(_) => {}
                 }
             }
@@ -4167,7 +5111,7 @@ impl Hud {
                 ];
                 let faces = rest.iter().find_map(|w| w.strip_prefix("faces=")).and_then(|v| {
                     let n: Vec<f32> = v.split([',', '/']).filter_map(|x| x.parse().ok()).collect();
-                    (n.len() >= 6 && n.len() % 3 == 0).then(|| n.chunks(3).map(|c| kh_ui::bubble::Face { x: c[0], y: c[1], r: c[2] }).collect::<Vec<_>>())
+                    (n.len() >= 6 && n.len().is_multiple_of(3)).then(|| n.chunks(3).map(|c| kh_ui::bubble::Face { x: c[0], y: c[1], r: c[2] }).collect::<Vec<_>>())
                 });
                 self.conv_demo = Some((Conversation::new(actors, steps), faces));
                 println!("hud-cmd conv demo: a conversation of Sora and Donald (the training dummy speaks as Donald)");

@@ -42,7 +42,7 @@ pub fn xf_inverse(q: Q4, t: V3, s: V3) -> Xf {
     if !any_abs_greater_small(s) {
         return Xf { q: IDENT_Q, t: IDENT_T, s: IDENT_S };
     }
-    let iq = [q[0] * -1.0, q[1] * -1.0, q[2] * -1.0, q[3] * 1.0]; // mulps QINV_SIGN_MASK (0x149D52910)
+    let iq = [-q[0], -q[1], -q[2], q[3] * 1.0]; // mulps QINV_SIGN_MASK (0x149D52910)
     let is = safe_scale_recip(s);
     let r = qrot(iq, mulv(t, is));
     Xf { q: iq, t: [0.0 - r[0], 0.0 - r[1], 0.0 - r[2]], s: is }
@@ -172,7 +172,7 @@ pub fn fn_143afaf80(core: &mut Core) {
     if forced == 0 {
         let (dx, dy, dz) = (cur[0] - prev[0], cur[1] - prev[1], cur[2] - prev[2]);
         let d2 = ((dy * dy) + (dx * dx)) + (dz * dz);
-        if !(d2 >= core.f371c) {
+        if d2.partial_cmp(&core.f371c).is_none_or(std::cmp::Ordering::is_lt) {
             return; // comiss + setae: NaN -> no teleport
         }
     }
@@ -415,7 +415,7 @@ pub fn fn_143aee280(core: &mut Core, r: f32) {
     // 143aeecb8: inverse of the current component rotation / scale
     let (iq, is);
     if any_abs_greater_small(core.f20) {
-        iq = [core.f0[0] * -1.0, core.f0[1] * -1.0, core.f0[2] * -1.0, core.f0[3] * 1.0];
+        iq = [-core.f0[0], -core.f0[1], -core.f0[2], core.f0[3] * 1.0];
         is = safe_scale_recip(core.f20);
     } else {
         iq = IDENT_Q;

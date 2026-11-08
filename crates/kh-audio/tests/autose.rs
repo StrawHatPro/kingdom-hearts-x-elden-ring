@@ -119,7 +119,7 @@ fn a_jump_and_its_landing_fire_once() {
     assert_eq!(lands.iter().map(|l| l.0).collect::<Vec<_>>(), [touch_down]);
     assert!(of(Motion::LandHard).is_empty());
     let air = (touch_down - take_off) as f32 * DT;
-    assert!(air >= RULES.autose_land_normal_air_time && air < RULES.autose_land_hard_air_time, "{air}");
+    assert!((RULES.autose_land_normal_air_time..RULES.autose_land_hard_air_time).contains(&air), "{air}");
 
     // With the enable windows of the clips (spec 4.3: the fall loop and the landing clips switch
     // the detectors off) the detector's own landing is suppressed: the landing sound is then the

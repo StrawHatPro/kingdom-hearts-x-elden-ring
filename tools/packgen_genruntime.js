@@ -69,6 +69,14 @@ function tokenize(src, start, end) {
 
 // ---------------------------------------------------------------- the literal grammar of the generators
 // node: { k: 'num'|'str'|'bool'|'path'|'struct'|'call'|'ref'|'arr'|'tup', ... }
+// f32::from_bits(0xXXXXXXXX) -> the shortest decimal text of that f32 (it parses back to the same bits)
+function f32FromBits(hex) {
+  const b = Buffer.alloc(4); b.writeUInt32LE(Number(hex.replace(/_/g, '')) >>> 0, 0);
+  const v = b.readFloatLE(0);
+  if (!Number.isFinite(v)) throw new Error(`f32::from_bits(${hex}): not a finite number`);
+  for (let p = 1; p <= 9; p++) { const t = Number(v.toPrecision(p)); if (Math.fround(t) === v) return String(t); }
+  return String(v);
+}
 function parseExpr(toks) {
   let p = 0;
   const peek = () => toks[p], next = () => toks[p++];
@@ -92,7 +100,14 @@ function parseExpr(toks) {
         while (peek().v !== '}') { const f = next().v; let val; if (peek().v === ':') { next(); val = expr(); } else val = { k: 'path', v: f }; fields.push([f, val]); if (peek().v === ',') next(); }
         next(); return { k: 'struct', name, fields };
       }
-      if (peek() && peek().v === '(') { next(); const items = []; while (peek().v !== ')') { items.push(expr()); if (peek().v === ',') next(); } next(); return { k: 'call', name, items }; }
+      if (peek() && peek().v === '(') {
+        next(); const items = []; while (peek().v !== ')') { items.push(expr()); if (peek().v === ',') next(); } next();
+        // (SETUP-TOOLS) tools/lib/f32lit.js writes a value that looks like a math constant as f32::from_bits(0x...) (Clippy's
+        // approx_constant): the data file gets that f32 as the shortest decimal text that parses back to the same bits (the
+        // reader parses each number as the compiler would: str::parse::<f32>, correctly rounded)
+        if (name === 'f32::from_bits' && items.length === 1 && items[0].k === 'num') return { k: 'num', v: f32FromBits(items[0].v) };
+        return { k: 'call', name, items };
+      }
       return { k: 'path', v: name };
     }
     throw new Error('unexpected token ' + t.v);
@@ -248,7 +263,10 @@ function convert(file) {
     const w = new W(); enc(site, node, w); blobs.push(w.out());
     const d = dec(site); decs.push(s.name + ':' + d);
     parts.push(src.slice(at, s.start));
-    parts.push(`pub static ${s.name}: kh_gendata::Gen<${s.type}> = kh_gendata::Gen::new(KHG_FILE, KHG_SCHEMA, ${index}, |${/\br\./.test(d) ? 'r' : '_r'}| ${d});`);
+    // the table's type through an alias of its own (Clippy's type_complexity: `Gen<&[(u8, u32, i32, ...)]>` in the static
+    // itself is "very complex"; an alias is not linted). A static's elided lifetimes are 'static; an alias needs them written.
+    parts.push(`pub static ${s.name}: kh_gendata::Gen<KhgTable${index}> = kh_gendata::Gen::new(KHG_FILE, KHG_SCHEMA, ${index}, |${/\br\./.test(d) ? 'r' : '_r'}| ${d});`);
+    parts.push(`\ntype KhgTable${index} = ${s.type.replace(/&(?!')/g, "&'static ")};`);
     at = s.end;
   });
   parts.push(src.slice(at));

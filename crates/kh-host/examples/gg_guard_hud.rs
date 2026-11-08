@@ -6,7 +6,7 @@
 
 use kh_core::{PadButtons, Sora, TargetId, Vec3};
 use kh_host::hud::{Frame, Hud, HudTargets, TargetView};
-use kh_host::hud_layers::{draw_movie_in, stage_root, Draw, Drawn, Perf};
+use kh_host::hud_layers::{draw_movie_in, stage_root, Draw, DrawArea, Drawn, Perf};
 use kh_host::party::{GuardLook, GuardValues, PartyChara, PartyHudSlot};
 
 struct NoTargets;
@@ -68,7 +68,7 @@ fn main() {
         let (stage, view) = stage_root(w as f32, h as f32);
         let mut draw = Draw::default();
         let mut renderer = kh_ui::render::Renderer::new(fonts.clone());
-        let Drawn::Picture(rect, _) = draw_movie_in(&mut draw, &mut renderer, movie, &stage, (w as f32, h as f32), true, Perf::default(), Some(view)) else { panic!("nothing drawn") };
+        let Drawn::Picture(rect, _) = draw_movie_in(&mut draw, &mut renderer, movie, &stage, DrawArea { size: (w as f32, h as f32), clip: Some(view) }, true, Perf::default()) else { panic!("nothing drawn") };
         let bg = [0.38f32, 0.36, 0.32];
         let z = 2;
         let (zw, zh) = (rect.2 * z, rect.3 * z);
@@ -93,7 +93,7 @@ fn main() {
         let f = kh_host::formation::Formation::new(&[PartyChara::Goofy], PartyChara::Goofy).unwrap();
         hud.set_formation(&f);
         hud.set_leader(PartyChara::Goofy, false);
-        let m = kh_host::party::PartyMenuMember { chara: PartyChara::Goofy, level: 20, exp: 28_841, exp_level: 28_841, exp_next: 33_000, hp: 160, hp_max: 220, mp: 60, mp_max: 100, ap_max: 20, ap_in_use: 0, strength: 20, magic: 0, defense: 25, resists: [0; 6], weapon: "WEP_GOOFY_00".into(), armour: vec![None], accessories: vec![None], items: vec![None], abilities: Vec::new(), ai: Default::default(), custom: None, custom_costs: Vec::new(), kit: Vec::new(), guard: Some((84, 120)), item_reload: vec![false], item_spent: vec![None] /* (EQ) */ };
+        let m = kh_host::party::PartyMenuMember { chara: PartyChara::Goofy, level: 20, exp: 28_841, exp_level: 28_841, exp_next: 33_000, hp: 160, hp_max: 220, mp: 60, mp_max: 100, ap_max: 20, ap_in_use: 0, strength: 20, magic: 0, defense: 25, resists: [0; 6], weapon: "WEP_GOOFY_00".into(), armour: vec![None], accessories: vec![None], items: vec![None], abilities: Vec::new(), ai: Default::default(), custom: None, custom_costs: Vec::new(), kit: Vec::new(), guard: Some((84, 120)), item_reload: vec![false], item_spent: vec![None] /* (EQ) */, parry: None /* (GOOFY) */ };
         hud.set_party_menu(vec![m]);
         let words_step = |hud: &mut Hud, w: &[&str], n: usize| {
             for k in 0..n {

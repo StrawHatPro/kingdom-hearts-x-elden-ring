@@ -77,6 +77,13 @@ pub fn penetration(a: &PushBody, b: &PushBody) -> Vec3 {
     direction * depth
 }
 
+/// (AUDIT-B W-CORE) His push power level now (0x1405AA1A0(pawn+0x460) = MyBodyColl slot 229 0x140642B50: +0x4A4, which
+/// the solver 0x140637430 reads as "mine" against each other body's): the level an attack raised it to
+/// (`PawnActions::push_level`, PPL_90 = 8 in PlayAttack's 0x25 / 0x6A / 0x3F .. 0x43), else the base parameter's.
+pub(crate) fn level(cx: &Ctx) -> u8 {
+    cx.pawn.actions.push_level.unwrap_or(P.body_push_level_sora as u8)
+}
+
 /// His push body touches the push body of `target` (the pair is on the body-collision
 /// component's overlap list: 0x140637430; each pair on it is told to both pawns through the notify
 /// interface's slot 8 by 0x140633EE0, which is how the Attack state's rush-suppression handler
@@ -85,7 +92,7 @@ pub(crate) fn touching(cx: &Ctx, target: crate::host::TargetId) -> bool {
     if cx.pawn.actions.body_collision_off {
         return false;
     }
-    let mine = PushBody { center: cx.pawn.cmc.location + Vec3::Z * CENTRE_Z, radius: P.body_push_shape_radius, half_height: HALF_HEIGHT, level: P.body_push_level_sora as u8 };
+    let mine = PushBody { center: cx.pawn.cmc.location + Vec3::Z * CENTRE_Z, radius: P.body_push_shape_radius, half_height: HALF_HEIGHT, level: level(cx) /* (AUDIT-B W-CORE) */ };
     match cx.host.targets.push_body(target) {
         Some(other) => penetration(&mine, &other) != Vec3::ZERO,
         None => false,
@@ -98,7 +105,7 @@ pub(crate) fn compute(cx: &Ctx) -> Vec3 {
     if cx.pawn.actions.body_collision_off {
         return Vec3::ZERO;
     }
-    let mine = PushBody { center: cx.pawn.cmc.location + Vec3::Z * CENTRE_Z, radius: P.body_push_shape_radius, half_height: HALF_HEIGHT, level: P.body_push_level_sora as u8 };
+    let mine = PushBody { center: cx.pawn.cmc.location + Vec3::Z * CENTRE_Z, radius: P.body_push_shape_radius, half_height: HALF_HEIGHT, level: level(cx) /* (AUDIT-B W-CORE) */ };
     let mut targets: Vec<TargetInfo> = Vec::new();
     cx.targets(&mut targets);
     let mut push = Vec3::ZERO;

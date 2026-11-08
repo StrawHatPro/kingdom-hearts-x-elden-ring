@@ -363,6 +363,144 @@ impl ShopRules {
 
 }
 
+// ------------------------------------------------------------------------------------- (P9b ACQUISITION) KH3's Moogle stock
+//
+// THE USER (2026-11-03): "Do we need M.O.G card? We already have all of the Elden Ring merchants converted to KH3 shops. The
+// moogle in the round table is only for synthesis". So what KH3 sold only at its Moogle shop (sheets/port/kh-workshop.json
+// `moogle.stock`, P6a: KH3's `m_ShopLevel`, `m_BuyPrice`, `m_bNeedMogCard`, `m_UnlockFlagIndex`; dishes and ingredients
+// already left out there) is sold by the converted Elden Ring merchants, GATED BY THE MOOGLE LEVEL (plan 6c: 1 start, 2
+// Godrick, 3 / 4 the second / third Great Rune holder, 5 Morgott, 6 Maliketh, 7 Godfrey / Hoarah Loux; P6a's
+// `Workshop::moogle_level`, raised by the boss flags only):
+// - DONALD'S STAVES AND GOOFY'S SHIELDS at the merchants of P9a's `shop.<KEY>` rows (sheets/port/kh-weapon-sources.json: a
+//   merchant whose own lineup holds a staff / seal or a shield, by talk script) from the row's Moogle level; a weapon no
+//   merchant fits (Astrolabe: "Moogle only") at the merchants of row `stock.moogle_only` (the coordinator's decision: the
+//   Twin Maiden Husks).
+// - THE OTHER ITEMS (armour, accessories, Fluorite ...) at every converted merchant from their KH3 level; a row the sheet
+//   sora-er-shop already stocks keeps that sheet's own rule (tier, price); a M.O.G. Card row (Elixir, the bangles /
+//   chokers: no level in KH3) from the level of row `stock.mog_card_level`.
+// - A MATERIAL a Collector's Goal unlocked for purchase (ENABLE_BUY, P6a's `buy_unlocked`) at every converted merchant.
+// PRICE: KH3's buy price x `price.kh_factor` (10), no area markup (plan Q2). Purchases show no OBTAINED popup (the HUD's
+// trade puts the weapon straight into the stock).
+
+/// (P9b) The rows of sheets/port/kh-weapon-sources.json this module reads: P9a's `shop.<KEY>` and P9b's `stock.*`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WeaponShops {
+    /// (weapon key, its Moogle level, the talk scripts of the merchants that sell it).
+    pub weapons: Vec<(String, u8, Vec<i32>)>,
+    /// The Moogle level the M.O.G. Card rows are sold from.
+    pub mog_card_level: u8,
+    pub problems: Vec<String>,
+}
+
+impl WeaponShops {
+    pub fn parse(text: &str) -> WeaponShops {
+        let mut out = WeaponShops { mog_card_level: 1, ..WeaponShops::default() };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(text) else {
+            out.problems.push("the sheet is not JSON".to_string());
+            return out;
+        };
+        let talks = |v: &serde_json::Value| -> Vec<i32> { v.as_array().map(Vec::as_slice).unwrap_or(&[]).iter().flat_map(|m| m["talk"].as_array().map(Vec::as_slice).unwrap_or(&[]).iter().filter_map(|t| t.as_i64().and_then(|t| i32::try_from(t).ok()))).collect() };
+        let mut only: Vec<(String, Vec<i32>)> = Vec::new();
+        for row in json["rows"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+            let (Some(id), v) = (row[0].as_str(), &row[1]) else { continue };
+            if let Some(key) = id.strip_prefix("shop.") {
+                let level = v["moogle_level"].as_u64().map_or(0, |l| l.min(u64::from(crate::weapons::MOOGLE_LEVEL_MAX)) as u8);
+                if crate::weapons::by_key(key).is_none() || level == 0 {
+                    out.problems.push(format!("{id}: not a weapon of the table, or no Moogle level"));
+                    continue;
+                }
+                out.weapons.push((key.to_string(), level, talks(&v["merchants"])));
+            } else if id == "stock.moogle_only" {
+                for m in v.as_array().map(Vec::as_slice).unwrap_or(&[]) {
+                    let list = talks(&serde_json::Value::Array(vec![m.clone()]));
+                    match m["item"].as_str() {
+                        Some(key) if !list.is_empty() => only.push((key.to_string(), list)),
+                        _ => out.problems.push(format!("{id}: an entry without item / talk: {m}")),
+                    }
+                }
+            } else if id == "stock.mog_card_level" {
+                match v.as_u64().filter(|l| (1..=u64::from(crate::weapons::MOOGLE_LEVEL_MAX)).contains(l)) {
+                    Some(l) => out.mog_card_level = l as u8,
+                    None => out.problems.push(format!("{id}: not a Moogle level 1 .. {}", crate::weapons::MOOGLE_LEVEL_MAX)),
+                }
+            }
+        }
+        for (key, list) in only {
+            match out.weapons.iter_mut().find(|w| w.0 == key) {
+                Some(w) if w.2.is_empty() => w.2 = list,
+                Some(_) => out.problems.push(format!("stock.moogle_only: {key} has merchants of its own already (ignored)")),
+                None => out.problems.push(format!("stock.moogle_only: {key} has no shop.{key} row")),
+            }
+        }
+        out
+    }
+
+    /// The sheet on disk, else the compiled copy.
+    pub fn load() -> WeaponShops {
+        let read = std::fs::read_to_string(kh_gendata::project_file("sheets/port/kh-weapon-sources.json")).map(|t| WeaponShops::parse(&t)).unwrap_or_default();
+        if read.weapons.is_empty() {
+            return WeaponShops::parse(crate::bossrewards::WEAPON_SOURCES_SHEET);
+        }
+        read
+    }
+}
+
+/// (P9b) The rows, read once.
+pub fn weapon_shops() -> &'static WeaponShops {
+    static SHOPS: OnceLock<WeaponShops> = OnceLock::new();
+    SHOPS.get_or_init(WeaponShops::load)
+}
+
+/// (P9b) Why a KH3 Moogle stock row is sold at this merchant now (`None`: it is not).
+fn kh3_row_sold(rules: &ShopRules, shops: &WeaponShops, row: &crate::workshop::StockRow, talk_id: i32, ws: &crate::weapons::Workshop) -> Option<&'static str> {
+    let level = ws.moogle_level.max(1);
+    if let Some((_, from, talks)) = shops.weapons.iter().find(|w| w.0 == row.key) {
+        return (talks.contains(&talk_id) && *from <= level).then_some("a weapon of this merchant, by the Moogle level");
+    }
+    if crate::weapons::by_key(&row.key).is_some() {
+        return None; // a weapon without a shop row: the Moogle's only (sold nowhere)
+    }
+    if rules.stock.iter().any(|s| s.key == row.key) {
+        return None; // the sheet sora-er-shop's own row stands (its tier, its price)
+    }
+    if crate::workshop::buy_unlocked(ws, row) || ws.buy_unlocked.contains(&row.key) {
+        return Some("unlocked for purchase by a Collector's Goal");
+    }
+    if row.level >= 1 {
+        return (row.level <= level).then_some("KH3's Moogle level");
+    }
+    (row.mog_card && shops.mog_card_level <= level).then_some("a M.O.G. Card row (row stock.mog_card_level)")
+}
+
+/// (P9b) WHAT KH3's MOOGLE SOLD THAT THIS MERCHANT (talk script `talk_id`) SELLS NOW, at KH3's buy price x `price.kh_factor`:
+/// the host puts it into `ShopOpen::extra` (after the tier's stock; a key the stock sells already is not listed twice).
+/// `held`: copies held (a KH3 "can be sold out" row is left out once its maximum is held).
+pub fn kh3_stock(rules: &ShopRules, shops: &WeaponShops, talk_id: i32, ws: &crate::weapons::Workshop, held: &dyn Fn(&str) -> u32) -> Vec<Offer> {
+    let mut out = Vec::new();
+    for row in &crate::workshop::tables().stock {
+        if kh3_row_sold(rules, shops, row, talk_id, ws).is_none() {
+            continue;
+        }
+        let (name, max) = match (crate::weapons::by_key(&row.key), crate::items::by_key(&row.key)) {
+            (Some(w), _) => (w.name.clone(), w.max),
+            (None, Some(i)) => (i.name.clone(), i.max),
+            (None, None) => continue,
+        };
+        if row.sold_out && held(&row.key) >= row.max {
+            continue;
+        }
+        let price = ((row.buy as f32) * rules.kh_factor).round().max(1.0) as u32;
+        out.push(Offer { key: row.key.clone(), item_id: row.item_id, name, price, max });
+    }
+    out
+}
+
+/// (P9b) [`kh3_stock`] on the running game: this process's rules, the sheet's rows, the running Workshop record (P1), what
+/// he holds (`crate::items::held`).
+pub fn kh3_stock_live(talk_id: i32) -> Vec<Offer> {
+    kh3_stock(rules(), weapon_shops(), talk_id, &crate::weapons::workshop(), &crate::items::held)
+}
+
 static RULES: OnceLock<ShopRules> = OnceLock::new();
 
 /// The sheet's place in the tree the binary was built from (the Elden Ring mod reads its sheets there at run time, as
@@ -473,6 +611,60 @@ mod tests {
         assert!(r.kill_scale(0, true) <= r.kill_scale(1, true) && r.kill_scale(1, true) <= r.kill_scale(2, true));
         assert_eq!(r.kill_scale(0, false), r.boss_scale);
         assert!(r.boss_scale >= 1.0, "bosses keep their reward");
+    }
+
+    /// (P9b) THE MERCHANTS' KH3 STOCK BY MOOGLE LEVEL (plan 6c): the Twin Maiden Husks sell Donald's staves and Goofy's
+    /// shields of P9a's rows from their KH3 Moogle level, the Astrolabe at level 6 (row stock.moogle_only); Thiollier's Storm
+    /// Anchor at 6; Kalé only the Clockwork Shield; every merchant KH3's armour / accessories by their level, the M.O.G. Card
+    /// bangles from row stock.mog_card_level; a material once a Collector's Goal unlocked it; the Elixir keeps sora-er-shop's
+    /// row; prices KH3's buy x 10; Keyblades are never sold.
+    #[test]
+    fn p9b_the_kh3_stock_follows_the_moogle_level() {
+        let r = sheet();
+        let shops = WeaponShops::parse(crate::bossrewards::WEAPON_SOURCES_SHEET);
+        assert!(shops.problems.is_empty(), "{:?}", shops.problems);
+        assert_eq!((shops.weapons.len(), shops.mog_card_level), (8, 7)); // (the coordinator 2026-11-03: the bangles at the last Moogle level)
+        const HUSKS: i32 = 600001110;
+        const THIOLLIER: i32 = 419002200;
+        const KALE: i32 = 800006000;
+        let at = |talk: i32, level: u8| {
+            let ws = crate::weapons::Workshop { moogle_level: level, ..crate::weapons::Workshop::default() };
+            kh3_stock(&r, &shops, talk, &ws, &|_| 0).into_iter().map(|o| o.key).collect::<Vec<_>>()
+        };
+        let weapons = |talk: i32, level: u8| at(talk, level).into_iter().filter(|k| k.starts_with("WEP_")).collect::<Vec<_>>();
+        assert!(weapons(HUSKS, 1).is_empty(), "level 1: the start, no weapon");
+        assert_eq!(weapons(HUSKS, 2), ["WEP_DONALD_02", "WEP_GOOFY_02"], "Godrick: Warhammer, Clockwork Shield");
+        assert_eq!(weapons(HUSKS, 3), weapons(HUSKS, 2), "no KH3 row at 3");
+        assert_eq!(weapons(HUSKS, 4), ["WEP_DONALD_02", "WEP_DONALD_04", "WEP_GOOFY_02", "WEP_GOOFY_04"]);
+        assert_eq!(weapons(HUSKS, 5).len(), 6, "Nirvana, Aegis Shield at Morgott");
+        assert_eq!(weapons(HUSKS, 6), ["WEP_DONALD_02", "WEP_DONALD_04", "WEP_DONALD_06", "WEP_DONALD_08", "WEP_GOOFY_02", "WEP_GOOFY_04", "WEP_GOOFY_06"], "the Astrolabe at Maliketh; no Storm Anchor here");
+        assert_eq!(weapons(THIOLLIER, 6), ["WEP_GOOFY_02", "WEP_GOOFY_04", "WEP_GOOFY_06", "WEP_GOOFY_08"]);
+        assert_eq!(weapons(KALE, 7), ["WEP_GOOFY_02"]);
+        assert!(weapons(0, 7).is_empty(), "a merchant of no shop row: no weapon");
+        // the other items, every merchant, by level
+        assert!(at(0, 1).contains(&"PRT_ITEM03".to_string()) && !at(0, 1).contains(&"PRT_ITEM04".to_string()));
+        assert!(at(0, 4).contains(&"PRT_ITEM04".to_string()) && at(KALE, 2).contains(&"ACC_ITEM12".to_string()));
+        assert!(!at(0, 6).contains(&"PRT_ITEM11".to_string()) && at(0, 7).contains(&"PRT_ITEM11".to_string()), "a M.O.G. Card bangle from stock.mog_card_level 7 (Godfrey / Hoarah Loux)");
+        assert!(!at(0, 7).contains(&"ITEM_ELIXIR".to_string()) && !at(0, 7).contains(&"ITEM_POTION".to_string()), "sora-er-shop's own rows stand");
+        assert!(at(0, 4).contains(&"MAT_ITEM53".to_string()) && !at(0, 3).contains(&"MAT_ITEM53".to_string()), "Fluorite at KH3's level 4");
+        assert!(!at(0, 7).contains(&"MAT_ITEM01".to_string()), "a goal material only once unlocked");
+        let ws = crate::weapons::Workshop { buy_unlocked: vec!["MAT_ITEM01".to_string()], ..crate::weapons::Workshop::default() };
+        assert!(kh3_stock(&r, &shops, KALE, &ws, &|_| 0).iter().any(|o| o.key == "MAT_ITEM01"), "unlocked: at every merchant");
+        assert!(at(0, 7).iter().all(|k| !k.starts_with("FOOD_")), "no dish, no ingredient");
+        // the price: KH3's buy x price.kh_factor, no markup
+        let ws = crate::weapons::Workshop { moogle_level: 6, ..crate::weapons::Workshop::default() };
+        let offers = kh3_stock(&r, &shops, HUSKS, &ws, &|_| 0);
+        let price = |k: &str| offers.iter().find(|o| o.key == k).map(|o| (o.price, o.max, o.name.clone()));
+        assert_eq!(price("WEP_DONALD_02"), Some((4000, 99, "Warhammer".to_string())));
+        assert_eq!(price("WEP_DONALD_08").map(|p| p.0), Some(12000));
+        assert_eq!(price("PRT_ITEM11"), None, "the bangles wait for level 7");
+        let late = crate::weapons::Workshop { moogle_level: 7, ..crate::weapons::Workshop::default() };
+        assert_eq!(kh3_stock(&r, &shops, 0, &late, &|_| 0).iter().find(|o| o.key == "PRT_ITEM11").map(|o| o.price), Some(10000));
+        // Keyblades: never sold, never stocked
+        for w in crate::weapons::table().iter().filter(|w| w.is_keyblade()) {
+            assert!(!r.sellable(&w.key) && r.sell_price(&w.key, 3).is_none() && !w.can_sell, "{}", w.key);
+            assert!(!offers.iter().any(|o| o.key == w.key));
+        }
     }
 
     /// (ONLINEITEMS) The online group is read (its items stay Elden Ring's: kh-er lootmap); the script-required rows of SHOP-4

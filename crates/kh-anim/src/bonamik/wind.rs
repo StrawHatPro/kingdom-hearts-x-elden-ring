@@ -38,7 +38,7 @@ pub enum Rng {
 
 impl Rng {
     /// The new w (uint32).
-    pub fn next(&mut self) -> u32 {
+    pub fn draw(&mut self) -> u32 {
         match self {
             Rng::Zero => 0x8000_0000,
             Rng::Xorshift(s) => {
@@ -69,11 +69,11 @@ pub fn rng_to_jitter(w: u32) -> f32 {
 pub fn fn_143b13000(p: &mut Particle, flow: V3, drag: f32, lift: f32, h: f32, jitter: V3) {
     let (mvx, mvy, mvz) = (-flow[0], -flow[1], -flow[2]);
     let s2 = ((mvy * mvy) + (mvx * mvx)) + (mvz * mvz);
-    if !(s2 > C_0_01) {
+    if s2.partial_cmp(&C_0_01).is_none_or(std::cmp::Ordering::is_le) {
         return; // comiss/jbe (NaN -> return)
     }
     let s2b = ((flow[1] * flow[1]) + (flow[0] * flow[0])) + (flow[2] * flow[2]);
-    if !(s2b > C_0_01) {
+    if s2b.partial_cmp(&C_0_01).is_none_or(std::cmp::Ordering::is_le) {
         return;
     }
     let len = sqrt(s2); // |flow|
@@ -84,7 +84,7 @@ pub fn fn_143b13000(p: &mut Particle, flow: V3, drag: f32, lift: f32, h: f32, ji
         // ---- variant A (143b130f5): particle without joint-twist neighbours; uses the jitter
         let (mut nx, mut ny, mut nz) = (p.f1d0[0], p.f1d0[1], p.f1d0[2]);
         let mut d = ((ny * uy) + (nx * ux)) + (nz * uz);
-        if !(d >= 0.0) {
+        if d.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_lt) {
             // comiss d,0 ; jae skips
             nx = -nx;
             ny = -ny;
@@ -105,32 +105,32 @@ pub fn fn_143b13000(p: &mut Particle, flow: V3, drag: f32, lift: f32, h: f32, ji
         let s = ((ly * ly) + (lx * lx)) + (lz * lz);
         if !(s == 1.0 || s.is_nan()) {
             // ucomiss s,1 ; je (equal or unordered) skips
-            if !(s >= C_1EM8) {
+            if s.partial_cmp(&C_1EM8).is_none_or(std::cmp::Ordering::is_lt) {
                 lx = 0.0;
                 ly = 0.0;
                 lz = 0.0;
             } else {
                 let k = rsqrt(s);
-                lx = k * lx;
-                ly = k * ly;
-                lz = k * lz;
+                lx *= k;
+                ly *= k;
+                lz *= k;
             }
         }
         let t = (along - len) * drag; // 143b13315 / 143b13324 (= -dragMag)
-        lx = lx * lift_mag;
-        ly = ly * lift_mag;
-        lz = lz * lift_mag;
+        lx *= lift_mag;
+        ly *= lift_mag;
+        lz *= lift_mag;
         z = (t * uz) + lz;
         x = lx - (ux * drag_mag);
         y = ly - (uy * drag_mag);
-        z = z * h;
-        x = x * h;
-        y = y * h;
+        z *= h;
+        x *= h;
+        y *= h;
     } else {
         // ---- variant B (143b1336c): particle with joint-twist neighbours; no jitter, no write-back of the flip
         let (mut nx, mut ny, mut nz) = (p.f1d0[0], p.f1d0[1], p.f1d0[2]);
         let d0 = ((uy * ny) + (ux * nx)) + (uz * nz);
-        if !(d0 >= 0.0) {
+        if d0.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_lt) {
             nx = -nx;
             ny = -ny;
             nz = -nz;
@@ -146,20 +146,20 @@ pub fn fn_143b13000(p: &mut Particle, flow: V3, drag: f32, lift: f32, h: f32, ji
         let mut lz = (uy * cx) - (ux * cy);
         let s = ((ly * ly) + (lx * lx)) + (lz * lz);
         if !(s == 1.0 || s.is_nan()) {
-            if !(s >= C_1EM8) {
+            if s.partial_cmp(&C_1EM8).is_none_or(std::cmp::Ordering::is_lt) {
                 lx = 0.0;
                 ly = 0.0;
                 lz = 0.0;
             } else {
                 let k = rsqrt(s);
-                lx = lx * k;
-                ly = ly * k;
-                lz = lz * k;
+                lx *= k;
+                ly *= k;
+                lz *= k;
             }
         }
-        if !(h >= C_0_05) {
-            along = along * C_0_7;
-            rem = rem * C_0_7;
+        if h.partial_cmp(&C_0_05).is_none_or(std::cmp::Ordering::is_lt) {
+            along *= C_0_7;
+            rem *= C_0_7;
         }
         let l = rem * lift; // NOTE: lift multiplies (|v| - along) here
         let dd = along * drag; //       drag multiplies along
@@ -170,10 +170,20 @@ pub fn fn_143b13000(p: &mut Particle, flow: V3, drag: f32, lift: f32, h: f32, ji
     p.f40 = [x + p.f40[0], y + p.f40[1], z + p.f40[2]];
 }
 
+/// One sub-step's inputs to Integrate: the step, its inverses, gravity and the global wind.
+#[derive(Clone, Copy)]
+pub struct IntegrateStep {
+    pub h: f32,
+    pub inv_h: f32,
+    pub inv_n: f32,
+    pub g: V3,
+    pub wind: V3,
+}
+
 /// 0x143b123b0 Integrate(xmm0 r, rdx core, r8 scene, r9 core+0x658, [rsp+20] h, [rsp+28] invH, [rsp+30] invN,
 ///                       [rsp+38] &gravity, [rsp+40] &globalWind, [rsp+48] presetWind[group])
-#[allow(clippy::too_many_arguments)]
-pub fn fn_143b123b0(r: f32, core: &mut Core, h: f32, inv_h: f32, inv_n: f32, g: V3, wind: V3, preset_wind: &[V3], rng: &mut Rng) {
+pub fn fn_143b123b0(r: f32, core: &mut Core, step: IntegrateStep, preset_wind: &[V3], rng: &mut Rng) {
+    let IntegrateStep { h, inv_h, inv_n, g, wind } = step;
     let k = h / r;
     let (gx, gy, gz) = (k * g[0], k * g[1], k * g[2]);
     // chara-wind direction for spaces 1 and 2 (computed once); other spaces: zero vector (space 0 = per particle)
@@ -212,9 +222,9 @@ pub fn fn_143b123b0(r: f32, core: &mut Core, h: f32, inv_h: f32, inv_n: f32, g: 
         let mut vy = p.f40[1] - ((p.f40[1] * damp) * h);
         let mut vz = p.f40[2] - ((p.f40[2] * damp) * h);
         let gm = mass_scale[grp] * p.f250;
-        vx = (gx * gm) + vx;
-        vy = (gy * gm) + vy;
-        vz = (gz * gm) + vz;
+        vx += gx * gm;
+        vy += gy * gm;
+        vz += gz * gm;
         p.f40 = [vx, vy, vz];
         let lf = p.f7c;
         p.f0 = [(inv_n * lf[0]) + p.f0[0], (lf[1] * inv_n) + p.f0[1], (lf[2] * inv_n) + p.f0[2]];
@@ -232,21 +242,14 @@ pub fn fn_143b123b0(r: f32, core: &mut Core, h: f32, inv_h: f32, inv_n: f32, g: 
             let t = t_wave * C_PI;
             let a = ((t + t) + ((i as f32) * 0.25)) * f3740;
             let s = ((((a as f64).sin() as f32) * f373c) + f3738) * chara_scale[grp];
-            wx = (d[0] * s) + wx;
-            wy = (d[1] * s) + wy;
-            wz = (d[2] * s) + wz;
+            wx += d[0] * s;
+            wy += d[1] * s;
+            wz += d[2] * s;
         }
         if aero[grp] != 0 {
-            let (d1, d2, d3) = (rng.next(), rng.next(), rng.next());
+            let (d1, d2, d3) = (rng.draw(), rng.draw(), rng.draw());
             let jit = [rng_to_jitter(d3), rng_to_jitter(d2), rng_to_jitter(d1)]; // x from the THIRD draw, z from the first
-            let mut two = false;
-            if version >= 0x960 {
-                if (p.f26c - p.f294).abs() >= C_0_01 {
-                    two = true;
-                } else if (p.f270 - p.f298).abs() >= C_0_01 {
-                    two = true;
-                }
-            }
+            let two = version >= 0x960 && ((p.f26c - p.f294).abs() >= C_0_01 || (p.f270 - p.f298).abs() >= C_0_01);
             let (f26c, f270, f294, f298) = (p.f26c, p.f270, p.f294, p.f298);
             if two {
                 fn_143b13000(p, [wx, wy, wz], f26c, f270, h, jit);
@@ -281,15 +284,15 @@ pub fn fn_143b1b830(x: &mut V3, c: V3, radius: f32, strength: f32) -> V3 {
         let inv = 1.0 / l;
         let ex = l - radius;
         let kk = radius * strength;
-        dx = dx * inv;
-        dy = dy * inv;
-        dz = dz * inv;
-        x0 = x0 + (dx * ex);
-        x1 = x1 + (dy * ex);
-        x2 = x2 + (dz * ex);
-        dx = dx * kk;
-        dy = dy * kk;
-        dz = dz * kk;
+        dx *= inv;
+        dy *= inv;
+        dz *= inv;
+        x0 += dx * ex;
+        x1 += dy * ex;
+        x2 += dz * ex;
+        dx *= kk;
+        dy *= kk;
+        dz *= kk;
     } else if l2 > 0.0 {
         let l = sqrt(l2);
         let inv = 1.0 / l;
@@ -348,7 +351,7 @@ pub fn fn_143ae53f0(r: f32, scene: &mut Scene) {
         let ps = &mut scene.f0;
         let (dx, dy, dz) = (ps[p1].f0[0] - ps[p2].f0[0], ps[p1].f0[1] - ps[p2].f0[1], ps[p1].f0[2] - ps[p2].f0[2]);
         let l2 = ((dy * dy) + (dx * dx)) + (dz * dz);
-        if !(l2 > 0.0) {
+        if l2.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
             continue;
         }
         let len = sqrt(l2);
@@ -377,7 +380,7 @@ pub fn fn_143ae53f0(r: f32, scene: &mut Scene) {
         if w > 0.5 {
             let kk = ((w - 0.5) + w) - 0.5;
             ps[p1].fa0 = [(kk * cx) + ps[p1].fa0[0], (kk * cy) + ps[p1].fa0[1], (kk * cz) + ps[p1].fa0[2]];
-        } else if !(w >= 0.5) {
+        } else if w.partial_cmp(&0.5).is_none_or(std::cmp::Ordering::is_lt) {
             // jbe ; jae -> skip only when w == 0.5
             let t = 0.5 - w;
             let kk = t + t;
@@ -409,12 +412,12 @@ pub fn fn_143b1e710(core: &mut Core, inv_h: f32) {
                 let s = ((ny * ny) + (nx * nx)) + (nz * nz);
                 if s > C_1EM8 {
                     let kk = rsqrt(s);
-                    nx = nx * kk;
-                    ny = ny * kk;
-                    nz = nz * kk;
+                    nx *= kk;
+                    ny *= kk;
+                    nz *= kk;
                 }
                 let vn = ((ny * p.f40[1]) + (nx * p.f40[0])) + (nz * p.f40[2]);
-                if !(vn >= C_M0_01) {
+                if vn.partial_cmp(&C_M0_01).is_none_or(std::cmp::Ordering::is_lt) {
                     let nb = -b;
                     bx = (nx * vn) * nb;
                     by = (ny * vn) * nb;
@@ -428,16 +431,16 @@ pub fn fn_143b1e710(core: &mut Core, inv_h: f32) {
             dy = (dy * C_0_96) - (acc[1] * 0.75);
             dz = (dz * C_0_96) - (acc[2] * 0.75);
         } else {
-            dx = dx - (acc[0] * C_0_98);
-            dy = dy - (acc[1] * C_0_98);
-            dz = dz - (acc[2] * C_0_98);
+            dx -= acc[0] * C_0_98;
+            dy -= acc[1] * C_0_98;
+            dz -= acc[2] * C_0_98;
         }
         p.f40 = [((dx * inv_h) + bx) * vs, ((dy * inv_h) + by) * vs, ((dz * inv_h) + bz) * vs];
         let q = p.f88;
         let s = ((q[0] * q[0]) + (q[1] * q[1])) + (q[2] * q[2]);
         if !(s == 1.0 || s.is_nan()) {
             // ucomiss ; jne
-            if !(s >= C_1EM8) {
+            if s.partial_cmp(&C_1EM8).is_none_or(std::cmp::Ordering::is_lt) {
                 p.f88 = ZERO;
             } else {
                 let kk = rsqrt(s);

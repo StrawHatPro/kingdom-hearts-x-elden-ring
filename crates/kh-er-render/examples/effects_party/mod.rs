@@ -20,6 +20,25 @@ use kh_host::seam::{AudioCommand, AudioQueue, EffectQueue};
 use kh_host::vfx::{EffectHost, PartyMemberFx};
 use kh_party::{ActionDef, Chara, MemberCommand, MemberId, Party, PartyConfig, PartyHost, SoraView, TargetRef};
 
+/// (HEROLIGHT-KB) `PartyRig::hero_carrier`: member id, weapon model, feet, the light's point on the weapon and its opacity.
+pub type HeroFriend = (u8, String, Vec3, Option<(Vec3, f32)>);
+
+/// One member's row of `PartyRig::audio`.
+type MemberAudio = (u8, u64, bool, (String, f32), String);
+
+/// The step's seam queues.
+pub struct Queues<'a> {
+    pub audio: &'a mut AudioQueue,
+    pub effects: &'a mut EffectQueue,
+}
+
+/// Sora's skeleton and pose of the step, and his component-to-world.
+pub struct PosedBody<'a> {
+    pub skeleton: &'a kh_anim::Skeleton,
+    pub pose: &'a kh_anim::Pose,
+    pub to_world: &'a kh_anim::Trs,
+}
+
 pub struct PartyRig {
     pub party: Party,
     posers: HashMap<u8, kh_partyhost::PosedMember>,
@@ -27,7 +46,7 @@ pub struct PartyRig {
     next: usize,
     taps: Vec<(u8, PartyMemberFx)>,
     /// The members' audio state of the step: (member, tap step, grounded, anim row + time, weapon).
-    audio: Vec<(u8, u64, bool, (String, f32), String)>,
+    audio: Vec<MemberAudio>,
     loop_sounds: HashMap<u32, &'static str>,
     busy: HashMap<u8, bool>,
     pub said: Vec<String>,
@@ -39,6 +58,10 @@ pub struct PartyRig {
     /// (ZETTA) the script's debug words: (T, word, argument): `T donald cast ID` (a party-don-spells row id: Donald casts it at
     /// the nearest foe, kh_party::donald::cast debug_casts) and `T donald zetta-ready` (Zettaflare's condition met now)
     words: Vec<(f32, &'static str, String)>,
+    /// (PARTY-WEAPONS) the pack (the weapons' manifests for `equip`)
+    pack: std::path::PathBuf,
+    /// (PARTY-WEAPONS) each member's speed-matched loop clocks (kh-partyhost `pose_loco`)
+    loco_time: HashMap<u8, [f32; 3]>,
 }
 
 fn action(chara: Chara, word: &str) -> Option<ActionDef> {
@@ -81,9 +104,32 @@ impl PartyRig {
                 fx.push((t, if chara == Chara::Donald { 0 } else { 1 }, name, w.get(4) == Some(&"loop")));
                 continue;
             }
+            // (FREEZE-FX) `T WHO freeze SECONDS`: WHO takes a FREEZE row's hit (the Mimic copy's Blizzard on the party): his own
+            // KH3 freeze state, KH3's frozen look on him by the shared route (kh-party freeze_fx)
+            if *what == "freeze" {
+                words.push((t, if chara == Chara::Donald { "freeze-donald" } else { "freeze-goofy" }, w.get(3).map(|s| s.to_string()).unwrap_or_else(|| "2".to_string())));
+                continue;
+            }
             // (ZETTA) the debug words
             if *what == "cast" || *what == "zetta-ready" {
                 words.push((t, if *what == "cast" { "cast" } else { "zetta-ready" }, w.get(3).map(|s| s.to_string()).unwrap_or_default()));
+                continue;
+            }
+            // (PARTY-WEAPONS) `T WHO battle` / `T WHO peace`: the party's battle flag on / off (the host's engaged count in kh-er);
+            // `T WHO equip KEY`: WHO's weapon (an item key WEP_DONALD_03 / a model w_gu050), mounted on his poser too
+            // (PARTY-WEAPONS) `T WHO hold` / `T WHO release`: WHO's weapon held out (the hero light's hold); `T WHO walk DX,DY`: WHO
+            // walks (KH3's Move1 run) to his place + (DX, DY) cm
+            if matches!(*what, "battle" | "peace" | "equip" | "hold" | "release" | "walk") {
+                let don = chara == Chara::Donald;
+                let word = match *what {
+                    "battle" => "battle",
+                    "peace" => "peace",
+                    "hold" => if don { "hold-donald" } else { "hold-goofy" },
+                    "release" => if don { "release-donald" } else { "release-goofy" },
+                    "walk" => if don { "walk-donald" } else { "walk-goofy" },
+                    _ => if don { "equip-donald" } else { "equip-goofy" },
+                };
+                words.push((t, word, w.get(3).map(|s| s.to_string()).unwrap_or_default()));
                 continue;
             }
             let def = action(chara, what).ok_or_else(|| format!("--party: {who} has no action {what}"))?;
@@ -94,6 +140,7 @@ impl PartyRig {
         let mut party = Party::new(PartyConfig::test_level99());
         party.spawn(Chara::Donald, Vec3::new(60.0, -220.0, 0.0), 0.0);
         party.spawn(Chara::Goofy, Vec3::new(60.0, 220.0, 0.0), 0.0);
+        party.gof.kh3_ai = true; // (GF-AI) the script plays his KH3 actions
         let index: serde_json::Value = std::fs::read_to_string(pack.join("party").join("party.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(serde_json::Value::Null);
         let mut posers = HashMap::new();
         for (member, id) in [(0u8, kh_partyhost::poser::DONALD), (1u8, kh_partyhost::poser::GOOFY)] {
@@ -114,11 +161,12 @@ impl PartyRig {
             }
             posers.insert(member, posed);
         }
-        Ok(PartyRig { party, posers, script: list, next: 0, taps: Vec::new(), audio: Vec::new(), loop_sounds: HashMap::new(), busy: HashMap::new(), said: Vec::new(), casts: Vec::new(), fx, fx_next: 0, fx_live: Vec::new(), words /* (ZETTA) */ })
+        Ok(PartyRig { party, posers, script: list, next: 0, taps: Vec::new(), audio: Vec::new(), loop_sounds: HashMap::new(), busy: HashMap::new(), said: Vec::new(), casts: Vec::new(), fx, fx_next: 0, fx_live: Vec::new(), words /* (ZETTA) */, pack: pack.to_path_buf() /* (PARTY-WEAPONS) */, loco_time: HashMap::new() })
     }
 
     /// ONE STEP after Sora's (as kh-er: the party's step on the same seams, then the poses).
-    pub fn step(&mut self, step: usize, dt: f32, sora: &kh_core::Output, world: &dyn kh_core::World, targets: &mut dyn kh_core::Targets, audio: &mut AudioQueue, effects: &mut EffectQueue) {
+    pub fn step(&mut self, step: usize, dt: f32, sora: &kh_core::Output, world: &dyn kh_core::World, targets: &mut dyn kh_core::Targets, queues: Queues) {
+        let Queues { audio, effects } = queues;
         let now = step as f32 * dt;
         while let Some((t, chara, def)) = self.script.get(self.next).copied() {
             if t > now {
@@ -183,6 +231,53 @@ impl PartyRig {
                     }
                     None => println!("party: step {step}: cast {arg}: no such spell row"),
                 },
+                // (FREEZE-FX) a FREEZE row's hit on him
+                "freeze-donald" | "freeze-goofy" => {
+                    let chara = if word == "freeze-donald" { Chara::Donald } else { Chara::Goofy };
+                    if let Some(id) = self.party.find(chara) {
+                        let at = self.party.view(id).map_or(Vec3::ZERO, |v| v.position);
+                        let mut h = kh_core::HitRecord::empty(kh_core::TargetId(1));
+                        (h.damage, h.damage_kind, h.position, h.direction, h.attack_name) = (1.0, kh_core::enums::ETresDamageKind::Small, at + Vec3::Z * 90.0, Vec3::new(-1.0, 0.0, 0.0), "MAG_BLIZZARD");
+                        (h.info.bad_status, h.info.bad_time) = ("FREEZE", arg.parse().unwrap_or(2.0));
+                        let r = self.party.receive_hit(id, &h);
+                        println!("party: step {step}: {chara:?} takes a FREEZE hit ({} s): {r:?}", h.info.bad_time);
+                    }
+                }
+                // (PARTY-WEAPONS) the battle flag, a weapon
+                "battle" | "peace" => {
+                    self.party.set_in_battle(word == "battle");
+                    println!("party: step {step}: the battle flag {}", if word == "battle" { "ON" } else { "off" });
+                }
+                "hold-donald" | "hold-goofy" | "release-donald" | "release-goofy" => {
+                    let chara = if word.ends_with("donald") { Chara::Donald } else { Chara::Goofy };
+                    if let Some(id) = self.party.find(chara) {
+                        self.party.set_weapon_hold(id, word.starts_with("hold"));
+                        println!("party: step {step}: {chara:?}'s weapon {}", if word.starts_with("hold") { "held out" } else { "released" });
+                    }
+                }
+                "walk-donald" | "walk-goofy" => {
+                    let chara = if word.ends_with("donald") { Chara::Donald } else { Chara::Goofy };
+                    let d: Vec<f32> = arg.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                    if let (Some(id), [dx, dy]) = (self.party.find(chara), d.as_slice()) {
+                        let goal = self.party.view(id).map_or(Vec3::ZERO, |v| v.position) + Vec3::new(*dx, *dy, 0.0);
+                        self.party.gof.kh3_ai = true;
+                        self.party.command(id, MemberCommand::MoveTo { goal: kh_party::MoveGoal::Point(goal), locomotion: kh_party::LocomotionDef::Move1, walk: false, acceptable_radius: 100.0, follow_path: false });
+                        println!("party: step {step}: {chara:?} walks to {goal:?}");
+                    }
+                }
+                "equip-donald" | "equip-goofy" => {
+                    let (chara, member) = if word == "equip-donald" { (Chara::Donald, 0u8) } else { (Chara::Goofy, 1u8) };
+                    match (kh_party::weapon_draw::weapon_row(&arg), self.party.find(chara)) {
+                        (Some(row), Some(id)) => {
+                            if let Some(s) = self.party.status_mut(id) {
+                                s.weapon = row.key;
+                            }
+                            self.mount(member, row.key);
+                            println!("party: step {step}: {chara:?} holds {} ({})", row.key, row.model);
+                        }
+                        _ => println!("party: step {step}: equip {arg}: no such weapon of {chara:?}"),
+                    }
+                }
                 _ => println!("party: step {step}: zetta-ready: {} Donald(s) meet Zettaflare's condition", kh_party::donald::zettaflare::debug_make_ready(&mut self.party)),
             }
         }
@@ -214,8 +309,15 @@ impl PartyRig {
         for id in ids {
             let Some(v) = self.party.view(id) else { continue };
             let Some(m) = self.posers.get_mut(&id.0) else { continue };
-            let weapon = !self.party.weapon_hidden(id);
-            if let Some(tap) = m.set_pose_view(id.0, v.position, v.yaw, dt, &v.anim, weapon, v.on_ground, &NoIk) {
+            // (PARTY-WEAPONS) in his hand while kh-party's rule has it out (weapon_draw)
+            let weapon = !self.party.weapon_hidden(id) && self.party.weapon_view(id).is_some_and(|w| w.opacity > 0.0);
+            // (PARTY-WEAPONS) a member in his speed-matched loop (the AI's Move, the pad's run) posed from it, as kh-partyhost does
+            let loco = self.party.pad_state(id).and_then(|p| p.loco).or_else(|| self.party.ai_loco(id));
+            let tap = match loco {
+                Some(loco) => Some(kh_partyhost::poser::pose_loco(self.loco_time.entry(id.0).or_default(), m, &v, &loco, dt, weapon, &NoIk)),
+                None => m.set_pose_view(kh_partyhost::poser::PoseState { member: id.0, position: v.position, yaw: v.yaw, weapon_visible: weapon, grounded: v.on_ground }, dt, &v.anim, &NoIk),
+            };
+            if let Some(tap) = tap {
                 self.audio.push((id.0, tap.step, tap.grounded, tap.anim.clone(), tap.weapon.clone()));
                 self.taps.push((id.0, PartyMemberFx { position: tap.position, yaw: tap.yaw, bones: tap.bones, anim: tap.anim.0 }));
             }
@@ -224,6 +326,53 @@ impl PartyRig {
                 self.said.push(format!("party: step {step}: {:?}'s action is over", v.chara));
             }
         }
+    }
+
+    /// (PARTY-WEAPONS) Mounts weapon `key` on member `member's` poser (the pack's weapon manifest).
+    fn mount(&mut self, member: u8, key: &str) {
+        let Some(m) = self.posers.get_mut(&member) else { return };
+        let Ok(def) = m.weapon_def(key) else { return };
+        let wm: Option<serde_json::Value> = std::fs::read_to_string(self.pack.join("party").join("weapons").join(&def.model).join("manifest.json")).ok().and_then(|t| serde_json::from_str(&t).ok());
+        if let Some(wm) = wm {
+            let _ = m.mount_weapon(&def, &wm);
+        }
+    }
+
+    /// (PARTY-WEAPONS) `--party-draw`: the simulated members DRAWN by the renderer's party path (as kh-er partydraw.rs): their
+    /// latest poses, the weapon in the hand at kh-party's `OpacityFade` (weapon_draw), the thrown shield not drawn.
+    #[cfg(feature = "party")]
+    pub fn draws(&self, glow_mask: bool) -> Vec<kh_er_render::party::CharDraw> {
+        let mut out = Vec::new();
+        for id in self.party.members() {
+            let Some(m) = self.posers.get(&id.0) else { continue };
+            let posed = m.posed(1.0);
+            let opacity = self.party.weapon_view(id).map_or(0.0, |w| w.opacity);
+            let weapon = posed.weapon.as_ref().filter(|w| w.2 && opacity > 0.0 && !self.party.weapon_hidden(id)).map(|(model, root, _)| kh_er_render::party::PartyWeapon { model: model.clone(), to_world: root.then(&posed.component_to_world), component: Vec::new(), opacity });
+            out.push(kh_er_render::party::CharDraw { chara: m.id, body: Some(kh_er_render::Body { component_to_world: posed.component_to_world, local: posed.local, component: posed.component }), weapon, props: Vec::new(), glow_mask, blood: Default::default() });
+        }
+        out
+    }
+
+    /// (HEROLIGHT-KB) `--hero-friend donald|goofy`: that friend carries the hero light (as kh-er when he leads): his member id,
+    /// his weapon's model, his feet and the light's place on his weapon's own line (kh-er partydraw.rs `hero_point`) with the
+    /// weapon's opacity; his weapon is held out by the shared gate (kh_core::weapon_gate::hold).
+    pub fn hero_carrier(&mut self, chara: Chara) -> Option<HeroFriend> {
+        let id = self.party.members().find(|id| self.party.view(*id).is_some_and(|v| v.chara == chara))?;
+        self.party.set_weapon_hold(id, kh_core::weapon_gate::hold(true, kh_er_render::pointlight::keyblade_wanted()));
+        let m = self.posers.get(&id.0)?;
+        let posed = m.posed(1.0);
+        let (model, _, visible) = posed.weapon.clone()?;
+        let opacity = self.party.weapon_view(id).map_or(0.0, |w| w.opacity);
+        let f = kh_er_render::herolight::blade_fraction(&kh_er_render::pointlight::settings());
+        let line = kh_er_render::herolight::weapon(&model).and_then(|w| w.line_sockets.clone());
+        let point = line.and_then(|(a, b)| m.weapon_socket_world(&a).zip(m.weapon_socket_world(&b))).map(|(a, b)| a.translation.lerp(b.translation, f));
+        Some((id.0, model, posed.component_to_world.translation, point.filter(|_| visible && opacity > 0.0).map(|p| (p, opacity))))
+    }
+
+    /// (PARTY-WEAPONS) What the weapons are now (the harness's line per shot).
+    #[cfg(feature = "party")]
+    pub fn weapons_line(&self) -> String {
+        self.party.members().filter_map(|id| Some(format!("{:?} {} out={} opacity={:.2}", self.party.view(id)?.chara, self.party.status(id)?.weapon, self.party.weapon_view(id)?.out as u8, self.party.weapon_view(id)?.opacity))).collect::<Vec<_>>().join(", ")
     }
 
     /// The effect side of the step (kh-er fx.rs `effect_step`): the members' poses and the spell actors / team props.
@@ -288,8 +437,8 @@ impl PartyAudio {
     }
 
     /// One audio step after the effect side's (the same order as kh-er's `Fx::after_step`).
-    #[allow(clippy::too_many_arguments)]
-    pub fn step(&mut self, out: &kh_core::Output, skeleton: &kh_anim::Skeleton, pose: &kh_anim::Pose, to_world: &kh_anim::Trs, effect_commands: &[kh_host::seam::EffectCommand], listener: kh_audio::Listener, sora_place: &dyn Fn(&kh_core::Attach) -> Vec3, party: &mut PartyRig) {
+    pub fn step(&mut self, out: &kh_core::Output, body: PosedBody, effect_commands: &[kh_host::seam::EffectCommand], listener: kh_audio::Listener, sora_place: &dyn Fn(&kh_core::Attach) -> Vec3, party: &mut PartyRig) {
+        let PosedBody { skeleton, pose, to_world } = body;
         if pose.component.is_empty() {
             self.pending.clear();
             return;
@@ -326,7 +475,7 @@ impl PartyAudio {
                 let (Some((_, fx)), Some(a)) = (taps.iter().find(|t| t.0 == *m), audio_rows.iter().find(|a| a.0 == *m)) else { continue };
                 let positions: [Vec3; 14] = std::array::from_fn(|i| fx.bones.get(kh_audio::autose::BONES[i]).map_or(if i == 0 { fx.position } else { fx.position + Vec3::Z * 50.0 }, |b| b.0));
                 let frame = kh_audio::BoneFrame::from_positions(&positions, a.2);
-                for e in engine.party_auto_se(*m, *n as f32 / 60.0, &frame, 0, Some((a.3 .0.as_str(), a.3 .1)), &listener, &|b| fx.bones.get(b).map(|x| x.0)) {
+                for e in engine.party_auto_se(*m, kh_audio::AutoSeTick { dt: *n as f32 / 60.0, frame: &frame, surface: 0, anim: Some((a.3 .0.as_str(), a.3 .1)), listener: &listener, bone: &|b| fx.bones.get(b).map(|x| x.0) }) {
                     let _ = e;
                 }
             }

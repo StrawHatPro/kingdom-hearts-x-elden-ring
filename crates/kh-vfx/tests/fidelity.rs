@@ -236,13 +236,13 @@ fn an_emitter_spawns_a_nested_system_that_follows_its_node() {
     assert_eq!(world.stats().0, 1, "only the nested system is left");
 }
 
-/// `SQEX_Raycast` (modelled [?]): the node goes to where its ray meets the ground the host gave.
+/// `SQEX_Raycast` ((AUDIT-B W-HANDOVER) traced [C]: def.rs `RaycastDef`): each particle goes to where its ray meets the ground the host gave.
 #[test]
 fn a_ray_puts_the_node_on_the_ground() {
     let life = module("ParticleModuleLifetime", json!({"Lifetime": constant(json!(5.0))}));
     let size = module("ParticleModuleSize", json!({"StartSize": constant(json!([10.0, 10.0, 10.0]))}));
     let ray = |theme: &str| module("ParticleModuleSQEX_Raycast", json!({"RayEndOffset": {"x": 0, "y": 0, "z": -500}, "SpawnLocationOffset": {"x": 0, "y": 0, "z": 5}, "bInWorldSpace": false, "SpawnTheme": theme}));
-    for (theme, ground, expect) in [("ESQEX_RAYCAST_SPAWN_THEME_ONHIT", Some(0.0f32), Some(5.0f32)), ("ESQEX_RAYCAST_SPAWN_THEME_ONHIT", None, None), ("ESQEX_RAYCAST_SPAWN_THEME_FORCE_SPAWN", None, Some(200.0)), ("ESQEX_RAYCAST_SPAWN_THEME_ONHIT", Some(-900.0), None)] {
+    for (theme, ground, expect) in [("ESQEX_RAYCAST_SPAWN_THEME_ONHIT", Some(0.0f32), Some(5.0f32)), ("ESQEX_RAYCAST_SPAWN_THEME_ONHIT", None, None), ("ESQEX_RAYCAST_SPAWN_THEME_FORCE_SPAWN", None, Some(-300.0)) /* (AUDIT-B W-HANDOVER) KH3 0x14435FCB0: no hit = the ray's END (200 - 500) */, ("ESQEX_RAYCAST_SPAWN_THEME_ONHIT", Some(-900.0), None)] {
         let mut world = World::new();
         world.set_ground(ground);
         world.register(effect("r", vec![emitter("e", "sprite", 1, vec![life.clone(), size.clone(), ray(theme)], json!({}), json!({}))]));

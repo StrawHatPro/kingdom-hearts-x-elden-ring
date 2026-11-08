@@ -19,7 +19,7 @@ pub fn norm_safe(v: V3) -> V3 {
     if l == 1.0 {
         return v;
     }
-    if !(l >= C_1E8) {
+    if l.partial_cmp(&C_1E8).is_none_or(std::cmp::Ordering::is_lt) {
         return ZERO;
     }
     let k = rsqrt(l);
@@ -93,7 +93,7 @@ pub fn fn_143b10010(core: &mut Core, dt: f32) {
             a = v;
         } else {
             a = core.f3578[g];
-            core.f34b8[g] = core.f34b8[g] - dt;
+            core.f34b8[g] -= dt;
         }
         if a <= C_9999 || core.f3638[g] <= C_9999 {
             if a < C_0001 && core.f3638[g] < C_0001 {

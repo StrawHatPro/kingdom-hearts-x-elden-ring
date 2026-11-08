@@ -66,7 +66,6 @@ struct Watch {
 struct Survey {
     handle: FieldInsHandle,
     npc_id: i32,
-    first: u8,
     last: u8,
     air: bool,
     flat_only: bool,
@@ -237,7 +236,7 @@ impl SoraHost {
                         self.targets.puppets.hold(&e, if air { 2.2 } else { 0.02 }, (last.saturating_sub(first) as f32 + 1.0) * 2.0 * TRIAL + 6.0, control.i64("pup.ai").map_or(3, |v| v as u32));
                     }
                     erlog!("survey: START c{:04} (target {}, {:?}, r {:.0} h {:.0} cm, hp {}/{}, poise {:.0}) levels {first}..{last} {}", e.npc_id, e.id.0, e.weight, e.radius, e.half_height * 2.0, e.hp, e.hp_max, e.poise_max, if air { "HELD IN THE AIR" } else { "on the ground" });
-                    self.lab.run = Some(Survey { handle: e.handle, npc_id: e.npc_id, first, last, air, flat_only, poise: num(4, 0.0), level: first, flat: flat_only, t: -1.5, fired: false, hp: e.hp, poise_before: e.poise, from: e.er_pos, seen: Vec::new(), last_anim: 0, far: 0.0, high: 0.0 });
+                    self.lab.run = Some(Survey { handle: e.handle, npc_id: e.npc_id, last, air, flat_only, poise: num(4, 0.0), level: first, flat: flat_only, t: -1.5, fired: false, hp: e.hp, poise_before: e.poise, from: e.er_pos, seen: Vec::new(), last_anim: 0, far: 0.0, high: 0.0 });
                 }
                 None => erlog!("survey: {text}: no such target"),
             }

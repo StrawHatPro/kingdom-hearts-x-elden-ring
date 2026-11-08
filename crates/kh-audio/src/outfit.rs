@@ -126,7 +126,7 @@ impl Picker {
                 let key = (outfit.outfit.clone(), rule.id.clone());
                 let last = self.last.get(&key).copied();
                 let choices: Vec<u32> = rule.clips.iter().copied().filter(|c| rule.clips.len() == 1 || Some(*c) != last).collect();
-                let clip = choices[((rng.next() >> 1) as usize) % choices.len()];
+                let clip = choices[((rng.draw() >> 1) as usize) % choices.len()];
                 self.last.insert(key, clip);
                 Some(clip)
             }
@@ -170,7 +170,7 @@ impl Pack {
         for (i, c) in j.get("clips").items().iter().enumerate() {
             let i = i as u32;
             let id = c.get("id").as_str().ok_or("a clip without id")?.to_string();
-            bank.materials.insert(i, Material { file: c.get("file").as_str().ok_or("a clip without file")?.to_string(), channels: c.get("channels").as_usize().unwrap_or(1) as u32, sample_rate: c.get("sample_rate").as_usize().unwrap_or(48_000) as u32, samples: c.get("samples").as_usize().unwrap_or(0) as u32, loop_points: None });
+            bank.materials.insert(i, Material { file: c.get("file").as_str().ok_or("a clip without file")?.to_string(), channels: c.get("channels").as_usize().unwrap_or(1) as u32, sample_rate: c.get("sample_rate").as_usize().unwrap_or(48_000) as u32, samples: c.get("samples").as_usize().unwrap_or(0) as u32, loop_points: None, peak: c.get("peak").as_f32() });
             let mut tracks = HashMap::new();
             tracks.insert(0, Track { commands: track_commands.clone(), material: i });
             bank.sounds.insert(

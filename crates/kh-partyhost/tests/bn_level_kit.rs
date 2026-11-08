@@ -2,7 +2,8 @@
 //! exactly the abilities of his kit's level table reached between the two levels.
 
 use kh_host::party::PartyChara;
-use kh_party::pad::{donald_kit::KitAbility, goofy_kit::GoofyAbility};
+use kh_party::goofy::GoofyAbility;
+use kh_party::pad::donald_kit::KitAbility;
 use kh_partyhost::custom::level_kit_abilities;
 
 #[test]
@@ -12,8 +13,8 @@ fn a_level_names_the_kit_abilities_it_reaches() {
         assert!(level_kit_abilities(PartyChara::Donald, lv - 1, lv).contains(&k.label().to_string()), "{} at {lv}", k.label());
         assert!(!level_kit_abilities(PartyChara::Donald, lv, lv + 1).contains(&k.label().to_string()), "{}: not again after {lv}", k.label());
     }
-    for k in GoofyAbility::OWN {
-        let Some(lv) = k.level() else { continue };
+    for k in GoofyAbility::ALL {
+        let lv = k.level();
         assert!(level_kit_abilities(PartyChara::Goofy, lv - 1, lv).contains(&k.label().to_string()), "{} at {lv}", k.label());
     }
     assert!(level_kit_abilities(PartyChara::Sora, 1, 99).is_empty(), "Sora's level abilities come with his own level-up (kh-core)");

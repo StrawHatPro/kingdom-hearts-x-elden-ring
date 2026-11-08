@@ -226,7 +226,7 @@ fn a_beat_spikes_an_airborne_victim_and_does_nothing_visible_on_the_ground() {
     let out = play(&mut r, &world, 600);
     println!("BEAT from 300 cm: lands after {:.3} s, {:.1} cm away", time(out.len() - 1), out.last().unwrap().position.x);
     // 1500 cm/s down: 300 cm in 0.19 s; spaced out by 0.7071 x (40 + 34) cm; no slam clip: over at the landing.
-    assert!(near(time(out.len() - 1), 0.21, 0.03) && near(out.last().unwrap().position.x, 0.7071 * 74.0, 6.0));
+    assert!(near(time(out.len() - 1), 0.21, 0.03) && near(out.last().unwrap().position.x, f32::from_bits(0x3F35_0481) * 74.0, 6.0));
     assert!(out.last().unwrap().finished && out.last().unwrap().landed);
     let mut r = medium();
     r.hit(&request(K::Beat), Pose { position: Vec3::ZERO, yaw: 180.0, grounded: true });

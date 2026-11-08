@@ -47,7 +47,7 @@ pub fn safe_normal(v: V3) -> V3 {
     if sq == 1.0 || sq.is_nan() {
         return [v[0], v[1], v[2]];
     }
-    if !(sq >= SMALL) {
+    if sq.partial_cmp(&SMALL).is_none_or(std::cmp::Ordering::is_lt) {
         return [0.0, 0.0, 0.0];
     }
     let y = rsqrt(sq);
@@ -95,7 +95,7 @@ pub fn z_axis(q: Q4) -> V3 {
 /// VectorNormalizeQuaternion shape (stock UE SSE)
 pub fn qnormalize(q: Q4) -> Q4 {
     let sq = ((q[1] * q[1]) + (q[3] * q[3])) + ((q[0] * q[0]) + (q[2] * q[2]));
-    if !(sq >= SMALL) {
+    if sq.partial_cmp(&SMALL).is_none_or(std::cmp::Ordering::is_lt) {
         return [0.0, 0.0, 0.0, 1.0];
     }
     let y = rsqrt(sq);
@@ -131,10 +131,10 @@ pub fn acos_poly(c: f32) -> f32 {
     let root = sqrt(1.0 - a);
     let a2 = a * a;
     let mut t = AC0 - (a * AC1);
-    t = t + (a2 * AC2);
-    t = t - ((a * a2) * AC3);
+    t += a2 * AC2;
+    t -= (a * a2) * AC3;
     let mut r = root * t;
-    if !(c >= 0.0) {
+    if c.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_lt) {
         r = PI - r;
     }
     r
@@ -143,7 +143,7 @@ pub fn acos_poly(c: f32) -> f32 {
 /// `cvttss2si` of a float (the JS's `Math.trunc` with the out-of-range value).
 pub fn cvttss2si(q: f32) -> i32 {
     let n = (q as f64).trunc();
-    if !(n >= -2147483648.0 && n <= 2147483647.0) {
+    if !(-2147483648.0..=2147483647.0).contains(&n) {
         i32::MIN
     } else {
         n as i32
@@ -172,13 +172,13 @@ pub fn sin_cos(v: f32) -> [f32; 2] {
     s = (s * y2) + S3;
     s = (s * y2) - S4;
     s = (s * y2) + 1.0;
-    s = s * y;
+    s *= y;
     let mut c = C1 - (y2 * C0);
     c = (c * y2) - C2;
     c = (c * y2) + C3;
     c = (c * y2) - 0.5;
     c = (c * y2) + 1.0;
-    c = c * sign;
+    c *= sign;
     [s, c]
 }
 
@@ -214,13 +214,7 @@ pub fn fn_143b166d0(sc: &mut Scene, r: f32, ci: usize, inner_scale: f32, outer_s
     }
     let qa: Q4;
     let mut qr: Q4;
-    let g = sc.f0[s].f190;
-    if g.is_none() || sc.f0[s].fbc == 0 {
-        // 143b17066
-        qa = sc.f0[s].f160;
-        qr = sc.f0[s].f160;
-    } else {
-        let g = g.expect("checked");
+    if let Some(g) = sc.f0[s].f190.filter(|_| sc.f0[s].fbc != 0) {
         qa = if sc.f0[g].f190.is_some() { sc.f0[g].f20 } else { sc.f0[g].f160 }; // 143b16817
         qr = if sc.f0[p1].f238.is_some() { sc.f0[g].f20 } else { sc.f0[s].f20 };
         if let Some(pin) = sc.f0[p1].f238 {
@@ -237,6 +231,10 @@ pub fn fn_143b166d0(sc: &mut Scene, r: f32, ci: usize, inner_scale: f32, outer_s
             }
             sc.f0[p1].f0 = fn_143af6960(sc, pin);
         }
+    } else {
+        // 143b17066
+        qa = sc.f0[s].f160;
+        qr = sc.f0[s].f160;
     }
     // 143b17086: hard length
     {
@@ -301,9 +299,9 @@ pub fn fn_143b166d0(sc: &mut Scene, r: f32, ci: usize, inner_scale: f32, outer_s
     let (mut nx, mut ny, mut nz) = (pos2[0] - pos1[0], pos2[1] - pos1[1], pos2[2] - pos1[2]);
     {
         let inv = 1.0 / sqrt(((ny * ny) + (nx * nx)) + (nz * nz));
-        nx = nx * inv;
-        ny = ny * inv;
-        nz = nz * inv;
+        nx *= inv;
+        ny *= inv;
+        nz *= inv;
     }
     let n = [nx, ny, nz];
     // 143b1746e .. 143b177cd computes a value and discards it (dead store); not reproduced.
@@ -325,14 +323,14 @@ pub fn fn_143b166d0(sc: &mut Scene, r: f32, ci: usize, inner_scale: f32, outer_s
                 let g = ((w - 0.5) + w) - 0.5; // = 2w - 1
                 let o = sc.f0[p1].f58;
                 sc.f0[p1].f58 = [(g * ex) + o[0], (g * ey) + o[1], (g * ez) + o[2]];
-            } else if !(w >= 0.5) {
+            } else if w.partial_cmp(&0.5).is_none_or(std::cmp::Ordering::is_lt) {
                 let g = (0.5 - w) + (0.5 - w); // = 1 - 2w
                 let o = sc.f0[p2].f58;
                 sc.f0[p2].f58 = [o[0] - (g * ex), o[1] - (g * ey), o[2] - (g * ez)];
             }
         }
     };
-    if !((lim_y - c.f34).abs() >= P01) {
+    if ((lim_y - c.f34).abs()).partial_cmp(&P01).is_none_or(std::cmp::Ordering::is_lt) {
         // 143b17865: circular limit
         let ang = acos_poly(((a[1] * ny) + (a[0] * nx)) + (a[2] * nz));
         if ang > lim_y {
@@ -404,9 +402,24 @@ pub fn fn_143b166d0(sc: &mut Scene, r: f32, ci: usize, inner_scale: f32, outer_s
     }
 }
 
+/// The settings of a cone record (angles in radians), from its SQEX_BonamikLinkDesc.
+#[derive(Clone, Copy)]
+pub struct ConeSetup {
+    pub lim_y: f32,
+    pub lim_z: f32,
+    pub lim_off_y: f32,
+    pub lim_off_z: f32,
+    pub cone_off_y: f32,
+    pub cone_off_z: f32,
+    pub outer_str: f32,
+    pub inner_str: f32,
+    pub parent_str: f32,
+    pub anim: u8,
+}
+
 /// 0x143ae6800: cone record setup (angles in radians)
-#[allow(clippy::too_many_arguments)]
-pub fn fn_143ae6800(sc: &Scene, p1: usize, p2: usize, lim_y: f32, lim_z: f32, lim_off_y: f32, lim_off_z: f32, cone_off_y: f32, cone_off_z: f32, outer_str: f32, inner_str: f32, parent_str: f32, anim: u8) -> Cone {
+pub fn fn_143ae6800(sc: &Scene, p1: usize, p2: usize, setup: ConeSetup) -> Cone {
+    let ConeSetup { lim_y, lim_z, lim_off_y, lim_off_z, cone_off_y, cone_off_z, outer_str, inner_str, parent_str, anim } = setup;
     let ident: Q4 = [0.0, 0.0, 0.0, 1.0];
     let mut rec = Cone { f0: p1, f8: p2, f10: -1, f14: 0.0, f18: 0.0, f20: 0, f24: 0, f28: 0.0, f2c: 0.0, f30: lim_y, f34: lim_z, f38: 0.0, f3c: 0.0, f40: 0.0, f44: 0.0, f50: ident, f60: ident, f70: ident, f80: ident, f90: [1.0, 1.0, 1.0] };
     let (a, b) = (&sc.f0[p1], &sc.f0[p2]);
@@ -424,7 +437,7 @@ pub fn fn_143ae6800(sc: &Scene, p1: usize, p2: usize, lim_y: f32, lim_z: f32, li
         if gp.f277 == 0 && sp.f276 == 0 && a.f240.is_none() {
             let mut v = [sp.f0[0] - gp.f0[0], sp.f0[1] - gp.f0[1], sp.f0[2] - gp.f0[2]];
             let sq = ((v[1] * v[1]) + (v[0] * v[0])) + (v[2] * v[2]);
-            if !(sq >= P01) {
+            if sq.partial_cmp(&P01).is_none_or(std::cmp::Ordering::is_lt) {
                 if let Some(gg) = gp.f190 {
                     let ggp = &sc.f0[gg];
                     v = [gp.f0[0] - ggp.f0[0], gp.f0[1] - ggp.f0[1], gp.f0[2] - ggp.f0[2]];
@@ -467,7 +480,8 @@ pub fn fn_143ae6800(sc: &Scene, p1: usize, p2: usize, lim_y: f32, lim_z: f32, li
 pub fn fn_143aec370(sc: &mut Scene, d: &LinkDesc, base: i32) -> usize {
     let idx = sc.f30.len();
     let (p1, p2) = ((d.f20 + base) as usize, (d.f24 + base) as usize);
-    let mut rec = fn_143ae6800(sc, p1, p2, d.f44 * DEG2RAD, d.f48 * DEG2RAD, d.f54 * DEG2RAD, d.f58 * DEG2RAD, d.f4c * DEG2RAD, d.f50 * DEG2RAD, d.f3c, d.f38, d.f40, d.f2c);
+    let setup = ConeSetup { lim_y: d.f44 * DEG2RAD, lim_z: d.f48 * DEG2RAD, lim_off_y: d.f54 * DEG2RAD, lim_off_z: d.f58 * DEG2RAD, cone_off_y: d.f4c * DEG2RAD, cone_off_z: d.f50 * DEG2RAD, outer_str: d.f3c, inner_str: d.f38, parent_str: d.f40, anim: d.f2c };
+    let mut rec = fn_143ae6800(sc, p1, p2, setup);
     rec.f10 = d.f6c;
     rec.f24 = idx;
     sc.f30.push(rec);
@@ -510,7 +524,7 @@ pub fn fn_143aee280_cones(sc: &mut Scene, bones: &[Xf]) {
         let p = ((t[0] * x[0]) + (t[1] * x[1])) + (t[2] * x[2]);
         let mut tw = [p * x[0], p * x[1], p * x[2], t[3]];
         let sq = (((tw[1] * tw[1]) + (tw[0] * tw[0])) + (tw[2] * tw[2])) + (tw[3] * tw[3]);
-        if !(sq > P0001) {
+        if sq.partial_cmp(&P0001).is_none_or(std::cmp::Ordering::is_le) {
             tw = [0.0, 0.0, 0.0, 1.0];
         }
         tw = qnormalize(tw);

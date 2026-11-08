@@ -213,12 +213,15 @@ pub type Capsule = (f32, f32, f32);
 /// The bigger of the two friends' capsules (Goofy's: r 40, half height 89, centre 91): the shared nav's.
 pub const NAV_CAPSULE: Capsule = (40.0, 89.0, 91.0);
 
+/// A straight line's quantised ends.
+type LineKey = (i32, i32, i32, i32, i32, i32);
+
 /// The nav's answers kept for a few steps (EQS asks the same neighbours again and again): floors under quantised points,
 /// straight lines between quantised ends. Emptied every `NavCache::STEPS` steps and when the trail is cut.
 #[derive(Debug, Default)]
 pub struct NavCache {
     floor: RefCell<HashMap<(i32, i32, i32), Option<Vec3>>>,
-    clear: RefCell<HashMap<(i32, i32, i32, i32, i32, i32), bool>>,
+    clear: RefCell<HashMap<LineKey, bool>>,
     age: Cell<u32>,
 }
 

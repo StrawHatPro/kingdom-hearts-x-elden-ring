@@ -29,10 +29,10 @@ fn boxes() -> &'static Boxes {
     B.get_or_init(|| {
         let mut s = [0u8; 256];
         let mut inv = [0u8; 256];
-        for i in 0..256usize {
+        for (i, slot) in s.iter_mut().enumerate() {
             let x = if i == 0 { 0 } else { (1..256u16).find(|j| gmul(i as u8, *j as u8) == 1).unwrap_or(0) as u8 };
             let y = x ^ x.rotate_left(1) ^ x.rotate_left(2) ^ x.rotate_left(3) ^ x.rotate_left(4) ^ 0x63;
-            s[i] = y;
+            *slot = y;
             inv[y as usize] = i as u8;
         }
         Boxes { s, inv }
@@ -100,7 +100,7 @@ impl Aes128 {
 
     /// ECB over whole 16-byte blocks of `data` (a tail shorter than a block is left as it is).
     pub fn decrypt_ecb(&self, data: &mut [u8]) {
-        for block in data.chunks_exact_mut(16) {
+        for block in data.as_chunks_mut::<16>().0 {
             self.decrypt_block(block);
         }
     }

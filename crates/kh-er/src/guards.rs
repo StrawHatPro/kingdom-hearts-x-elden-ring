@@ -119,11 +119,6 @@ impl FallGuard {
         }
     }
 
-    /// The frame was rebased / he was put somewhere else: heights before it mean nothing.
-    pub fn reset(&mut self) {
-        *self = FallGuard { discarded: self.discarded, ..FallGuard::default() };
-    }
-
     /// HP the game takes off its body NOW is its fall damage (or its fall death): Sora takes none.
     pub fn in_window(&self, on_floor: bool) -> bool {
         if on_floor { self.landed.is_some() } else { self.drop >= FALL_MIN_DROP }
@@ -131,6 +126,95 @@ impl FallGuard {
 
     pub fn drop(&self) -> f32 {
         self.drop
+    }
+}
+
+/// (THE IN-GAME TESTER 2026-11-03, run 2: the test aids left the hidden body hanging, then put it 16.7 m lower: the game
+/// took 1325 of its HP as a fall, no attacker named, and that went to Sora as a Blow "from the nearest hostile", a soldier
+/// that stood idle; a 21 m put-down later cost 3959 and knocked the friend leader out) THE HIDDEN BODY'S OWN FALL. The game
+/// measures a fall from the highest point the body had since it last stood to where it stands again; a put-down by a warp
+/// counts as one. `FallGuard` watches the leader's drops; this watches the body's, which may fall (or be put down) while
+/// the leader does not. ER metres, Y up.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BodyFall {
+    /// The highest point since it last stood (on the ground: where it stands), and where it was last frame.
+    top: Option<f32>,
+    last: Option<Vec3>,
+    /// Seconds since it came down from a drop of `FALL_MIN_DROP` or more (`None`: none is recent).
+    landed: Option<f32>,
+    /// The depth of the last such drop, m (for the log).
+    pub depth: f32,
+}
+
+impl BodyFall {
+    /// Once a frame from the body's own state: on its ground, where it is. `shift`: the physics origin moved this frame
+    /// (`game::origin_shift`): positions of the old origin are moved with it, no fall. True: it came down from a drop of
+    /// `FALL_MIN_DROP` or more in this frame (the window opens; for the log).
+    pub fn frame(&mut self, on_ground: bool, at: Vec3, shift: bool, dt: f32) -> bool {
+        if let (true, Some(last), Some(top)) = (shift, self.last, self.top.as_mut()) {
+            *top += at.y - last.y;
+        }
+        self.last = Some(at);
+        let top = self.top.get_or_insert(at.y).max(at.y);
+        if let Some(t) = self.landed.as_mut() {
+            *t += dt;
+            if *t > FALL_WINDOW {
+                self.landed = None;
+            }
+        }
+        let mut came_down = false;
+        if on_ground {
+            let drop = top - at.y;
+            if drop * 100.0 >= FALL_MIN_DROP {
+                self.landed = Some(0.0);
+                self.depth = drop;
+                came_down = true;
+            }
+            self.top = Some(at.y);
+        } else {
+            self.top = Some(top);
+        }
+        came_down
+    }
+
+    /// HP the game takes off its body now with no attacker named is the body's own fall: it is on a drop of
+    /// `FALL_MIN_DROP` or more, or came down from one within `FALL_WINDOW`.
+    pub fn in_window(&self) -> bool {
+        self.landed.is_some() || matches!((self.top, self.last), (Some(top), Some(at)) if (top - at.y) * 100.0 >= FALL_MIN_DROP)
+    }
+}
+
+/// (THE IN-GAME TESTER 2026-11-03) WHO HURT THE HIDDEN BODY, AS FAR AS ANYONE KNOWS. A guess never names an enemy: the
+/// nearest hostile was named before, 22 m away and idle, for the body's own fall.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Blame {
+    /// The game's `last_hit_by` (or the attack sensor's reading) names a character we know: its hit.
+    Attacker,
+    /// A status tick (poison, rot): no attacker, no reaction (status.rs).
+    Tick,
+    /// No attacker named, the body on (or just down from) a fall of its own: the game's fall damage. KH3 has none:
+    /// discarded, whether the leader fell or not.
+    Fall,
+    /// No attacker named, but a living hostile within reach of the leader is in (or just ended) an attack animation: that
+    /// hostile (a bullet, a bite the game names nobody for). Evidence, never the nearest body as such.
+    Attacking,
+    /// No attacker named and none attacking in reach: the environment or the body's own state (a fire floor, a trap, a
+    /// blast): the hit lands on the leader as damage of its own size, with no causer.
+    Environment,
+}
+
+/// The rule, in order: a named attacker, a status tick, the body's own fall, a hostile seen attacking in reach, the rest.
+pub fn blame(named: bool, tick: bool, body_falling: bool, attacking_in_reach: bool) -> Blame {
+    if tick {
+        Blame::Tick
+    } else if named {
+        Blame::Attacker
+    } else if body_falling {
+        Blame::Fall
+    } else if attacking_in_reach {
+        Blame::Attacking
+    } else {
+        Blame::Environment
     }
 }
 
@@ -457,6 +541,8 @@ impl Grab {
 /// THE SAVE POINTS HIDE IN COMBAT: hidden from the frame Sora's battle flag is up (KH3's own battle mode, which the host
 /// feeds with its engaged-enemy count: a hostile, living, active, DRAWN enemy within the sheet's `engage_range`, or one
 /// that hit him / he hit in the last 5 s, + KH3's 1 s linger) until it has been down for `hold` seconds.
+/// (HUD-REVIVE-COMBAT) The flag it reads is the whole party's (savepoint.rs: the leader's fight = conv.rs `leader_combat`; the
+/// count behind it is `ErTargets::engages_the_party`: any member's range, hits, or an enemy's AI target on a member).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CombatHide {
     pub hidden: bool,
@@ -524,8 +610,8 @@ pub struct FriendLead {
     pub alive: bool,
     pub hp: i32,
     pub max_hp: i32,
-    /// (GOOFY-BAL) THE HP AN ELDEN RING HIT'S SHARE IS TAKEN OF (sora.rs `damage_in`): Sora's max HP x the leader's
-    /// defence factor while the balance rule is on (kh-party balance.rs `incoming_reference`), else his own `max_hp`.
+    /// (GF-STATS) THE HP AN ELDEN RING HIT'S SHARE IS TAKEN OF (sora.rs `damage_in`): the sheet's reference at his level x his
+    /// Defense factor while the rule is on (kh-party balance.rs `incoming_reference`), else his own `max_hp`.
     pub share_max: f32,
     /// Refuses hits now (Die / Warp / a team attack's FR state).
     pub invulnerable: bool,
@@ -533,19 +619,22 @@ pub struct FriendLead {
 
 /// (ER party S2) What the body code sends a friend leader (party/leader.rs carries it out through kh-partyhost's
 /// `LeaderSink` at the party's next step).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum LeadOrder {
     /// A hit, already through the damage-in rule (share of HIS maximum, the status class).
-    Hit(kh_core::HitRecord),
+    Hit(Box<kh_core::HitRecord>),
     /// The body leads (a cutscene, a grab, an action, the net's put-back): he is put here, KH3 space / yaw.
     Follow(Vec3, f32),
     /// The body leads no more: the hold of `Follow` ends.
-    #[cfg_attr(not(feature = "party"), allow(dead_code))]
+    #[cfg(feature = "party")]
     Release,
     /// (a lift) He is carried by this much (KH3 cm), once.
     Nudge(Vec3),
     /// (LADDER2) Y at a ladder's foot: the friend leader LEAPS UP it onto the landing (KH3 floor point), facing this yaw.
     LadderJump { to: Vec3, facing: f32 },
+    /// (SPIRITSPRING) His jump at a spiritspring: for his next step, a jump still rising tops out this far above its
+    /// take-off (cm; kh-party `NpcPawn::spring_lift`). Asked every step of the rise.
+    SpringLift(f32),
     /// Drowned or a death of the net: his KO (the game over is the host's rule).
     Die,
 }
@@ -563,10 +652,9 @@ pub fn water_depth_for(base_cm: f32, capsule: (f32, f32, f32)) -> f32 {
     base_cm * (top / SORA_TOP_CM).clamp(0.3, 1.5)
 }
 
-/// (ER party S2) THE BODY'S HIT ON A FRIEND LEADER as kh-party's `receive_hit` takes it (contract B.3: the damage final;
-/// the host caps it by his defender's `damage_max` when it delivers). `kind` None = a status tick or damage over time:
+/// (ER party S2) THE BODY'S HIT ON A FRIEND LEADER as kh-party's `receive_hit` takes it (contract B.3: the damage final).
+/// `kind` None = a status tick or damage over time:
 /// HP without a reaction (`ReactionResult::NoReaction`). The same facts Sora's `HitOnPlayer` gets (sora.rs damage_in).
-#[allow(clippy::too_many_arguments)]
 pub fn friend_hit(lead: &FriendLead, kind: Option<kh_core::enums::ETresDamageKind>, amount: f32, causer: kh_core::TargetId, from: Vec3, yaw: f32, radius: f32) -> kh_core::HitRecord {
     use kh_core::host::{HitAttacker, HitInfo, ReactionResult};
     let direction = ((lead.position - from) * Vec3::new(1.0, 1.0, 0.0)).normalize_or_zero();
@@ -584,23 +672,80 @@ pub fn friend_hit(lead: &FriendLead, kind: Option<kh_core::enums::ETresDamageKin
     }
 }
 
-/// (ER party S2) A blow the friend leader's defender caps (KH3's friend rule `damage_max`; 0 = no cap).
-#[cfg_attr(not(feature = "party"), allow(dead_code))]
-pub fn capped(damage: f32, damage_max: i32) -> f32 {
-    if damage_max > 0 {
-        damage.min(damage_max as f32)
-    } else {
-        damage
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use kh_core::PadButton;
 
+    /// (THE IN-GAME TESTER 2026-11-03, run 2 at 430.2 s) the body put 16.7 m lower by a warp, standing both frames: its
+    /// fall; the 1325 HP the game took then, with no attacker named, are the fall's (discarded), never the idle soldier's.
+    #[test]
+    fn the_body_put_down_by_a_warp_is_a_fall_never_an_enemy_hit() {
+        let dt = 1.0 / 60.0;
+        let mut f = BodyFall::default();
+        let at = Vec3::new(25.1, 6.0, 30.9);
+        for _ in 0..30 {
+            f.frame(true, at, false, dt);
+        }
+        assert!(!f.in_window());
+        f.frame(true, at + Vec3::new(6.05, -16.7, 5.8), false, dt);
+        assert!(f.in_window() && (f.depth - 16.7).abs() < 1e-3, "{f:?}");
+        assert_eq!(blame(false, false, f.in_window(), false), Blame::Fall);
+        // ... a named attacker's blow in that window is still its own; a status tick is a tick
+        assert_eq!(blame(true, false, f.in_window(), false), Blame::Attacker);
+        assert_eq!(blame(false, true, f.in_window(), false), Blame::Tick);
+        // the window closes 0.75 s after it came down
+        for _ in 0..46 {
+            f.frame(true, at + Vec3::new(6.05, -16.7, 5.8), false, dt);
+        }
+        assert!(!f.in_window());
+        assert_eq!(blame(false, false, f.in_window(), false), Blame::Environment);
+    }
+
+    /// The body hanging (no ground) and then put on the ground below; a long drop while still in the air; walking down a
+    /// slope and the physics origin moving by 8 m are no falls.
+    #[test]
+    fn the_body_s_own_drops_and_what_is_no_fall() {
+        let dt = 1.0 / 60.0;
+        let mut f = BodyFall::default();
+        f.frame(true, Vec3::new(0.0, 10.0, 0.0), false, dt);
+        f.frame(false, Vec3::new(0.0, 12.0, 0.0), false, dt);
+        f.frame(false, Vec3::new(0.0, 9.0, 0.0), false, dt);
+        assert!(!f.in_window(), "3 m below the top: no fall yet");
+        f.frame(false, Vec3::new(0.0, 7.5, 0.0), false, dt);
+        assert!(f.in_window(), "4.5 m below the top, still in the air");
+        f.frame(true, Vec3::new(0.0, 1.0, 0.0), false, dt);
+        assert!(f.in_window() && (f.depth - 11.0).abs() < 1e-3);
+        // walking down a slope: 3 cm a frame for 10 s
+        let mut f = BodyFall::default();
+        for k in 0..600 {
+            f.frame(true, Vec3::new(k as f32 * 0.05, 50.0 - k as f32 * 0.03, 0.0), false, dt);
+            assert!(!f.in_window(), "frame {k}");
+        }
+        // the origin moved by -8 m: positions of the old origin go with it
+        let mut f = BodyFall::default();
+        f.frame(true, Vec3::new(3.0, 4.0, 5.0), false, dt);
+        f.frame(true, Vec3::new(3.0, -4.0, 5.0), true, dt);
+        assert!(!f.in_window());
+        // ... also while it is in the air
+        f.frame(false, Vec3::new(3.0, -3.0, 5.0), false, dt);
+        f.frame(false, Vec3::new(3.0, 5.0, 5.0), true, dt);
+        f.frame(true, Vec3::new(3.0, 4.5, 5.0), false, dt);
+        assert!(!f.in_window(), "{f:?}");
+    }
+
+    /// (THE IN-GAME TESTER 2026-11-03) no attacker named: a hostile in its attack animation in reach is the evidence; an
+    /// idle one is never named, the hit is the environment's.
+    #[test]
+    fn an_unknown_attacker_never_names_an_idle_enemy() {
+        assert_eq!(blame(false, false, false, true), Blame::Attacking);
+        assert_eq!(blame(false, false, false, false), Blame::Environment);
+        assert_eq!(blame(false, false, true, true), Blame::Fall, "a fall stays a fall with a hostile swinging nearby");
+        assert_eq!(blame(true, false, false, false), Blame::Attacker);
+    }
+
     /// (ER party S2) Donald drowns in shallower water than Sora; Goofy at Sora's depth; a hit on a friend leader: the
-    /// direction from the attacker, his capsule centre, no reaction for a tick, the attacker given; the cap.
+    /// direction from the attacker, his capsule centre, no reaction for a tick, the attacker given.
     #[test]
     fn a_friend_leaders_water_and_hits() {
         assert!((water_depth_for(150.0, (34.0, 89.0, 91.0)) - 150.0).abs() < 1e-3);
@@ -616,8 +761,6 @@ mod tests {
         let tick = friend_hit(&lead, None, 3.0, kh_core::TargetId::NONE, Vec3::new(100.0, 0.0, 0.0), 0.0, 40.0);
         assert_eq!(tick.info.victim_result, kh_core::host::ReactionResult::NoReaction);
         assert!(tick.takes_hp() && !tick.attacker.valid && tick.direction == Vec3::X);
-        assert_eq!(capped(500.0, 120), 120.0);
-        assert_eq!(capped(50.0, 0), 50.0);
     }
 
     /// (IMPL_ER67) The user's log, 111.6 s: Y to the game, the item given, the body's 60071: Sora runs on through it; the

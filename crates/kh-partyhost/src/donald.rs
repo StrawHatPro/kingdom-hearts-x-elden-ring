@@ -221,8 +221,11 @@ pub struct Installed {
     pub unknown: Vec<String>,
 }
 
-/// (DON-PROG) The last tuning's inputs: the host's `don.*` ctl pairs and Sora's MP cost factor in force.
-static TUNING: std::sync::Mutex<Option<(Vec<(String, String)>, Option<f32>)>> = std::sync::Mutex::new(None);
+/// (DON-PROG) A tuning's inputs: the host's `don.*` ctl pairs and Sora's MP cost factor in force.
+type Tuning = (Vec<(String, String)>, Option<f32>);
+
+/// (DON-PROG) The last tuning's inputs.
+static TUNING: std::sync::Mutex<Option<Tuning>> = std::sync::Mutex::new(None);
 
 /// (DON-PROG) TUNING WITHOUT A REBUILD, the whole route (the host calls it at the party's start and at every ctl
 /// reload): the two foundation sheets ([`sheet_data`]) and the progression sheet read again; Donald's MP costs scaled
@@ -268,7 +271,7 @@ fn install_with(pairs: Vec<(String, String)>, scale: Option<f32>) -> Installed {
 /// the one in force, the tuning is installed again with it (the last ctl keys kept). The installed result when it changed.
 pub fn follow_cost_scale(scale: f32) -> Option<Installed> {
     let (pairs, now) = TUNING.lock().ok().map(|t| t.clone().unwrap_or_default()).unwrap_or_default();
-    if now.is_some_and(|n| (n - scale).abs() < 1e-6) || !(scale > 0.0) {
+    if now.is_some_and(|n| (n - scale).abs() < 1e-6) || scale.partial_cmp(&0.0).is_none_or(std::cmp::Ordering::is_le) {
         return None;
     }
     let done = install_with(pairs, Some(scale));
@@ -297,9 +300,10 @@ pub fn steps_of(tokens: &[String]) -> (Vec<DonStep>, Vec<String>) {
 
 /// (DON-PROG) THE RULE (pure): the boss rows whose steps Donald is due: the boss is beaten (`boss:<id>`, Sora's record)
 /// and its steps are not recorded (`don:<id>`). This is both the live grant and THE CATCH-UP of an older save (no
-/// `don:` record at all: every beaten boss's steps once).
+/// `don:` record at all: every beaten boss's steps once). (GF-STATS) A row with only raw HP / MP / slot steps has no magic step:
+/// crate::growth gives those, on its own record.
 pub fn don_due<'a>(rows: &'a [kh_host::bossrewards::DonRow], records: &[String]) -> Vec<&'a kh_host::bossrewards::DonRow> {
-    rows.iter().filter(|r| kh_host::bossrewards::recorded(records, &r.boss) && !records.iter().any(|k| k.eq_ignore_ascii_case(&don_record(&r.boss)))).collect()
+    rows.iter().filter(|r| !r.steps.is_empty() && kh_host::bossrewards::recorded(records, &r.boss) && !records.iter().any(|k| k.eq_ignore_ascii_case(&don_record(&r.boss)))).collect()
 }
 
 impl PartyRuntime {
@@ -374,6 +378,12 @@ impl PartyRuntime {
     pub fn don_after_step(&mut self, sora: &mut kh_core::Sora, events: &[kh_core::Event], dt: f32) {
         let _ = follow_cost_scale(sora.status().mp_cost_scale); // Donald's MP costs scale with Sora's difficulty
         for e in events {
+            // (GF-THREAT) Sora's hits and guards count in the threat book, as a friend's
+            match e.kind {
+                kh_core::host::EventKind::Hit { record, .. } => kh_party::goofy::threat::sora_hit(&mut self.party, record.target),
+                kh_core::host::EventKind::PlayerGuarded { hit, .. } => kh_party::goofy::threat::sora_guard(&mut self.party, hit.causer),
+                _ => {}
+            }
             match e.kind {
                 kh_core::host::EventKind::Hit { record, .. } if record.attribute == kh_core::enums::ETresDamageAttribute::Thunder && record.damage > 0.0 => donald::ai::note_sora_thunder(&mut self.party),
                 kh_core::host::EventKind::PlayerGuarded { .. } => donald::ai::note_guard(&mut self.party, donald::cast::SORA_MEMBER),
@@ -429,6 +439,12 @@ impl<'a> AuraTargets<'a> {
 impl kh_core::Targets for AuraTargets<'_> {
     fn enumerate(&self, out: &mut Vec<kh_core::host::TargetInfo>) {
         self.inner.enumerate(out)
+    }
+    fn hit_bone(&self, id: kh_core::TargetId, at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        self.inner.hit_bone(id, at) // (AUDIT-B W-FIN, forwarded by PARTY-AI: the trait's new methods reach the host)
+    }
+    fn bone_pose(&self, id: kh_core::TargetId, bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        self.inner.bone_pose(id, bone) // (AUDIT-B W-FIN)
     }
     fn script_hold(&mut self, id: kh_core::TargetId, hold: Option<kh_core::host::ScriptHold>) {
         self.inner.script_hold(id, hold) // (ZETTA) Zettaflare's held target
@@ -517,6 +533,9 @@ impl kh_core::Targets for AuraTargets<'_> {
     }
     fn size_class(&self, id: kh_core::TargetId) -> u8 {
         self.inner.size_class(id)
+    }
+    fn stagger_ask(&mut self, id: kh_core::TargetId, ask: kh_core::host::StaggerAsk) -> bool {
+        self.inner.stagger_ask(id, ask) // (GF-BREAK)
     }
     fn element_affinity(&self, id: kh_core::TargetId) -> Option<[i32; 8]> {
         self.inner.element_affinity(id)
@@ -654,7 +673,7 @@ mod prog_host_tests {
         assert!(t.problems.is_empty(), "{:?}", t.problems);
         for d in &t.don {
             let (steps, bad) = steps_of(&d.steps);
-            assert!(bad.is_empty() && !steps.is_empty(), "don.{}: {bad:?}", d.boss);
+            assert!(bad.is_empty() && !(steps.is_empty() && d.growth.is_empty()), "don.{}: {bad:?}", d.boss);
         }
         // every boss beaten, in the table's order then backwards: every line at its top, every Banish level. (the user,
         // 2026-10-22: -za in the DLC) Forward the DLC boss comes last (no MP step); backward it comes first and gives every
@@ -662,7 +681,7 @@ mod prog_host_tests {
         // (DONLINE2) line 2 from its own three bosses per element (Light: the Tree Sentinel + two): exactly Lv 3, no MP step
         for reverse in [false, true] {
             let mut r = rt(true);
-            let mut rows = t.don.clone();
+            let mut rows: Vec<_> = t.don.iter().filter(|d| !d.steps.is_empty()).cloned().collect(); // (GF-STATS) the rows with magic
             if reverse {
                 rows.reverse();
             }
@@ -693,9 +712,9 @@ mod prog_host_tests {
         rec.push("boss:bayle".into());
         let got = th.don_claim_due(&table().don, &mut rec);
         assert_eq!(got[0].1, vec![Grant::Tier(Element::Thunder, 4), Grant::Ultimate(Element::Thunder)]);
-        // Margit: Thunder 1 (+ its Attunement; DONLINE2: no Ball Lightning); Messmer: Zettaflare
+        // Margit: Thunder 1 (+ its Attunement; DONLINE2: no Ball Lightning); Elden Beast: Zettaflare
         records.push("boss:margit".into());
-        records.push("boss:messmer".into());
+        records.push("boss:elden_beast".into());
         let got = r.don_claim_due(&t.don, &mut records);
         assert_eq!(got[0].1, vec![Grant::Tier(Element::Thunder, 1), Grant::Attunement(Element::Thunder)]);
         assert_eq!(got[1].1, vec![Grant::Arcane(ArcaneLine::Zettaflare, 1)]);
@@ -771,7 +790,7 @@ mod prog_host_tests {
         // the reward tokens: don: and the old kit: alike
         assert_eq!(crate::FriendReward::parse("don:AERO_FLOAT"), Some(crate::FriendReward::Don(DonAbility::AeroFloat)));
         assert_eq!(crate::FriendReward::parse("kit:AERO_FLOAT"), Some(crate::FriendReward::Don(DonAbility::AeroFloat)));
-        assert!(matches!(crate::FriendReward::parse("kit:TORNADO_COPTER"), Some(crate::FriendReward::Kit(_))), "Goofy's stay");
+        assert!(matches!(crate::FriendReward::parse("kit:SECOND_WIND"), Some(crate::FriendReward::Kit(_))), "Goofy's stay");
         assert_eq!(level_abilities(PartyChara::Donald, 9, 10), vec!["Low Profile".to_string()]);
         assert!(level_abilities(PartyChara::Goofy, 1, 99).is_empty());
     }
@@ -824,7 +843,7 @@ mod prog_host_tests {
             let body = &text[text.find(start).expect(start)..];
             let body = &body[..body.find("
 }").unwrap()];
-            body.lines().filter_map(|l| l.trim_start().strip_prefix("fn ")).map(|l| l.split(|c: char| c == '(' || c == '<').next().unwrap().to_string()).collect()
+            body.lines().filter_map(|l| l.trim_start().strip_prefix("fn ")).map(|l| l.split(['(', '<']).next().unwrap().to_string()).collect()
         };
         let core = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../kh-core/src/host/targets.rs")).unwrap();
         let mine = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/donald.rs")).unwrap();

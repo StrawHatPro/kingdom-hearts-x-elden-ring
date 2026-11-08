@@ -11,8 +11,8 @@
 //!   (never behind it: that is where Donald and the camera behind him are) and the line's far end, its centre line on it;
 //! - a ring (two long sides, one thin) sits around the line (its thin axis along it, its centre on it);
 //! - anything else (a ring turning about the beam's start, a lump) is centred on the line.
-//! The cards and rings may stray as far as the event authored them (BEHIND_OK, SIDE_OK, RING_OK) and no further.
-//! Several aims (level, rising, falling, sideways) and the beam's girth for a small and a huge target.
+//!   The cards and rings may stray as far as the event authored them (BEHIND_OK, SIDE_OK, RING_OK) and no further.
+//!   Several aims (level, rising, falling, sideways) and the beam's girth for a small and a huge target.
 //!
 //! The pack: `ZETTA_FX_DIR` (a `.../vfx` folder), else the shipped test-level pack `build/play/donpack/party/vfx`, else
 //! ZETTA's staging pack; skipped (with a note) when none is there.
@@ -360,7 +360,7 @@ fn the_ending_beams_card_length_table_covers_its_cards() {
         w.register(EffectDef::parse(&text).expect("the effect parses"));
         let x = Vec3::X;
         let place = xform(Vec3::from_slice(row.offset), Vec3::from_slice(row.rotation), Vec3::ONE);
-        let Some(id) = w.spawn(row.asset, place, SpawnOptions { seed: Some(7), ..SpawnOptions::default() }) else { continue };
+        let Some(_id) = w.spawn(row.asset, place, SpawnOptions { seed: Some(7), ..SpawnOptions::default() }) else { continue };
         let dt = 1.0 / 60.0;
         let mut t = 0.0f32;
         let mut k = 0usize;
@@ -369,7 +369,7 @@ fn the_ending_beams_card_length_table_covers_its_cards() {
             w.step(dt);
             t += dt;
             k += 1;
-            if k % 15 != 0 {
+            if !k.is_multiple_of(15) {
                 continue;
             }
             let mut out = DrawList::default();

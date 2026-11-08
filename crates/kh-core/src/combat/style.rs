@@ -4,6 +4,9 @@
 //! (slot 830 0x1413F0ED0). The form itself (start, finish commands, end) is `form.rs`; the
 //! queue the commands go to is `situation.rs`.
 //!
+//! (weapons P3) The offer is data: the held Keyblade's forms (`form::offer_now`, sheets/port/sora-keyblade-forms.json),
+//! the first stage outside a form and the second stage inside a first stage, ready forms only (`form::ready`).
+//!
 //! Not here: the anti form (controller+0x888 == 0x8B), the game flags of the tick whose meaning
 //! is open (F open question 3: taken as "formchanges available"), swimming, the periodic add of
 //! `AwardAtMax` step 2 (its flag is not identified).
@@ -147,7 +150,6 @@ fn roll_grand_magic(cx: &mut Ctx) -> bool {
 
 /// The grand-magic bookkeeping is cleared when such a command was used (magic spec J 5.5:
 /// controller+0xB40, +0xB4C, arrays +0xB98 / +0xBA8).
-#[allow(dead_code)]
 pub(crate) fn clear_grand(cx: &mut Ctx) {
     cx.pawn.combat.style.clear();
 }
@@ -156,11 +158,24 @@ pub(crate) fn clear_grand(cx: &mut Ctx) {
 fn award_at_max(cx: &mut Ctx) -> bool {
     let max = if P.form_gauge_max > 0.0 { P.form_gauge_max } else { 100.0 };
     // 1. the pending flag against the HUD: outside a form it stands while the HUD still has 0x94.
+    // (weapons P3) generally: while the HUD still has the held Keyblade's offer for the form level (none for the Kingdom
+    // Key inside Second Form: unchanged); and a form outside the Second Form family loses its "finish given" (+0xB5D)
+    // when its finish command left the HUD (not while RISKCHARGE runs: ctrl+0x880 == 0xB3), so the next full gauge
+    // gives it anew.
     {
-        let has = cx.pawn.combat.situation.has(CHANGE_L1);
-        let f = &mut cx.pawn.combat.form;
-        if !f.finish_pending && f.award_pending && f.level == 0 {
-            f.award_pending = has;
+        let f = cx.pawn.combat.form;
+        if f.finish_pending {
+            if f.cmd != 0 && !form::is_second_form(f.cmd) {
+                let finish = form::current_finish(cx);
+                // (P3) the HUD's own query: a finish command under a guard counter's prompt is still in slot B (hud_has).
+                if !(finish != 0 && cx.pawn.combat.situation.hud_has(finish)) && f.command_in_action != 0xB3 {
+                    cx.pawn.combat.form.finish_pending = false;
+                }
+            }
+        } else if f.award_pending {
+            if let Some(row) = form::offered(form::weapon_type(&cx.pawn.status), f.level) {
+                cx.pawn.combat.form.award_pending = cx.pawn.combat.situation.has(row.cmd);
+            }
         }
     }
     // 2. (the periodic add: not identified.) The command cool-down blocks the rest.
@@ -176,10 +191,11 @@ fn award_at_max(cx: &mut Ctx) -> bool {
     form::set_style_finish_command(cx, true, false);
     let offered = roll_grand_magic(cx);
     if !offered && !cx.pawn.combat.form.finish_pending {
-        let f = cx.pawn.combat.form;
         // No second formchange inside Second Form; weapon type 1 (the Kingdom Key): 0x94.
-        if !form::is_second_form(f.cmd) && f.level == 0 {
-            situation::enqueue(cx, CHANGE_L1, -1.0);
+        // (weapons P3) by the held Keyblade's weapon type and the form level (0: its first stage, 1: inside a first
+        // stage, its second), only a READY form (the pending rule: form::ready).
+        if let Some(cmd) = form::offer_now(cx) {
+            situation::enqueue(cx, cmd, -1.0);
         }
     }
     cx.pawn.combat.style.clear();
@@ -188,6 +204,8 @@ fn award_at_max(cx: &mut Ctx) -> bool {
 
 /// `StyleGaugeTick(dt)`: every controller frame.
 pub(crate) fn tick(state: &StateData, cx: &mut Ctx, dt: f32) {
+    // (F-RAGE) every frame: Rage Form's HP-loss offer, its cooldown and the battle's count reset (combat/forms/rage.rs).
+    super::forms::rage::watch(state, cx, dt);
     // "current state is of class StyleChange: return": points wait during the transformation.
     if state.id() == StateId::Stylechange {
         return;
@@ -213,6 +231,10 @@ pub(crate) fn tick(state: &StateData, cx: &mut Ctx, dt: f32) {
     }
     let pending = award_at_max(cx);
     cx.pawn.combat.form.award_pending = pending;
+    // (weapons P3) the held form's package, every frame (combat/forms `tick`).
+    if let Some((m, row)) = super::forms::of_current(cx) {
+        (m.tick)(state, cx, row, dt);
+    }
     if cx.pawn.combat.form.style_fix {
         return;
     }

@@ -117,6 +117,8 @@ pub struct SavePointMenu {
     /// of its own above the menu. Off by default (a host switches it on).
     pub confirm_title: bool,
     dialog: Movie,
+    /// (ER-POPUPS) KH3's layout of the window (fitted to its text: crate::question::DialogFit; a choice of three keeps its own).
+    dialog_fit: crate::question::DialogFit,
     /// The question is up: the cursor (0 = Yes, 1 = No).
     asking: Option<usize>,
     dialog_closing: bool,
@@ -154,7 +156,7 @@ impl SavePointMenu {
         let strings = pack.string_table("kh3_menu");
         let dialog = pack.movie_linked("Dialog", &crate::camp_menu::LIBRARIES)?;
         let system = pack.string_table("kh3_system");
-        Ok(SavePointMenu { movie: Movie::new(def), fonts, strings, open: false, commands: Vec::new(), disabled: Vec::new(), cursor: 0, decided: None, texts: Vec::new(), confirm_title: false, dialog: Movie::new(dialog), asking: None, dialog_closing: false, system, host_icons: Vec::new(), host_choices: Vec::new(), ask_choice: None, choice: None })
+        Ok(SavePointMenu { movie: Movie::new(def), fonts, strings, open: false, commands: Vec::new(), disabled: Vec::new(), cursor: 0, decided: None, texts: Vec::new(), confirm_title: false, dialog: Movie::new(dialog), dialog_fit: Default::default(), asking: None, dialog_closing: false, system, host_icons: Vec::new(), host_choices: Vec::new(), ask_choice: None, choice: None })
     }
 
     pub fn is_open(&self) -> bool {
@@ -192,7 +194,13 @@ impl SavePointMenu {
                 self.dialog.add_instance("", "DialogButton", name);
             }
             self.dialog.set_visible("dialogText", labels.len() <= 2);
-            self.dialog.set_text("dialogText.textField", &text, &fonts);
+            // (ER-POPUPS) a text and up to two buttons: the window fitted to its text; a choice of three keeps its own place
+            if labels.len() <= 2 {
+                self.dialog_fit.lay(&mut self.dialog, &fonts, &text, &labels);
+            } else {
+                self.dialog_fit.unlay(&mut self.dialog);
+                self.dialog.set_text("dialogText.textField", &text, &fonts);
+            }
         }
         self.dialog_closing = false;
         self.asking = Some(cursor);
@@ -242,8 +250,9 @@ impl SavePointMenu {
             // (IMPL_ER26) the window is as tall as a line of text and two buttons: a choice of three has no text line (its
             // options say it) and its buttons start where the text would stand
             let top = if self.question_buttons() > 2 { text_y.map_or(y - BUTTON_PITCH, |t| t + THREE_TOP) } else { y };
+            let (cx, cy) = if self.question_buttons() > 2 { (0.0, 0.0) } else { self.dialog_fit.canvas() }; // (ER-POPUPS)
             for (n, name) in BUTTON_NAMES.into_iter().enumerate() {
-                self.dialog.set_position(name, x, top + BUTTON_PITCH * n as f32, 0.0);
+                self.dialog.set_position(name, x + cx, top + cy + BUTTON_PITCH * n as f32, 0.0);
             }
         }
     }
@@ -365,6 +374,14 @@ impl SavePointMenu {
         let (commands, disabled, texts) = (self.commands.clone(), self.disabled.clone(), self.texts.clone());
         let texts: Vec<(SavePointCommand, &str, &str)> = texts.iter().map(|(c, name, detail)| (*c, name.as_str(), detail.as_str())).collect();
         self.open_with_texts(&commands, &disabled, &texts);
+        self.back_at(command);
+    }
+
+    /// (THE TESTER 2026-11-03: after Party Formation from the save-point menu "the menu's cursor returns to Save instead
+    /// of Party Formation") A MENU JUST OPENED COMES BACK FROM ONE OF ITS SCREENS: the clip's `inBack` (0x1416F7F00) and
+    /// the cursor on the entry that screen was opened from, KH3's rule for its own screens (Save -> Save, Load -> Load).
+    /// An entry the menu does not hold: the cursor stays.
+    pub fn back_at(&mut self, command: SavePointCommand) {
         self.movie.goto_and_play(ROOT, "inBack");
         if let Some(at) = self.commands.iter().position(|c| *c == command) {
             let left = self.cursor;

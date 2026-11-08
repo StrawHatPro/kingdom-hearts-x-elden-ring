@@ -412,6 +412,17 @@ pub fn publish(config: &UserConfig) {
     let (sens_v, sens_h) = config.camera_sensitivity();
     CAMERA.store(flip_v as u32 | (flip_h as u32) << 1 | (!config.camera_auto() as u32) << 2 | (sens_v as u32) << 8 | (sens_h as u32) << 16, Ordering::Relaxed);
     MASTER.store(config.get(O::MasterVolume).min(10) as u32, Ordering::Relaxed);
+    // (AUDIT-C) Combo Cam (byte 3) and Keyblade Cinematics (byte 1 bit 2) for BP_TresIsGameEnablePerformanceCamera
+    PERF.store(u32::from(config.get(O::ComboCam).min(2)) | u32::from(config.get(O::KeybladeCinematics) != 0) << 8, Ordering::Relaxed);
+}
+
+/// (AUDIT-C) bits 0..8: Combo Cam (0 Auto, 1 On, 2 Off); bit 8: Keyblade Cinematics Basic. KH3's defaults: Auto, Normal.
+static PERF: AtomicU32 = AtomicU32::new(0);
+
+/// (AUDIT-C) The inputs of KH3's performance-camera test (kh_camera::form_bp::PerfCamera) from the Config rows in force.
+pub fn perf_camera() -> kh_camera::form_bp::PerfCamera {
+    let p = PERF.load(Ordering::Relaxed);
+    kh_camera::form_bp::PerfCamera { combo_cam: (p & 0xFF).min(2) as u8, keyblade_cinematics: p & 0x100 == 0, restricted: false }
 }
 
 /// The KH camera's stick factors (x, y: flips and sensitivities; 1, 1 at KH3's defaults) and whether the camera

@@ -53,9 +53,9 @@ impl Pixels {
         let texels = (info.width * info.height) as usize;
         let rgba: Vec<u8> = match info.color_type {
             png::ColorType::Rgba => buffer,
-            png::ColorType::Rgb => buffer.chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
+            png::ColorType::Rgb => buffer.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
             png::ColorType::Grayscale => buffer.iter().flat_map(|g| [*g, *g, *g, 255]).collect(),
-            png::ColorType::GrayscaleAlpha => buffer.chunks_exact(2).flat_map(|p| [p[0], p[0], p[0], p[1]]).collect(),
+            png::ColorType::GrayscaleAlpha => buffer.as_chunks::<2>().0.iter().flat_map(|p| [p[0], p[0], p[0], p[1]]).collect(),
             other => return Err(format!("{}: colour type {other:?} after expansion", path.display())),
         };
         if rgba.len() != texels * 4 {

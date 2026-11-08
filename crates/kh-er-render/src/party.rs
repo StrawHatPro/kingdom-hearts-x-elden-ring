@@ -28,6 +28,13 @@ use crate::{Body, PortraitFrame};
 pub const DONALD: u8 = 1;
 pub const GOOFY: u8 = 2;
 pub const TEAM: u8 = 3;
+/// (P8 MOOGLE NPC) KH3's Synthesis Moogle at Roundtable Hold (`PACK/party/n_ex028`, tools/moogle_pack.js): drawn by the same
+/// party path (his own translated shaders, the hybrid light, his probe), never a party member.
+pub const MOOGLE: u8 = 8;
+/// (MOOGLE-HOVER, THE USER 2026-11-05: "The moogle should look and animate exactly like the one in Twilight Town") KH3's Twilight Town
+/// Synthesis Moogle n_ex014 (g_ex_mogli_01, TresShopActor, m_ShopID TT_MOOGLE1; tt_01_npc g_tt_SynthesisShop87): his own
+/// materials (no CRT screen-RGB emissive), his swaying M_001; `PACK/party/n_ex014` (tools/moogle_pack.js --npc n_ex014).
+pub const MOOGLE_TT: u8 = 9;
 
 /// (RSF) The folder of a draw id from the pack's roster (`PACK/party/party.json`: `members[].member` -> `dir`): a character
 /// added to the roster is drawn with no code naming him (every path of gfx/party.rs is per member).
@@ -43,6 +50,8 @@ pub fn dir_of(chara: u8) -> Option<&'static str> {
         DONALD => Some("n_ex001"),
         GOOFY => Some("n_ex002"),
         TEAM => Some("team"),
+        MOOGLE => Some("n_ex028"), // (P8, P8 fix: KH3's floating field Moogle n_ex028 of g_ex_mogli_02)
+        MOOGLE_TT => Some("n_ex014"), // (MOOGLE-HOVER) KH3's Twilight Town Moogle
         _ => None,
     }
 }
@@ -363,7 +372,9 @@ mod tests {
         set_void_char(None);
         assert!(void_char_now().is_none());
         assert_eq!(dir_of(TEAM), Some("team"));
-        assert_eq!(dir_of(9), None);
+        assert_eq!(dir_of(10), None); // (MOOGLE-HOVER) 9 is the Twilight Town Moogle
+        assert_eq!(dir_of(MOOGLE_TT), Some("n_ex014"), "(MOOGLE-HOVER) the Twilight Town Moogle's pack folder");
+        assert_eq!(dir_of(MOOGLE), Some("n_ex028"), "(P8 fix) the floating Moogle's pack folder");
         // (ERT4) the friend leader's feet reach the level anchor, carrier or not, and r.party = 0 drops them
         let feet = Vec3::new(300.0, 0.0, 0.0);
         set_hero_carrier(None);

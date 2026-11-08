@@ -8,8 +8,10 @@
 //! and the MP is deducted there.
 //!
 //! Literal readings and what is not here (each reported):
-//! - swimming (flag 4, the underwater remap, the SWIM exit), weapon forms other than the
-//!   Kingdom Key's, turn-type units: not reachable in the port;
+//! - swimming (flag 4, the underwater remap, the SWIM exit): not reachable in the port;
+//! - (HM-MAGIC) the weapon forms: the held form's magic set (pawn vt+0x1440 0x141780ED0: `p_ex001_hm_MagicSet` in the six
+//!   forms that install it, `magic/hm_set.rs`), its turn-type units (MagicTurn / MagicSpin, the shot 0x141380470) and
+//!   vt+0x3C0's moving clear are made; the `_bz_` / `_dw_` sets and the form {2, 4, 16} shot 0x14137E110 are not;
 //! - `Jump+0xF8` (a flow jump) refuses the cast; the friend "combo finish" roll (pawn vt+0x28C0)
 //!   and the HUD hint 0x14140DF30 are not made;
 //! - `SetMovementMode(Falling)` at the shot (A 1.4 step 11) is made on the ground too, as the
@@ -102,7 +104,6 @@ pub(crate) struct FireMagic {
     effect: Option<EffectHandle>,
 }
 
-#[allow(dead_code)]
 impl FireMagic {
     /// Reset (0x14136ECF0).
     pub const RESET: FireMagic = FireMagic {
@@ -133,8 +134,10 @@ impl FireMagic {
         self.flags & bits != 0
     }
 
-    fn unit(&self) -> Option<SpellUnit> {
-        spells::unit(self.cmd)
+    /// (HM-MAGIC) pawn vt+0x1440 (0x141780ED0): the unit of the command in the magic set the held form `form` installed
+    /// (the hm set's when it has one, else `p_ex001_MagicSet`'s; no form: the base set).
+    fn unit_in(&self, form: i32) -> Option<SpellUnit> {
+        crate::magic::hm_set::unit(form, self.cmd)
     }
 
     fn target_info(&self, cx: &Ctx) -> Option<TargetInfo> {
@@ -190,11 +193,6 @@ impl FireMagic {
     /// `CanAttack`'s FIREMAGIC row (combat strand A 2; `T` and the final latch are the caller's).
     pub fn can_attack(&self, s: &Pawn, max_combo: i32) -> bool {
         s.queue.queued_id() != Some(StateId::Attack) && !self.has(flag::FOLLOW_UP) && self.bullets > 0 && self.combo_index < max_combo
-    }
-
-    /// `CanLaunch` adds: the cast must not be a finisher.
-    pub fn can_launch(&self, s: &Pawn, max_combo: i32) -> bool {
-        self.can_attack(s, max_combo) && !self.has(flag::FINISH)
     }
 
     /// `TryAttack` on a running cast (0x141437BEA): the follow-up is noted; returns (the next
@@ -285,7 +283,6 @@ pub(crate) fn can_magic(state: &StateData, s: &Pawn, cmd: u8) -> bool {
         StateData::UseItem(_) => s.queue.flags.enable_change,
         // DAMAGE: nothing queued; Damage+0x90 == 0; Damage+0x88 in {1, 2}; m_bEnableChange.
         StateData::Damage(d) => s.queue.nothing_queued() && matches!(d.kind.value(), 1 | 2) && s.queue.flags.enable_change,
-        #[allow(unreachable_patterns)]
         _ => false,
     }
 }
@@ -293,6 +290,9 @@ pub(crate) fn can_magic(state: &StateData, s: &Pawn, cmd: u8) -> bool {
 /// `TryMagic(targetPawn, targetComp, stickMag, stickYaw, bGrand)` (slot 53 0x14143AEB0; A 2.3).
 /// The command is the pawn's pending command (pawn+0xE00, written by `ExecCommand`).
 pub(crate) fn try_magic(state: &mut StateData, cx: &mut Ctx, target: TargetId, target_self: bool, stick: f32, stick_yaw: f32, grand: bool) -> bool {
+    if !crate::nocombat::allows(crate::nocombat::Fighter::Sora, crate::nocombat::Act::Magic) {
+        return false; // (NOCOMBAT)
+    }
     let s = &mut *cx.pawn;
     let cmd = s.magic.pending_cmd;
     if !can_magic(state, s, cmd) {
@@ -456,7 +456,7 @@ pub(crate) fn muzzle(pawn: &Pawn) -> Option<Vec3> {
 impl FireMagic {
     /// `OnShot` (state+0x40 slot 69 0x14137BB30; A 1.4, I 0.1, I 3.1).
     fn on_shot(&mut self, cx: &mut Ctx) {
-        let Some(unit) = self.unit() else { return };
+        let Some(unit) = self.unit_in(cx.pawn.combat.form.cmd) else { return };
         let sp = Sheet::Spells;
         // 1.
         let had = self.flags;
@@ -475,6 +475,11 @@ impl FireMagic {
             if !grand && cost != 0 && cx.pawn.status.mp >= cx.pawn.status.max_mp() {
                 self.flags |= flag::FULL_MP;
             }
+        }
+        // 3. (HM-MAGIC) a turn-type unit (vt+0x3A8 0x14136F400) -> vt+0x3F0 = 0x141380470, and OnShot returns.
+        if let Some(class) = crate::magic::hm_set::turn_class(cx.pawn.combat.form.cmd, self.cmd) {
+            self.shot_turn(cx, class, unit.mp);
+            return;
         }
         let (yaw, origin) = (cx.pawn.yaw, cx.pawn.cmc.location);
         let facing = {
@@ -552,6 +557,53 @@ impl FireMagic {
             s.cmc.set_falling();
         }
     }
+
+    /// (HM-MAGIC) The turn-type shot, FireMagic vt+0x3F0 = 0x141380470 (magic/hm_set.rs): the unit's `TresProj_Mag*CL`
+    /// class at P = the form weapon's ATK_01 (pawn vt+0x1410(LocationIndex): every MagicTurn / MagicSpin Shot notify
+    /// leaves LocationIndex 0; no height limit and no wall trace, unlike OnShot's step 7), T = the root + (0, 0, 100),
+    /// D = the actor rotation's vector (pitch removed in Begin): spawner vt+0x788(class, pawn, P, T, D, team, 0, 0); the
+    /// setters 0x1100(cmd, -1), 0x1130(combo index), 0x1140(A, A at Begin, B at Begin), 0x1160(full MP), 0x1120(finish
+    /// end, grand) and NO homing target (neither 0x1220 nor 0x1210); the fire effects at P (0x11F8: no clip sets
+    /// m_bAttachFireEffect); StartFire. Then BulletCount += 1, the MP unless grand (0x14140D560), flags |= 0x200000, pawn
+    /// vt+0x1D80(1), gravity on, Falling unless swimming. Neither the Water / Aero specials nor the Cure Converter nor
+    /// step 12's controller call are on this path. T only feeds the spawner's homing (the CL classes have none).
+    fn shot_turn(&mut self, cx: &mut Ctx, class: &'static str, mp: MpCost) {
+        let Some(def) = crate::magic::hm_set::stage(class) else {
+            cx.pawn.note("(HM-MAGIC) a turn-type unit's CL class is not in sora-hm-magic: nothing was spawned");
+            return;
+        };
+        let at = crate::magic::hm_set::muzzle(cx).unwrap_or(cx.pawn.cmc.location);
+        let a = cx.pawn.yaw.to_radians();
+        let direction = Vec3::new(a.cos(), a.sin(), 0.0);
+        let grand = self.has(flag::GRAND);
+        let args = SpawnArgs {
+            def,
+            position: at,
+            direction,
+            cmd: self.cmd,
+            shoot_flow: 0,
+            finish: self.has(flag::FINISH_END),
+            situation: grand,
+            full_mp: self.has(flag::FULL_MP),
+            combo: [self.combo_index, self.counter_a, self.a_begin, self.b_begin],
+            target: TargetId::NONE,
+            attached: None,
+            fire: true,
+        };
+        projectile::spawn_fired_from(cx, &args, at);
+        self.bullets += 1;
+        if !grand {
+            let combo = cx.pawn.combat.combo;
+            cx.pawn.status.spend_command_mp(mp, combo);
+        }
+        self.flags |= flag::SHOT_FIRED;
+        let s = &mut *cx.pawn;
+        s.combat.hit_flag = true;
+        s.cmc.gravity_off = false;
+        if FALLING_AT_GROUND_SHOT || !on_ground(s) {
+            s.cmc.set_falling();
+        }
+    }
 }
 
 impl PlayerState for FireMagic {
@@ -572,7 +624,7 @@ impl PlayerState for FireMagic {
         }
         (self.a_begin, self.b_begin) = (self.counter_a, self.counter_b);
         cx.pawn.combat.carry = (0, 0);
-        let Some(unit) = self.unit() else { return };
+        let Some(unit) = self.unit_in(cx.pawn.combat.form.cmd) else { return };
         self.direct_pos = unit.direct_pos;
         // 5. Pawn effect slot 1 = the unit's effect group.
         if unit.effect_group >= 0 {
@@ -603,7 +655,7 @@ impl PlayerState for FireMagic {
     /// `Tick` (0x1413794B0; A 1.3).
     fn tick(&mut self, cx: &mut Ctx, dt: f32) {
         let sp = Sheet::Spells;
-        let Some(unit) = self.unit() else {
+        let Some(unit) = self.unit_in(cx.pawn.combat.form.cmd) else {
             cx.pawn.queue.do_chain();
             return;
         };
@@ -645,7 +697,12 @@ impl PlayerState for FireMagic {
                 cx.pawn.status.damage_invalid = false;
                 return;
             }
+            let form = cx.pawn.combat.form.cmd;
             let s = &mut *cx.pawn;
+            // (HM-MAGIC) vt+0x3C0 (0x14136F320): in weapon forms 3, 5, 6, 7, 12, 14, 15, 17, 18, 20, 21 no cast moves.
+            if crate::magic::hm_set::clears_moving(form) {
+                self.flags &= !flag::MOVING;
+            }
             // A finish-end or grand cast is never a moving cast.
             if self.has(flag::FINISH_END | flag::GRAND) {
                 self.flags &= !flag::MOVING;
@@ -653,6 +710,8 @@ impl PlayerState for FireMagic {
             let b = self.has(flag::FINISH_END | flag::GRAND);
             let air = self.has(flag::AIR | flag::SWIM);
             let moving = self.has(flag::MOVING);
+            // (HM-MAGIC) isTurn = vt+0x3A8: the unit of the held form's set is turn type.
+            let turn_clip = if moving { None } else { crate::magic::hm_set::turn_class(form, self.cmd).and_then(|_| crate::magic::hm_set::turn_clip(form, b, air)) };
             // The clip (0x141379D3A..).
             let anim = if self.has(flag::CURE) || unit.cast_type {
                 match (moving, b && !self.has(flag::CURE), air) {
@@ -675,6 +734,10 @@ impl PlayerState for FireMagic {
                     (false, false, false) => AnimId::MagicFireMR,
                     (false, false, true) => AnimId::MagicAirFireMR,
                 }
+            } else if let Some(clip) = turn_clip {
+                // (HM-MAGIC) a turn-type unit standing: !B MagicTurn / MagicAirTurn, B MagicSpin / MagicAirSpin (the form
+                // set's rows: 3381..3384, C381.., 7381.., F381..).
+                clip
             } else {
                 match (b, air) {
                     (false, false) => AnimId::MagicFire,
@@ -701,6 +764,11 @@ impl PlayerState for FireMagic {
                 s.cmc.gravity_off = true;
             }
             // Play(name, slot 0, blendIn -1 (asset), mode 2, effect group, rate 1).
+            // (AUDIT-B W-DATA) the effect group IS the spell unit's m_EffectGroup (0x1413794B0 lines 265-270: uVar34 = unit +8,
+            // TresPlayerMagicAssetUnit.m_EffectGroup at +8 in sheets/reflect; line 567 passes it as the play's 6th argument, and
+            // the pawn's play 0x1405A0D70 makes it the attach component's current group, Set 0x141770D30). So the cast clip's
+            // rows of the spell's group spawn (Twin Yo-Yos' strings, ead_w_so060_com groups 1301 .. 1403) and its group-0 rows do not.
+            s.next_effect_group = Some(unit.effect_group);
             s.anim.play_with(anim, PlayArgs::mode(2, -1.0));
             self.flags |= flag::AIM_PITCH | flag::TURN;
             self.face_yaw = s.yaw;
@@ -805,7 +873,7 @@ impl PlayerState for FireMagic {
         }
         if voice {
             // The voice group the state set for the clip's PlayVoice notify (anim interface vt+0x1F0).
-            if let Some(unit) = self.unit() {
+            if let Some(unit) = self.unit_in(cx.pawn.combat.form.cmd) {
                 let index = if self.has(flag::CURE) && self.target_self {
                     Sheet::Spells.list("cast.cure_voice.sora").get(1).copied().unwrap_or(31.0) as i32
                 } else if self.has(flag::FINISH_END) {

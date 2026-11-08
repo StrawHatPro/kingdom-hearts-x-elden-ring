@@ -21,7 +21,7 @@
 //!   (MyMovement vt+0x580 = SetHoming(false)) and starts the definition's fade m_fAttackFadeTime; a wall hit
 //!   (normal more than 45 deg from up, FUN_14126C8E0) stops the shield with no fade. The shield is taken back by
 //!   the catch clip of the definition (Tick 0x1411C7670 sub-step 4), not by flying home.
-//! Homing is kh-core's TresProjectileMovementComponent law (0x1414859E0 / 0x141481160 `steer`).
+//!   Homing is kh-core's TresProjectileMovementComponent law (0x1414859E0 / 0x141481160 `steer`).
 
 use crate::ids::{Chara, MemberId};
 use crate::tables;
@@ -84,6 +84,11 @@ impl ProjectileKind {
         }
     }
 
+    /// (GF-POLISH) The kind of a sheet key (`proj.<key>.*`).
+    pub fn of_key(key: &str) -> Option<ProjectileKind> {
+        [ProjectileKind::Fire, ProjectileKind::Blizzard, ProjectileKind::Thunder, ProjectileKind::Aero, ProjectileKind::Discus].into_iter().find(|k| k.key() == key)
+    }
+
     /// The sheet key (`proj.<key>.*`).
     pub const fn key(self) -> &'static str {
         match self {
@@ -102,6 +107,15 @@ impl ProjectileKind {
             k => tables::param(&format!("magicset.{}.direct_pos", k.key())) != 0.0,
         }
     }
+}
+
+/// (GF-POLISH, R18) A SHOT GOOFY BATTED BACK (Goofy Tornado's rank 3): the projectile is only its look. It touches nothing but
+/// its target, and there `row` lands through `apply_hit` (`pad::goofy_counters::batted_landed`). (THE USER 2026-11-02: Return
+/// Fire and its MP went with the counters.)
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Batted {
+    pub row: crate::pad::goofy_shots::SoloRow,
+    pub stagger: f32,
 }
 
 /// One attack shape of a projectile, world space: segment `a`..`b` with `radius`.
@@ -142,17 +156,27 @@ pub struct Projectile {
     /// (party P3) A pad-driven Goofy's free throw (no target, or its target lost; our design): seconds of the out
     /// leg left (straight on); then `returning` flies it back to him at its full speed until he catches it.
     pub free: Option<f32>,
+    /// (GF-POLISH) What it is when Goofy batted it back (R18).
+    pub batted: Option<Batted>,
 }
 
 impl Projectile {
     /// The shield thrown by `UTresAttack8_n_ex002_Discus`'s ThrowWeapon (0x1411CD930): `dir` is the
     /// launch direction (normalized), `homing` the throw's homing decision.
     pub fn discus(owner: MemberId, origin: Vec3, dir: Vec3, homing: bool, target: TargetId, target_point: Option<Vec3>) -> Projectile {
-        let mut p = Projectile::spawn_at(ProjectileKind::Discus, owner, Chara::Goofy, origin, 0.0, target, target_point, None);
+        let mut p = Projectile::spawn_at(ProjectileKind::Discus, owner, Chara::Goofy, origin, 0.0, ProjectileAim { target, point: target_point, ground: None });
         p.velocity = dir * p.speed;
         p.homing_on = homing;
         p
     }
+}
+
+/// What a spell is aimed at: the target, its centre (homing aim) and its feet (the put point of a direct-pos spell).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProjectileAim {
+    pub target: TargetId,
+    pub point: Option<Vec3>,
+    pub ground: Option<Vec3>,
 }
 
 fn row(kind: ProjectileKind, k: &str) -> f32 {
@@ -163,11 +187,11 @@ impl Projectile {
     /// `origin` is the cast point; `target_point` the target's centre (homing aim) and `ground`
     /// the target's feet (the put point of a direct-pos spell).
     pub fn spawn(kind: ProjectileKind, owner: MemberId, chara: Chara, origin: Vec3, yaw: f32, target: TargetId, target_point: Option<Vec3>) -> Projectile {
-        Projectile::spawn_at(kind, owner, chara, origin, yaw, target, target_point, None)
+        Projectile::spawn_at(kind, owner, chara, origin, yaw, ProjectileAim { target, point: target_point, ground: None })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn spawn_at(kind: ProjectileKind, owner: MemberId, chara: Chara, origin: Vec3, yaw: f32, target: TargetId, target_point: Option<Vec3>, ground: Option<Vec3>) -> Projectile {
+    pub fn spawn_at(kind: ProjectileKind, owner: MemberId, chara: Chara, origin: Vec3, yaw: f32, aim: ProjectileAim) -> Projectile {
+        let ProjectileAim { target, point: target_point, ground } = aim;
         let (speed, max_speed, accel, turn, delay, homing, life) = match kind {
             ProjectileKind::Discus => {
                 let s = tables::aparam(Chara::Goofy, "Attack8_Discus", "fStartSpeed");
@@ -184,7 +208,7 @@ impl Projectile {
             }
         }
         let start = if kind.direct_pos() { ground.or(target_point).unwrap_or(origin + dir * 300.0) } else { origin };
-        Projectile { kind, owner, chara, position: start, velocity: dir * speed, speed, max_speed, accel, turn, homing_delay: delay, homing_on: homing, life, age: 0.0, target, target_point, hits: [TargetId::NONE; 8], alive: true, returning: false, caught: false, effect: 0, free: None }
+        Projectile { kind, owner, chara, position: start, velocity: dir * speed, speed, max_speed, accel, turn, homing_delay: delay, homing_on: homing, life, age: 0.0, target, target_point, hits: [TargetId::NONE; 8], alive: true, returning: false, caught: false, effect: 0, free: None, batted: None }
     }
 
     pub fn already_hit(&self, t: TargetId) -> bool {

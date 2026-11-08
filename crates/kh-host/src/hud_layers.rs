@@ -21,12 +21,41 @@ use crate::hud::Hud;
 /// (cutscene) "CutscenePause" = the cutscene pause menu (the Pause movie's Continue / Skip Scene), alone on screen.
 /// (new game) "NewGameText" / "NewGameDialog" = the new-game choice menu's words and window, alone on screen.
 /// (CV1) "SpeechBubble" = the conversation system's speech bubble (kh_ui::bubble), over everything of the play.
-pub const LAYERS: [&str; 15] = ["HudTarget", "HudStatus", "HudCommand", "HudLeft", "HudRight", "Pause", "CampMenu", "GameHelp", "Dialog", "GameOver", "SavePoint", "CutscenePause", "NewGameText", "NewGameDialog", "SpeechBubble"];
+/// (F-HUD, INT-F) "HudOperation" = the operation guide (ShooterMode's "<RT hold> Auto-Shot"), a cockpit layer.
+pub const LAYERS: [&str; 16] = ["HudTarget", "HudStatus", "HudCommand", "HudLeft", "HudRight", "HudOperation", "Pause", "CampMenu", "GameHelp", "Dialog", "GameOver", "SavePoint", "CutscenePause", "NewGameText", "NewGameDialog", "SpeechBubble"];
 /// The first menu layer of `LAYERS` (the ones before it are the cockpit, drawn in place).
-pub const FIRST_MENU_LAYER: usize = 5;
+pub const FIRST_MENU_LAYER: usize = layer_index("Pause");
+
+/// (INT-F) The index of a layer in [`LAYERS`] by its name, at compile time (a name not in the list fails the build): hosts
+/// that place pictures of their own between the layers name the layer instead of counting.
+pub const fn layer_index(name: &str) -> usize {
+    let mut i = 0;
+    while i < LAYERS.len() {
+        let (a, b) = (LAYERS[i].as_bytes(), name.as_bytes());
+        if a.len() == b.len() {
+            let mut k = 0;
+            while k < a.len() && a[k] == b[k] {
+                k += 1;
+            }
+            if k == a.len() {
+                return i;
+            }
+        }
+        i += 1;
+    }
+    panic!("no such HUD layer")
+}
 
 /// A rectangle of the output in pixels: x, y, width, height.
 pub type PxRect = (i32, i32, usize, usize);
+
+/// (ER party S6) Where a picture goes: the output's size and the rectangle of it the picture is clipped to (left, top,
+/// width, height; `None` = the whole output).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DrawArea {
+    pub size: (f32, f32),
+    pub clip: Option<(f32, f32, f32, f32)>,
+}
 
 /// The stage -> output matrix and the stage's rectangle (left, top, width, height) for an output of
 /// `width` x `height` pixels.
@@ -129,10 +158,10 @@ fn merge_rects(mut rects: Vec<(i32, i32, i32, i32)>) -> Vec<(i32, i32, i32, i32)
     }
 }
 
-/// (perf) Rasterises the device rectangle (x0, y0, w, h) of the movie into `out` (w * h * 4 bytes, straight alpha):
+/// (perf) Rasterises the device rectangle `rect` (x0, y0, w, h) of the movie into `out` (w * h * 4 bytes, straight alpha):
 /// on this thread, or in horizontal bands on scoped threads when it is large and `perf.bands` > 1.
-#[allow(clippy::too_many_arguments)]
-fn raster_region(pool: &mut Vec<(Canvas, Vec<u8>)>, renderer: &mut Renderer, movie: &Movie, root: &Matrix, x0: i32, y0: i32, w: usize, h: usize, perf: Perf, out: &mut Vec<u8>) {
+fn raster_region(pool: &mut Vec<(Canvas, Vec<u8>)>, renderer: &mut Renderer, movie: &Movie, root: &Matrix, rect: PxRect, perf: Perf, out: &mut Vec<u8>) {
+    let (x0, y0, w, h) = rect;
     let bands = if w * h >= perf.band_pixels.max(1) { perf.bands.min(h / 48).max(1) } else { 1 };
     if pool.len() < bands {
         pool.resize_with(bands, Default::default);
@@ -186,7 +215,7 @@ pub fn draw_movie(draw: &mut Draw, renderer: &mut Renderer, movie: &Movie, root:
 
 /// (perf) [`draw_movie`] with the switches of [`Perf`].
 pub fn draw_movie_with(draw: &mut Draw, renderer: &mut Renderer, movie: &Movie, root: &Matrix, size: (f32, f32), resized: bool, perf: Perf) -> Drawn {
-    draw_movie_in(draw, renderer, movie, root, size, resized, perf, None)
+    draw_movie_in(draw, renderer, movie, root, DrawArea { size, clip: None }, resized, perf)
 }
 
 /// (ER party S6) [`draw_movie_with`] CLIPPED TO A RECTANGLE of the output (left, top, width, height): KH3's ExactFit
@@ -194,9 +223,8 @@ pub fn draw_movie_with(draw: &mut Draw, renderer: &mut Renderer, movie: &Movie, 
 /// than the stage (Elden Ring at 21:9 / 16:10) passes the stage's rectangle (`Layers::clip`) so that pieces placed
 /// beyond the stage's edge (the friends' gauge plates of the status HUD reach 120 stage px past its right edge) do
 /// not show in the pillar / letter box. `None` = the whole output, as before.
-#[allow(clippy::too_many_arguments)]
-pub fn draw_movie_in(draw: &mut Draw, renderer: &mut Renderer, movie: &Movie, root: &Matrix, size: (f32, f32), resized: bool, perf: Perf, clip: Option<(f32, f32, f32, f32)>) -> Drawn {
-    let (width, height) = size;
+pub fn draw_movie_in(draw: &mut Draw, renderer: &mut Renderer, movie: &Movie, root: &Matrix, area: DrawArea, resized: bool, perf: Perf) -> Drawn {
+    let DrawArea { size: (width, height), clip } = area;
     let limit = match clip {
         Some((x, y, w, h)) => kh_ui::Rect::new(x.max(0.0), y.max(0.0), (x + w).min(width), (y + h).min(height)),
         None => kh_ui::Rect::new(0.0, 0.0, width, height),
@@ -237,7 +265,7 @@ pub fn draw_movie_in(draw: &mut Draw, renderer: &mut Renderer, movie: &Movie, ro
         if rects.len() > 1 && total * 10 < one * 8 && total * 10 < cw * ch * 7 {
             for r in &rects {
                 let (rw, rh) = ((r.2 - r.0) as usize, (r.3 - r.1) as usize);
-                raster_region(&mut draw.bands, renderer, movie, root, r.0, r.1, rw, rh, perf, &mut draw.scratch_rgba);
+                raster_region(&mut draw.bands, renderer, movie, root, (r.0, r.1, rw, rh), perf, &mut draw.scratch_rgba);
                 for row in 0..rh {
                     let to = (((r.1 - y0) as usize + row) * cw + (r.0 - x0) as usize) * 4;
                     draw.rgba[to..to + rw * 4].copy_from_slice(&draw.scratch_rgba[row * rw * 4..(row + 1) * rw * 4]);
@@ -251,7 +279,7 @@ pub fn draw_movie_in(draw: &mut Draw, renderer: &mut Renderer, movie: &Movie, ro
         // Only the part that differs.
         let (dw, dh) = ((dx1 - dx0) as usize, (dy1 - dy0) as usize);
         if perf.bands > 1 {
-            raster_region(&mut draw.bands, renderer, movie, root, dx0, dy0, dw, dh, perf, &mut draw.scratch_rgba);
+            raster_region(&mut draw.bands, renderer, movie, root, (dx0, dy0, dw, dh), perf, &mut draw.scratch_rgba);
         } else {
             draw.scratch.reset(dx0, dy0, dw, dh);
             renderer.draw(&mut draw.scratch, movie, root);
@@ -265,7 +293,7 @@ pub fn draw_movie_in(draw: &mut Draw, renderer: &mut Renderer, movie: &Movie, ro
         Drawn::Picture((x0, y0, cw, ch), Some((dx0, dy0, dw, dh)))
     } else {
         if perf.bands > 1 {
-            raster_region(&mut draw.bands, renderer, movie, root, x0, y0, cw, ch, perf, &mut draw.rgba);
+            raster_region(&mut draw.bands, renderer, movie, root, (x0, y0, cw, ch), perf, &mut draw.rgba);
         } else {
             draw.canvas.reset(x0, y0, cw, ch);
             renderer.draw(&mut draw.canvas, movie, root);
@@ -339,7 +367,7 @@ fn start_worker(fonts: kh_ui::Fonts) -> Option<Worker> {
                     draws[job.layer] = Draw::default();
                 }
                 let draw = &mut draws[job.layer];
-                let drawn = draw_movie_in(draw, &mut renderer, &job.movie, &job.root, job.size, job.resized, job.perf, job.clip);
+                let drawn = draw_movie_in(draw, &mut renderer, &job.movie, &job.root, DrawArea { size: job.size, clip: job.clip }, job.resized, job.perf);
                 // (perf) the time of the drawing itself, without the copy of the picture for the other thread
                 let seconds = started.elapsed().as_secs_f64();
                 let redrawn = draw.redrawn;
@@ -500,7 +528,7 @@ impl Layers {
                 }
             }
             let layer_started = Instant::now();
-            match draw_movie_in(&mut layer.draw, &mut self.renderer, movie, root, size, resized, self.perf, clip) {
+            match draw_movie_in(&mut layer.draw, &mut self.renderer, movie, root, DrawArea { size, clip }, resized, self.perf) {
                 Drawn::Empty => {
                     layer.draw = Draw::default(); // (GOOFY-GG) as above: the picture after an empty one is shown whole
                     sink(index, LayerEvent::Hide)
@@ -579,7 +607,7 @@ mod perf_tests {
                     (Drawn::Same, Drawn::Same) | (Drawn::Empty, Drawn::Empty) => {}
                     _ => panic!("{name}, frame {frame}: one drew and the other did not"),
                 }
-                let n = plain.rgba.chunks_exact(4).zip(quick.rgba.chunks_exact(4)).filter(|(a, b)| a != b).count();
+                let n = plain.rgba.as_chunks::<4>().0.iter().zip(quick.rgba.as_chunks::<4>().0).filter(|(a, b)| a != b).count();
                 let worst = plain.rgba.iter().zip(&quick.rgba).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
                 assert_eq!(plain.rgba.len(), quick.rgba.len(), "{name}, frame {frame}");
                 if exact {

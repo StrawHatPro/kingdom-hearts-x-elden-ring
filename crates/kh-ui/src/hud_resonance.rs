@@ -17,10 +17,12 @@
 //! - THE ATTUNE CAST: the icon of the element being attuned blinks in the first badge (a badge of its own when nothing
 //!   is attuned yet).
 //! - THE WORN SPELLS (6.1): a member wearing Aero Barrier gets the Aero icon by his portrait, one wearing Ball Lightning
-//!   the Thunder icon while it is active, with no count of the balls (the user, 2026-10-22).
+//!   the Thunder icon while it is active, with no count of the balls (the user, 2026-10-22). (ALLY-BUFF, the user,
+//!   2026-11-03: "should appear on whoever has it in the HUD regardless of who is party leader") they are no longer
+//!   drawn here (only while Donald led) but by hud_buffs.rs whoever leads, at the place of this sheet's `worn.*` rows.
 //!
 //! The host gives the values ([`ResonanceView`], from kh-party `donald::hud::DonHud`) and the look ([`ResonanceLayout`],
-//! sheet `party-don-hud`) each update; `None` = nothing (not Donald, or not attuned and nothing worn).
+//! sheet `party-don-hud`) each update; `None` = nothing (not Donald, or not attuned).
 
 use std::sync::Arc;
 
@@ -61,8 +63,6 @@ pub struct ResonanceView {
     pub rings: Vec<RingLook>,
     /// Attuning now: (the element's icon, its colour, the share done).
     pub attuning: Option<(String, [f32; 4], f32)>,
-    /// Members wearing a spell: (status slot: 0 the leader, 1 / 2 the friends' slots in the HUD's order, barrier, orbs).
-    pub worn: Vec<(usize, bool, u8)>,
     /// The leader's HP track frame (KH3's `hpMaxFrames`, 2 x max HP up to 668): where his HP bar starts (the leader's
     /// worn icon sits in the gap left of it, under the MP bar). 0 = unknown (the sheet's fallback place).
     pub leader_hp_frames: i32,
@@ -83,7 +83,7 @@ pub struct StarsLook {
 
 impl ResonanceView {
     pub fn is_empty(&self) -> bool {
-        self.rings.is_empty() && self.attuning.is_none() && self.worn.is_empty() && self.stars.is_none()
+        self.rings.is_empty() && self.attuning.is_none() && self.stars.is_none()
     }
 }
 
@@ -146,7 +146,8 @@ pub struct ResonanceLayout {
     /// large enough to be easily readable"). The leader's: its right edge `worn_gap` left of where his HP bar starts
     /// (`hp_bar_x0` - the HP track frame, `sttsPc` units; `worn_pc_x` when the frame is unknown), centred on `worn_pc_y`,
     /// `worn_size_pc` tall. A friend's: centred at `worn_npc` in his slot's units (the grey plate right of the portrait),
-    /// `worn_size_npc` tall.
+    /// `worn_size_npc` tall. (ALLY-BUFF) hud_buffs.rs draws them now, whoever leads, from these numbers
+    /// ([`ResonanceLayout::buff_look`]).
     pub worn_gap: f32,
     pub hp_bar_x0: f32,
     pub worn_pc_x: f32,
@@ -204,6 +205,14 @@ impl Default for ResonanceLayout {
     }
 }
 
+impl ResonanceLayout {
+    /// (ALLY-BUFF) The helpful-status icons' place and size from this sheet's `worn.*` rows (Donald's place, for every
+    /// leader and every friend slot).
+    pub fn buff_look(&self) -> crate::hud_buffs::BuffLook {
+        crate::hud_buffs::BuffLook { pc: (self.worn_pc_x, self.worn_pc_y), size_pc: self.worn_size_pc, npc: self.worn_npc, size_npc: self.worn_size_npc, ..Default::default() }
+    }
+}
+
 /// The art the badges draw with.
 #[derive(Clone, Debug, Default)]
 pub struct DonArt {
@@ -241,8 +250,6 @@ pub fn pill(t: &Arc<Texture>, x: f32, y: f32, w: f32, h: f32) -> Vec<GfxRect> {
 const ART_CLASS: &str = "CoPcMpLogo";
 
 const PC: &str = "sttsPc";
-/// The portraits' parts: the leader's, the two friends'.
-const WORN_PARENTS: [&str; 3] = ["sttsPc", "sttsNpc1", "sttsNpc2"];
 
 /// A colour transform that multiplies (keeps the art's shading) by `c`.
 pub fn multiply(c: [f32; 4]) -> Cx {
@@ -278,11 +285,13 @@ pub fn ensure_art_of(m: &mut Movie, class: &str, parent: &str, name: &str) -> bo
 
 /// One IconText icon as a bitmap rectangle centred on (x, y), `size` tall.
 pub fn icon_rect(set: &IconSet, icon: &str, x: f32, y: f32, size: f32) -> Option<GfxRect> {
-    let i = set.icons.get(&icon.to_lowercase()).copied()?;
-    let k = size / i.4.max(1.0);
-    let (w, h) = (i.3 * k, size);
+    // (BUTTON-ICONS) a button icon (the Arcane stars' Triangle) is the glyph of the role's input in the chosen set
+    let g = set.glyphs(icon).into_iter().next()?;
+    let k = size / g.h.max(1.0);
+    let (w, h) = (g.w * k, size);
+    let (kx, ky) = (w / g.src.2.max(1.0), h / g.src.3.max(1.0));
     let (x0, y0) = (x - w / 2.0, y - h / 2.0);
-    let fill = BitmapFill { texture: set.textures.get(i.0)?.clone(), matrix: Matrix::new(k, 0.0, 0.0, k, x0 - k * i.1, y0 - k * i.2), scale: (1.0, 1.0), repeat: false, smooth: true };
+    let fill = BitmapFill { texture: set.textures.get(g.tex)?.clone(), matrix: Matrix::new(kx, 0.0, 0.0, ky, x0 - kx * g.src.0, y0 - ky * g.src.1), scale: (1.0, 1.0), repeat: false, smooth: true };
     Some(GfxRect { x: x0, y: y0, w, h, fill })
 }
 
@@ -316,8 +325,6 @@ pub struct ResonanceRing {
     pub last: Vec<(u32, u8, bool)>,
     pub last_ult: Vec<UltLook>,
     pub last_place: Vec<(f32, f32, f32)>,
-    /// The worn icons drawn: (slot, centre x, centre y) in `sttsPc` units.
-    pub last_worn: Vec<(usize, f32, f32)>,
     star_blink: f32,
     /// The Arcane Flow row last drawn: (stars lit, the oldest blinking, tracker lit, tracker size) and its plate
     /// (left, top, right, bottom) in `sttsPc` units.
@@ -405,7 +412,7 @@ impl ResonanceRing {
     }
 
     fn hide_all(m: &mut Movie) {
-        for n in ["donStarsPlate", "donZettaPlate", "donStarsLabel", "donZettaDim", "donZettaLit", "donWornDisc"] {
+        for n in ["donStarsPlate", "donZettaPlate", "donStarsLabel", "donZettaDim", "donZettaLit"] {
             m.set_visible(&format!("{PC}.{n}"), false);
         }
         for i in 0..8 {
@@ -418,9 +425,6 @@ impl ResonanceRing {
             for k in 0..3 {
                 m.set_visible(&pip_path(row, k), false);
             }
-        }
-        for slot in 0..WORN_PARENTS.len() {
-            m.set_visible(&format!("{PC}.donWorn{slot}"), false);
         }
     }
 
@@ -600,44 +604,6 @@ impl ResonanceRing {
         self.star_blink = (self.star_blink + dt * stars_look.star_blink_hz.max(0.0)).fract();
         let badges = rows.len().min(2);
         self.draw_stars(m, art, v.stars.as_ref().filter(|_| visible), look, stars_look, badges);
-        // the worn spells by the portraits: drawn in the leader's part (the friends' slots overlap each other, a lower
-        // slot's own children are covered), placed at the seat's part each update
-        let pc_at = m.node(PC).map(|n| (n.matrix.tx, n.matrix.ty)).unwrap_or_default();
-        self.last_worn.clear();
-        for (slot, parent) in WORN_PARENTS.iter().enumerate() {
-            let path = format!("{PC}.donWorn{slot}");
-            let w = v.worn.iter().find(|w| w.0 == slot);
-            // the leader's icon on a dark disc (it sits on the bars' junction): the disc made first, behind it
-            if w.is_some() && ((slot == 0 && !ensure_art(m, PC, "donWornDisc")) || !ensure_art(m, PC, &format!("donWorn{slot}"))) {
-                continue;
-            }
-            if slot == 0 {
-                m.set_visible(&format!("{PC}.donWornDisc"), false);
-            }
-            let seat = m.node(parent).filter(|n| n.is_visible()).map(|n| (n.matrix.tx, n.matrix.ty));
-            match (w, art.icons.as_ref(), seat) {
-                // Aero Barrier: the Aero icon; Ball Lightning: the Thunder icon while it is active, no count of the balls
-                // (the user, 2026-10-22: "have an icon on the HUD, but no need to specify how many balls there are")
-                // ONE icon per character (the user: "each character can only have one effect like that active on them at a
-                // time"; the rule itself is allyfx's): the barrier's, else the orbs'
-                (Some(&(_, barrier, orbs)), Some(set), Some((sx, sy))) if barrier || orbs > 0 => {
-                    let icon = if barrier { "Aero" } else { "Thunder" };
-                    let (x, y, size) = if slot == 0 {
-                        // (the user, 2026-10-22: "between the magic and health, in the empty space between the top of the MP bar
-                        // and the health bar right next to the face"): above the MP bar's right end, left of the HP ring
-                        (look.worn_pc_x, look.worn_pc_y, look.worn_size_pc)
-                    } else {
-                        (sx - pc_at.0 + look.worn_npc.0, sy - pc_at.1 + look.worn_npc.1, look.worn_size_npc)
-                    };
-                    let gfx: Vec<GfxRect> = icon_rect(set, icon, x, y, size).into_iter().collect();
-                    set_art(m, &path, gfx, Cx::IDENTITY, true);
-
-                    self.last_worn.push((slot, x, y));
-                }
-                _ => {
-                    m.set_visible(&path, false);
-                }
-            }
-        }
+        // (ALLY-BUFF) the worn spells by the portraits: hud_buffs.rs, whoever leads
     }
 }

@@ -75,6 +75,7 @@ fn member(chara: PartyChara, hp: i32, hp_max: i32) -> PartyMenuMember {
         guard: None, // (GOOFY-GG)
         item_reload: vec![false],    // (EQ)
         item_spent: vec![None],      // (EQ)
+        parry: None,                 // (GOOFY) the Parry Techniques page: not this test's
     }
 }
 

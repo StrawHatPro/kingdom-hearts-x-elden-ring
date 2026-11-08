@@ -137,11 +137,12 @@ fn member(chara: PartyChara) -> PartyMenuMember {
         guard: None,
         item_reload: vec![false, false],
         item_spent: vec![None, None],
+        parry: None, // (GOOFY) the Parry Techniques page: not this test's
     }
 }
 
 /// 1. THE SLOT ORDER: the leader first whatever his formation slot (Sora's menus start on Sora: the first card, the
-/// character list's cursor, the Items target); Equipment opens on HIS page.
+///    character list's cursor, the Items target); Equipment opens on HIS page.
 #[test]
 fn a_friend_leaders_menus_start_on_him_as_soras_start_on_sora() {
     let Some(mut r) = rig() else { return };
@@ -177,7 +178,7 @@ fn a_friend_leaders_menus_start_on_him_as_soras_start_on_sora() {
 }
 
 /// 2. ABILITIES (Donald leading): the copy under the cursor goes to HIM (copy 2 alone), the local copy shows it at
-/// once, the AP gauge counts it, a second toggle takes it off; a friend chosen from Sora's menu the same.
+///    once, the AP gauge counts it, a second toggle takes it off; a friend chosen from Sora's menu the same.
 #[test]
 fn a_friends_abilities_toggle_the_copy_under_the_cursor() {
     let Some(mut r) = rig() else { return };
@@ -207,13 +208,13 @@ fn a_friends_abilities_toggle_the_copy_under_the_cursor() {
 }
 
 /// 3. EQUIPMENT ITEM ROWS (Goofy leading): Triangle on his Potion row is HIS Auto-Reload (Sora's pouch stays as it
-/// was); a used auto-reload slot shows greyed with its item; the menu's close refills it from the shared stock.
+///    was); a used auto-reload slot shows greyed with its item; the menu's close refills it from the shared stock.
 #[test]
 fn a_friends_item_rows_have_soras_auto_reload_and_refill() {
     let Some(mut r) = rig() else { return };
     let f = Formation::new(&[PartyChara::Goofy], PartyChara::Goofy).unwrap();
     let goofy = member(PartyChara::Goofy);
-    r.feed(&f, &[goofy.clone()]);
+    r.feed(&f, std::slice::from_ref(&goofy));
     let sora_reload_before: Vec<bool> = r.sora.magic().pouch.slots.iter().map(|s| s.auto_reload).collect();
     r.open();
     r.keys(&["menu decide", "menu decide"]);
@@ -252,9 +253,47 @@ fn a_friends_item_rows_have_soras_auto_reload_and_refill() {
     assert_eq!((r.hud.party_menu()[0].items[0], r.hud.party_menu()[0].item_reload[0]), (Some(ItemKind::Potion), true));
 }
 
+/// 3b. (GF-STATS) THE FIFTH SLOT ON A PAD: a Goofy with every reward has five armour rows and five item rows on his Equipment
+///    screen; the cursor reaches the last of each with the menu keys, and the fifth item slot takes an item from the stock.
+#[test]
+fn a_friends_fifth_slots_are_on_his_equipment_screen() {
+    let Some(mut r) = rig() else { return };
+    let f = Formation::new(&[PartyChara::Goofy], PartyChara::Goofy).unwrap();
+    let mut goofy = member(PartyChara::Goofy);
+    goofy.armour = vec![None; 5];
+    goofy.accessories = vec![None; 3];
+    goofy.items = vec![Some(ItemKind::Potion), Some(ItemKind::Ether), None, None, None];
+    goofy.item_reload = vec![false; 5];
+    goofy.item_spent = vec![None; 5];
+    r.feed(&f, std::slice::from_ref(&goofy));
+    r.open();
+    r.keys(&["menu decide", "menu decide"]);
+    r.frames(30, None);
+    let kinds = |r: &Rig, kind: u8| r.hud.camp_menu().unwrap().equipment.data.slots.iter().filter(|s| s.kind == kind).count();
+    assert_eq!((kinds(&r, kh_ui::camp_equip::KIND_ARMOUR), kinds(&r, kh_ui::camp_equip::KIND_ACCESSORY), kinds(&r, kh_ui::camp_equip::KIND_ITEM)), (5, 3, 5));
+    // rows: weapon, 5 armour, 3 accessories, 5 items
+    r.keys(&["menu down"; 5]);
+    let slot = r.hud.camp_menu().unwrap().equipment.slot().cloned().unwrap();
+    assert_eq!((slot.kind, slot.slot), (kh_ui::camp_equip::KIND_ARMOUR, 4), "the fifth armour slot");
+    r.shoot("3c_goofy_fifth_armour");
+    r.keys(&["menu down"; 8]);
+    let slot = r.hud.camp_menu().unwrap().equipment.slot().cloned().unwrap();
+    assert_eq!((slot.kind, slot.slot), (kh_ui::camp_equip::KIND_ITEM, 4), "the fifth item slot");
+    r.keys(&["menu decide"]);
+    r.frames(10, None);
+    let rows: Vec<String> = r.hud.camp_menu().unwrap().equipment.stock_rows.iter().map(|s| s.piece.id.clone()).collect();
+    let at = rows.iter().position(|id| id == ItemKind::HiPotion.name()).expect("the stock's Hi-Potion");
+    r.keys(&vec!["menu down"; at]);
+    r.keys(&["menu decide"]);
+    r.frames(10, None);
+    assert!(r.edits.contains(&PartyMenuEdit::ItemSlot { chara: PartyChara::Goofy, slot: 4, item: Some(ItemKind::HiPotion) }), "{:?}", r.edits);
+    assert_eq!(r.hud.party_menu()[0].items[4], Some(ItemKind::HiPotion));
+    r.shoot("3d_goofy_fifth_item");
+}
+
 /// 4. CUSTOMIZE: each leader's own page and list. Goofy: his abilities by tier and items, NO spell; Donald: Sora's
-/// learned spells; both: the stock's items as Sora's list (Hi-Potion is in the stock, not in their slots); a shortcut
-/// set goes to the leader's own block, never to Sora's.
+///    learned spells; both: the stock's items as Sora's list (Hi-Potion is in the stock, not in their slots); a shortcut
+///    set goes to the leader's own block, never to Sora's.
 #[test]
 fn each_leaders_customize_is_his_own() {
     let Some(mut r) = rig() else { return };
@@ -289,18 +328,20 @@ fn each_leaders_customize_is_his_own() {
             }
         }
         // Shortcut Set A, its first button, the list's last row (an item): set
-        r.keys(&["menu down", "menu decide", "menu decide", "menu up", "menu decide"]);
+        // (GF-UI) Goofy has no Magic entry and his set opens on LB + A: LB + Y (slot 1) is the button that takes an item
+        let (path, slot): (&[&str], usize) = if leader == PartyChara::Goofy { (&["menu decide", "menu up", "menu up", "menu decide", "menu up", "menu decide"], 1) } else { (&["menu down", "menu decide", "menu decide", "menu up", "menu decide"], 0) };
+        r.keys(path);
         r.frames(10, None);
-        let set: Vec<&PartyMenuEdit> = r.edits.iter().filter(|e| matches!(e, PartyMenuEdit::Custom { edit: CustomEdit::SetShortcut { page: 0, slot: 0, .. }, .. })).collect();
+        let set: Vec<&PartyMenuEdit> = r.edits.iter().filter(|e| matches!(e, PartyMenuEdit::Custom { edit: CustomEdit::SetShortcut { page: 0, slot: s, .. }, .. } if *s == slot)).collect();
         assert_eq!(set.len(), 1, "{leader:?}: one shortcut edit: {:?}", r.edits);
         assert_eq!(set[0].chara(), leader);
         let PartyMenuEdit::Custom { edit: CustomEdit::SetShortcut { kind, .. }, .. } = set[0] else { unreachable!() };
-        assert_eq!(r.hud.party_menu()[0].custom.unwrap().shortcuts[0][0], *kind, "his block at once");
-        assert_eq!(r.hud.camp_menu().unwrap().customize.data.shortcuts[0][0], *kind, "the screen shows it");
+        assert_eq!(r.hud.party_menu()[0].custom.unwrap().shortcuts[0][slot], *kind, "his block at once");
+        assert_eq!(r.hud.camp_menu().unwrap().customize.data.shortcuts[0][slot], *kind, "the screen shows it");
         r.shoot(&format!("4_{}_customize", leader.name().to_lowercase()));
         // Square: Remove
         r.keys(&["menu square"]);
-        assert!(r.edits.iter().any(|e| matches!(e, PartyMenuEdit::Custom { edit: CustomEdit::SetShortcut { page: 0, slot: 0, kind: 0 }, .. })));
+        assert!(r.edits.iter().any(|e| matches!(e, PartyMenuEdit::Custom { edit: CustomEdit::SetShortcut { page: 0, slot: s, kind: 0 }, .. } if *s == slot)));
         r.keys(&["menu cancel", "menu cancel"]);
         r.close();
     }
@@ -308,7 +349,7 @@ fn each_leaders_customize_is_his_own() {
 }
 
 /// 5. ITEMS: the target starts on the leader (slot 0) and the use is his; a knocked-out member gets Sora's "no
-/// benefit" (his rule: hp 0 = nothing).
+///    benefit" (his rule: hp 0 = nothing).
 #[test]
 fn items_target_the_leader_first_and_follow_soras_benefit_rule() {
     let Some(mut r) = rig() else { return };

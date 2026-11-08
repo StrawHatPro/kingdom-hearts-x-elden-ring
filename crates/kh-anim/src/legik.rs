@@ -28,6 +28,16 @@ pub struct SweepHit {
     pub start_penetrating: bool,
 }
 
+/// What a leg IK node reads for one evaluation: the skeleton, the input pose in component space,
+/// the mesh component's transform in the world, and the host's collision query.
+#[derive(Clone, Copy)]
+pub struct IkInput<'a> {
+    pub skeleton: &'a Skeleton,
+    pub component: &'a [Trs],
+    pub c2w: &'a Trs,
+    pub world: &'a dyn IkWorld,
+}
+
 /// What the host answers for the leg IK: the game's query on collision channel 22
 /// (`TresIKCollision`), simple collision, the owner ignored (0x14063ACB0).
 pub trait IkWorld {
@@ -385,13 +395,14 @@ impl LegIk {
         out
     }
 
-    /// One evaluation. `local` is the saved pose and `component` its component-space form (both
-    /// unmodified); `alpha` the pawn's leg-IK alpha; `c2w` the mesh component's transform in the
+    /// One evaluation. `local` is the saved pose and `input.component` its component-space form (both
+    /// unmodified); `alpha` the pawn's leg-IK alpha; `input.c2w` the mesh component's transform in the
     /// world. Changes the local transforms of the hips, thighs, shins and feet in `local`.
-    pub fn evaluate(&mut self, skeleton: &Skeleton, local: &mut [Trs], component: &[Trs], alpha: f32, dt: f32, c2w: &Trs, world: &dyn IkWorld) {
+    pub fn evaluate(&mut self, input: IkInput<'_>, local: &mut [Trs], alpha: f32, dt: f32) {
+        let IkInput { skeleton, component, c2w, world } = input;
         self.report = LegIkReport::default();
         // Stock shell (4.1): not evaluated at all at or below 1e-5; the state stays frozen.
-        if !(alpha > 1.0e-5) {
+        if alpha.partial_cmp(&1.0e-5).is_none_or(std::cmp::Ordering::is_le) {
             return;
         }
         let alpha = alpha.min(ALPHA_CAP);
@@ -584,7 +595,7 @@ impl LegIk {
                 // bAllowTwist) the stock RemoveTwist (0x14052C9B0 [C]) on the thigh against its parent and on the shin
                 // against the solved thigh; the foot keeps its rotation and takes the solved end position.
                 let (mut r, mut j, mut e) = (root, joint, foot);
-                solve_two_bone_ik(&mut r, &mut j, &mut e, joint_target, desired, leg.allow_stretching, leg.start_stretch_ratio, leg.max_stretch_scale);
+                solve_two_bone_ik(&mut r, &mut j, &mut e, joint_target, desired, Stretch { allow: leg.allow_stretching, start_ratio: leg.start_stretch_ratio, max_scale: leg.max_stretch_scale });
                 if !leg.allow_twist {
                     if let Some(parent) = skeleton.bones[leg.root].parent {
                         remove_twist(&component[parent], &mut r, &local[leg.root], leg.twist_axis);
@@ -696,10 +707,17 @@ fn find_best_axis_vectors(v: Vec3) -> (Vec3, Vec3) {
     (axis1, axis1.cross(v))
 }
 
+/// The two-bone solver's stretch settings.
+#[derive(Clone, Copy, Debug)]
+pub struct Stretch {
+    pub allow: bool,
+    pub start_ratio: f32,
+    pub max_scale: f32,
+}
+
 /// Stock `AnimationCore::SolveTwoBoneIK` (positions; UE 4.17 TwoBoneIK.cpp [U], exe 0x1437C7290): the joint and end
 /// positions that reach `effector` with the bend in the plane of `joint_target`.
-#[allow(clippy::too_many_arguments)]
-pub fn solve_two_bone_positions(root: Vec3, effector: Vec3, joint_target: Vec3, mut upper: f32, mut lower: f32, allow_stretching: bool, start_stretch_ratio: f32, max_stretch_scale: f32) -> (Vec3, Vec3) {
+pub fn solve_two_bone_positions(root: Vec3, effector: Vec3, joint_target: Vec3, mut upper: f32, mut lower: f32, stretch: Stretch) -> (Vec3, Vec3) {
     let desired_delta = effector - root;
     let mut desired_length = desired_delta.length();
     let mut max_length = lower + upper;
@@ -722,11 +740,11 @@ pub fn solve_two_bone_positions(root: Vec3, effector: Vec3, joint_target: Vec3, 
             bend_dir = (target_delta - target_delta.dot(desired_dir) * desired_dir).normalize_or_zero();
         }
     }
-    if allow_stretching {
-        let range = max_stretch_scale - start_stretch_ratio;
+    if stretch.allow {
+        let range = stretch.max_scale - stretch.start_ratio;
         if range > KINDA_SMALL && max_length > KINDA_SMALL {
             let reach = desired_length / max_length;
-            let factor = (max_stretch_scale - 1.0) * ((reach - start_stretch_ratio) / range).clamp(0.0, 1.0);
+            let factor = (stretch.max_scale - 1.0) * ((reach - stretch.start_ratio) / range).clamp(0.0, 1.0);
             if factor > KINDA_SMALL {
                 lower *= 1.0 + factor;
                 upper *= 1.0 + factor;
@@ -754,11 +772,10 @@ pub fn solve_two_bone_positions(root: Vec3, effector: Vec3, joint_target: Vec3, 
 /// Stock `AnimationCore::SolveTwoBoneIK` on component-space transforms (0x1437C5380 [U by shape]): the upper and the
 /// middle bone turn by `FindBetweenNormals(old dir, new dir)`, the middle bone and the end move; the end keeps its
 /// rotation.
-#[allow(clippy::too_many_arguments)]
-pub fn solve_two_bone_ik(root: &mut Trs, joint: &mut Trs, end: &mut Trs, joint_target: Vec3, effector: Vec3, allow_stretching: bool, start_stretch_ratio: f32, max_stretch_scale: f32) {
+pub fn solve_two_bone_ik(root: &mut Trs, joint: &mut Trs, end: &mut Trs, joint_target: Vec3, effector: Vec3, stretch: Stretch) {
     let (root_p, joint_p, end_p) = (root.translation, joint.translation, end.translation);
     let (lower, upper) = ((end_p - joint_p).length(), (joint_p - root_p).length());
-    let (out_joint, out_end) = solve_two_bone_positions(root_p, effector, joint_target, upper, lower, allow_stretching, start_stretch_ratio, max_stretch_scale);
+    let (out_joint, out_end) = solve_two_bone_positions(root_p, effector, joint_target, upper, lower, stretch);
     let between = |a: Vec3, b: Vec3| find_between(safe_normal(a), safe_normal(b));
     root.rotation = between(joint_p - root_p, out_joint - root_p) * root.rotation;
     root.translation = root_p;

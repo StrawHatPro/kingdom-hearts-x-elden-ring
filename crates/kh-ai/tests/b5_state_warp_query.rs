@@ -2,8 +2,7 @@
 //! `TresFriendData.WarpQuery`): the controller runs the game's query for a body that asks and hands the best
 //! item back through `AiBody::warp_query_result` (defaulted trait methods, kh-ai API unchanged otherwise).
 
-mod common;
-use common::*;
+use crate::common::*;
 use glam::Vec3;
 use kh_ai::*;
 

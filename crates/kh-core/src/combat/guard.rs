@@ -26,7 +26,7 @@
 
 use glam::Vec3;
 
-use super::classify::{classify, Classified, MapResponse, Shape};
+use super::classify::{classify, Classified, DamageClass, MapResponse, Shape};
 use crate::enums::{ETresAbilityKind, ETresCommandKind};
 use crate::host::{BodyReaction, HitInfo, ReactionResult, TargetBody, TargetId};
 use crate::pawn::{Ctx, Pawn};
@@ -179,7 +179,7 @@ pub(crate) fn classify_on_sora(s: &Pawn, hit: &HitOnPlayer) -> (Classified, Body
     // option `ai.slot89()` is off.)
     let body = TargetBody { reaction: part, ..TargetBody::DEFAULT };
     let shape = Shape { no_clash: hit.reflect_level <= 0, victim_may_refuse: false, reflect_window: false, p7: false };
-    let c = classify(&body, MapResponse::Other, &shape, hit.kind, hit.attribute, &mut info, &mut |_, _| 0, &mut |_| 0);
+    let c = classify(&body, MapResponse::Other, &shape, DamageClass { kind: hit.kind, attribute: hit.attribute }, &mut info, &mut |_, _| 0, &mut |_| 0);
     (c, part, info)
 }
 
@@ -197,6 +197,17 @@ pub(crate) fn guarded(state: &mut crate::states::StateData, cx: &mut Ctx, hit: &
         crate::states::reflect::request(cx, hit.causer, hit.causer_position, direction, true);
         return;
     }
+    // (AUDIT-C) OnGuardedHit 0x14143CAF0's first branch (ctrl vt+0x1A70 == 0x8B), behind its gate (slot 141 = the guard
+    // state the port's gate asks for): Rage Form's guard is a back slide away from the attacker that arms Rage Raid
+    // (combat/forms/rage.rs `guarded`), never the Guard hit entry.
+    if cx.pawn.combat.form.cmd == crate::combat::forms::rage::CHANGE_AN && matches!(state, crate::states::StateData::Guard(_)) && matches!(cx.pawn.queue.queued_id(), None | Some(crate::states::StateId::Guard)) {
+        cx.pawn.actions.hits_guarded += 1;
+        cx.pawn.actions.last_attacker = Some((hit.causer, hit.causer_position)); // the slide's target pawn (+0x98) = Rage Raid's target
+        let attacker = cx.target(hit.causer).map(|t| t.position).or(Some(hit.causer_position));
+        let success = crate::combat::forms::rage::guarded(cx, attacker);
+        cx.pawn.event(crate::host::EventKind::PlayerGuarded { hit: *hit, success, critical: false });
+        return;
+    }
     if !crate::states::guard::on_guarded_hit(state, cx, hit) {
         // Its gate (slot 141) refused: no HP loss, no reaction (R 5 applies nothing).
         cx.pawn.actions.hits_guarded += 1;
@@ -209,9 +220,14 @@ pub(crate) fn guarded(state: &mut crate::states::StateData, cx: &mut Ctx, hit: &
 /// controller's timer, not a list countdown): the counter window's command (`FUN_1414145C0`:
 /// `HUD 0x14158C180(hud, 0, id, 0)`) and the aerial recovery's (`FUN_141414350(ctrl, kind, 2.0
 /// s, 0)`: BLOWCOUNTER). Called every UI tick.
+///
+/// (INT-F, the coordinator's decision 2026-11-03: KH3 1:1) THE COUNTER WINDOW'S COMMAND IS NOT A SITUATION ENTRY: KH3 shows it
+/// on the Attack slot only (0x14158C180 -> 0x14162A440 -> setMainCommandText; kh-host `hud_forms::attack_text`), and Attack
+/// in the window triggers every guard counter (tests/int_f_guard_counter.rs: the Revenge kinds and every form's). Its half
+/// here stays empty; the aerial recovery's prompt (a real reaction command) is still mirrored.
 pub(crate) fn mirror_prompts(cx: &mut Ctx) {
     let a = &cx.pawn.actions;
-    let wanted = [if a.counter_window > 0.0 { (a.counter_command, a.counter_window) } else { (0, 0.0) }, a.reaction_command.filter(|c| c.1 > 0.0).unwrap_or((0, 0.0))];
+    let wanted = [(0, 0.0), a.reaction_command.filter(|c| c.1 > 0.0).unwrap_or((0, 0.0))];
     for (k, (kind, time)) in wanted.into_iter().enumerate() {
         let shown = cx.pawn.combat.guard.shown[k];
         if shown != kind {
@@ -230,11 +246,30 @@ pub(crate) fn mirror_prompts(cx: &mut Ctx) {
 /// Consumes what it uses.
 pub(crate) fn forced_attack(id: StateId, s: &mut Pawn) -> Option<CounterOffer> {
     use crate::actions;
+    // (REVENGE) a host-asked counter's next kind (abilities/xs/counter.rs; never in KH3's own play)
+    if let Some(offer) = crate::abilities::xs::counter::take(id, s) {
+        return Some(offer);
+    }
     match id {
         // GUARD with the counter window open: 0x24 / 0x23 / 0x21, the guarded attacker, the
         // just-guard bit from controller+0x878 bit 8; the window closes.
         StateId::Guard if s.actions.counter_window > 0.0 => {
-            let offer = CounterOffer { source: id, kind: guard_counter_kind(&s.status.abilities), target: s.actions.counter_attacker, just_guard: s.actions.critical, push: false };
+            // (F-SHIELD) TryAttack 0x141437E1A cases 0x89 / 0x91 (Counter Shield, Frying Pan): no forced kind and the window is NOT
+            // closed (FUN_1414145C0 is skipped): the attack is ComboSH's own decision, the grown attack 0x55 / 0x56 of the
+            // block that grew the shield; the just-guard bit as for the others.
+            if crate::combat::forms::shield::is_shield(s.combat.form.cmd) {
+                return Some(CounterOffer { source: id, kind: 0, target: s.actions.counter_attacker, just_guard: s.actions.critical, push: false });
+            }
+            // (F-HAMMER) TryAttack 0x141437E1A: forms 0x92 / 0x93 (Boom Hammer, Clock Drill) counter with Barrier Cracker (0x25). KH3's
+            // switch also lists 0x86 0x87 0x8E 0x8F 0xDD .. 0xE0: their packages' PlayAttack case 0x25 is theirs to add here.
+            let kind = if crate::combat::forms::hammer::is_toon(s.combat.form.cmd) { crate::combat::forms::hammer::KIND_BARRIER_CRACKER } else { guard_counter_kind(&s.status.abilities) };
+            // (F-LIGHTDARK) ... and 0xDD .. 0xE0 (Light / Dark / Double Form: Light Burst, Dark Burst, Dual Smasher).
+            let kind = if crate::combat::forms::lightdark::class_of(s.combat.form.cmd).is_some() { crate::combat::forms::lightdark::KIND_BARRIER_CRACKER } else { kind };
+            // (F-ARROWGUN) ... and 0x8E / 0x8F (Hunny Blasters, Hunny Launcher: Barrier Cracker, BARRIERCRACKER's shot).
+            let kind = if crate::combat::forms::arrowgun::is_hunny(s.combat.form.cmd) { crate::combat::forms::arrowgun::KIND_BARRIER_CRACKER } else { kind };
+            // (F-ULTIMATE) ... and 0x87 (Ultimate Form: BarrierCracker, BARRIERCRACKER = TresProjSW_BladeCounter).
+            let kind = if crate::combat::forms::ultimate::is_ultimate(s.combat.form.cmd) { crate::combat::forms::ultimate::KIND_COUNTER } else { kind };
+            let offer = CounterOffer { source: id, kind, target: s.actions.counter_attacker, just_guard: s.actions.critical, push: false };
             actions::close_counter_window(s);
             Some(offer)
         }
@@ -250,6 +285,12 @@ pub(crate) fn forced_attack(id: StateId, s: &mut Pawn) -> Option<CounterOffer> {
             let target = s.actions.last_attacker.map_or(TargetId::NONE, |a| a.0);
             s.actions.reaction_command = None;
             Some(CounterOffer { source: id, kind: super::tables::P.recovery_blow_counter_attack_kind as u8, target, just_guard: false, push: true })
+        }
+        // (AUDIT-C) AIR_SLIDE in Rage Form (Begin 0x141332930 flag 0x100: +0xAC = 0xD, +0xB0 = 0xC6): Rage Raid on the attacker.
+        StateId::AirSlide if s.actions.reaction_command.is_some_and(|c| c.0 == crate::combat::forms::rage::RAGE_RAID_COMMAND) && s.combat.form.cmd == crate::combat::forms::rage::CHANGE_AN => {
+            let target = s.actions.last_attacker.map_or(TargetId::NONE, |a| a.0);
+            s.actions.reaction_command = None;
+            Some(CounterOffer { source: id, kind: crate::combat::forms::rage::RAGE_RAID_KIND, target, just_guard: false, push: true })
         }
         // A state's own offer (Risk Dodge: kinds 0x28 - 0x2B).
         _ => match s.combat.guard.offer {

@@ -17,7 +17,7 @@ use std::sync::Arc;
 use crate::controls::{self, FollowGauge};
 use crate::def::MovieDef;
 use crate::frames::gauge_frame;
-use crate::player::{Movie, NumberProps};
+use crate::player::{Movie, NumberProps, Sprite, Stretch}; // (BOSS-BARS) Sprite, Stretch
 use crate::render::Fonts;
 use crate::UiSound;
 
@@ -364,6 +364,45 @@ pub fn icon_line(icon: LineIcon, text: &str) -> String {
 pub const SE_BONUS: u32 = 38;
 /// `HudRightEnmHpPack.ENEMY_HP_STOCK_MAX`.
 pub const ENEMY_HP_STOCK_MAX: i32 = 20;
+/// (BOSS-BARS) One digit step of the counter's bitmap number (`HudRightEnmHPNum`: width 24, kerning -4): how far
+/// `digit10` moves the "+" from `digit1`, and how far each further digit moves it and the plate's left end.
+pub const ADD_STOCK_DIGIT_STEP: i32 = 20;
+/// (BOSS-BARS) The plate's straight middle (`enmHpAddS.@1`, shape 0..72 x 0..16): stretched for 3+ digits.
+const ADD_STOCK_PLATE_STRETCH: (f32, f32) = (16.0, 56.0);
+
+/// (BOSS-BARS) The counter's bitmap digits for `n`: its decimal digits, at least KH3's 2.
+pub fn add_stock_digits(n: i32) -> i32 {
+    (n.max(1).ilog10() as i32 + 1).max(2)
+}
+
+/// (BOSS-BARS) The x the timeline gives child `name` of `s` at its current frame: the last operation on its depth up to
+/// it that sets a matrix (a new placement without one = the identity; a move without one keeps the earlier one).
+fn authored_x(s: &Sprite, name: &str) -> Option<f32> {
+    let depth = s.child(name)?.depth;
+    let op = s.def.ops.iter().take(s.frame as usize).flatten().rev().find(|op| op.depth == depth && !op.remove && (op.matrix.is_some() || !op.is_move))?;
+    Some(op.matrix.map_or(0.0, |m| m.tx))
+}
+
+/// (BOSS-BARS) What the "+N" counter shows ([`HudRight::add_stock_view`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AddStockView {
+    /// `enmHpAddS` at `loop` (more than 20 bars).
+    pub shown: bool,
+    /// `enmHpAddSSet`'s layout: `digit1` or `digit10`.
+    pub label: String,
+    pub number: i32,
+    /// The bitmap number's digits (KH3: 2).
+    pub num_digit: i32,
+    /// The digits drawn, most significant first.
+    pub digits: Vec<i32>,
+    /// Their places in the number clip (the last one at 0: right-aligned).
+    pub digit_x: Vec<f32>,
+    /// The "+" in `enmHpAddSSet`.
+    pub plus_x: f32,
+    /// The plate in `enmHpAddS`, and how much wider it is drawn.
+    pub plate_x: f32,
+    pub plate_by: f32,
+}
 
 pub struct HudRight {
     pub movie: Movie,
@@ -387,6 +426,8 @@ pub struct HudRight {
     /// (BN) The bonus window's height (its `rect1`, 0x141653920), the authored y of the two window kinds.
     bonus_height: f32,
     base_y: (f32, f32),
+    /// (GOOFY) See [`HudRight::set_stack_shift`].
+    stack_shift: f32,
     /// (BN) The stack (level-up windows 0 - 4, then bonus windows 0 - 4): row (-1 = not placed), y now, slide.
     stack_row: [i32; LEVEL_UP_WINDOWS + GET_BONUS_WINDOWS],
     stack_y: [f32; LEVEL_UP_WINDOWS + GET_BONUS_WINDOWS],
@@ -395,7 +436,7 @@ pub struct HudRight {
 
 impl HudRight {
     pub fn new(def: Arc<MovieDef>, fonts: Fonts, strings: &SideStrings) -> HudRight {
-        let mut hud = HudRight { movie: Movie::new(def), fonts, e_hp_follow: FollowGauge::with_scale(2.0), e_hpg_stock_max: 0, e_hpg_stock: 0, visible_add_s: false, level_up_visible: false, level_ups: [None; LEVEL_UP_WINDOWS], level_up_three: [false; LEVEL_UP_WINDOWS], level_up_height: (LEVEL_UP_STEP, LEVEL_UP_STEP), get_bonus_visible: false, enemy_shown: false, calls: Vec::new(), bonuses: [None; GET_BONUS_WINDOWS], bonus_queue: Default::default(), bonus_height: LEVEL_UP_STEP, base_y: (LEVEL_UP_BASE.1, LEVEL_UP_BASE.1), stack_row: [-1; LEVEL_UP_WINDOWS + GET_BONUS_WINDOWS], stack_y: [0.0; LEVEL_UP_WINDOWS + GET_BONUS_WINDOWS], stack_slide: [None; LEVEL_UP_WINDOWS + GET_BONUS_WINDOWS] };
+        let mut hud = HudRight { movie: Movie::new(def), fonts, e_hp_follow: FollowGauge::with_scale(2.0), e_hpg_stock_max: 0, e_hpg_stock: 0, visible_add_s: false, level_up_visible: false, level_ups: [None; LEVEL_UP_WINDOWS], level_up_three: [false; LEVEL_UP_WINDOWS], level_up_height: (LEVEL_UP_STEP, LEVEL_UP_STEP), get_bonus_visible: false, enemy_shown: false, calls: Vec::new(), bonuses: [None; GET_BONUS_WINDOWS], bonus_queue: Default::default(), bonus_height: LEVEL_UP_STEP, base_y: (LEVEL_UP_BASE.1, LEVEL_UP_BASE.1), stack_shift: 0.0, stack_row: [-1; LEVEL_UP_WINDOWS + GET_BONUS_WINDOWS], stack_y: [0.0; LEVEL_UP_WINDOWS + GET_BONUS_WINDOWS], stack_slide: [None; LEVEL_UP_WINDOWS + GET_BONUS_WINDOWS] };
         // HudRightEnmHpPack.<init>
         for gauge in ["enmHpGg", "enmHpGgR", "enmHpDodai"] {
             hud.movie.stop(&format!("{ENM_SET}.enmHp.{gauge}"));
@@ -471,6 +512,14 @@ impl HudRight {
         hud
     }
 
+    /// (GOOFY) The popups' stack stands `shift` lower (the Stagger gauge sits where it starts); those on screen slide.
+    pub fn set_stack_shift(&mut self, shift: f32) {
+        if self.stack_shift != shift {
+            self.stack_shift = shift;
+            self.layout_stack();
+        }
+    }
+
     /// (BN) The bonus window's measured height (its rect1), stage pixels.
     pub fn bonus_window_height(&self) -> f32 {
         self.bonus_height
@@ -514,9 +563,9 @@ impl HudRight {
     /// Part +0x100 (its own y) and +0x104 (its height) of stack part `p`.
     fn stack_base_height(&self, p: usize) -> (f32, f32) {
         if p < LEVEL_UP_WINDOWS {
-            (self.base_y.0, if self.level_up_three[p] { self.level_up_height.1 } else { self.level_up_height.0 })
+            (self.base_y.0 + self.stack_shift, if self.level_up_three[p] { self.level_up_height.1 } else { self.level_up_height.0 })
         } else {
-            (self.base_y.1, self.bonus_height)
+            (self.base_y.1 + self.stack_shift, self.bonus_height)
         }
     }
 
@@ -671,6 +720,7 @@ impl HudRight {
         self.movie.goto_and_play(&format!("{ENM_SET}.enmHpDummy"), "off");
         self.visible_add_s = false;
         self.movie.goto_and_stop(&format!("{ENM_SET}.enmHpAddS"), "off");
+        self.fit_add_stock(); // (BOSS-BARS)
     }
 
     /// `setEHPBase(a1)`.
@@ -710,6 +760,7 @@ impl HudRight {
                 self.visible_add_s = l4;
                 self.movie.goto_and_stop(&format!("{ENM_SET}.enmHpAddS"), if l4 { "loop" } else { "off" });
             }
+            self.fit_add_stock(); // (BOSS-BARS)
         }
         self.movie.goto_frame(&format!("{ENM_SET}.enmHp.enmHpGg"), a2.max(1) as u32);
         if let Some(frame) = self.e_hp_follow.set_gauge(a3, a2) {
@@ -730,12 +781,73 @@ impl HudRight {
     }
 
     /// `setAddStockNum(a1)`: the "+N" counter above 20 squares.
+    /// (BOSS-BARS, THE USER 2026-11-05: "if a boss has more than 99 health bars, it actually shows the number of health
+    /// bars (no 99+)") KH3's layouts as authored for 1 - 9 (`digit1`) and 10 - 99 (`digit10`); 100 and more = `digit10`
+    /// extended KH3's way: one bitmap digit more per power of ten ([`add_stock_digits`]), the "+" and the plate's left
+    /// end one digit step further left each ([`Self::fit_add_stock`]). Any count, no cap.
     pub fn set_add_stock_num(&mut self, a1: i32) {
         let set = format!("{ENM_SET}.enmHpAddS.enmHpAddSCount.enmHpAddSSet");
         self.movie.goto_and_stop(&set, if a1 < 10 { "digit1" } else { "digit10" });
         if let Some(s) = self.movie.sprite_mut(&format!("{set}.enmHpAddSNum")) {
-            controls::number_set(s, a1);
+            let digits = add_stock_digits(a1); // (BOSS-BARS)
+            match s.number.as_deref_mut() {
+                Some(p) if p.num_digit != digits => {
+                    (p.num_digit, p.number) = (digits, a1.max(0));
+                    controls::number_update(s);
+                }
+                _ => controls::number_set(s, a1),
+            }
         }
+        self.fit_add_stock();
+    }
+
+    /// (BOSS-BARS) The counter's extension for 3+ digits, from its number's digit count: the "+" (`enmHpAddPlus`) at the
+    /// current layout's place minus [`ADD_STOCK_DIGIT_STEP`] per digit over 2, the plate (`enmHpAddS.@1`, 72 x 16)
+    /// widened by as much to the left ([`ADD_STOCK_PLATE_STRETCH`]: its rounded ends keep their art, the right end
+    /// stays against the squares). 1 - 2 digits: both back on the timeline, as KH3 has them. Called after every
+    /// change of the counter's clips (the plate's clip may be placed anew by `enmHpAddS`'s labels).
+    fn fit_add_stock(&mut self) {
+        let add_s = format!("{ENM_SET}.enmHpAddS");
+        let set = format!("{add_s}.enmHpAddSCount.enmHpAddSSet");
+        let extra = self.movie.sprite(&format!("{set}.enmHpAddSNum")).and_then(|s| s.number.as_deref()).map_or(0, |p| (p.num_digit - 2).max(0));
+        let by = (extra * ADD_STOCK_DIGIT_STEP) as f32;
+        for (parent, child) in [(set.as_str(), "enmHpAddPlus"), (add_s.as_str(), "@1")] {
+            let Some(x) = self.movie.sprite(parent).and_then(|s| authored_x(s, child)) else { continue };
+            if let Some(node) = self.movie.node_mut(&format!("{parent}.{child}")) {
+                node.matrix.tx = x - by;
+                node.script_matrix = extra > 0;
+            }
+        }
+        if let Some(plate) = self.movie.sprite_mut(&format!("{add_s}.@1")) {
+            plate.stretch = (extra > 0).then_some(Stretch { from: ADD_STOCK_PLATE_STRETCH.0, to: ADD_STOCK_PLATE_STRETCH.1, by });
+        }
+    }
+
+    /// (BOSS-BARS) What the "+N" counter shows (tests, pictures): None without its clips.
+    pub fn add_stock_view(&self) -> Option<AddStockView> {
+        let add_s = format!("{ENM_SET}.enmHpAddS");
+        let set = format!("{add_s}.enmHpAddSCount.enmHpAddSSet");
+        let num = self.movie.sprite(&format!("{set}.enmHpAddSNum"))?;
+        let p = num.number.as_deref()?;
+        let base = num.movie.bitmaps.get(&p.bmp_name)?.matrix.tx;
+        let cells = num.child("num")?;
+        let rects = cells.sprite().map_or(&[][..], |c| &c.gfx[..]);
+        // drawNum: the fill is moved by -bmpStartX - bmpWidth x digit + x
+        let digits = rects.iter().map(|r| ((r.x - p.bmp_start_x as f32 - (r.fill.matrix.tx - base)) / p.bmp_width as f32).round() as i32).collect();
+        let digit_x = rects.iter().map(|r| cells.matrix.tx + r.x).collect();
+        let plate = self.movie.node(&format!("{add_s}.@1"))?;
+        let plate_by = plate.sprite().and_then(|s| s.stretch).map_or(0.0, |st| st.by);
+        Some(AddStockView {
+            shown: self.visible_add_s,
+            label: self.movie.sprite(&set)?.current_label().unwrap_or("").to_string(),
+            number: p.number,
+            num_digit: p.num_digit,
+            digits,
+            digit_x,
+            plus_x: self.movie.node(&format!("{set}.enmHpAddPlus"))?.matrix.tx,
+            plate_x: plate.matrix.tx,
+            plate_by,
+        })
     }
 
     /// The part's show (vtable +0x280: label `in`) / hide (+0x288: `out`).
@@ -886,7 +998,7 @@ impl HudRight {
 pub struct EnemyValues {
     pub hp: i32,
     pub hp_max: i32,
-    /// vt+0x17D0: the large gauge (2000 HP per bar, cap 240,000).
+    /// vt+0x17D0: the large gauge (2000 HP per bar; KH3's cap of 240,000 is lifted: BOSS-BARS).
     pub large: bool,
     pub alive: bool,
 }
@@ -972,9 +1084,10 @@ impl EnemyGauge {
             hud.show_enemy_gauge(true);
             self.unit = if v.large { 2000 } else { 200 };
         }
-        let cap = self.unit * 120;
-        let hp = v.hp.clamp(0, cap);
-        let max_hp = v.hp_max.clamp(0, cap);
+        // (BOSS-BARS, THE USER 2026-11-05: "it must actually show the amount") NO CAP: KH3 holds the HP at 120 bars
+        // (unit x 120: 24,000 / 240,000), which stopped the "+N" counter at 99; every bar is counted now.
+        let hp = v.hp.max(0);
+        let max_hp = v.hp_max.max(0);
         if self.fresh || max_hp != self.max_hp {
             self.fresh = false;
             self.max_hp = max_hp;
@@ -986,7 +1099,7 @@ impl EnemyGauge {
             self.shown_stock = stock_max;
             self.base_rest = rem;
             hud.set_ehp_max(stock_max, gauge_frame(rem, self.unit, 500) + 1);
-            self.hp = self.prev_hp.take().map_or(hp, |p| p.clamp(0, cap));
+            self.hp = self.prev_hp.take().map_or(hp, |p| p.max(0)); // (BOSS-BARS) no cap
             self.send_hp(hud, hp);
         } else if hp != self.hp || was_fresh {
             self.send_hp(hud, hp);

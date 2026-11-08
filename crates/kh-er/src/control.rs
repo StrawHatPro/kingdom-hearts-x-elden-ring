@@ -41,7 +41,7 @@ pub fn read_text(path: &Path) -> Option<String> {
 /// (INI) [`read_text`] of bytes.
 pub fn decode(bytes: &[u8]) -> Option<String> {
     let utf16 = |b: &[u8], le: bool| {
-        let units: Vec<u16> = b.chunks_exact(2).map(|c| if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) }).collect();
+        let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) }).collect();
         String::from_utf16(&units).ok()
     };
     if let Some(b) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
@@ -140,7 +140,9 @@ fn value(raw: &str) -> String {
 /// (IMPL_ER32; the user, 2026-10-13: "also Sora's attacks should break breakable objects and fire should explode explosives"; standing
 /// instruction as above): `break.kh` = 1: Sora's hits reach breakable map objects as bullets with object damage, KH3 fire / blizzard /
 /// thunder are Elden Ring fire / magic / lightning (breakables.rs). NOT RUN IN ELDEN RING. `break.kh = 0`: the attack rows exactly as before.
-pub const DEFAULTS: &[(&str, &str)] = &[("hud.kh", "1"), ("hud.er", "0"), ("in.kh_menu", "1"), ("menu.pause", "1"), ("gameover.kh", "1"), ("prize.kh", "1"), ("munny.mirror", "1"), ("savepoint.kh", "1"), ("save.kh", "1"), ("cutscene.menu", "1"), ("save.points_only", "1"), ("newgame.auto", "1"), ("saveload.kh", "1"), ("hud.exp_unit", "EXP"), ("finish.kh", "1"), ("loot.kh", "1"), ("loot.gate", "1"), ("shop.kh", "1"), ("items.er_keys", "1"), ("boss.rewards", "1"), ("break.kh", "1"), ("cure.er_status", "1"), ("blood.kh", "1")];
+/// (DEATHPLANE, the coordinator 2026-11-03) `water.death` = 0: the drowning heuristic (sora.rs `water_phase`) is off; a KH character dies in the
+/// sea where Elden Ring itself kills, at its own barriers (deathplane.rs). `water.death = 1`: the heuristic as before (debugging).
+pub const DEFAULTS: &[(&str, &str)] = &[("hud.kh", "1"), ("hud.er", "0"), ("in.kh_menu", "1"), ("menu.pause", "1"), ("gameover.kh", "1"), ("prize.kh", "1"), ("munny.mirror", "1"), ("savepoint.kh", "1"), ("save.kh", "1"), ("cutscene.menu", "1"), ("save.points_only", "1"), ("newgame.auto", "1"), ("saveload.kh", "1"), ("hud.exp_unit", "EXP"), ("finish.kh", "1"), ("loot.kh", "1"), ("loot.gate", "1"), ("shop.kh", "1"), ("items.er_keys", "1"), ("boss.rewards", "1"), ("break.kh", "1"), ("cure.er_status", "1"), ("blood.kh", "1"), ("water.death", "0") /* (DEATHPLANE) the old drowning heuristic retired: deaths come from the game's own barriers (deathplane.rs); `water.death = 1` brings it back for debugging */];
 // (IMPL_ER78b) `r.hybrid` is NOT a default: the first build with it on (B9CECFC41912) was reported broken in the user's game
 // (2026-10-15); it stays opt-in (`r.hybrid = 1`) until a `r.hybrid_dump` from the game confirms it (kh-er-render hybrid.rs).
 
@@ -148,12 +150,13 @@ pub const DEFAULTS: &[(&str, &str)] = &[("hud.kh", "1"), ("hud.er", "0"), ("in.k
 /// (invulnerability, unlocks, rewards or levels given, the party host's debug words). Their keys are dropped when the file
 /// is read, so no line of kh-er.ini (or the old kh-er.ctl) can switch one on. Only a build with the cargo feature
 /// `dev-aids` (off by default, never used by setup/setup.js) reads them.
-const DEV_PREFIXES: &[&str] = &["test.", "dbg.", "p.dbg_"];
+const DEV_PREFIXES: &[&str] = &["test.", "dbg.", "p.dbg_", "atk."]; // (GF-SENSOR) atk.*: the attack sensor's test bench (sensorlab.rs)
 const DEV_KEYS: &[&str] = &[
     "party.word", "party.recover", "party.body_test", "party.body_test.show", "party.team_invuln", "party.climb_capture",
     "dmg.invuln", "dmg.off", "unlock.give", "unlock.goto", "unlock.jump", "unlock.reset", "unlock.starter", "unlock.state",
     "boss.grant", "prize.test", "finish.test", "sora.level", "hud.cmd", "r.hybrid_kh_test", "r.hybrid_dump", "blt.dump",
     "in.script", "in.script_menus", "in.vpad", "in.x", "in.y", "in.rx", "in.ry", "in.dir", "in.jump", "in.jump_hold",
+    "world.test_shot", "world.test_fx", // (WORLDTIME-2) an enemy's test bullet, one test effect
 ];
 
 /// True for a key of a development aid (see [`DEV_KEYS`]).

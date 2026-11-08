@@ -42,12 +42,17 @@ pub enum EffectCommand {
     Stop(EffectHandle, bool),
     /// (DON-MAGIC tint) the effect of this handle recoloured (`kh_core::Effects::tint`).
     Tint(EffectHandle, kh_core::host::Tint),
+    /// (AUDIT-C) the effect of this handle takes its attach row's ParticleColor / ParticleAlpha (`kh_core::Effects::color`).
+    Color(EffectHandle, [f32; 4]),
     /// (DON-MAGIC orbit) the effect of this handle moved (`kh_core::Effects::place`): a world point, or the new offset of an
     /// attached one.
     Place(EffectHandle, glam::Vec3),
     /// (ZETTA) the effect of this handle moved, turned and scaled (`kh_core::Effects::transform`): world place, rotation
     /// (pitch, yaw, roll) degrees, scale per local axis.
     Transform(EffectHandle, glam::Vec3, glam::Vec3, glam::Vec3),
+    /// (AUDIT-B W-FIN) the attach row's FadeIn / FadeOut / StartDelayTime of the effect just spawned with this handle
+    /// (`kh_core::Effects::timing`); it follows that handle's `Spawn` in the same step.
+    Timing(EffectHandle, kh_core::host::EffectTiming),
 }
 
 #[derive(Default)]
@@ -66,12 +71,20 @@ impl kh_core::Effects for EffectQueue {
         self.0.push(EffectCommand::Tint(handle, tint)); // (DON-MAGIC tint)
     }
 
+    fn color(&mut self, handle: EffectHandle, rgba: [f32; 4]) {
+        self.0.push(EffectCommand::Color(handle, rgba)); // (AUDIT-C)
+    }
+
     fn place(&mut self, handle: EffectHandle, at: glam::Vec3) {
         self.0.push(EffectCommand::Place(handle, at)); // (DON-MAGIC orbit)
     }
 
     fn transform(&mut self, handle: EffectHandle, at: glam::Vec3, rotation: glam::Vec3, scale: glam::Vec3) {
         self.0.push(EffectCommand::Transform(handle, at, rotation, scale)); // (ZETTA)
+    }
+
+    fn timing(&mut self, handle: EffectHandle, timing: kh_core::host::EffectTiming) {
+        self.0.push(EffectCommand::Timing(handle, timing)); // (AUDIT-B W-FIN)
     }
 }
 

@@ -9,14 +9,14 @@
 //!   one of its element unless the tier was chosen by hand; an element no slot holds goes into the first empty slot.
 //!   Shortcut list: every learned tier of every element (each its own entry), then his pouch items. First-switch
 //!   shortcut set A: the best Fire / Blizzard / Thunder / Cure (Circle, Triangle, Square, Cross), B and C empty.
-//! - Goofy: three ability slots (Goofy Tornado / Turbo / Discus) with a tier pick like magic. His tiers follow the
-//!   party's magic (decision 6): tier 2 with the first second-tier spell Sora has, tier 3 with the first third-tier one.
-//!   Shortcut list: each ability at each tier he has, then his pouch items. First-switch set A: Tornado / Turbo /
-//!   Discus at the best tier, Potion.
+//! - Goofy (GF-ARTS, documentation/GOOFY_OVERHAUL.md 8, PLAN.md R1, R19): two equipped Shield Arts on LB + A and LB + B, Taunt
+//!   fixed on LB + X, the items on LB + Y. Goofy has no magic: his panel's Arts are the same on all three pages, and Y's item is
+//!   each page's own. An Art he learns fills an empty slot. Ranks come from kh-party (`goofy::ArtBook`, copied in by the host).
 //!
 //! GOOFY'S IDS: his entries need command kinds for the menus and the save; `ETresCommandKind` has no free values, so
-//! Goofy's list has its own id space [`goofy`] (`0xC1 ..= 0xC9`), used ONLY inside Goofy's block and lists (never
-//! executed as a Sora command). Item entries are the item commands 58 ..= 68 in every block.
+//! Goofy's list has its own id space [`goofy`] (`0xCA ..= 0xD0`), used ONLY inside Goofy's block and lists (never
+//! executed as a Sora command). An old save's tiered ids `0xC1 ..= 0xC9` are migrated. Item entries are the item commands
+//! 58 ..= 68 in every block.
 
 use crate::magic::items::{command_of_item, item_of_command};
 use crate::magic::spells::{self, Element};
@@ -54,7 +54,7 @@ impl LeaderKind {
     pub const fn slot_count(self) -> usize {
         match self {
             LeaderKind::Donald => 6,
-            LeaderKind::Goofy => 3,
+            LeaderKind::Goofy => 2,
         }
     }
 }
@@ -62,56 +62,142 @@ impl LeaderKind {
 /// The asset order of the Customize lists (`CustomizeDataAsset.MagicCommands`, UI spec 10.6).
 pub const ASSET_ORDER: [Element; 6] = [Element::Fire, Element::Blizzard, Element::Thunder, Element::Water, Element::Aero, Element::Cure];
 
-/// GOOFY'S OWN ID SPACE (port design, see the module text): ability index x 3 + tier - 1 + `BASE`.
+/// (GF-ARTS) GOOFY'S OWN ID SPACE (port design, see the module text): one id per Art, the rank is the Art's own. His block
+/// holds these and the item commands 58 ..= 68. kh-party's `pad::goofy_arts::Art` is the same numbering.
 pub mod goofy {
-    pub const BASE: u8 = 0xC1;
-    pub const TORNADO: u8 = BASE;
-    pub const TURBO: u8 = BASE + 3;
-    pub const DISCUS: u8 = BASE + 6;
-    pub const LAST: u8 = BASE + 8;
-    /// The `TresAbilityData` rows of the three abilities (`GOOFY_TORNADE`, `GOOFY_TURBO`, `GOOFY_FLIP`).
-    pub const ABILITY_ROWS: [&str; 3] = ["GOOFY_TORNADE", "GOOFY_TURBO", "GOOFY_FLIP"];
+    use super::{Assignable, Tab};
+    use crate::magic::items::item_of_command;
+    use crate::magic::spells;
+    use crate::status::ItemKind;
+
+    /// An old save's tiered abilities (index x 3 + tier - 1 + `OLD_FIRST`: Tornado, Turbo, Discus).
+    pub const OLD_FIRST: u8 = 0xC1;
+    pub const OLD_LAST: u8 = 0xC9;
+    pub const CHARGE: u8 = 0xCA;
+    pub const TORNADO: u8 = 0xCB;
+    pub const BASH: u8 = 0xCC;
+    pub const TURBO: u8 = 0xCD;
+    pub const INTERPOSE: u8 = 0xCE;
+    pub const SHIELD_TOSS: u8 = 0xCF;
+    /// Fixed on LB + X: never one of the two equipped.
+    pub const TAUNT: u8 = 0xD0;
+    pub const FIRST: u8 = CHARGE;
+    pub const LAST: u8 = TAUNT;
+    /// The Arts he may equip, in the doc's order.
+    pub const ARTS: [u8; 6] = [CHARGE, TORNADO, BASH, TURBO, INTERPOSE, SHIELD_TOSS];
+
+    /// The panel's slots (`shortcut[page][slot]`, Sora's order: B, Y, X, A).
+    pub const SLOT_B: usize = 0;
+    pub const SLOT_ITEM: usize = 1;
+    pub const SLOT_TAUNT: usize = 2;
+    pub const SLOT_A: usize = 3;
 
     pub const fn is_goofy(kind: u8) -> bool {
-        kind >= BASE && kind <= LAST
+        kind >= FIRST && kind <= LAST
     }
 
-    /// The id of ability `index` (0 Tornado, 1 Turbo, 2 Discus) at `tier` (1 ..= 3).
-    pub const fn id(index: u8, tier: u8) -> u8 {
-        let t = if tier < 1 { 1 } else if tier > 3 { 3 } else { tier };
-        BASE + index * 3 + t - 1
+    /// One of the two-slot Arts (Taunt is not).
+    pub const fn is_art(kind: u8) -> bool {
+        kind >= FIRST && kind < TAUNT
     }
 
-    /// (ability index 0 ..= 2, tier 1 ..= 3) of an id.
-    pub const fn split(kind: u8) -> Option<(u8, u8)> {
-        if !is_goofy(kind) {
-            return None;
+    const fn is_old(kind: u8) -> bool {
+        kind >= OLD_FIRST && kind <= OLD_LAST
+    }
+
+    /// AN OLD SAVE'S ENTRY: Tornado and Turbo at any tier are those Arts, Discus is Shield Toss; his own ids and the rest unchanged.
+    pub const fn migrate(kind: u8) -> u8 {
+        match kind {
+            0xC1..=0xC3 => TORNADO,
+            0xC4..=0xC6 => TURBO,
+            0xC7..=0xC9 => SHIELD_TOSS,
+            _ => kind,
         }
-        let k = kind - BASE;
-        Some((k / 3, k % 3 + 1))
     }
 
-    /// The three tiers of an id's ability.
-    pub fn tiers(kind: u8) -> Option<[u8; 3]> {
-        let (index, _) = split(kind)?;
-        Some([id(index, 1), id(index, 2), id(index, 3)])
-    }
-
-    /// The display name (KH3's "Goofy Tornado" / "Goofy Turbo" / "Goofy Discus" [kh3_system]; the tier marks II / III
-    /// are ours: KH3's friends have one tier).
+    /// The display name (the doc's; KH3's own for Tornado and Turbo).
     pub const fn name(kind: u8) -> &'static str {
         match kind {
-            0xC1 => "Goofy Tornado",
-            0xC2 => "Goofy Tornado II",
-            0xC3 => "Goofy Tornado III",
-            0xC4 => "Goofy Turbo",
-            0xC5 => "Goofy Turbo II",
-            0xC6 => "Goofy Turbo III",
-            0xC7 => "Goofy Discus",
-            0xC8 => "Goofy Discus II",
-            0xC9 => "Goofy Discus III",
+            CHARGE => "Goofy Charge",
+            TORNADO => "Goofy Tornado",
+            BASH => "Goofy Bash",
+            TURBO => "Goofy Turbo",
+            INTERPOSE => "Interpose",
+            SHIELD_TOSS => "Shield Toss",
+            TAUNT => "Taunt",
             _ => "",
         }
+    }
+
+    /// The Customize help line. "{0}" is the MP; "{1}" the Art's cooldown in seconds (COMPOSED, no KH3 string; THE USER
+    /// 2026-11-02: "Goofy's abilities (except taunt) should cost more MP, and introduce a cooldown with a visible timer"). Taunt
+    /// has none.
+    pub const fn help(kind: u8) -> &'static str {
+        match kind {
+            CHARGE => "A shield-first rush that pushes enemies along and ends in a guard stance. MP Cost: {0}  Cooldown: {1} s",
+            TORNADO => "A spinning shield whirl that hits all around and deflects projectiles while it spins. MP Cost: {0}  Cooldown: {1} s",
+            BASH => "An overhead slam that staggers the enemy badly. MP Cost: {0}  Cooldown: {1} s",
+            TURBO => "Rides the shield forward like a sled. X cancels it into Guard. MP Cost: {0}  Cooldown: {1} s",
+            INTERPOSE => "Dashes in front of the nearest threatened friend and deflects the next hit aimed at them. MP Cost: {0}  Cooldown: {1} s",
+            SHIELD_TOSS => "Throws the shield, which returns. While it is out he can only guard bare-handed. MP Cost: {0}  Cooldown: {1} s",
+            TAUNT => "Hollers and bangs the shield: nearby enemies turn on him. Always on <icon(L1)> + <icon(Square)>. MP Cost: {0}", // (BUTTON-ICONS) icons
+            _ => "",
+        }
+    }
+
+    /// WHAT GOOFY HAS LEARNED as his block reads it (kh-party's ranks, copied in by the host every step: kh-partyhost custom.rs).
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub struct ArtBook {
+        /// Rank per Art, index `id - FIRST` (0 = not learned).
+        pub ranks: [u8; 7],
+        /// The ranks are his (the host fed them): an Art above them may be cleared. Unfed, the block only keeps what it holds.
+        pub fed: bool,
+    }
+
+    impl Default for ArtBook {
+        fn default() -> ArtBook {
+            ArtBook::START
+        }
+    }
+
+    impl ArtBook {
+        /// The start (the doc's 11.2): Goofy Charge and Taunt.
+        pub const START: ArtBook = ArtBook { ranks: [1, 0, 0, 0, 0, 0, 1], fed: false };
+
+        pub fn rank(&self, kind: u8) -> u8 {
+            if is_goofy(kind) { self.ranks[(kind - FIRST) as usize] } else { 0 }
+        }
+
+        pub fn knows(&self, kind: u8) -> bool {
+            self.rank(kind) > 0
+        }
+    }
+
+    /// THE ARTS HE MAY EQUIP NOW: the learned ones, Taunt not among them (Customize's list).
+    pub fn arts(book: &ArtBook) -> Vec<Assignable> {
+        ARTS.into_iter().filter(|k| book.knows(*k)).map(|kind| Assignable { kind, name: name(kind), tab: Tab::Magic, auto_reload: false }).collect()
+    }
+
+    /// The list of a slot of his panel: the Arts, then the items (`items`: his pouch and the shared stock).
+    pub fn assignable(book: &ArtBook, items: &[ItemKind]) -> Vec<Assignable> {
+        let mut out = arts(book);
+        for cmd in 58u8..=68 {
+            if item_of_command(cmd).is_some_and(|i| items.contains(&i)) {
+                out.push(Assignable { kind: cmd, name: spells::command_name(cmd), tab: Tab::Items, auto_reload: false });
+            }
+        }
+        out
+    }
+
+    /// The first two Arts he knows: [LB + A, LB + B] of a block never filled (0 = empty).
+    pub fn default_arts(book: &ArtBook) -> [u8; 2] {
+        let mut known = ARTS.into_iter().filter(|k| book.knows(*k));
+        [known.next().unwrap_or(0), known.next().unwrap_or(0)]
+    }
+
+    /// The page holds what the old layout allowed: an old id, an item off Y's slot, an Art on it.
+    pub(super) fn old_layout(page: &[u8; 4]) -> bool {
+        page.iter().enumerate().any(|(slot, k)| is_old(*k) || (slot == SLOT_ITEM && is_goofy(*k)) || (slot != SLOT_ITEM && item_of_command(*k).is_some()))
     }
 }
 
@@ -441,12 +527,6 @@ impl MagicBook {
         let t = self.tier(element);
         (t > 0).then(|| element.command(t))
     }
-
-    /// GOOFY'S TIER (decision 6): the highest tier of any spell the party has (tier 2 with the first -ra, 3 with the
-    /// first -ga); 1 with none.
-    pub fn goofy_tier(&self) -> u8 {
-        self.tiers.iter().copied().max().unwrap_or(0).clamp(1, 3)
-    }
 }
 
 /// ONE LEADER'S CUSTOMIZE BLOCK (Sora's `CommandState` storage shape: `magicSlot[6]`, the hand-chosen bits S+0x5C,
@@ -461,6 +541,8 @@ pub struct LeaderCustom {
     /// (DON-UI) Donald's learned magic as his block reads it (the host copies it in before each sync; not saved here:
     /// the roster's `donald_magic` record is the source). Unused in Goofy's block.
     pub don: donald::DonBook,
+    /// (GF-ARTS) Goofy's learned Arts as his block reads it (the same; his ranks are the roster's). Unused in Donald's block.
+    pub gof: goofy::ArtBook,
 }
 
 impl LeaderCustom {
@@ -471,20 +553,10 @@ impl LeaderCustom {
         match kind {
             // (DON-UI) Donald's own block (the overhaul): his ids, his book (`self.don`), the old save's Sora ids migrated
             LeaderKind::Donald => self.sync_donald(),
+            // (GF-ARTS) Goofy's own block: his Art ids, his book (`self.gof`), the old save's tiers migrated
             LeaderKind::Goofy => {
-                let t = book.goofy_tier();
-                if !self.filled {
-                    self.filled = true;
-                    self.tier_chosen = [false; 6];
-                    self.magic_slots = [goofy::id(0, t), goofy::id(1, t), goofy::id(2, t), 0, 0, 0];
-                    self.shortcuts = [[goofy::id(0, t), goofy::id(1, t), goofy::id(2, t), spells::cmd::POTION], [0; 4], [0; 4]];
-                }
-                for (slot, s) in self.magic_slots.iter_mut().enumerate() {
-                    if let Some((index, tier)) = goofy::split(*s) {
-                        let want = if self.tier_chosen[slot] { tier.min(t) } else { t };
-                        *s = goofy::id(index, want);
-                    }
-                }
+                let _ = book;
+                self.sync_goofy();
             }
         }
         *self != before
@@ -516,10 +588,11 @@ impl LeaderCustom {
                 let _ = (cmd, old, book);
                 false
             }
-            LeaderKind::Goofy => match (goofy::split(cmd), goofy::split(old)) {
-                (Some((i, t)), Some((j, _))) => i == j && t <= book.goofy_tier(),
-                _ => false,
-            },
+            // (GF-ARTS) his page is the two equipped Arts: no tiers, the slot takes any learned Art
+            LeaderKind::Goofy => {
+                let _ = (old, book);
+                return self.equip_art(slot, cmd);
+            }
         };
         if !ok {
             return false;
@@ -539,6 +612,10 @@ impl LeaderCustom {
         }
         self.magic_slots.swap(a, b);
         self.tier_chosen.swap(a, b);
+        if kind == LeaderKind::Goofy {
+            let [x, y] = self.arts(); // (GF-ARTS) his page is the two Arts: the buttons swap with it
+            self.write_arts([y, x]);
+        }
         true
     }
 
@@ -547,15 +624,106 @@ impl LeaderCustom {
         if page >= 3 || slot >= 4 || (cmd != 0 && !self.list(kind, book, items).iter().any(|a| a.kind == cmd)) {
             return false;
         }
+        // (GF-ARTS) Goofy's panel: A and B are the two Arts (on every page), X is Taunt, Y is an item
+        if kind == LeaderKind::Goofy {
+            return match slot {
+                goofy::SLOT_A => self.equip_art(0, cmd),
+                goofy::SLOT_B => self.equip_art(1, cmd),
+                goofy::SLOT_ITEM if cmd == 0 || item_of_command(cmd).is_some() => {
+                    self.shortcuts[page][slot] = cmd;
+                    true
+                }
+                _ => false,
+            };
+        }
         self.shortcuts[page][slot] = cmd;
         true
+    }
+
+    /// (GF-ARTS) GOOFY'S TWO EQUIPPED ARTS: [LB + A, LB + B].
+    pub fn arts(&self) -> [u8; 2] {
+        [self.shortcuts[0][goofy::SLOT_A], self.shortcuts[0][goofy::SLOT_B]]
+    }
+
+    /// (GF-ARTS) EQUIPS A LEARNED ART on `slot` (0 LB + A, 1 LB + B, on every page). The Art already on the other slot swaps
+    /// over. False: not an Art he knows (Taunt never is), or no such slot.
+    pub fn equip_art(&mut self, slot: usize, art: u8) -> bool {
+        if slot >= 2 || !goofy::is_art(art) || !self.gof.knows(art) {
+            return false;
+        }
+        let mut arts = self.arts();
+        if arts[1 - slot] == art {
+            arts[1 - slot] = arts[slot];
+        }
+        arts[slot] = art;
+        self.write_arts(arts);
+        true
+    }
+
+    fn write_arts(&mut self, arts: [u8; 2]) {
+        for page in self.shortcuts.iter_mut() {
+            page[goofy::SLOT_A] = arts[0];
+            page[goofy::SLOT_B] = arts[1];
+            page[goofy::SLOT_TAUNT] = goofy::TAUNT;
+        }
+        self.magic_slots = [arts[0], arts[1], 0, 0, 0, 0];
+    }
+
+    /// (GF-ARTS) GOOFY'S BLOCK SYNC:
+    /// - an old save's block (tiered ids, an item on any slot): its Arts in the order A, B, Y, X over the pages, its items onto
+    ///   the pages' Y slots in order;
+    /// - an Art he does not know (an older progression loaded) is cleared; an empty slot takes the first Art he knows that the
+    ///   other slot does not hold;
+    /// - the first fill: the first two Arts he knows and a Potion on Y.
+    fn sync_goofy(&mut self) {
+        let book = self.gof;
+        let fresh = !self.filled;
+        self.filled = true;
+        self.tier_chosen = [false; 6];
+        let mut arts = self.arts();
+        if fresh {
+            self.shortcuts[0][goofy::SLOT_ITEM] = spells::cmd::POTION;
+        } else if self.shortcuts.iter().any(goofy::old_layout) {
+            let (mut found, mut items) = (Vec::new(), Vec::new());
+            for page in self.shortcuts.iter() {
+                for slot in [goofy::SLOT_A, goofy::SLOT_B, goofy::SLOT_ITEM, goofy::SLOT_TAUNT] {
+                    let k = goofy::migrate(page[slot]);
+                    if goofy::is_art(k) && !found.contains(&k) {
+                        found.push(k);
+                    } else if item_of_command(k).is_some() {
+                        items.push(k);
+                    }
+                }
+            }
+            arts = [found.first().copied().unwrap_or(0), found.get(1).copied().unwrap_or(0)];
+            for (p, page) in self.shortcuts.iter_mut().enumerate() {
+                page[goofy::SLOT_ITEM] = items.get(p).copied().unwrap_or(0);
+            }
+        }
+        for a in arts.iter_mut() {
+            if !goofy::is_art(*a) || (book.fed && !book.knows(*a)) {
+                *a = 0;
+            }
+        }
+        if arts[0] == arts[1] {
+            arts[1] = 0;
+        }
+        for i in 0..2 {
+            if arts[i] == 0 {
+                arts[i] = goofy::ARTS.into_iter().find(|k| book.knows(*k) && !arts.contains(k)).unwrap_or(0);
+            }
+        }
+        self.write_arts(arts);
     }
 
     /// (DON-UI) The leader's shortcut list (Customize): Donald's from his own book (`self.don`), Goofy's [`assignable`].
     pub fn list(&self, kind: LeaderKind, book: &MagicBook, items: &[ItemKind]) -> Vec<Assignable> {
         match kind {
             LeaderKind::Donald => donald::assignable(&self.don, items),
-            LeaderKind::Goofy => assignable(kind, book, items),
+            LeaderKind::Goofy => {
+                let _ = book;
+                goofy::assignable(&self.gof, items) // (GF-ARTS) his own book
+            }
         }
     }
 
@@ -588,8 +756,8 @@ impl LeaderCustom {
                 None => 0,
             };
         }
-        for e in 0..donald::ELEMENTS {
-            if book.unlocked(e) && !seen[e] {
+        for (e, &placed) in seen.iter().enumerate() {
+            if book.unlocked(e) && !placed {
                 if let Some(slot) = self.magic_slots.iter().position(|k| *k == 0) {
                     self.magic_slots[slot] = donald::line1(e, 1);
                 }
@@ -658,28 +826,13 @@ pub fn entry_name(kind: u8) -> &'static str {
 /// THE SHORTCUT LIST of a friend leader (the list a shortcut button opens; `customize::assignable` for Sora): his
 /// entries in asset order, then the item commands of the items in his pouch (`items`: his item slots' items).
 pub fn assignable(kind: LeaderKind, book: &MagicBook, items: &[ItemKind]) -> Vec<Assignable> {
-    let mut out = Vec::new();
+    let _ = book;
     match kind {
-        // (DON-UI) Donald's list is his own book's: [`LeaderCustom::list`]; here the start's (no block at hand)
-        LeaderKind::Donald => {
-            let _ = book;
-            return donald::assignable(&donald::DonBook::START, items);
-        }
-        LeaderKind::Goofy => {
-            for index in 0..3u8 {
-                for tier in 1..=book.goofy_tier() {
-                    let id = goofy::id(index, tier);
-                    out.push(Assignable { kind: id, name: goofy::name(id), tab: Tab::Magic, auto_reload: false });
-                }
-            }
-        }
+        // (DON-UI) Donald's list is his own book's (LeaderCustom::list); here the start's (no block at hand)
+        LeaderKind::Donald => donald::assignable(&donald::DonBook::START, items),
+        // (GF-ARTS) the same for Goofy
+        LeaderKind::Goofy => goofy::assignable(&goofy::ArtBook::START, items),
     }
-    for cmd in 58u8..=68 {
-        if item_of_command(cmd).is_some_and(|i| items.contains(&i)) {
-            out.push(Assignable { kind: cmd, name: spells::command_name(cmd), tab: Tab::Items, auto_reload: false });
-        }
-    }
-    out
 }
 
 /// The item command of an item (58 Potion ...), for the friends' pouch rows.
@@ -743,8 +896,7 @@ mod tests {
     #[test]
     fn donald_s_block_fills_learns_and_lists() {
         use donald::*;
-        let mut c = LeaderCustom::default();
-        c.don = DonBook::START;
+        let mut c = LeaderCustom { don: DonBook::START, ..LeaderCustom::default() };
         assert!(c.sync(LeaderKind::Donald, &MagicBook::default()));
         assert_eq!(c.slots(LeaderKind::Donald), vec![line1(0, 1), line1(3, 1)]);
         assert_eq!(c.shortcuts, [[line1(0, 1), line2(0), line1(3, 1), line2(3)], [attune(0), attune(3), 0, 0], [0; 4]], "three palettes from the start");
@@ -774,28 +926,104 @@ mod tests {
         assert_eq!(c.shortcuts[2][..3], [line1(1, 2), 0, hybrid(0, 3).unwrap()]);
     }
 
+    fn gof(ranks: [u8; 7]) -> goofy::ArtBook {
+        goofy::ArtBook { ranks, fed: true }
+    }
+
+    fn goofy_block(book: goofy::ArtBook, shortcuts: [[u8; 4]; 3]) -> LeaderCustom {
+        LeaderCustom { filled: true, shortcuts, gof: book, ..LeaderCustom::default() }
+    }
+
     #[test]
-    fn goofy_s_tiers_follow_the_party_s_magic() {
-        assert_eq!(book([1, 0, 0, 0, 0, 0]).goofy_tier(), 1);
-        assert_eq!(book([1, 2, 0, 0, 0, 0]).goofy_tier(), 2);
-        assert_eq!(book([0; 6]).goofy_tier(), 1);
+    fn goofy_s_ids_names_and_the_first_fill() {
+        use goofy::*;
+        assert_eq!(ARTS.len(), 6, "six to equip; Taunt is fixed");
+        for k in ARTS {
+            assert!(is_art(k) && is_goofy(k) && !name(k).is_empty() && !help(k).is_empty(), "{k:#x}");
+            assert!(item_of_command(k).is_none() && !spells::is_magic(k) && !donald::is_donald(k), "{k:#x} is his alone");
+            assert_eq!(entry_name(k), name(k));
+        }
+        assert!(is_goofy(TAUNT) && !is_art(TAUNT));
+        assert!(!is_goofy(cmd::POTION) && !is_goofy(OLD_FIRST) && !is_goofy(OLD_LAST) && !is_goofy(0xD1));
+        // level 1: Charge and Taunt; the second Art slot waits
         let mut c = LeaderCustom::default();
-        c.sync(LeaderKind::Goofy, &book([1, 2, 0, 0, 0, 0]));
-        assert_eq!(c.slots(LeaderKind::Goofy), vec![goofy::id(0, 2), goofy::id(1, 2), goofy::id(2, 2)]);
-        assert_eq!(c.shortcuts[0], [goofy::TORNADO + 1, goofy::TURBO + 1, goofy::DISCUS + 1, cmd::POTION]);
-        assert!(c.set_slot(LeaderKind::Goofy, &book([1, 2, 0, 0, 0, 0]), 1, goofy::TURBO));
-        c.sync(LeaderKind::Goofy, &book([3; 6]));
-        assert_eq!(c.slots(LeaderKind::Goofy), vec![goofy::id(0, 3), goofy::TURBO, goofy::id(2, 3)], "a hand-chosen tier stays");
-        assert_eq!(goofy::split(goofy::id(2, 3)), Some((2, 3)));
-        assert_eq!(goofy::tiers(goofy::id(1, 2)), Some([0xC4, 0xC5, 0xC6]));
-        assert_eq!(assignable(LeaderKind::Goofy, &book([3; 6]), &[]).len(), 9);
-        assert!(!goofy::is_goofy(cmd::POTION) && !goofy::is_goofy(231));
+        c.sync(LeaderKind::Goofy, &book([1; 6]));
+        assert!(c.filled);
+        assert_eq!(c.arts(), [CHARGE, 0]);
+        assert_eq!(c.shortcuts, [[0, cmd::POTION, TAUNT, CHARGE], [0, 0, TAUNT, CHARGE], [0, 0, TAUNT, CHARGE]], "Arts and Taunt on every page, the Potion on Y");
+        // an Art learned later fills the empty slot, and stays out of the taken one
+        c.gof = gof([1, 1, 0, 0, 0, 0, 1]);
+        c.sync(LeaderKind::Goofy, &book([1; 6]));
+        assert_eq!(c.arts(), [CHARGE, TORNADO]);
+        c.gof = gof([1, 1, 1, 0, 0, 0, 1]);
+        assert!(!c.sync(LeaderKind::Goofy, &book([1; 6])), "both taken: nothing moves");
+    }
+
+    #[test]
+    fn equip_art_takes_a_learned_art_and_swaps_a_duplicate() {
+        use goofy::*;
+        let mut c = LeaderCustom { gof: gof([1, 1, 1, 0, 0, 2, 1]), ..LeaderCustom::default() };
+        c.sync(LeaderKind::Goofy, &book([1; 6]));
+        assert_eq!(c.arts(), [CHARGE, TORNADO]);
+        assert!(c.equip_art(1, SHIELD_TOSS));
+        assert_eq!(c.arts(), [CHARGE, SHIELD_TOSS]);
+        assert!(c.shortcuts.iter().all(|p| p[SLOT_B] == SHIELD_TOSS), "every page");
+        assert!(c.equip_art(0, SHIELD_TOSS), "the Art on the other slot swaps over");
+        assert_eq!(c.arts(), [SHIELD_TOSS, CHARGE]);
+        assert!(!c.equip_art(0, TURBO), "not learned");
+        assert!(!c.equip_art(0, TAUNT), "Taunt is fixed");
+        assert!(!c.equip_art(2, BASH), "no third slot");
+        assert_eq!(arts(&c.gof).iter().map(|a| a.kind).collect::<Vec<_>>(), [CHARGE, TORNADO, BASH, SHIELD_TOSS], "the list: learned, no Taunt");
+        // the shortcut route of Customize lands on the same rules
+        let items = [ItemKind::Potion];
+        assert!(c.set_shortcut(LeaderKind::Goofy, &book([1; 6]), &items, 2, SLOT_A, BASH));
+        assert_eq!(c.arts()[0], BASH, "the Art of any page is the Art of every page");
+        assert!(!c.set_shortcut(LeaderKind::Goofy, &book([1; 6]), &items, 0, SLOT_TAUNT, CHARGE), "X stays Taunt");
+        assert!(!c.set_shortcut(LeaderKind::Goofy, &book([1; 6]), &items, 0, SLOT_A, cmd::POTION), "an item is not an Art");
+        assert!(!c.set_shortcut(LeaderKind::Goofy, &book([1; 6]), &items, 0, SLOT_ITEM, BASH), "Y holds items");
+        assert!(c.set_shortcut(LeaderKind::Goofy, &book([1; 6]), &items, 1, SLOT_ITEM, cmd::POTION), "Y is each page's own");
+        assert_eq!((c.shortcuts[1][SLOT_ITEM], c.shortcuts[2][SLOT_ITEM]), (cmd::POTION, 0));
+        assert!(c.swap(LeaderKind::Goofy, 0, 1));
+        assert_eq!(c.arts(), [CHARGE, BASH], "the page's swap swaps the buttons");
+        assert_eq!(c.slots(LeaderKind::Goofy), vec![CHARGE, BASH]);
+        assert!(c.set_slot(LeaderKind::Goofy, &book([1; 6]), 1, SHIELD_TOSS), "his page's slot equips");
+        assert_eq!(c.arts(), [CHARGE, SHIELD_TOSS]);
+    }
+
+    #[test]
+    fn an_old_save_s_tiered_block_migrates_to_arts() {
+        use goofy::*;
+        // X2's default block (slots B, Y, X, A: Tornado II, Turbo II, Discus II, Potion), everything learned
+        let all = gof([1; 7]);
+        let mut c = goofy_block(all, [[0xC2, 0xC5, 0xC8, cmd::POTION], [0; 4], [0; 4]]);
+        c.magic_slots = [0xC2, 0xC5, 0xC8, 0, 0, 0];
+        c.tier_chosen[1] = true;
+        assert!(c.sync(LeaderKind::Goofy, &book([1; 6])));
+        assert_eq!(c.arts(), [TORNADO, TURBO], "in panel order");
+        assert_eq!(c.shortcuts[0], [TURBO, cmd::POTION, TAUNT, TORNADO], "the item moved to Y");
+        assert_eq!(c.magic_slots[..3], [TORNADO, TURBO, 0]);
+        assert_eq!(c.tier_chosen, [false; 6]);
+        let settled = c;
+        assert!(!c.sync(LeaderKind::Goofy, &book([1; 6])), "once");
+        assert_eq!(c, settled);
+        // a Discus with a low-level Goofy: not learned yet -> his Charge; the items spread over the pages
+        let mut c = goofy_block(gof([1, 0, 0, 0, 0, 0, 1]), [[0xC9, cmd::POTION, cmd::ETHER, 0], [0xC1, 0, 0, cmd::POTION], [0; 4]]);
+        c.sync(LeaderKind::Goofy, &book([1; 6]));
+        assert_eq!(c.arts(), [CHARGE, 0]);
+        assert_eq!((c.shortcuts[0][SLOT_ITEM], c.shortcuts[1][SLOT_ITEM], c.shortcuts[2][SLOT_ITEM]), (cmd::POTION, cmd::ETHER, cmd::POTION));
+        // before the host fed his ranks the old Arts are kept
+        let mut c = goofy_block(ArtBook::START, [[0xC3, 0xC6, 0xC9, 0], [0; 4], [0; 4]]);
+        c.sync(LeaderKind::Goofy, &book([1; 6]));
+        assert_eq!(c.arts(), [TORNADO, TURBO], "unfed: nothing is thrown away");
+        // an older progression loaded: the Art above his ranks goes, the free slot takes one he knows
+        let mut c = goofy_block(gof([1, 1, 0, 0, 0, 0, 1]), [[SHIELD_TOSS, 0, TAUNT, TORNADO]; 3]);
+        c.sync(LeaderKind::Goofy, &book([1; 6]));
+        assert_eq!(c.arts(), [TORNADO, CHARGE]);
     }
 
     #[test]
     fn the_save_shape_round_trips() {
-        let mut c = LeaderCustom::default();
-        c.don = donald::DonBook { tier: [3; 6], line2: [1; 6], dual: false };
+        let mut c = LeaderCustom { don: donald::DonBook { tier: [3; 6], line2: [1; 6], dual: false }, ..LeaderCustom::default() };
         c.sync(LeaderKind::Donald, &book([3; 6]));
         c.tier_chosen[2] = true;
         let s = c.to_json();

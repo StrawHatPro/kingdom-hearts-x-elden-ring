@@ -50,6 +50,8 @@ pub struct Snap {
     /// The animation speed it should run at (1 = normal).
     pub speed: f32,
     pub blind: bool,
+    /// (FREEZE-FX) Donald's Frozen is on it (its frozen look: freezefx.rs).
+    pub frozen: bool,
 }
 
 /// The frame's snapshot.
@@ -89,7 +91,7 @@ pub fn book_of(party: &kh_party::Party) -> Book {
         .iter()
         .map(|(id, s)| {
             let speed = if s.is_frozen() { FROZEN_SPEED } else { 1.0 - s.slow(t) };
-            Snap { id: *id, exposed: s.damage_taken_mult(t), speed, blind: s.is_blind() }
+            Snap { id: *id, exposed: s.damage_taken_mult(t), speed, blind: s.is_blind(), frozen: s.is_frozen() /* (FREEZE-FX) */ }
         })
         .collect();
     let aura = party.don_prog.aura.sources.iter().filter(|s| s.aura.enemy_speed_mult < 1.0).map(|s| (s.pos.to_array(), s.aura.radius, s.aura.enemy_speed_mult)).collect();
@@ -190,6 +192,11 @@ pub fn restore_flattened(why: &str) {
 fn with<R>(f: impl FnOnce(&mut Book) -> R) -> Option<R> {
     let mut g = BOOK.lock().unwrap_or_else(|e| e.into_inner());
     g.as_mut().map(f)
+}
+
+/// (FREEZE-FX) The enemies Donald's Frozen is on (the frozen look's list: freezefx.rs).
+pub fn frozen_ids() -> Vec<TargetId> {
+    with(|b| b.enemies.iter().filter(|e| e.frozen).map(|e| TargetId(e.id)).collect()).unwrap_or_default()
 }
 
 /// x on a hit's damage for Exposed (1 for kh-party's own hits, which carry it: `flags & DON_HIT_FLAG`).

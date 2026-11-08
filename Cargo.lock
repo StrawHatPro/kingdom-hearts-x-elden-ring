@@ -527,6 +527,7 @@ dependencies = [
  "glam",
  "kh-core",
  "kh-gendata",
+ "serde_json",
 ]
 
 [[package]]
@@ -592,6 +593,7 @@ dependencies = [
  "kh-partyhost",
  "kh-ui",
  "kh-vfx",
+ "naga",
  "png",
  "serde_json",
  "windows 0.62.2",

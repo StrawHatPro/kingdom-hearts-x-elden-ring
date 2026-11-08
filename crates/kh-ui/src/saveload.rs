@@ -33,6 +33,9 @@
 //!   tells the host `Delete(slot)`; its guide "<icon(Triangle)> Delete" (`kh3_menu.save.button_0001`) is a second line
 //!   of the help text; a slot the host protects (`delete_current` off: the `is_current` row) refuses with a message;
 //! - (SV) with `confirm_load` a used load row asks "Load the save data in this slot?" first (COMPOSED: KH3 asks nothing);
+//! - (NG delete, the user 2026-11-02: "When prompted to delete a save file, it should use the KH3 save menu to delete")
+//!   with `delete_only` the load list is the new game's "make room" list: decide on a used row asks the Delete question
+//!   as Triangle / Y does, nothing loads, the help line is `DELETE_FOR_NEW_GAME` (COMPOSED);
 //! - slot numbers are drawn with two digits (the authored field holds "00"); the row cursor's colour variant
 //!   (`color1` .. `color3`) is left as authored.
 
@@ -239,13 +242,15 @@ pub const DELETING: &str = "kh3_system.general.dialog_0004_xb1";
 /// (SV) The stage frame's guide of the lists (`kh3_menu.save.button_0001`: "<icon(Triangle)> Delete").
 pub const DELETE_GUIDE: &str = "kh3_menu.save.button_0001";
 /// (SV) COMPOSED (KH3's load list asks nothing; the user asked for a confirmation, 2026-10-17): the question in the words
-/// of KH3's other two slot questions ("Overwrite / Delete the save data in this slot?") and of its Title Screen question
-/// ("All unsaved game progress will be lost.").
-pub const LOAD_QUESTION: &str = "Load the save data in this slot?\nAll unsaved game progress will be lost.";
+/// of KH3's other two slot questions ("Overwrite / Delete the save data in this slot?"), then the mod's own warning
+/// (KH3TEXT 2026-11-08: not KH3's Title Screen sentence, which is not compiled in).
+pub const LOAD_QUESTION: &str = "Load the save data in this slot?\nAny progress you have not saved will be lost.";
 /// (SV) COMPOSED: a slot the host will not delete (the running game's own slot in the Elden Ring host).
 pub const DELETE_IN_USE: &str = "This save data is in use and cannot be deleted.";
 /// (SV) COMPOSED: a delete that failed (KH3's failure texts name only saving and loading).
 pub const DELETE_FAILED: &str = "Failed to delete the save data.";
+/// (NG delete) COMPOSED: the help line of a [`SaveLoadScreen::delete_only`] list (a new game with every slot in use).
+pub const DELETE_FOR_NEW_GAME: &str = "There is no free slot for a new game. Select save data to delete.";
 
 struct Clip {
     root: &'static str,
@@ -282,6 +287,8 @@ pub struct SaveLoadScreen {
     /// The slot list (movie SaveLoad) and the message window (movie Dialog): two layers.
     pub movie: Movie,
     pub dialog: Movie,
+    /// (ER-POPUPS) KH3's layout of the window (fitted to its text: crate::question::DialogFit).
+    dialog_fit: crate::question::DialogFit,
     fonts: Fonts,
     strings: HashMap<String, String>,
     faces: HashMap<String, Arc<MovieDef>>,
@@ -302,6 +309,9 @@ pub struct SaveLoadScreen {
     pub delete_current: bool,
     /// (SV) A used load row asks [`LOAD_QUESTION`] (Yes / No, the cursor on No) before the load (KH3 asks nothing).
     pub confirm_load: bool,
+    /// (NG delete) The load list only deletes (a new game needs a free slot): decide on a used row asks the Delete
+    /// question as Triangle / Y does, nothing is ever loaded; the help line is [`DELETE_FOR_NEW_GAME`].
+    pub delete_only: bool,
 }
 
 pub type SaveScreen = SaveLoadScreen;
@@ -340,6 +350,7 @@ impl SaveLoadScreen {
         Ok(SaveLoadScreen {
             movie: Movie::new(def),
             dialog: Movie::new(dialog),
+            dialog_fit: Default::default(),
             fonts,
             strings,
             faces,
@@ -355,6 +366,7 @@ impl SaveLoadScreen {
             delete_enabled: false,
             delete_current: false,
             confirm_load: false,
+            delete_only: false,
         })
     }
 
@@ -446,10 +458,10 @@ impl SaveLoadScreen {
             SaveLoadMode::Save => ("kh3_menu.save.title_0001", "kh3_menu.save.detail_0001"),
             SaveLoadMode::Load => ("kh3_menu.save.title_0002", "kh3_menu.save.detail_0002"),
         };
-        let (title, help) = (self.string(title), self.string(help));
+        let (title, help) = (self.string(title), if self.delete_only { DELETE_FOR_NEW_GAME.to_string() } else { self.string(help) });
         // (SV) the stage frame's Delete guide (KH3: `kh3_menu.save.button_0001` in the frame, which this port does not
         // show) stands as a second line under the help line
-        let help = if self.delete_enabled { format!("{help}\n{}", self.string(DELETE_GUIDE)) } else { help };
+        let help = if self.delete_enabled || self.delete_only { format!("{help}\n{}", self.string(DELETE_GUIDE)) } else { help };
         let fonts = self.fonts.clone();
         self.movie.set_text(&format!("{}.stageCategory.category.categoryName.txName", clip.root), &title, &fonts);
         self.movie.set_text(clip.help, &help, &fonts);
@@ -562,7 +574,7 @@ impl SaveLoadScreen {
         self.dialog_closing = false;
         let fonts = self.fonts.clone();
         self.dialog.set_visible("dialogText", true);
-        self.dialog.set_text("dialogText.textField", text, &fonts);
+        self.dialog_fit.lay(&mut self.dialog, &fonts, text, buttons); // (ER-POPUPS) the window fitted to its text
         for (n, name) in ["dialogButton", "dialogButton2"].into_iter().enumerate() {
             self.dialog.set_visible(name, n < buttons.len());
             if let Some(label) = buttons.get(n) {
@@ -588,6 +600,8 @@ impl SaveLoadScreen {
             self.dialog.set_position("dialogText", x, y, 0.0);
         }
         if let Some((x, y)) = stage(&self.dialog, &format!("{holder}.poDialogButton")) {
+            let (cx, cy) = self.dialog_fit.canvas(); // (ER-POPUPS) the button canvas under the text's last line
+            let (x, y) = (x + cx, y + cy);
             self.dialog.set_position("dialogButton", x, y, 0.0);
             self.dialog.set_position("dialogButton2", x, y + 35.0, 0.0);
         }
@@ -641,6 +655,25 @@ impl SaveLoadScreen {
         self.show_dialog(text, &buttons, 1);
     }
 
+    /// (SV) KH3's Delete on row `index`: a used row asks "Delete the save data in this slot?" (Yes / No, the cursor on No);
+    /// an empty row refuses; a row the host protects says why.
+    fn ask_delete(&mut self, index: usize, sounds: &mut Vec<UiSound>) {
+        let Some(slot) = self.slots.get(index) else { return };
+        if !slot.is_used() {
+            sounds.push(UiSound::Play(SE_MENU_REFUSED));
+        } else if slot.is_current && !self.delete_current {
+            sounds.push(UiSound::Play(SE_MENU_REFUSED));
+            let ok = vec![self.string("kh3_system.general.choice_0003")];
+            self.show_dialog(DELETE_IN_USE, &ok, 0);
+            self.state = State::Notice;
+        } else {
+            sounds.push(UiSound::Play(SE_MENU_DECIDE));
+            let text = self.string(DELETE_QUESTION);
+            self.ask(&text);
+            self.state = State::ConfirmDelete(index, 1);
+        }
+    }
+
     /// (SV) Moves the cursor of a Yes / No question.
     fn question_cursor(&mut self, cursor: usize, key: CampKey, repeat: bool, sounds: &mut Vec<UiSound>) -> Option<usize> {
         let next = crate::camp::move_wrapping(cursor, 2, matches!(key, CampKey::Down | CampKey::Right), repeat)?;
@@ -672,7 +705,7 @@ impl SaveLoadScreen {
                     }
                 }
                 CampKey::Decide => {
-                    let Some(slot) = self.slots.get(self.cursor()) else { return None };
+                    let slot = self.slots.get(self.cursor())?;
                     let index = self.cursor();
                     match (self.mode, slot.is_used()) {
                         // (0x141708F70 event 7, list 8: an empty slot plays the refuse sound)
@@ -685,6 +718,8 @@ impl SaveLoadScreen {
                             self.show_dialog(&text, &buttons, 1);
                             self.state = State::Confirm(index, 1);
                         }
+                        // (NG delete) a delete-only list: the Delete question, nothing loads
+                        (SaveLoadMode::Load, true) if self.delete_only => self.ask_delete(index, sounds),
                         // (SV) a host's load question (the cursor on No)
                         (SaveLoadMode::Load, true) if self.confirm_load => {
                             sounds.push(UiSound::Play(SE_MENU_DECIDE));
@@ -710,23 +745,7 @@ impl SaveLoadScreen {
                 }
                 // (SV) TRIANGLE / Y: KH3's Delete (0x141708F70 event 0xE, both lists): a used row asks "Delete the save
                 // data in this slot?" (Yes / No, the cursor on No); an empty row refuses; a row the host protects says why
-                CampKey::Triangle if self.delete_enabled => {
-                    let index = self.cursor();
-                    let Some(slot) = self.slots.get(index) else { return None };
-                    if !slot.is_used() {
-                        sounds.push(UiSound::Play(SE_MENU_REFUSED));
-                    } else if slot.is_current && !self.delete_current {
-                        sounds.push(UiSound::Play(SE_MENU_REFUSED));
-                        let ok = vec![self.string("kh3_system.general.choice_0003")];
-                        self.show_dialog(DELETE_IN_USE, &ok, 0);
-                        self.state = State::Notice;
-                    } else {
-                        sounds.push(UiSound::Play(SE_MENU_DECIDE));
-                        let text = self.string(DELETE_QUESTION);
-                        self.ask(&text);
-                        self.state = State::ConfirmDelete(index, 1);
-                    }
-                }
+                CampKey::Triangle if self.delete_enabled || self.delete_only => self.ask_delete(self.cursor(), sounds),
                 _ => {}
             },
             // (SV) the delete question: Yes deletes (nothing is saved), No / cancel gives the row its focus back

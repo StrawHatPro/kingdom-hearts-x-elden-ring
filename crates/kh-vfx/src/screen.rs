@@ -19,8 +19,19 @@
 //!   the LINEAR direction. Every value of the pack reads sensibly under it (a full-screen blur for Range 2, a hole that
 //!   fades in for HoleSize / Inside, Zettaflare's faint streaks for Power 0.0002).
 //! - [A] SQEX_Filter: FildterType ADD adds FilterColor x FilterAlpha, ALPHA mixes toward FilterColor by FilterAlpha
-//!   (both on the displayed picture: UseAlphaFilterAtHDR is false on every user), GRAY feeds FilterColor (x, y, z) x alpha
-//!   as the effect filter shader's (negative, grey, edge) amounts.
+//!   (both on the displayed picture: UseAlphaFilterAtHDR is false on every user).
+//! - (AUDIT-B W-VFX) SQEX_Filter GRAY / NPR, traced: the module's tick (0x1442EEC40) samples (FilterColor.xyz, FilterAlpha)
+//!   at the emitter time (x FilterColorScaleAtHDR / FilterAlphaScaleAtHDR in HDR) and hands that one vector to the filter
+//!   manager (vtable 0x147703A20) by its type (ALPHA 0, ADD 1, SUB 2, NPR 3, GRAY 4, HDR_ALPHA 5: slots +0x10 + 8 x type;
+//!   GRAY 0x1443BE840 keeps one entry per component in the list of its type); 0x1443A9170 SUMS each list's vectors
+//!   (NPR into manager+0x98, GRAY into +0xA8). The pass `PassEffectFilter` (0x1434409D0, TPostProcessSqexEffectFilterPS)
+//!   sets the view's three filter rows (+0x860 / +0x870 / +0x880) into the shader, whose rows read: cb0[21] =
+//!   (NPR: x != 0 spares the pixels of object class 7, -, -, w = the NEGATIVE amount), cb0[22] = (GRAY: x != 0 spares the
+//!   pixels of object class 5, y = the edge colour k -> (k, 1.01 k, k), z = the EDGE amount, w = the GREY amount): grey =
+//!   c + w (mean - c), negative = c + w (1 - 2 c) (each only when w > 0), the edge where the mean depth step to 8 neighbours
+//!   2 px away is >= 1e-4 on pixels of class 0. So GRAY's FilterColor is (spare flag, edge colour, edge amount) and its
+//!   alpha the grey amount (before: x was read as a negative amount, which turned Clock Drill's finish into a white
+//!   negative of the scene).
 //! - [A] SQEX_GaussBlur: Size is the blur radius in percent of the screen width (UE4's gaussian kernel convention),
 //!   Intensity the mix toward it.
 
@@ -157,6 +168,7 @@ pub fn parse_screen(short: &str, p: &Value) -> Option<ScreenDef> {
     let filter_mode = match p.get("FildterType").and_then(Value::as_str).unwrap_or("") {
         s if s.ends_with("_ALPHA") => 1,
         s if s.ends_with("_GRAY") => 2,
+        s if s.ends_with("_NPR") => 3, // (AUDIT-B W-VFX) the negative (TPostProcessSqexEffectFilterPS cb0[21])
         _ => 0,
     };
     Some(ScreenDef {
@@ -299,13 +311,17 @@ pub fn apply_filter(c: [f32; 3], mode: u8, color: [f32; 3], alpha: f32) -> [f32;
         0 => [c[0] + color[0] * alpha, c[1] + color[1] * alpha, c[2] + color[2] * alpha],
         // ALPHA
         1 => [c[0] + (color[0] - c[0]) * alpha, c[1] + (color[1] - c[1]) * alpha, c[2] + (color[2] - c[2]) * alpha],
-        // GRAY: (negative, grey) amounts x alpha (the edge amount needs the depth: the hosts' shaders do it)
+        // (AUDIT-B W-VFX) NPR: the negative by alpha (cb0[21].w)
+        3 => {
+            let neg = alpha.max(0.0);
+            [c[0] + (1.0 - 2.0 * c[0]) * neg, c[1] + (1.0 - 2.0 * c[1]) * neg, c[2] + (1.0 - 2.0 * c[2]) * neg]
+        }
+        // (AUDIT-B W-VFX) GRAY: the grey by alpha (cb0[22].w); FilterColor is (spare flag, edge colour, edge amount): the
+        // object classes and the depth edge are the hosts' shaders' (no classes, no depth here)
         _ => {
-            let neg = (color[0] * alpha).clamp(0.0, 1.0);
-            let n = [c[0] + (1.0 - 2.0 * c[0]) * neg, c[1] + (1.0 - 2.0 * c[1]) * neg, c[2] + (1.0 - 2.0 * c[2]) * neg];
-            let grey = (color[1] * alpha).clamp(0.0, 1.0);
-            let m = (n[0] + n[1] + n[2]) / 3.0;
-            [n[0] + (m - n[0]) * grey, n[1] + (m - n[1]) * grey, n[2] + (m - n[2]) * grey]
+            let grey = alpha.max(0.0);
+            let m = (c[0] + c[1] + c[2]) / 3.0;
+            [c[0] + (m - c[0]) * grey, c[1] + (m - c[1]) * grey, c[2] + (m - c[2]) * grey]
         }
     }
 }
@@ -324,7 +340,20 @@ pub fn pick(list: &[ScreenFx]) -> Vec<ScreenFx> {
         }
     }
     // Filters of different modes may stack: the strongest ADD and the strongest ALPHA both run.
-    for fx in list.iter().filter(|f| f.kind == ScreenKind::Filter) {
+    // (AUDIT-B W-VFX) GRAY / NPR: KH3 SUMS every live component's (FilterColor, FilterAlpha) of the type (0x1443A9170)
+    for mode in [2u8, 3] {
+        let mut same = list.iter().filter(|f| f.kind == ScreenKind::Filter && f.mode == mode);
+        let Some(first) = same.next() else { continue };
+        let mut sum = *first;
+        for f in same {
+            sum.color = [sum.color[0] + f.color[0], sum.color[1] + f.color[1], sum.color[2] + f.color[2]];
+            sum.alpha += f.alpha;
+            sum.priority = sum.priority.max(f.priority);
+        }
+        out.retain(|o| !(o.kind == ScreenKind::Filter && o.mode == mode));
+        out.push(sum);
+    }
+    for fx in list.iter().filter(|f| f.kind == ScreenKind::Filter && f.mode < 2) {
         if !out.iter().any(|o| o.kind == ScreenKind::Filter && o.mode == fx.mode) {
             out.push(*fx);
         } else if let Some(o) = out.iter_mut().find(|o| o.kind == ScreenKind::Filter && o.mode == fx.mode) {
@@ -348,10 +377,18 @@ pub struct CharParamDef {
     pub center: bool,
     /// `InLightCameraOffset`: the centre moved this far toward the camera (cm) [A].
     pub camera_offset: Option<Dist>,
-    /// `NoSetUseLastParameter`: the value is not given back when the emitter ends.
+    /// `NoSetUseLastParameter` as the module has it. (FREEZE-FX) False = UseLastParameter: the material drive leaves its last
+    /// value on the mesh when the emitter ends (`CharParam::keep`; the frozen look's "Ice" 0 -> 1, held, then 1 -> 0 by the break).
     pub keep_last: bool,
     /// `ParamType`: 0 the main body (SQEX_IN_LIGHT_TYPE_MAIN), 1 a sub mesh.
     pub target: u8,
+    /// (VFX-2) `SQEX_Material_Scalar` / `_Vector`: their update (0x144378F10 / 0x144379F10) sets the parameter on the
+    /// emitter's own dynamic material, else on the mesh of `vt+0x2F8` (0x1442871A0: the emitter's own SQEX_SkeletalMesh
+    /// component, else its parent emitter's, else the owner's mesh `AttachOwnerMeshComp`): the character only when no
+    /// skeletal mesh emitter is in between (`EmitterDef::mat_params`).
+    pub material: bool,
+    /// (VFX-2) `SQEX_Material_Vector.MaterialAlphaParam`: the vector parameter's alpha (FLinearColor A) for a dynamic material.
+    pub alpha: Option<Dist>,
 }
 
 /// One drive this frame.
@@ -363,6 +400,10 @@ pub struct CharParam {
     pub value: [f32; 4],
     pub vector: bool,
     pub target: u8,
+    /// (FREEZE-FX) `SQEX_Material_Scalar` / `_Vector` with UseLastParameter (`NoSetUseLastParameter` false): KH3 leaves the
+    /// last value on the mesh when the emitter ends (KH3's frozen look: `vs_abn_frz_in` puts "Ice" at 1 and leaves it there
+    /// until the break's `vs_abn_frz_out0` takes it back). The host keeps it while the effect's spawn is not stopped.
+    pub keep: bool,
 }
 
 /// The material module `short` with its params, or None for any other class.
@@ -377,31 +418,36 @@ pub fn parse_char(short: &str, p: &Value) -> Option<CharParamDef> {
     };
     let def = match short {
         "SQEX_Material_InLight" => {
-            let main = if name.is_empty() { "InLight".to_string() } else { name };
-            push(&main, "InLightParam", false);
-            push("InLightColor", "InLightColor", true);
-            push("InLightOutColor", "InLightOutColor", true);
-            push("InLightCenterBounds", "InLightCenterBounds", false);
-            push("InLightCenterBoundsBlur", "InLightCenterBoundsBlur", false);
-            push("InLightOutBounds", "InLightOutBounds", false);
-            push("InLightOutBoundsBlur", "InLightOutBoundsBlur", false);
+            // (HAIR-PULSE) KH3's parameter names come from ParamType, not ParamName: 0x14436FCA0 takes them from the table of
+            // 0x140387190 at +0 (MAIN: "InLight", "InLightColor" ...) or +0x40 (SUB: "Sub_InLight", "Sub_InLightColor" ...),
+            // the scalar included (`r9 = ParamType != 0 ? 0x40 : 0`). Every body / hair / face material of Sora (all outfits)
+            // reads only the MAIN names; the weapons read the SUB ones. So the form charge glow vs_com_lv2 (SUB) never lights
+            // Sora's model (it lit his hair and clothes every 2 s in every form when it was written as "InLight").
             let target = u8::from(!p.get("ParamType").and_then(Value::as_str).unwrap_or("_MAIN").ends_with("_MAIN"));
-            CharParamDef { values, center: true, camera_offset: dist(p, "InLightCameraOffset"), keep_last, target }
+            let names = in_light_names(target); // (HAIR-PULSE)
+            push(names[0], "InLightParam", false); // (HAIR-PULSE) was ParamName (every module of the pack: "InLight")
+            push(names[1], "InLightColor", true); // (HAIR-PULSE) names[..] were the MAIN literals
+            push(names[2], "InLightOutColor", true);
+            push(names[4], "InLightCenterBounds", false);
+            push(names[5], "InLightCenterBoundsBlur", false);
+            push(names[6], "InLightOutBounds", false);
+            push(names[7], "InLightOutBoundsBlur", false);
+            CharParamDef { values, center: true, camera_offset: dist(p, "InLightCameraOffset"), keep_last, target, material: false, alpha: None }
         }
         "SQEX_Material_Aura" => {
             let main = if name.is_empty() { "Aura".to_string() } else { name };
             push(&main, "Aura", false);
             push("AuraColor", "AuraColor", true);
             push("AuraOutColor", "AuraOutColor", true);
-            CharParamDef { values, center: false, camera_offset: None, keep_last, target: 0 }
+            CharParamDef { values, center: false, camera_offset: None, keep_last, target: 0, material: false, alpha: None }
         }
         "SQEX_Material_Scalar" if !name.is_empty() => {
             push(&name, "MaterialScalarParam", false);
-            CharParamDef { values, center: false, camera_offset: None, keep_last, target: 0 }
+            CharParamDef { values, center: false, camera_offset: None, keep_last, target: 0, material: true, alpha: None }
         }
         "SQEX_Material_Vector" if !name.is_empty() => {
             push(&name, "MaterialVectorParam", true);
-            CharParamDef { values, center: false, camera_offset: None, keep_last, target: u8::from(p.get("BoneOrSocketName").and_then(Value::as_str).is_some_and(|b| b != "None")) }
+            CharParamDef { values, center: false, camera_offset: None, keep_last, target: u8::from(p.get("BoneOrSocketName").and_then(Value::as_str).is_some_and(|b| b != "None")), material: true, alpha: dist(p, "MaterialAlphaParam") }
         }
         _ => return None,
     };
@@ -409,6 +455,24 @@ pub fn parse_char(short: &str, p: &Value) -> Option<CharParamDef> {
 }
 
 impl CharParamDef {
+    /// (VFX-2) A `SQEX_Material_*` module's values at emitter time `t`, for the dynamic material of a skeletal mesh
+    /// emitter (name, value, vector), in the module order: a later module of the same name wins, as its later call does.
+    pub fn values_at(&self, t: f32, out: &mut Vec<(String, [f32; 4], bool)>) {
+        let mut rng = Rng::new(1);
+        for (name, d, vector) in &self.values {
+            let value = if *vector {
+                let v = d.vec3(t, &mut rng);
+                [v.x, v.y, v.z, self.alpha.as_ref().map_or(0.0, |a| a.float(t, &mut rng))]
+            } else {
+                [d.float(t, &mut rng), 0.0, 0.0, 0.0]
+            };
+            match out.iter_mut().find(|o| o.0 == *name) {
+                Some(o) => *o = (name.clone(), value, *vector),
+                None => out.push((name.clone(), value, *vector)),
+            }
+        }
+    }
+
     /// The drives at emitter time `t`; `node` the emitter's place, `camera` the camera's (for the in-light centre).
     pub fn sample(&self, effect: u64, t: f32, node: Vec3, camera: Vec3, out: &mut Vec<CharParam>) {
         let mut rng = Rng::new(1);
@@ -419,15 +483,31 @@ impl CharParamDef {
             } else {
                 [d.float(t, &mut rng), 0.0, 0.0, 0.0]
             };
-            out.push(CharParam { effect, name: name.clone(), value, vector: *vector, target: self.target });
+            out.push(CharParam { effect, name: name.clone(), value, vector: *vector, target: self.target, keep: self.material && !self.keep_last /* (FREEZE-FX) */ });
         }
         if self.center {
             let offset = self.camera_offset.as_ref().map_or(0.0, |d| d.float(t, &mut rng));
             let c = node + (camera - node).normalize_or_zero() * offset;
             // (world cm; the host makes it relative to the character: `in_light_center`)
-            out.push(CharParam { effect, name: "InLightCenterPosition".to_string(), value: [c.x, c.y, c.z, 1.0], vector: true, target: self.target });
+            // (HAIR-PULSE) the SUB module writes Sub_InLightCenterPosition (0x14436FCA0)
+            out.push(CharParam { effect, name: in_light_names(self.target)[3].to_string(), value: [c.x, c.y, c.z, 1.0], vector: true, target: self.target, keep: false });
         }
     }
+}
+
+/// (HAIR-PULSE) KH3's in-light parameter names (FName table 0x140387190) of a `ParamType`: 0 SQEX_IN_LIGHT_TYPE_MAIN, else
+/// SQEX_IN_LIGHT_TYPE_SUB. Order: the scalar, colour, out colour, centre position, centre bounds, its blur, out bounds, its blur.
+pub fn in_light_names(target: u8) -> [&'static str; 8] {
+    if target == 0 {
+        ["InLight", "InLightColor", "InLightOutColor", "InLightCenterPosition", "InLightCenterBounds", "InLightCenterBoundsBlur", "InLightOutBounds", "InLightOutBoundsBlur"]
+    } else {
+        ["Sub_InLight", "Sub_InLightColor", "Sub_InLightOutColor", "Sub_InLightCenterPosition", "Sub_InLightCenterBounds", "Sub_InLightCenterBoundsBlur", "Sub_InLightOutBounds", "Sub_InLightOutBoundsBlur"]
+    }
+}
+
+/// (HAIR-PULSE) The drive is an in-light centre (MAIN or SUB), which the hosts make relative to the character.
+pub fn is_in_light_center(name: &str) -> bool {
+    name == "InLightCenterPosition" || name == "Sub_InLightCenterPosition"
 }
 
 /// [A] The character materials read `InLightCenterPosition` relative to the character (its default (0, 0, 70) is chest
@@ -494,9 +574,14 @@ mod tests {
         assert!((a[0] - 0.35).abs() < 1.0e-6 && (a[1] - 0.55).abs() < 1.0e-6 && (a[2] - 2.2).abs() < 1.0e-6);
         let a = apply_filter([0.2, 0.4, 0.6], 1, [1.0, 1.0, 1.0], 0.5);
         assert!((a[0] - 0.6).abs() < 1.0e-6 && (a[2] - 0.8).abs() < 1.0e-6);
-        let g = apply_filter([0.0, 0.3, 0.9], 2, [0.0, 1.0, 0.0], 1.0);
-        assert!((g[0] - 0.4).abs() < 1.0e-6 && (g[1] - 0.4).abs() < 1.0e-6);
-        let n = apply_filter([0.25, 0.5, 1.0], 2, [1.0, 0.0, 0.0], 1.0);
+        // (AUDIT-B W-VFX) GRAY greys by alpha whatever its FilterColor (spare flag, edge colour, edge amount): Clock Drill's
+        // vw_so114_fns_nis00 (1, 1, 0.6) is grey, not a negative
+        let g = apply_filter([0.0, 0.3, 0.9], 2, [1.0, 1.0, 0.6], 1.0);
+        assert!((g[0] - 0.4).abs() < 1.0e-6 && (g[1] - 0.4).abs() < 1.0e-6 && (g[2] - 0.4).abs() < 1.0e-6);
+        let h = apply_filter([0.0, 0.3, 0.9], 2, [0.0, 1.0, 0.0], 0.5);
+        assert!((h[0] - 0.2).abs() < 1.0e-6 && (h[2] - 0.65).abs() < 1.0e-6);
+        // NPR: the negative by alpha
+        let n = apply_filter([0.25, 0.5, 1.0], 3, [0.0, 0.0, 0.0], 1.0);
         assert!((n[0] - 0.75).abs() < 1.0e-6 && n[2].abs() < 1.0e-6);
     }
 
@@ -542,5 +627,22 @@ mod tests {
         assert_eq!(&get("InLightCenterPosition")[..3], &[100.0, 0.0, 50.0]);
         assert_eq!(in_light_center(Vec3::new(100.0, 0.0, 50.0), Vec3::new(90.0, 0.0, 0.0)), [10.0, 0.0, 50.0, 0.0]);
         assert!(out.iter().all(|p| p.effect == 7));
+    }
+
+    /// (HAIR-PULSE) A SUB in-light module (the form charge glow vs_com_lv2) writes only KH3's `Sub_InLight*` names
+    /// (0x14436FCA0 +0x40), never the MAIN ones Sora's body / hair materials read.
+    #[test]
+    fn a_sub_in_light_module_writes_the_sub_names_only() {
+        let json: Value = serde_json::from_str(r#"{"InLightCameraOffset":0,"InLightOutBoundsBlur":1,"InLightOutBounds":3,"InLightCenterBoundsBlur":1,"InLightCenterBounds":2,
+            "InLightOutColor":{"x":5,"y":4,"z":1},"InLightColor":{"x":10,"y":10,"z":10},"InLightParam":0.5,"ParamType":"SQEX_IN_LIGHT_TYPE_SUB","NoSetUseLastParameter":false,"ParamName":"InLight"}"#).unwrap();
+        let def = parse_char("SQEX_Material_InLight", &json).expect("parsed");
+        assert_eq!(def.target, 1);
+        let mut out = Vec::new();
+        def.sample(3, 0.5, Vec3::new(10.0, 0.0, 90.0), Vec3::new(-500.0, 0.0, 100.0), &mut out);
+        let names: Vec<&str> = out.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Sub_InLight", "Sub_InLightColor", "Sub_InLightOutColor", "Sub_InLightCenterBounds", "Sub_InLightCenterBoundsBlur", "Sub_InLightOutBounds", "Sub_InLightOutBoundsBlur", "Sub_InLightCenterPosition"]);
+        assert_eq!(out[0].value[0], 0.5);
+        assert!(names.iter().all(|n| !in_light_names(0).contains(n)));
+        assert!(is_in_light_center("Sub_InLightCenterPosition") && is_in_light_center("InLightCenterPosition") && !is_in_light_center("InLight"));
     }
 }

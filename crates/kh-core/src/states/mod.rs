@@ -43,6 +43,7 @@
 
 pub(crate) mod common; // (XSI) pub(crate): the XS abilities (abilities/xs) use its probes
 mod host;
+pub mod bp_event; // (AUDIT-C) the form clips' BpEvents for the state-event camera blueprints
 
 pub(crate) use host::{main_proc, on_notifies, PlayerState, Queue};
 pub use attack::AttackView;
@@ -50,6 +51,7 @@ pub use reflect::ReflectView;
 pub use risk_dodge::RiskDodgeView;
 pub use style_finish::FinishView;
 pub use damage::{direction_index, DamageView, Handler as DamageHandler, HitOnPlayer};
+pub use die::member as member_ko; // (HUD-REVIVE SORAKO) a party member's KO: the down pose, the get-up
 pub use athletic_flow::AirstepView;
 pub use fire_magic::CastView;
 pub use host::StateFlags;
@@ -171,6 +173,41 @@ player_states! {
     FrGoofyShoot => fr_goofy_shoot::FrGoofyShoot,
     FrCallMeteor => fr_call_meteor::FrCallMeteor,
     FrFlareForce => fr_flare_force::FrFlareForce,
+    // (THE USER 2026-11-02: "Give Sora the ability to 'Summon'") Sora's summon chant: KH3's Link call
+    SummonChant => summon_chant::SummonChant,
+    // (weapons P2) KH3's Keyblade switch (TresPlayerState_WeaponChange, id 32)
+    WeaponChange => weapon_change::WeaponChange,
+    // (weapons F-SHIELD) Counter Shield / Frying Pan: COMBO_SH (84) and STYLEFINISH_SH (38)
+    ComboSh => combo_sh::ComboSh,
+    StyleFinishSh => style_finish_sh::StyleFinishSh,
+    // (F-RAGE) Rage Form: COMBO_ANTI (86)
+    ComboAnti => combo_anti::ComboAnti,
+    // (F-CLAWS) Agile / Blizzard Claws, Twin Yo-Yos, Blizzard Blades: COMBO_CL (85), COMBO_YO (77), COMBO_SK (80)
+    ComboCl => combo_cl::ComboCl,
+    ComboYo => combo_yo::ComboYo,
+    ComboSk => combo_sk::ComboSk,
+    // (F-SHIP) Highwind / Storm Flag: COMBO_HL (87), COMBO_FL (88)
+    ComboHl => combo_hl::ComboHl,
+    ComboFl => combo_fl::ComboFl,
+    // (F-NANO) Nano Arms: COMBO_GM (81)
+    ComboGm => combo_gm::ComboGm,
+    // (F-ARROWGUN) Double Arrowguns / Hunny Blasters: COMBO_DW (75); Magic Launcher / Hunny Launcher: COMBO_BZ (78)
+    ComboDw => combo_dw::ComboDw,
+    ComboBz => combo_bz::ComboBz,
+    // (F-STAFF) Mirage Staff: COMBO_WA (83)
+    ComboWa => combo_wa::ComboWa,
+    // (F-HAMMER) Hyper / Boom Hammer: COMBO_HM (76); Drill Punch / Clock Drill: COMBO_DR (79); Clock Drill's STYLEFINISH_DR (34)
+    ComboHm => combo_hm::ComboHm,
+    ComboDr => combo_dr::ComboDr,
+    StyleFinishDr => style_finish_dr::StyleFinishDr,
+    // (F-ULTIMATE) Ultimate Form: COMBO_SW (82)
+    ComboSw => combo_sw::ComboSw,
+    // (F-LIGHTDARK) Light Form: COMBO_LF (159); Dark Form: COMBO_DF (160); Double Form: COMBO_TF (161)
+    ComboLf => combo_lf::ComboLf,
+    ComboDf => combo_df::ComboDf,
+    ComboTf => combo_tf::ComboTf,
+    // (F-ARROWGUN) the gun forms' ShooterMode (40): Auto-Shot / Charged Shot
+    ShooterMode => shooter_mode::ShooterMode,
 }
 
 impl StateData {

@@ -313,7 +313,8 @@ unsafe extern "system" fn execute_hook(this: *mut c_void, count: u32, lists: *co
     // (IMPL_ER53) THE EARLY DEPTH: in the deferred stage, after its last G-buffer list (and after his real shadow when
     // that comes first), his depth goes into the scene depth before the rest of the stage makes its depth copies.
     let early = submission.early_split as u32;
-    let early = if submission.scene.is_some() && early > cast && early < count && submission.velocity.is_none() && !DEAD.load(Ordering::Relaxed) && !is_ours() && crate::gfx::early_wanted() { early } else { 0 };
+    // (HAIR-BLEED) `>=`: the first G-buffer list may also hold the last caster pass (both splits at its end, the shadow first)
+    let early = if submission.scene.is_some() && early >= cast.max(1) && early < count && submission.velocity.is_none() && !DEAD.load(Ordering::Relaxed) && !is_ours() && crate::gfx::early_wanted() { early } else { 0 };
     if cast > 0 || early > 0 {
         let mut done = 0u32;
         if cast > 0 {
@@ -325,7 +326,9 @@ unsafe extern "system" fn execute_hook(this: *mut c_void, count: u32, lists: *co
             }
         }
         if early > 0 {
-            original(this, early - done, lists.add(done as usize));
+            if early > done {
+                original(this, early - done, lists.add(done as usize));
+            }
             done = early;
             if !DEAD.load(Ordering::Relaxed) && std::panic::catch_unwind(|| as_ours(|| crate::gfx::early_pass(this as usize, submission))).is_err() {
                 DEAD.store(true, Ordering::SeqCst);
@@ -360,12 +363,11 @@ unsafe extern "system" fn execute_hook(this: *mut c_void, count: u32, lists: *co
     }
     // The game's forward stage (the submission with its velocity pass) is complete: Sora's late
     // effects and the scene darkening go here, before the game's temporal anti-aliasing and tone map.
-    if submission.velocity.is_some() && !DEAD.load(Ordering::Relaxed) && !is_ours() {
-        if std::panic::catch_unwind(|| as_ours(|| crate::gfx::late_pass(this as usize, submission))).is_err() {
+    if submission.velocity.is_some() && !DEAD.load(Ordering::Relaxed) && !is_ours()
+        && std::panic::catch_unwind(|| as_ours(|| crate::gfx::late_pass(this as usize, submission))).is_err() {
             DEAD.store(true, Ordering::SeqCst);
             rlog!("render: PANIC while drawing; the renderer is inert from now on");
         }
-    }
     if let Some((lines, tables)) = capture {
         let _ = std::panic::catch_unwind(|| as_ours(|| crate::gfx::write_capture(this as usize, lines, tables)));
     }
@@ -375,12 +377,11 @@ unsafe extern "system" fn execute_hook(this: *mut c_void, count: u32, lists: *co
     // And the deferred stage of the scene just went in: with `r.at = scene` (the default) our draw
     // goes HERE, into the HDR scene target, before the game's forward stage, effects, TAA, tone
     // mapping and HUD (gfx::after_submission decides which of the two it acts on).
-    if submission.scene.is_some() || submission.finished.is_some_and(|_| !IN_PRESENT.with(|c| c.get())) {
-        if !DEAD.load(Ordering::Relaxed) && std::panic::catch_unwind(|| as_ours(|| crate::gfx::after_submission(this as usize, submission))).is_err() {
+    if (submission.scene.is_some() || submission.finished.is_some_and(|_| !IN_PRESENT.with(|c| c.get())))
+        && !DEAD.load(Ordering::Relaxed) && std::panic::catch_unwind(|| as_ours(|| crate::gfx::after_submission(this as usize, submission))).is_err() {
             DEAD.store(true, Ordering::SeqCst);
             rlog!("render: PANIC while drawing; the renderer is inert from now on");
         }
-    }
 }
 
 /// The queues seen executing so far.

@@ -14,8 +14,8 @@
 //! `CSWorldGeomMan`: every grace of the base game and the DLC, ones in blocks streamed in later within one search round of
 //! graceflame.rs) holds its mound's model (`CSGeomModelIns`, a `CSModelIns`: + 0x10 its `CSFD4ModelItem` whose name is at
 //! + 0x6C0, + 0x18 its `CSModelDispEntity`) at + 0x1D0 (inside the SDK's `unk1a8` of `CSWorldGeomIns`). The model is made
-//! LATE (the game makes map models through `CSGeomModelInsDelayCreator`s when the object comes within its draw distance)
-//! and freed again far away: the old IMPL_ER52 look gave up after three frames, before the model existed. So:
+//!   LATE (the game makes map models through `CSGeomModelInsDelayCreator`s when the object comes within its draw distance)
+//!   and freed again far away: the old IMPL_ER52 look gave up after three frames, before the model existed. So:
 //! - EVERY FRAME (PRE_PHYSICS, right after graceflame.rs) each grace object's model word is read (+ 0x1D0 and any offset a
 //!   full look learnt; one read for an object without a model): a model of class `CSGeomModelIns` with a
 //!   `CSModelDispEntity...` and a name containing `AEG099_060` is taken THE FRAME IT APPEARS.
@@ -235,7 +235,7 @@ fn full(s: &mut State, k: usize) -> Vec<Model> {
     }
     let mut cands = Vec::new();
     let mut facts = Vec::new();
-    for (j, c) in raw.chunks_exact(8).enumerate() {
+    for (j, c) in raw.as_chunks::<8>().0.iter().enumerate() {
         let p = usize::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]);
         if !crate::game::plausible(p) || p == geom {
             continue;
@@ -415,7 +415,7 @@ mod tests {
         assert_eq!(hidden_flags(0xf), 0xe);
         assert_eq!(hidden_flags(0xe), 0xe);
         // MEASURED offset (the user's log 2026-10-27): inside the full look, inside the base object
-        assert!(MODEL_AT >= 0x18 && MODEL_AT < BASE_END && MODEL_AT % 8 == 0);
+        assert!(MODEL_AT >= 0x18 && MODEL_AT < BASE_END && MODEL_AT.is_multiple_of(8));
     }
 
     /// (IMPL_ER52) The mound's model is the one named after the grace's asset; an unnamed one only when it is alone.

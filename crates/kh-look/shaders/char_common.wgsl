@@ -414,9 +414,18 @@ fn kh_shade(i_in: KhIn, key_dir: vec3<f32>, key_color: vec3<f32>, shadow: f32, c
 #ifdef KH_BLOOD
     // (IMPL_ER60, a host's blood layer on the G-buffer values, before any light: the Elden Ring renderer defines
     // kh_blood in er_char.wgsl; no other host defines KH_BLOOD)
+#ifdef KH_ICE_EXTRA
+    // (FREEZE-FX) KH3's ice on a material without its own Ice parameter (er_char.wgsl kh_ice_extra)
+    let g = kh_blood(kh_ice_extra(kh_material(i), normalize(-i.twp), i.tc0.xy), i.twp + camera, i.tc0.xy);
+#else
     let g = kh_blood(kh_material(i), i.twp + camera, i.tc0.xy);
+#endif
+#else
+#ifdef KH_ICE_EXTRA
+    let g = kh_ice_extra(kh_material(i), normalize(-i.twp), i.tc0.xy); // (FREEZE-FX)
 #else
     let g = kh_material(i);
+#endif
 #endif
     var color: vec3<f32>;
     var alpha = 1.0;
@@ -469,6 +478,13 @@ fn kh_shade(i_in: KhIn, key_dir: vec3<f32>, key_color: vec3<f32>, shadow: f32, c
     // (HY: + the world position, game space, for the host's own shadow terms)
     lit = kh_hybrid_light(g, normal, to_camera, normalize(key_dir), key_color, i.svpos, lit, i.twp + camera);
 #endif
+    // (EYES-SF round 2, a host's hybrid: the Elden Ring renderer's kh_hybrid_indirect, in its native mode what the game's light gives
+    // the subsurface colour, KH3's DiffuseColorForIndirect += SubsurfaceColor; 0 otherwise. No other host defines KH_HYBRID.)
+#ifdef KH_HYBRID
+    let indirect = g.o0.xyz + kh_hybrid_indirect();
+#else
+    let indirect = g.o0.xyz;
+#endif
 #ifdef KH_EXTRA_LIGHTS
     // (IMPL_ER44, a host's own extra point lights, IN ADDITION to the light above: the Elden Ring renderer's hero
     // light and effect lights; the host defines kh_extra_lights, which goes through the same light shader, so the
@@ -485,14 +501,19 @@ fn kh_shade(i_in: KhIn, key_dir: vec3<f32>, key_color: vec3<f32>, shadow: f32, c
         i.sdepth = vec4<f32>(1.0 / max(i.svpos.w, 1.0));
         i.sao = vec4<f32>(kh.khs.z);
         i.slight = vec4<f32>(lit, 0.0);
-        i.sbackup = vec4<f32>(g.o0.xyz + lit, 1.0);
+        i.sbackup = vec4<f32>(indirect + lit, 1.0);
         i.samb = vec4<f32>(0.0);
-        i.sind = vec4<f32>(g.o0.xyz, 0.0);
+        i.sind = vec4<f32>(indirect, 0.0);
         color = kh_khs(i);
     } else {
-        color = g.o0.xyz + lit;
+        color = indirect + lit;
     }
     color += kh_reflection(g, normal, to_camera);
+#ifdef KH_HYBRID
+    // (ER-NATIVE, a host's hybrid: the Elden Ring renderer's kh_hybrid_after, the game's own specular at this pixel for the
+    // material's F0, added where KH3 adds its reflection; the host's stand-in cube is off then. No other host defines KH_HYBRID.)
+    color += kh_hybrid_after(g, normal, to_camera);
+#endif
 #endif
     color = max(color, vec3<f32>(0.0));
     // KH_CHAR_DEBUG: 1 base colour, 2 world normal, 3 (metallic, specular, roughness), 4 subsurface colour,

@@ -55,10 +55,18 @@
 //! KEYS: `talk.kh` (1; 0 = Elden Ring's own UI), `talk.kh.skip` (talk ids, comma separated, left to Elden Ring),
 //! `talk.kh.log` (0; 1 = a `talk:` line per line and choice).
 
+// (THE USER 2026-11-02: "Move the Outfits selection to Boc") Boc's "Alter garments" -> the KH Outfits screen (pure rules)
+pub mod alter;
+// (ER-TWEAKS, the user 2026-11-06: "Remove Rennala's respec and cosmetic change options.") her Rebirth / Cosmetics not added
+pub mod rennala;
 pub mod rules;
 // (SHOP) the merchants' buy / sell windows -> the KH shop; the smiths' talk refused (pure rules of the hooks)
 pub mod shop;
+// (P7 SMITHS, the user 2026-11-03) command 24 (any smith's reinforcement menu) -> KH3's Keyblade Forge; the smiths' other options trimmed
+pub mod smith;
 pub mod steps;
+// (THE USER 2026-11-02) Roderika's "Spirit Tuning" -> the KH Spirit Tuning screen (pure rules)
+pub mod tuning;
 
 #[cfg(windows)]
 pub(crate) mod game; // (SHOP) pub(crate): npc_of for the KH shop

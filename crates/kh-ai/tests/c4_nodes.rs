@@ -1,8 +1,7 @@
 //! C4 (2026-10-15): the EQS generators / tests, the EQS service and the FindAttackLocation nodes,
 //! the movement motion record, the focus-break bit and the Interrupt damage hook, each against
 //! the rule read in the decompiled C (addresses in the code comments of kh-ai).
-mod common;
-use common::*;
+use crate::common::*;
 use glam::Vec3;
 use kh_ai::api::{ActorRef, AiBody, AiCommand, AiCommandStatus, BodyView, CureStyle, GimmickObstacle, UID_DONALD};
 use kh_ai::bb::{BbObject, BbValue, Blackboard};

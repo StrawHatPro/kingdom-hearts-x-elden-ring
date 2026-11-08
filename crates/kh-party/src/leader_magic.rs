@@ -25,8 +25,7 @@
 //!   situation slot ahead of Sora's queue, Y casts it (no MP, `MagicCast` at 0.85x speed, the cast effect at 1.5x,
 //!   invincible until the Shot as Sora's grand casts are: XD 1.5).
 //!
-//! GOOFY LEADING: his "Abilities" page / shortcuts (his block) pick Goofy Tornado / Turbo / Discus by tier; the action
-//! is his KH3 one, the tier of the run is [`PadMagic::tier`] (X3G implements the tiers' effects).
+//! GOOFY LEADING: his block holds his two Shield Arts, Taunt and an item for each page (pad/goofy_arts.rs fires them).
 //!
 //! What the host does (kh-partyhost custom.rs): feed [`LeaderFeed`] every step before `set_pad_frame`, publish
 //! `Party::caster_projectiles` with the other spell actors, and not forward a Y the leader used ([`PadMagic::y_taken`]).
@@ -39,7 +38,7 @@ use crate::pawn::{forward, horizontal, yaw_of, NpcPawn, StepCtx};
 use crate::states::NpcStateId;
 use crate::view::{PartyEventKind, PartyOutput, SoraHeal, SoraView};
 use glam::Vec3;
-use kh_core::command::leader::{goofy, LeaderCustom, LeaderKind, MagicBook};
+use kh_core::command::leader::{LeaderCustom, LeaderKind, MagicBook};
 use kh_core::command::CommandRow;
 use kh_core::enums::ETresAbilityKind;
 use kh_core::host::targets::Ally;
@@ -112,8 +111,6 @@ pub struct PadMagic {
     pub shots: Vec<Shot>,
     /// A grand-magic offer to take off the caster's queue.
     pub take_offer: Option<u32>,
-    /// GOOFY: the tier (1 ..= 3) of the ability the menu ran last (X3G reads it at the action's Begin).
-    pub tier: u8,
     /// The magic chain: casts in the running combo, and the element of the last cast with its age (seconds).
     pub chain: u8,
     pub last: Option<(Element, f32)>,
@@ -147,15 +144,6 @@ pub const fn element_def(element: Element) -> ActionDef {
 /// A bolt (`MagicFire` clips) or a placed spell (`MagicCast`).
 pub const fn is_bolt(element: Element) -> bool {
     matches!(element, Element::Fire | Element::Blizzard)
-}
-
-/// The Goofy action of an ability index (0 Tornado, 1 Turbo, 2 Discus).
-pub const fn goofy_def(index: u8) -> ActionDef {
-    match index {
-        0 => ActionDef::GoofyTornado,
-        1 => ActionDef::GoofyTurbo,
-        _ => ActionDef::GoofyDiscus,
-    }
 }
 
 /// The member's menu feed (None = no feed or AI).
@@ -235,14 +223,7 @@ pub fn can_pay(p: &NpcPawn, cmd: u8, scale: f32) -> bool {
 pub fn spell_row(p_status: &crate::FriendStatus, feed: &MenuFeed, cmd: u8) -> CommandRow {
     let cost = caster::effective_cost(cmd, 0, &p_status.abilities, feed.mp_cost_scale).unwrap_or(0);
     let learned = feed.book.learned(cmd);
-    CommandRow { kind: cmd, name: spells::command_name(cmd), enabled: learned && p_status.mp_charge_left <= 0.0, mp_short: learned && cost > 0 && p_status.mp < cost, quantity: 0, needs_target: matches!(cmd, 49..=51) }
-}
-
-/// The row of one of Goofy's tiered abilities (his own MP row, `FriendStatus::mp_cost`).
-pub fn goofy_row(p_status: &crate::FriendStatus, id: u8) -> CommandRow {
-    let Some((index, _)) = goofy::split(id) else { return CommandRow::default() };
-    let cost = p_status.mp_cost(goofy::ABILITY_ROWS[index as usize]);
-    CommandRow { kind: 28, name: goofy::name(id), enabled: cost.is_some() && p_status.mp_charge_left <= 0.0, mp_short: cost.is_some_and(|c| c > 0 && p_status.mp < c), quantity: 0, needs_target: false }
+    CommandRow { kind: cmd, name: spells::command_name(cmd), enabled: learned && p_status.mp_charge_left <= 0.0, mp_short: learned && cost > 0 && p_status.mp < cost, quantity: 0, needs_target: matches!(cmd, 49..=51), ..CommandRow::default() }
 }
 
 /// A grand-magic offer as the HUD's situation row (class 1 = icon type 3 "magic", kh-host hud.rs).
@@ -498,6 +479,9 @@ const fn ally_member(id: MemberId) -> TargetId {
 impl crate::party::Party {
     /// (party X2) THE HOST'S FEED, every step before `set_pad_frame` (None: no feed, every friend keeps his KH3 kit).
     pub fn set_leader_magic(&mut self, feed: Option<LeaderFeed>) {
+        if let Some(f) = feed.as_ref().map(|f| &f.customs[LeaderKind::Goofy as usize]).filter(|c| c.filled) {
+            self.set_goofy_arts(f.arts()); // (GF-ARTS) leader or AI, his two Arts
+        }
         let offers: Vec<(MemberId, Vec<GrandOffer>)> = self.x2.casters.iter().map(|(id, c)| (*id, c.offers().to_vec())).collect();
         let ids: Vec<MemberId> = self.members().collect();
         for id in ids {
@@ -604,7 +588,7 @@ pub fn step(party: &mut crate::party::Party, dt: f32, sora: &SoraView, host: &mu
         }
         let (strength, magic, own, charging, position, yaw) = {
             let m = party.member(id).unwrap();
-            (m.status.strength(), m.status.magic(), m.status.abilities.clone(), m.status.mp_charge_left > 0.0, m.position(), m.yaw)
+            (m.status.strength(), m.status.magic(), m.status.abilities, m.status.mp_charge_left > 0.0, m.position(), m.yaw)
         };
         let k = match party.x2.casters.iter().position(|c| c.0 == id) {
             Some(k) => k,

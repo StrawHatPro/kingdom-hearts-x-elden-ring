@@ -132,9 +132,29 @@ pub struct Routes {
     pub owner: Option<String>,
     /// (party stream E) Every weapon's swing / hit set of a party member, by weapon model ("w_do010"); the
     /// equipped one is copied into `swing` / `hit` by `select_weapon`.
-    pub weapon_sets: HashMap<String, (HashMap<u32, String>, HashMap<u32, String>)>,
+    pub weapon_sets: HashMap<String, WeaponSounds>,
     /// (party stream E) The weapon whose sets are in `swing` / `hit`.
     pub weapon: Option<String>,
+    /// (AUDIT-C TF) The LEFT hand's weapon sets (`LH_WEAPON:` aliases, kh-core `notify::left_hand_alias`): Double Form's
+    /// Oblivion (w_so210, set 02021). Empty with no weapon in that hand: KH3 plays nothing then.
+    pub left_swing: HashMap<u32, String>,
+    pub left_hit: HashMap<u32, String>,
+    /// (AUDIT-C TF) The weapon whose sets are in `left_swing` / `left_hit` (None: no weapon in the left hand).
+    pub left_weapon: Option<String>,
+}
+
+/// (party stream E) A weapon's swing set and hit set.
+pub type WeaponSounds = (HashMap<u32, String>, HashMap<u32, String>);
+
+/// (AUDIT-A) A notify row's logical animations AND its clip: the core names some rows by their clip ("1301", "2403",
+/// "B412") where the pack's rows say "M_1301" / the set's logical name, so a lookup by the played row found no list (a
+/// random voice then always played its first entry instead of KH3's weighted draw 0x14056CAE0).
+fn with_clip(logical: &[String], clip: Option<&str>) -> Vec<String> {
+    let mut out = logical.to_vec();
+    if let Some(clip) = clip.filter(|c| !c.is_empty() && !out.iter().any(|l| l == c)) {
+        out.push(clip.to_string());
+    }
+    out
 }
 
 fn alias_number(name: &str, prefix: &str) -> Option<u32> {
@@ -156,6 +176,49 @@ impl Routes {
             r.select_weapon(&first);
         }
         r
+    }
+
+    /// (AUDIT-A) KH3's choice of the sets (`PlayWeaponSwingSE` 0x1405615F0 / `PlayWeaponHitSE` 0x1405612A0: the weapon
+    /// actor on the notify's unit, pawn vt+0x1428, then ITS `m_SoundAssets_Swing` / `_Hit`, 0x14178BED0 / 0x14178BEB0):
+    /// `model`'s sets when it has them; a weapon of Sora's own (`w_so...`) the pack knows no sets of has none in KH3 (the
+    /// Double Arrowguns w_so022 / w_so023, the transform units w_so021 / w_so031, the StylePawns: their blueprints carry no
+    /// `m_SoundAssets_*`, checked in audit/sora_port/audio/keyblade_rows.json `sets`), so its aliases are silent instead of
+    /// playing the previous weapon's. Any other name keeps the sets as they are. True: `model`'s own sets are in use.
+    pub fn select_weapon_kh3(&mut self, model: &str) -> bool {
+        if self.select_weapon(model) {
+            return true;
+        }
+        if model.starts_with("w_so") && self.owner.is_none() {
+            self.swing.clear();
+            self.hit.clear();
+            self.weapon = Some(model.to_string());
+        }
+        false
+    }
+
+    /// (AUDIT-C TF) The LEFT hand's weapon (`""`: none): its swing / hit sets play the `LH_WEAPON:` aliases (KH3's
+    /// PlayWeaponSwingSE / PlayWeaponHitSE with the notify's unit LH_WEAPON: pawn vt+0x1428(2), then THAT actor's
+    /// m_SoundAssets_Swing / _Hit). A model without sets, or none, leaves them empty: those aliases are silent.
+    pub fn select_left_weapon(&mut self, model: &str) {
+        if self.left_weapon.as_deref() == Some(model) || (model.is_empty() && self.left_weapon.is_none()) {
+            return;
+        }
+        let (swing, hit) = self.weapon_sets.get(model).cloned().unwrap_or_default();
+        (self.left_swing, self.left_hit) = (swing, hit);
+        self.left_weapon = (!model.is_empty()).then(|| model.to_string());
+    }
+
+    /// (AUDIT-A) Adds a weighted random voice list the pack's triggers lack (a form anim set's clip: the pack's notify rows
+    /// cover the main set and the StyleChange clips only), from the core's own clip data (kh-host `audio::core_lists`).
+    /// Nothing is added when the pack already has a list of that clip with the same first entry at that time.
+    pub fn add_random_voice(&mut self, list: RandomVoice) -> bool {
+        let first = list.entries.first().map(|e| e.0.clone());
+        let known = self.random_voices.iter().any(|v| v.entries.first().map(|e| &e.0) == first.as_ref() && (v.time - list.time).abs() < 1e-3 && v.logical.iter().any(|l| list.logical.contains(l)));
+        if known || first.is_none() {
+            return false;
+        }
+        self.random_voices.push(list);
+        true
     }
 
     /// (party stream E) Uses `model`'s swing / hit sets for the aliases from now on. False: no such weapon.
@@ -224,17 +287,17 @@ impl Routes {
                         }
                     }
                 }
-                "notify.voice_random" => r.random_voices.push(RandomVoice { id: t.id.clone(), logical: t.logical.clone(), time: t.time.unwrap_or(0.0), entries: t.sounds.iter().map(|s| (s.asset.clone(), s.weight.unwrap_or(0))).collect() }),
+                "notify.voice_random" => r.random_voices.push(RandomVoice { id: t.id.clone(), logical: with_clip(&t.logical, t.clip.as_deref()), time: t.time.unwrap_or(0.0), entries: t.sounds.iter().map(|s| (s.asset.clone(), s.weight.unwrap_or(0))).collect() }),
                 "notify.auto_se_enable" => {
                     if let (Some(start), Some(setting)) = (t.time, t.enable_setting) {
-                        for logical in &t.logical {
+                        for logical in &with_clip(&t.logical, t.clip.as_deref()) {
                             r.enable_windows.entry(logical.clone()).or_default().push((start, start + t.duration.unwrap_or(0.0), setting));
                         }
                     }
                 }
                 "notify.auto_se" => {
                     if let Some(record) = t.slot.as_ref().filter(|_| t.trigger.contains("PlayAutoSe")) {
-                        r.aux_notifies.push((t.logical.clone(), t.time.unwrap_or(0.0), record.clone()));
+                        r.aux_notifies.push((with_clip(&t.logical, t.clip.as_deref()), t.time.unwrap_or(0.0), record.clone()));
                     }
                 }
                 "code.prize" => {
@@ -269,13 +332,13 @@ impl Routes {
     /// setting, else the component's own state, which is ASSUMED enabled (the three glide-loop
     /// windows that ENABLE imply something disables it around them; that code was not found).
     pub fn auto_se_enabled(&self, anim: &str, time: f32) -> bool {
-        self.enable_windows.get(anim).and_then(|w| w.iter().find(|(a, b, _)| time >= *a && time <= *b)).map_or(true, |w| w.2)
+        self.enable_windows.get(anim).and_then(|w| w.iter().find(|(a, b, _)| time >= *a && time <= *b)).is_none_or(|w| w.2)
     }
 
     /// The sounds of an effect, by its particle system's name or path
     /// ("/Game/Effects/.../vs_com_grd00.vs_com_grd00" -> "vs_com_grd00").
     pub fn effect_sounds(&self, effect: &str) -> &[EffectSe] {
-        let name = effect.rsplit(|c| c == '/' || c == '.').next().unwrap_or(effect);
+        let name = effect.rsplit(['/', '.']).next().unwrap_or(effect);
         self.effects.get(&name.to_ascii_lowercase()).map_or(&[], Vec::as_slice)
     }
 
@@ -317,6 +380,15 @@ impl Routes {
                 return Resolved::Asset { path: localized(name, cx.language), voice: true };
             }
             return Resolved::Asset { path: crate::pack::asset_key(name).to_string(), voice: false };
+        }
+        // (AUDIT-C TF) an alias of the LEFT hand's weapon (LH_WEAPON: Double Form's Oblivion)
+        if let Some(alias) = name.strip_prefix("LH_WEAPON:") {
+            if let Some(n) = alias_number(alias, "SWING") {
+                return self.left_swing.get(&n).map_or(Resolved::Silent("no entry in the left hand weapon's swing set"), |a| Resolved::Asset { path: a.clone(), voice: false });
+            }
+            if let Some(n) = alias_number(alias, "HIT") {
+                return self.left_hit.get(&n).map_or(Resolved::Silent("no entry in the left hand weapon's hit set"), |a| Resolved::Asset { path: a.clone(), voice: false });
+            }
         }
         if let Some(n) = alias_number(name, "SWING") {
             // 11..13 are empty in the Kingdom Key's set: silent with this weapon (spec 5.3).
@@ -377,7 +449,7 @@ pub fn pick_voice(entries: &[(String, u32)], last: Option<usize>, rng: &mut XorS
     if total == 0 {
         return None;
     }
-    let mut r = (rng.next() >> 1) % total;
+    let mut r = (rng.draw() >> 1) % total;
     for (i, e) in entries.iter().enumerate() {
         if Some(i) == last {
             continue;
@@ -388,4 +460,50 @@ pub fn pick_voice(entries: &[(String, u32)], last: Option<usize>, rng: &mut XorS
         r -= e.1;
     }
     None
+}
+
+// (AUDIT-A) the host-side resolution of the formchanges' sounds
+#[cfg(test)]
+mod audit_a_tests {
+    use super::*;
+
+    fn sets(n: u32, asset: &str) -> WeaponSounds {
+        (HashMap::from([(n, asset.to_string())]), HashMap::from([(n, format!("{asset}_hit"))]))
+    }
+
+    #[test]
+    fn a_weapon_without_sets_is_silent_as_in_kh3() {
+        let mut r = Routes::default();
+        r.weapon_sets.insert("w_so020".to_string(), sets(1, "/Game/Sound/SE/weapon/02002/se02002_101"));
+        assert!(r.select_weapon_kh3("w_so020"));
+        assert_eq!(r.swing.get(&1).map(String::as_str), Some("/Game/Sound/SE/weapon/02002/se02002_101"));
+        // the Double Arrowguns: no m_SoundAssets_Swing / _Hit on w_so022_Wep -> nothing, not Shooting Star's set
+        assert!(!r.select_weapon_kh3("w_so022"));
+        assert!(r.swing.is_empty() && r.hit.is_empty());
+        assert_eq!(r.weapon.as_deref(), Some("w_so022"));
+        // a name that is not one of Sora's weapons keeps the sets as they are
+        r.select_weapon_kh3("w_so020");
+        assert!(!r.select_weapon_kh3("something_else"));
+        assert_eq!(r.swing.len(), 1);
+    }
+
+    #[test]
+    fn a_row_is_found_by_its_clip_too() {
+        assert_eq!(with_clip(&["M_1301".to_string()], Some("1301")), vec!["M_1301".to_string(), "1301".to_string()]);
+        assert_eq!(with_clip(&["2403".to_string()], Some("2403")), vec!["2403".to_string()]);
+        assert_eq!(with_clip(&[], None), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_core_list_is_added_once_and_drawn_as_its_list() {
+        let mut r = Routes::default();
+        let first = "/Game/Sound/VOICE/Localization/ja/battle/PC/bt1010580sr0";
+        let list = RandomVoice { id: "core.B412.PlayVoice.3".to_string(), logical: vec!["B412".to_string()], time: 0.1, entries: vec![(first.to_string(), 34), ("/Game/Sound/VOICE/Localization/ja/battle/PC/bt1010590sr0".to_string(), 33)] };
+        assert!(r.add_random_voice(list.clone()));
+        assert!(!r.add_random_voice(list), "the same list twice");
+        let cx = Context { surface: 0, language: Language::En, voice_group_no: 0, anim: Some(("B412", 0.1)) };
+        assert_eq!(r.random_list(&format!("{first}.bt1010580sr0"), cx.anim), Some(0));
+        // another row with the same first entry has no list: the asset itself
+        assert_eq!(r.random_list(first, Some(("B413", 0.1))), None);
+    }
 }

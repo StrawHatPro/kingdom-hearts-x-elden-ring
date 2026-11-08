@@ -77,6 +77,7 @@
 ["ai.thunder_memory",0,0,0,4,"s","PORT DESIGN (DON-PROG, a number the doc leaves open): Sora / Goofy \"uses Thunder\" = a Thunder hit within this"],
 ["ai.ultimate",0,0,0,1,"on/off","DONALD_OVERHAUL.md 11 (the user's design, \"implement the entire doc\", 2026-10-22): \"He may use an ultimate at full power, once per attunement period like the player\""],
 ["ai.mp_keep",0,0,0,0.15,"share","PORT DESIGN (DON-PROG, a number the doc leaves open): below this MP share he only casts heals and protection"],
+["ai.orbs_gap",0,0,0,8,"s","PORT DESIGN (PARTY-AI 2026-11-03, the in-game round: in melee the balls are spent within a second and AI Donald put a new set on the fighter at every turn, so he never cast an attack spell): Ball Lightning goes on a wearer only when he has no ball, no set runs on him and none was put on him within this many seconds"],
 ["kh3.mp_rage",0,0,0,0.5,"MP per HP","PORT DESIGN (DON-PROG, a number the doc leaves open) (KH2's MP Rage: MP when hit): MP restored per HP lost"],
 ["insight.cut_weak",0,0,0,1.1,"x","PORT DESIGN (DON-PROG, the coordinator 2026-10-22: Elemental Insight in Elden Ring): an Elden Ring enemy whose NpcParam damage cut rate of an element (fire, lightning, holy) is at or above this takes clearly more than average: WEAK (the cut rate multiplies the damage taken, 1 = neutral)"],
 ["insight.cut_resist",0,0,0,0.85,"x","PORT DESIGN (DON-PROG): at or below this cut rate the element is RESISTED"],

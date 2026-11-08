@@ -1,6 +1,5 @@
 //! (ZETTA) probe: the ending's beam (kg702c shot 960, vd_kg702b_96_zfr_00) at an identity placement: each mesh's
 //! transform over time (its long axis, its thickness), so the shrink and the beam's direction can be read
-use glam::Vec3;
 use kh_vfx::{Camera, DrawList, EffectDef, SpawnOptions, World, Xform};
 
 #[test]

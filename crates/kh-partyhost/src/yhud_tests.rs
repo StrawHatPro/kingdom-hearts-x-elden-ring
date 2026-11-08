@@ -3,7 +3,7 @@
 //! playing as have their Y moves show up on the HUD").
 //!
 //! The shared runtime (the code both hosts run: `PartyRuntime::route`), the friends' Y-capable states on (Donald's full
-//! Arcane Flow, Goofy's Bombardier ready) and Sora's queue holding every kind of Y command: his Grand Magic, a formchange,
+//! Arcane Flow) and Sora's queue holding every kind of Y command: his Grand Magic, a formchange,
 //! the finish in slot B and the four team attacks (193 Trinity Guard: Donald + Goofy, 195 Bombardier: Goofy, 207 / 208
 //! Donald Meteor / Flare Force: Donald). The HUD's stack (kh-host `y_stack`, the function `Hud::live_model` draws) is
 //! read from the two hosts' snapshots: the test level's (kh-app gfx_hud: `hud_snapshot` over Sora's live snapshot) and
@@ -11,7 +11,7 @@
 //! - Sora leads: his whole queue and his event button; never a friend's own row.
 //! - Donald leads: his Arcane rows + 193 / 207 / 208 only (6.6: "Donald's with Sora and with Goofy"); with no Arcane
 //!   charge and no team attack the stack is EMPTY (it was Sora's queue).
-//! - Goofy leads: 193 / 195 only while they stand (Y is the team attack's), else his Bombardier alone.
+//! - Goofy leads: 193 / 195 only while they stand (Y is the team attack's), else nothing of his.
 //! - Y: the leader's selected team row runs (chosen in Sora's queue); Sora's own rows are never run by the player's Y.
 
 use kh_core::combat::situation::{class, Entry, Slot};
@@ -32,6 +32,13 @@ impl kh_core::Targets for NoEnemies {
     fn hurt_shapes(&self, _id: TargetId, _out: &mut Vec<HurtShape>) {}
     fn apply_hit(&mut self, _hit: &HitRecord) -> HitResult {
         HitResult::default()
+    }
+    // (AUDIT-B) no bones here: a rider attached to a hit follows the target's origin and yaw
+    fn hit_bone(&self, _id: kh_core::TargetId, _at: kh_core::Vec3) -> Option<kh_core::host::TargetBone> {
+        None
+    }
+    fn bone_pose(&self, _id: kh_core::TargetId, _bone: kh_core::host::TargetBone) -> Option<kh_core::host::BonePose> {
+        None
     }
 }
 
@@ -102,10 +109,6 @@ fn is_arcane(serial: u32) -> bool {
     serial & 0xFF00_0000 == 0x5D00_0000
 }
 
-fn is_bombardier(serial: u32) -> bool {
-    serial & 0xFFFF_FFF0 == 0x5A00_0010
-}
-
 fn lead(h: &mut Harness, c: PartyChara) {
     h.rt.lead_word(&["leader", c.name()]);
     for _ in 0..30 {
@@ -138,7 +141,7 @@ fn yhud_sora_leads_his_queue_only_never_a_friends_own_y() {
     for (host, (serials, _, event)) in ["test level", "Elden Ring"].iter().zip(stacks(&h)) {
         assert_eq!(serials, vec![GRAND, FORM, TRINITY, BOMBARDIER, METEOR, FLARE], "{host}: Sora's whole queue");
         assert!(event, "{host}: Sora's finish on the event button");
-        assert!(!serials.iter().any(|s| is_arcane(*s) || is_bombardier(*s)), "{host}: no friend's own Y row");
+        assert!(!serials.iter().any(|s| is_arcane(*s)), "{host}: no friend's own Y row");
     }
     // his own Y reaches his core as ever
     let out = route(&mut h, PadButtons::NONE.with(PadButton::FaceTop), PadButtons::NONE);
@@ -185,23 +188,22 @@ fn yhud_donald_leads_his_arcane_and_his_team_attacks_only() {
 }
 
 #[test]
-fn yhud_goofy_leads_his_bombardier_and_his_team_attacks_only() {
+fn yhud_goofy_leads_his_team_attacks_only() {
     let Some(mut h) = Harness::new() else {
         println!("no party AI pack: skipped");
         return;
     };
     lead(&mut h, PartyChara::Goofy);
     h.rt.word("party don-zetta-ready"); // AI Donald's full Arcane Flow
-    // only Donald's team attacks with Sora: not Goofy's -> his Bombardier alone
+    // only Donald's team attacks with Sora: not Goofy's -> no Y row of his (GOOFY: Bombardier is gone; Y is the Breaker's and the team rows')
     plant(&mut h, &[METEOR, FLARE]);
     let _ = route(&mut h, PadButtons::NONE, PadButtons::NONE);
     for (host, (serials, names, event)) in ["test level", "Elden Ring"].iter().zip(stacks(&h)) {
-        assert_eq!(serials.len(), 1, "{host}: {names:?}");
-        assert!(is_bombardier(serials[0]), "{host}: his Bombardier: {names:?}");
+        assert!(serials.is_empty(), "{host}: {names:?}");
         assert!(!event, "{host}");
     }
     let (forwarded, _) = press(&mut h, PadButton::FaceTop);
-    assert!(!forwarded, "Y is his Bombardier, never Sora's queue");
+    assert!(!forwarded, "Sora's own queue is never his");
     // his team attacks offered: 193 and 195 (Y and the slot are theirs), LT picks the second, Y runs it
     plant(&mut h, &ALL_TEAM);
     let _ = route(&mut h, PadButtons::NONE, PadButtons::NONE);
@@ -213,4 +215,62 @@ fn yhud_goofy_leads_his_bombardier_and_his_team_attacks_only() {
     let (forwarded, current) = press(&mut h, PadButton::FaceTop);
     assert!(forwarded);
     assert_eq!(current, Some((Slot::List, 195)), "LT then Y: Goofy Bombardier with Sora");
+}
+
+/// (PROMPT-UI, THE USER 2026-11-05: "Goofy should not use the arrows", "Donald shouldn't use them either") Goofy leading:
+/// Sora's style-point gauge (">>") and his "ATTACK!" notice never reach Goofy's HUD, in both hosts' snapshots and in the
+/// real HUD drawn from them.
+#[test]
+fn prompt_ui_a_goofy_leader_never_shows_the_arrows() {
+    no_arrows_under(PartyChara::Goofy);
+}
+
+/// (PROMPT-UI) The same for Donald (only Sora's formchange progress fills the arrows, as in KH3).
+#[test]
+fn prompt_ui_a_donald_leader_never_shows_the_arrows() {
+    no_arrows_under(PartyChara::Donald);
+}
+
+fn no_arrows_under(leader: PartyChara) {
+    let Some(mut h) = Harness::new() else {
+        println!("no party AI pack: skipped");
+        return;
+    };
+    lead(&mut h, leader);
+    let mut base = h.sora.ui_snapshot();
+    base.situation.gauge_ratio = 0.6; // AI Sora at two chevrons
+    base.prompt = Some(kh_core::ui_model::ButtonPrompt { kind: kh_core::ui_model::PromptKind::Counter(3), target: TargetId::NONE });
+    // the test level: the gate over Sora's live snapshot
+    let app = h.rt.hud_snapshot(&base).expect("the friend's HUD snapshot");
+    assert_eq!((app.prompt, app.situation.gauge_ratio), (None, 0.0), "test level: no Sora gauge / notice under {leader:?}");
+    // Elden Ring: the feed's snapshot, laid over the live base as kh-er partyui does
+    let feed = h.rt.hud_snapshot(&UiSnapshot::default()).expect("the feed");
+    let mut er = base.clone();
+    er.command = feed.command.clone();
+    kh_core::ui_model::YPrompts::of(&feed).apply(&mut er);
+    assert_eq!((er.prompt, er.situation.gauge_ratio), (None, 0.0), "Elden Ring: the same");
+    // the real HUD on Goofy's snapshot: no gauge row, no notice
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../build/sora_pack/ui");
+    let Ok((mut hud, _fonts)) = kh_host::hud::Hud::load(&root) else {
+        println!("no UI pack: the HUD half skipped");
+        return;
+    };
+    struct NoTargets;
+    impl kh_host::hud::HudTargets for NoTargets {
+        fn target(&self, _id: TargetId) -> Option<kh_host::hud::TargetView> {
+            None
+        }
+    }
+    fn same(p: Vec3) -> Vec3 {
+        p
+    }
+    let draw = |hud: &mut kh_host::hud::Hud, s: &UiSnapshot| {
+        for _ in 0..60 {
+            hud.frame(&mut kh_host::hud::Frame { snapshot: s, sora: &h.sora, events: &[], state: kh_core::StateId::Idle, step_dt: 1.0 / 60.0, play_seconds: 0, targets: &NoTargets, to_view: same, view: None, words: &[], dt: 1.0 / 60.0, ticks: 1, pressed: PadButtons::NONE, nav: Vec::new() });
+        }
+        (hud.gauge_row_state().0, hud.notice_state().0)
+    };
+    assert_eq!(draw(&mut hud, &base), (true, Some(0xB)), "the same values on Sora's own snapshot: shown");
+    assert_eq!(draw(&mut hud, &app), (false, None), "{leader:?} leads: no arrows, no notice");
+    assert_eq!(draw(&mut hud, &er), (false, None));
 }

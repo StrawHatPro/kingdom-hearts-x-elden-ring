@@ -1044,7 +1044,7 @@ fn jump_cut_caps_the_rise_speed_but_always_reaches_the_minimum_height() {
         if at_release + LEFT_CM < MIN_CM {
             // An early release: the minimum decides. The sampled apex is not below it and at
             // most g dt^2 / 8 = 0.14 cm (plus rounding) above it.
-            assert!(height >= MIN_CM && height <= MIN_CM + 1.0, "released {after_launch} frames after the launch at {at_release} cm: apex {height} cm");
+            assert!((MIN_CM..=MIN_CM + 1.0).contains(&height), "released {after_launch} frames after the launch at {at_release} cm: apex {height} cm");
         } else {
             // A late release: the 400 cm/s rule: at most 19.4 cm more, and never under the minimum.
             assert!(height <= at_release + LEFT_CM + 1.0 && height >= MIN_CM.min(at_release), "released {after_launch} frames after the launch at {at_release} cm: apex {height} cm");
@@ -1076,7 +1076,7 @@ fn jump_cut_a_tap_reaches_the_minimum_height_and_no_more() {
     let launch_z = outs[takeoff - 1].position.z;
     let apex = outs.iter().map(|o| o.position.z).fold(f32::MIN, f32::max) - launch_z;
     println!("jump cut on release: smallest jump {apex} cm above the take-off (minimum {MIN_CM})");
-    assert!(apex >= MIN_CM && apex <= MIN_CM + 5.0, "tap: {apex} cm");
+    assert!((MIN_CM..=MIN_CM + 5.0).contains(&apex), "tap: {apex} cm");
     assert!(outs.last().unwrap().on_floor);
 }
 
