@@ -8,10 +8,11 @@
 //! - the grace's talk script sets event flag 9000 while the player sits; event 950 (Melina's accord) waits for
 //!   9000 AND the player within 2 m of one of eight graces AND (its counter of those graces discovered, or one of two
 //!   of them), then plays cutscene 6042000N; everything after the scene (her offer, Accept / Refuse, the whistle) is HER
-//!   TALK SCRIPT, which runs only inside the game's rest. The invitation to the Roundtable Hold and every "Talk to
-//!   Melina" are talk-script states of the grace menu as well.
-//! - So nothing of it can be started by a flag alone with confidence (method A): the scene would play, her talk would
-//!   not. METHOD B is what is delivered: at the moment a row's condition is met the game's REAL rest is made for the
+//!   TALK SCRIPT. The invitation to the Roundtable Hold and every "Talk to Melina" are talk-script states of the grace
+//!   as well. ((MELINA-SUMMON) Her script itself does not need the rest: no state reachable in it tests 9000; the
+//!   grace's part is the summon, which talkdrive.rs `Summon` runs without a rest. The accord's scene does need it.)
+//! - So the accord cannot be started by a flag alone with confidence (method A): the scene would play, her talk would
+//!   not. METHOD B is what is delivered for it: at the moment a row's condition is met the game's REAL rest is made for the
 //!   body under a black cover, with Sora not taking the body's pose (he never attunes, never sits), and never on Save.
 //!
 //! (IMPL_ER36, the user after the first session: "the game forces you into the grace menu when you reach a checkpoint
@@ -21,11 +22,14 @@
 //!   game's grace menu (MEASURED: the rest ended by itself after her talk). The invitation to the Roundtable Hold and the
 //!   talk after Morgott are kind `self` ("she speaks by herself at a rest", by the talk script): in the user's session
 //!   she did NOT speak in five rests although every flag the script names held (NOT EXPLAINED), so the row fired at
-//!   every new save point and left the player in the game's grace menu. A `self` row is never made unasked: it only
-//!   puts "Talk to Melina" into the save-point menu, once per session.
-//! - "Talk to Melina" is DRIVEN TO THE END (talkdrive.rs): cover, the rest, her talk selected in the game's menu for
-//!   the player, cover off while she speaks, cover on and the rest left when the game's menu comes back. The game's
-//!   grace menu is never shown and never left to the player.
+//!   every new save point and left the player in the game's grace menu. A `self` row is never made unasked.
+//! - (MELINA-SUMMON, the user 2026-11-08: "Talk to Melina needs to just straight up make Melina appear and talk, using
+//!   the same logic for her dialogue but skipping having to access a grace menu behind the scenes all together") "Talk
+//!   to Melina" SUMMONS HER (talkdrive.rs `Summon`): no cover, no rest, no grace menu; the grace's own summon command on
+//!   the grace's own talk object, the flags its script sets, her own talk script for everything she says. WHEN the
+//!   entry shows and WHAT she talks about are the grace script's own rules (talkdrive::talk_for): the `self` and
+//!   `menu` rows of the table are only logged now. Only the accord keeps the driven rest (its scene needs the game's
+//!   rest: talkdrive.rs `Drive`).
 //!
 //! | key | default | meaning |
 //! |---|---|---|
@@ -41,12 +45,11 @@ use std::collections::BTreeMap;
 pub enum Kind {
     /// The rest is made by itself the moment the row is ready at a save point.
     Auto,
-    /// The save-point menu shows "Talk to Melina" while the row is ready: an ENTRY OF THE GAME'S GRACE MENU exists then
-    /// (the talk script's group x57), which talkdrive.rs selects.
+    /// An ENTRY OF THE GAME'S GRACE MENU exists while the row is ready (the talk script's group x57). (MELINA-SUMMON) For
+    /// the log only: the entry and its topic are talkdrive::talk_for's.
     Menu,
     /// (IMPL_ER36, sheet value `self`) By the talk script Melina SPEAKS BY HERSELF when the player rests while the row
-    /// holds (no menu entry of the game's): never made unasked; the save-point menu offers "Talk to Melina" for it until
-    /// one driven rest in the session brought no talk of hers.
+    /// holds: never made unasked. (MELINA-SUMMON) For the log only: talkdrive::talk_for says when she has something to say.
     Own,
 }
 
@@ -71,9 +74,6 @@ pub struct Rule {
     /// THE COUNT: this many of these flags (the discovery flags of the counted graces) must be on.
     pub count_flags: Vec<u32>,
     pub count_min: u32,
-    /// (FX5) The body must carry NONE of these special effects (the talk script's `f61(id) == 0` tests: t000001000 x60 state 0 /
-    /// t000003000 x72 state 0 for the Roundtable invitation; the CV3 run: 4270 on the body, "NOTHING OF MELINA'S CAME").
-    pub no_effects: Vec<i32>,
 }
 
 /// What a row says now.
@@ -135,7 +135,7 @@ pub fn parse(text: &str) -> Result<(Vec<Rule>, Vec<String>), String> {
             graces_free: list(value, "graces_free"),
             count_flags: list(value, "count_flags"),
             count_min: value.get("count_min").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            no_effects: list(value, "no_effects").into_iter().map(|n| n as i32).collect(), // (FX5)
+            // (the sheet's `no_effects` of the invitation: the effects talkdrive::MP_EFFECTS tests now)
         };
         // (a row that asks nothing at all would rest him at every save point: refused)
         let asks = !rule.need_all.is_empty() || !rule.need_any.is_empty() || !rule.rise_any.is_empty() || (rule.count_min > 0 && !rule.count_flags.is_empty()) || !rule.graces.is_empty();
@@ -271,8 +271,6 @@ pub struct Story {
     /// For the log: each row's last verdict text (judged without a place), each refusal last told.
     told: BTreeMap<usize, String>,
     refused: Option<(usize, u32, &'static str)>,
-    /// (IMPL_ER36) Rows of kind `self` whose driven rest brought no talk of Melina's in this session: not offered again.
-    own_tried: Vec<usize>,
     /// (RC, the user 2026-10-20: "Melina cutscenes should play only when you press activate on the save point, not just by
     /// touching it") `story.on_y` (savepoint.rs, default 1): an automatic row is made only after Y AT THE SAVE POINT asked
     /// for it (`ask`), as the game's own event waits for the player resting at the grace (flag 9000, event 950).
@@ -283,17 +281,15 @@ pub struct Story {
     told_wait: Option<(usize, u32)>,
 }
 
-/// (IMPL_ER36) What the menu's "Talk to Melina" stands for at a save point.
+/// What the menu's "Talk to Melina" stands for at a save point.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Offer {
-    /// The row that makes the entry (for the log).
+    /// What makes the entry (for the log): the automatic row, or her talk.
     pub row: String,
-    /// A row of kind `self`: she is expected to speak by herself once the body rests.
-    pub own: Option<usize>,
-    /// The game's grace menu holds her entry: it is selected when she does not speak by herself.
-    pub entry: bool,
-    /// An automatic row's scene is expected (its rest was tried here before and brought nothing).
+    /// An automatic row's scene is expected (its rest was tried here before and brought nothing): the driven rest.
     pub scene: bool,
+    /// (MELINA-SUMMON) Her talk, summoned (talkdrive.rs `Summon`): what the grace's script would have her talk about.
+    pub talk: Option<crate::talkdrive::Talk>,
 }
 
 /// What a frame decided.
@@ -356,7 +352,6 @@ impl Story {
         self.session_used.clear();
         self.unlocked.clear();
         self.refused = None;
-        self.own_tried.clear();
         self.told.clear();
         (self.asked, self.told_wait) = (None, None); // (RC)
         // (a flag that is on after the load did not "turn on in this session"; what rose stays risen: the boss is dead)
@@ -382,7 +377,7 @@ impl Story {
                 // (IMPL_ER36) a menu row's flags are set and cleared by map events as he walks past a grace (MEASURED: flag
                 // 1042372701 flipped 22 times in a session): said only with `story.log = 1`
                 if rule.kind != Kind::Menu || verbose {
-                    d.log.push(format!("{} ({}): {text}{}", rule.id, match rule.kind { Kind::Auto => "automatic", Kind::Menu => "menu entry", Kind::Own => "she speaks by herself at a rest: offered in the menu, never made unasked" }, if rule.kind == Kind::Auto && text.starts_with("READY") { if rule.graces.is_empty() { ": it happens at the next save point he stands in" } else { ": it happens at the next of ITS save points he stands in" } } else { "" }));
+                    d.log.push(format!("{} ({}): {text}{}", rule.id, match rule.kind { Kind::Auto => "automatic", Kind::Menu => "menu entry", Kind::Own => "she speaks by herself at a rest: never made unasked (\"Talk to Melina\" follows the talk script's own rules)" }, if rule.kind == Kind::Auto && text.starts_with("READY") { if rule.graces.is_empty() { ": it happens at the next save point he stands in" } else { ": it happens at the next of ITS save points he stands in" } } else { "" }));
                 }
                 self.told.insert(k, text);
             }
@@ -440,74 +435,21 @@ impl Story {
         d
     }
 
-    /// (IMPL_ER36) DOES THE MENU SHOW "Talk to Melina" at this save point, and what is the driven rest to expect?
-    /// `entry_gate`: the game's grace menu can hold her entry here at all (talkdrive::menu_gate). In this order:
-    /// a row of kind `self` that is ready and was not tried in this session (she is expected to speak by herself; a
-    /// menu row that is ready as well is the fallback inside the same rest), a menu row that is ready (the entry is
-    /// selected), an automatic row that is ready and whose rest was already tried here (its scene is expected).
-    #[cfg(test)]
-    pub fn talk_offer(&self, grace: u32, flag: &dyn Fn(u32) -> Option<bool>, entry_gate: bool) -> Option<Offer> {
-        self.talk_offer_lifting(grace, flag, entry_gate, &|_| false, false).map(|(o, _)| o)
-    }
-
-    /// (FX5) `talk_offer` with THE WHOLE CONDITION of a `self` row: the body's special effects the talk script tests
-    /// (`Rule::no_effects`, `has`: the body carries this effect now). A row whose effects block is NOT offered (the game
-    /// would not have her speak: the CV3 run's "NOTHING OF MELINA'S CAME" with 4270 on the body), unless `lift`
-    /// (`story.lift_blockers` 1; (FINAL5) default 0, savepoint.rs): then it is offered and the second value lists the effects the driven rest
-    /// takes off the body before it rests and gives back after (savepoint.rs).
-    pub fn talk_offer_lifting(&self, grace: u32, flag: &dyn Fn(u32) -> Option<bool>, entry_gate: bool, has: &dyn Fn(i32) -> bool, lift: bool) -> Option<(Offer, Vec<i32>)> {
-        let ready = |r: &Rule| evaluate(r, Some(grace), flag, &self.risen).ready();
-        let entry = self.rules.iter().find(|r| r.kind == Kind::Menu && entry_gate && ready(r)).map(|r| r.id.clone());
-        let own = self.rules.iter().enumerate().find(|(k, r)| r.kind == Kind::Own && !self.own_tried.contains(k) && ready(r) && (lift || blockers(r, has).is_empty()));
-        if let Some((k, r)) = own {
-            return Some((Offer { row: r.id.clone(), own: Some(k), entry: entry.is_some(), scene: false }, blockers(r, has)));
+    /// DOES THE MENU SHOW "Talk to Melina" at this save point, and what is it? First an automatic row that is ready and
+    /// whose rest was already tried here (its scene is expected: the driven rest, as the scene needs the game's rest);
+    /// else (MELINA-SUMMON) `talk`, her talk as the grace's script would have it here (talkdrive::talk_for; None: the
+    /// game has no talk of hers here now).
+    pub fn talk_offer(&self, grace: u32, flag: &dyn Fn(u32) -> Option<bool>, talk: Option<crate::talkdrive::Talk>) -> Option<Offer> {
+        let scene = self.rules.iter().enumerate().find(|(k, r)| r.kind == Kind::Auto && self.tried.contains(&(*k, grace)) && evaluate(r, Some(grace), flag, &self.risen).ready());
+        if let Some((_, r)) = scene {
+            return Some(Offer { row: r.id.clone(), scene: true, talk: None });
         }
-        self.talk_offer_rest(grace, flag, entry).map(|o| (o, Vec::new()))
-    }
-
-    /// (FX5) The `self` rows that are ready here but held back by an effect on the body (for the log): (row, effects).
-    pub fn held_by_effects(&self, grace: u32, flag: &dyn Fn(u32) -> Option<bool>, has: &dyn Fn(i32) -> bool) -> Vec<(String, Vec<i32>)> {
-        self.rules
-            .iter()
-            .enumerate()
-            .filter(|(k, r)| r.kind == Kind::Own && !self.own_tried.contains(k) && evaluate(r, Some(grace), flag, &self.risen).ready())
-            .map(|(_, r)| (r.id.clone(), blockers(r, has)))
-            .filter(|(_, b)| !b.is_empty())
-            .collect()
-    }
-
-    fn talk_offer_rest(&self, grace: u32, flag: &dyn Fn(u32) -> Option<bool>, entry: Option<String>) -> Option<Offer> {
-        let ready = |r: &Rule| evaluate(r, Some(grace), flag, &self.risen).ready();
-        if let Some(row) = entry {
-            return Some(Offer { row, own: None, entry: true, scene: false });
-        }
-        self.rules.iter().enumerate().find(|(k, r)| r.kind == Kind::Auto && self.tried.contains(&(*k, grace)) && ready(r)).map(|(_, r)| Offer { row: r.id.clone(), own: None, entry: false, scene: true })
-    }
-
-    /// (IMPL_ER36) A driven rest for a row of kind `self` ended without a talk of Melina's: the row is not offered
-    /// again in this session (the game did not have her speak; its own flags decide when she will).
-    pub fn own_tried(&mut self, k: usize) {
-        if !self.own_tried.contains(&k) {
-            self.own_tried.push(k);
-        }
+        talk.map(|t| Offer { row: t.describe(), scene: false, talk: Some(t) })
     }
 
     pub fn rule_id(&self, k: usize) -> &str {
         self.rules.get(k).map_or("?", |r| r.id.as_str())
     }
-}
-
-/// (FX5) The special effects of `rule.no_effects` the body carries now (`has`): what keeps the game from having her
-/// speak by herself.
-pub fn blockers(rule: &Rule, has: &dyn Fn(i32) -> bool) -> Vec<i32> {
-    rule.no_effects.iter().copied().filter(|e| has(*e)).collect()
-}
-
-/// (FINAL5) `story.lift_blockers`: DEFAULT 0 (absent = off). Taking the game's special effects off the body for the driven
-/// rest and giving them back never ran in game, so by default a blocked `self` row is offered only when the game's own talk
-/// condition holds (faithful to Elden Ring). `story.lift_blockers = 1` turns FX5's lifting on to try it.
-pub fn lift_blockers(control: &crate::control::Control) -> bool {
-    control.flag("story.lift_blockers") == Some(true)
 }
 
 /// The body's animations of attuning to and resting at a site of grace (MEASURED IMPL_ER17: 26011 / 68000 touch;
@@ -690,70 +632,42 @@ mod tests {
     /// (IMPL_ER36) THE USER'S SESSION: after the accord the invitation's row held at every new save point of Stormveil and
     /// each got a hidden rest that ended in the game's grace menu. A row of kind `self` never makes a rest by itself.
     #[test]
-    fn a_talk_row_is_never_made_unasked_and_is_offered_once_a_session() {
+    fn a_talk_row_is_never_made_unasked() {
         let mut story = Story::new(default_rules());
-        let k = story.rules.iter().position(|r| r.id == "story.roundtable").unwrap();
         let on = [951, 953, 4680, 10000851, 71002, 71001];
-        // unlocked this session, standing in it, nothing in the way: NO rest, at none of them, however long
         for grace in [10001952u32, 10001951, 10001958, 10001954] {
             story.unlocked(grace);
             assert!((0..120).all(|_| story.frame(ctx(Some(grace)), &flags(&on), false).rest.is_none()), "{grace}");
         }
-        // the menu offers it: she is expected to speak by herself; no entry of the game's menu stands behind it here
-        assert_eq!(story.talk_offer(10001952, &flags(&on), true), Some(Offer { row: "story.roundtable".to_string(), own: Some(k), entry: false, scene: false }));
-        // ... with a talk of the game's own menu ready as well (flag 1042372701: set near that grace), that is the fallback
-        let with_entry = [951, 953, 4680, 10000851, 1042372701];
-        assert_eq!(story.talk_offer(10001952, &flags(&with_entry), true), Some(Offer { row: "story.roundtable".to_string(), own: Some(k), entry: true, scene: false }));
-        // the driven rest brought no talk of hers: not offered again in this session, at no save point
-        story.own_tried(k);
-        assert_eq!(story.talk_offer(10001952, &flags(&on), true), None);
-        assert_eq!(story.talk_offer(10001954, &flags(&on), true), None);
-        // (the menu row is still offered by itself)
-        assert_eq!(story.talk_offer(10001952, &flags(&with_entry), true).map(|o| (o.row, o.own, o.entry)), Some(("story.talk.limgrave_1".to_string(), None, true)));
-        // a death / load: a new session's one offer
-        story.reset();
-        assert!(story.talk_offer(10001952, &flags(&on), true).is_some());
-        // she was heard (10009655) and told to wait: the game's own entry takes over; reached the Hold: nothing
-        assert_eq!(story.talk_offer(10001952, &flags(&[951, 953, 4680, 10000851, 10009655]), true).map(|o| o.row), Some("story.talk.roundtable".to_string()));
-        assert_eq!(story.talk_offer(10001952, &flags(&[951, 953, 4680, 10000851, 10009655, 105]), true), None);
-    }
-
-    #[test]
-    fn the_talk_after_morgott_is_offered_only_in_the_session_he_falls() {
-        let mut story = Story::new(default_rules());
-        let k = story.rules.iter().position(|r| r.id == "story.morgott").expect("the row");
-        let morgott = story.rules[k].rise_any[0];
-        // loaded with the boss long dead: nothing (no flag marks the talk as heard: a dead entry every session otherwise)
-        assert!((0..10).all(|_| story.frame(ctx(Some(ELLEH)), &flags(&[4680, 953, morgott]), false).rest.is_none()));
-        assert_eq!(story.talk_offer(ELLEH, &flags(&[4680, 953, morgott]), true), None);
-        // seen dying in this session: offered (never made unasked)
+        // the talk after Morgott: never unasked either, also in the session he falls
+        let morgott = rule(&story.rules, "story.morgott").rise_any[0];
         let mut live = Story::new(default_rules());
         assert!(live.frame(ctx(None), &flags(&[4680, 953]), false).rest.is_none());
         assert!(live.frame(ctx(None), &flags(&[4680, 953, morgott]), false).log.iter().any(|l| l.contains("TURNED ON")));
         live.unlocked(11001950);
         assert!(live.frame(ctx(Some(11001950)), &flags(&[4680, 953, morgott]), false).rest.is_none());
-        assert_eq!(live.talk_offer(11001950, &flags(&[4680, 953, morgott]), true).and_then(|o| o.own), Some(k));
     }
 
+    /// (MELINA-SUMMON) THE MENU'S "Talk to Melina": her talk where the grace's script has one (talkdrive::talk_for, given),
+    /// the accord's scene where its rest was tried and brought nothing (the driven rest), nothing otherwise.
     #[test]
-    fn the_menu_entry_shows_only_while_the_game_offers_a_talk() {
+    fn the_menu_entry_is_her_summoned_talk_or_the_accords_scene() {
         let mut story = Story::new(default_rules());
-        // an ordinary save point, nothing pending
-        assert_eq!(story.talk_offer(ELLEH, &flags(&[951, 953, 4680]), true), None);
-        // the Forge of the Giants (PARSED: flag 1054532702 = the talk that burns the Erdtree is offered)
-        let forge = story.talk_offer(1054531950, &flags(&[953, 4680, 1054532702]), true).expect("the entry");
-        assert_eq!((forge.row.as_str(), forge.own, forge.entry, forge.scene), ("story.talk.forge_burn", None, true, false));
-        // ... but not where the game's menu cannot hold her entry (the gate: talkdrive::menu_gate said no)
-        assert_eq!(story.talk_offer(1054531950, &flags(&[953, 4680, 1054532702]), false), None);
-        // the accord was refused: she can be asked again (the one entry of hers before it is accepted)
-        assert_eq!(story.talk_offer(ELLEH, &flags(&[951, 953]), true).map(|o| o.row), Some("story.talk.accord_again".to_string()));
-        // an automatic row whose rest was tried here and brought nothing (the game did not rest): its scene can be asked for
+        let talk = crate::talkdrive::Talk::Topic(Some(1054539215));
+        // nothing of hers here: no entry
+        assert_eq!(story.talk_offer(ELLEH, &flags(&[951, 953, 4680]), None), None);
+        // her talk: summoned
+        let forge = story.talk_offer(1054531950, &flags(&[953, 4680, 1054532702]), Some(talk)).expect("the entry");
+        assert_eq!((forge.scene, forge.talk), (false, Some(talk)));
+        assert!(forge.row.contains("1054539215"), "{}", forge.row);
+        assert_eq!(story.talk_offer(ELLEH, &flags(&[951, 953, 4680, 10000851]), Some(crate::talkdrive::Talk::Own)).and_then(|o| o.talk), Some(crate::talkdrive::Talk::Own));
+        // an automatic row whose rest was tried here and brought nothing: its scene (the rest), before any talk
         let on = [76100, 76111];
-        assert_eq!(story.talk_offer(GATEFRONT, &flags(&on), true), None, "before the automatic try: no entry");
+        assert_eq!(story.talk_offer(GATEFRONT, &flags(&on), None), None, "before the automatic try: no entry");
         story.unlocked(GATEFRONT);
         assert!(story.frame(ctx(Some(GATEFRONT)), &flags(&on), false).rest.is_some());
-        assert_eq!(story.talk_offer(GATEFRONT, &flags(&on), true), Some(Offer { row: "story.accord".to_string(), own: None, entry: false, scene: true }));
-        assert_eq!(story.talk_offer(ELLEH, &flags(&on), true), None, "only where it was tried");
+        assert_eq!(story.talk_offer(GATEFRONT, &flags(&on), Some(talk)), Some(Offer { row: "story.accord".to_string(), scene: true, talk: None }));
+        assert_eq!(story.talk_offer(ELLEH, &flags(&on), None), None, "only where it was tried");
         // (the menu rows' flags flip as he walks: nothing of them is logged without story.log)
         let mut quiet = Story::new(default_rules());
         quiet.frame(ctx(None), &flags(&[953, 4680]), false);
@@ -769,58 +683,6 @@ mod tests {
         }
         // the other own actions stay his (remains, the double door)
         assert!(!grace_animation(60071) && !grace_animation(60030) && !grace_animation(0) && !grace_animation(63000));
-    }
-
-    /// (FX5) THE CV3 RUN: every flag of the Roundtable invitation held, the body carried special effect 4270, the menu offered
-    /// "Talk to Melina" and the driven rest brought "NOTHING OF MELINA'S CAME". The talk script tests six effects of the body;
-    /// the offer now holds the whole condition: blocked = not offered, or (story.lift_blockers) offered with the effects to
-    /// take off for the rest. Without any of them nothing changes.
-    #[test]
-    fn fx5_melinas_invitation_is_offered_only_as_the_talk_script_would_have_her_speak() {
-        let story = Story::new(default_rules());
-        let k = story.rules.iter().position(|r| r.id == "story.roundtable").unwrap();
-        assert_eq!(story.rules[k].no_effects, vec![4270, 4271, 4272, 4280, 4282, 4286], "the sheet holds the script's six tests");
-        // the CV3 flags at the grace menu (er_r3_run1b 50.858 s): 951 953 4680 10000851 on, 10009655 off
-        let on = [951, 953, 4680, 10000851];
-        let cv3_body = |id: i32| id == 4270;
-        let clean = |_: i32| false;
-        // a clean body: offered as before, nothing to take off
-        assert_eq!(story.talk_offer_lifting(GATEFRONT, &flags(&on), true, &clean, false), Some((Offer { row: "story.roundtable".to_string(), own: Some(k), entry: false, scene: false }, vec![])));
-        assert_eq!(story.talk_offer(GATEFRONT, &flags(&on), true).map(|o| o.row), Some("story.roundtable".to_string()));
-        // 4270 on the body, lifting off: NOT offered (the game would not have her speak), and said why
-        assert_eq!(story.talk_offer_lifting(GATEFRONT, &flags(&on), true, &cv3_body, false), None);
-        assert_eq!(story.held_by_effects(GATEFRONT, &flags(&on), &cv3_body), vec![("story.roundtable".to_string(), vec![4270])]);
-        // ... lifting on (`story.lift_blockers 1`; (FINAL5) not the default): offered, the rest takes 4270 off
-        assert_eq!(story.talk_offer_lifting(GATEFRONT, &flags(&on), true, &cv3_body, true).map(|(o, l)| (o.row, l)), Some(("story.roundtable".to_string(), vec![4270])));
-        // a game menu entry of hers still stands by itself when the invitation is blocked (lifting off)
-        let with_entry = [951, 953, 4680, 10000851, 1042372701];
-        assert_eq!(story.talk_offer_lifting(10001952, &flags(&with_entry), true, &cv3_body, false).map(|(o, l)| (o.row, o.own, l)), Some(("story.talk.limgrave_1".to_string(), None, vec![])));
-        // the after-Morgott row tests no effect: an effect never holds it back
-        let m = story.rules.iter().position(|r| r.id == "story.morgott").unwrap();
-        assert!(story.rules[m].no_effects.is_empty());
-    }
-
-    /// (FINAL5) the coordinator's decision: lifting is OFF unless the ctl says `story.lift_blockers = 1` (the effects' removal and
-    /// re-application never ran in game); the key stays so 1 can be tried.
-    #[test]
-    fn final5_lifting_the_blockers_is_off_by_default() {
-        let dir = std::env::temp_dir().join(format!("kh-er-final5-lift-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let absent = crate::control::Control::new(dir.join("no-such.ctl"));
-        assert!(!lift_blockers(&absent), "absent key = off");
-        for (text, want) in [("story.lift_blockers = 1
-", true), ("story.lift_blockers=on
-", true), ("story.lift_blockers = 0
-", false), ("# story.lift_blockers = 1
-", false)] {
-            let path = dir.join("t.ctl");
-            std::fs::write(&path, text).unwrap();
-            let mut c = crate::control::Control::new(path.clone());
-            c.poll();
-            assert_eq!(lift_blockers(&c), want, "{text:?}");
-            let _ = std::fs::remove_file(&path);
-        }
-        let _ = std::fs::remove_dir(&dir);
     }
 
     /// (RC, the user 2026-10-20: "Melina cutscenes should play only when you press activate on the save point, not just by

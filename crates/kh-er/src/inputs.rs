@@ -144,7 +144,7 @@ unsafe fn masked(original: usize, index: u32, state: *mut XINPUT_STATE) -> u32 {
     let mut result = original(index, state);
     ALL_CALLS.fetch_add(1, Ordering::Relaxed);
     ER_CALL_AT.store(GetTickCount64(), Ordering::Relaxed);
-    // (IMPL_ER8) THE SCRIPTED PAD (`in.script`, a testing aid) and our own presses (`open_er_system_menu`) as a pad
+    // (IMPL_ER8) THE SCRIPTED PAD (`in.script`, a testing aid) and our own presses (the cutscene skip, the save point's commands) as a pad
     // Elden Ring sees: with no pad connected, slot 0 answers "connected, nothing held" while either is running;
     // the script's sticks and buttons go in BEFORE the mask, exactly as a held pad's would.
     if !state.is_null() && index == 0 {
@@ -195,7 +195,7 @@ unsafe fn masked(original: usize, index: u32, state: *mut XINPUT_STATE) -> u32 {
                 pad.bRightTrigger = 0;
             }
         }
-        // (presses of ours that only Elden Ring is to see: `open_er_system_menu`)
+        // (presses of ours that only Elden Ring is to see: the cutscene skip, the save point's commands)
         let force = FORCE.load(Ordering::Relaxed);
         if force != 0 {
             if GetTickCount64() < FORCE_UNTIL.load(Ordering::Relaxed) {
@@ -429,7 +429,7 @@ pub fn ui_states() -> Option<[u8; 0x46]> {
     }
     Some(out)
 }
-
+// ---------------------------------------------------------------- presses of ours for Elden Ring (never its menu)
 // ---------------------------------------------------------------- Elden Ring's system menu, opened by us
 
 /// Buttons our XInput hook ADDS to what Elden Ring reads, until `FORCE_UNTIL` (GetTickCount64).
@@ -440,30 +440,24 @@ static PAD_SCRIPT: std::sync::Mutex<Vec<(u64, u16)>> = std::sync::Mutex::new(Vec
 static PAD_NEXT_AT: AtomicU64 = AtomicU64::new(0);
 const PRESS_MS: u64 = 120;
 
-/// OPENS ELDEN RING'S SYSTEM MENU (settings, save and quit): the intended caller is the Kingdom
-/// Hearts camp menu's Config entry (a later overlay); `er.sysmenu` of the control file fires it
-/// for testing. HOW: presses that only Elden Ring sees, put into the pad state our XInput hook
-/// hands it: Start (its main menu), D-pad Up (the cursor wraps from Equipment to System, the last
-/// entry), A (OK): the System page, tab "Game Options" (the other tabs: LB / RB there). It needs a
-/// CONNECTED PAD (the hook only edits a state the system returned) and the default menu layout.
-/// No function of the SDK opens a menu; keys sent with SendInput from inside the game were not
-/// seen by it (tried, run 5). Returns false when it cannot be done now.
-pub fn open_er_system_menu(ui: ErUi) -> bool {
-    // (IMPL_ER8: a connected pad, or the testing aid's virtual one: MEASURED, with no pad Elden Ring does not read XInput)
-    if ui.menu || ORIGINAL_GET_STATE.load(Ordering::Relaxed) == 0 || ((0..4).all(|i| xinput_state(i).is_none()) && !vpad_live()) {
-        return false;
-    }
-    let mut script = PAD_SCRIPT.lock().unwrap();
-    if !script.is_empty() {
-        return false;
-    }
-    *script = vec![(450, 0x1000), (800, 0x0001), (0, XI_START)];
-    PAD_NEXT_AT.store(0, Ordering::Relaxed);
-    true
+/// (NO-ER-PAUSE) Elden Ring's own system menu is never opened by us any more (the user 2026-11-09: its pause menu must never
+/// show up): the former `open_er_system_menu` (Start, Up, A pressed for the game) and the `er.sysmenu` one-shot are gone. The
+/// presses below are the game's cutscene skip and the save point's single presses only.
+///
+/// THE KEYBOARD'S Esc AS THE KH MENU KEY (sora.rs: Start, the camp menu / the Pause screen): down now, the game's window in
+/// front, and not the Esc that gave up a button capture of the settings screen (remap_er.rs: such an Esc counts again only
+/// after it was let go).
+pub fn esc_menu() -> bool {
+    // SAFETY: plain getter.
+    let down = game_in_foreground() && (unsafe { GetAsyncKeyState(i32::from(VK_ESCAPE)) } as u16) & 0x8000 != 0;
+    crate::remap_er::esc_counts(down)
 }
 
+/// The Escape key's virtual-key code.
+pub const VK_ESCAPE: u16 = 0x1B;
+
 /// (ZETTA 2026-10-23, zboss.rs) THE GAME'S OWN CUTSCENE SKIP as a player makes it: Menu (Start), then A after 0.7 s,
-/// pressed for Elden Ring through the hook (a pad must be one it reads, as `open_er_system_menu`). False: not pressed.
+/// pressed for Elden Ring through the hook (a pad must be one it reads). False: not pressed.
 pub fn skip_cutscene() -> bool {
     if ORIGINAL_GET_STATE.load(Ordering::Relaxed) == 0 || ((0..4).all(|i| xinput_state(i).is_none()) && !vpad_live()) {
         return false;
@@ -542,7 +536,7 @@ pub fn er_reads_pad() -> bool {
 }
 
 /// (savepoint) ONE PRESS THAT ONLY ELDEN RING SEES: the pad button `buttons` through the pad hook
-/// when the game reads a pad (as `open_er_system_menu` does it), else the key of scan code `scan`
+/// when the game reads a pad (as `skip_cutscene` does it), else the key of scan code `scan`
 /// (SendInput with the scan-code flag, the way er\tools\keys.ps1 does from outside; the game's
 /// window must be the foreground window). Returns how it was sent, or None when neither way is open.
 pub fn press_for_er(buttons: u16, scan: u16) -> Option<&'static str> {

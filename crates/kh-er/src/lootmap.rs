@@ -454,6 +454,9 @@ pub struct LootRules {
     /// (KEYITEM-TUTORIALS) row `goods.tutorial`: Elden Ring's tutorial logs as (goodsType, sortGroupIds); `None` (no row):
     /// none are told apart.
     tutorial_goods: Option<(u8, Vec<u8>)>,
+    /// (SPIRIT-POPUP) row `goods.popup_types`: the goodsType values of the NORMAL inventory that get KH3's OBTAINED popup
+    /// (the spirit ashes, 7 and 8); empty (no row): none but the online items.
+    popup_goods_types: Vec<u8>,
     /// (IMPL_ER42) row `msg.texts`: the message files holding an item's DESCRIPTION (tried in order).
     text_files: HashMap<Cat, Vec<u32>>,
     /// (er30) The base consumable drop: rows `base.*`.
@@ -573,6 +576,7 @@ impl LootRules {
             name_files: HashMap::new(),
             hidden_goods_types: Vec::new(),
             tutorial_goods: None, // (KEYITEM-TUTORIALS)
+            popup_goods_types: Vec::new(), // (SPIRIT-POPUP)
             // (IMPL_ER42) without the sheet row: GoodsCaption (the long text) 24, its DLC file 321, then GoodsInfo (the
             // short line) 20, its DLC file 320. FROM MEMORY of the public FMG lists (10 = GoodsName is proven by the log).
             text_files: HashMap::from([(Cat::Goods, vec![24, 321, 20, 320])]),
@@ -718,6 +722,8 @@ impl LootRules {
                     }
                 }
                 "goods.hidden_types" => out.hidden_goods_types = value.as_array().into_iter().flatten().filter_map(|x| x.as_u64().map(|n| n as u8)).collect(),
+                // (SPIRIT-POPUP) [7, 8]
+                "goods.popup_types" => out.popup_goods_types = value.as_array().into_iter().flatten().filter_map(|x| x.as_u64().map(|n| n as u8)).collect(),
                 // (KEYITEM-TUTORIALS) {"goods_type": 12, "sort_groups": [20]}
                 "goods.tutorial" => match value["goods_type"].as_u64() {
                     Some(t) => out.tutorial_goods = Some((t as u8, value["sort_groups"].as_array().into_iter().flatten().filter_map(|x| x.as_u64().map(|n| n as u8)).collect())),
@@ -905,6 +911,13 @@ impl LootRules {
     /// notes, maps, letters and paintings of the same type have other groups. Derived from the regulation.bin copy.
     pub fn is_tutorial(&self, item: &ErItem) -> bool {
         item.cat == Some(Cat::Goods) && item.known && self.tutorial_goods.as_ref().is_some_and(|(t, groups)| item.goods_type == *t && groups.contains(&item.sort_group))
+    }
+
+    /// (SPIRIT-POPUP, the user 2026-11-08: "spirit ashes need a key item pop up, I didn't get one for the spirit jellyfish
+    /// ashes") A goods row of the normal inventory whose goodsType gets KH3's OBTAINED popup (sheet row `goods.popup_types`:
+    /// the spirit ashes, 7, and the renowned ones, 8).
+    pub fn popup_by_type(&self, item: &ErItem) -> bool {
+        item.cat == Some(Cat::Goods) && item.known && self.popup_goods_types.contains(&item.goods_type)
     }
 
     /// The message files (FMG categories of the game's `MsgRepository`) that hold the names of a table's items.
@@ -2536,14 +2549,14 @@ mod key_items_tab_tests {
             let item = goods(id, 12, 20);
             assert!(rules.is_tutorial(&item), "{name}");
             assert!(!in_key_items_tab(&item, &rules), "{name} is a tutorial log: not on the Key Items tab, and no OBTAINED popup (loot.rs key_item_of)");
-            assert!(!key_item_popup(&item), "{name}: no OBTAINED popup from the normal inventory either");
+            assert!(!key_item_popup(&item, &rules), "{name}: no OBTAINED popup from the normal inventory either");
         }
         // the OBTAINED popup's gate of the key-item inventory (loot.rs key_item_of -> on_key_items_tab) is this list's:
         // a real key item still gets the popup
         for (id, goods_type, sort_group, name) in [(8000, 1, 40, "Stonesword Key"), (8148, 1, 40, "Godrick's Great Rune"), (8162, 1, 60, "Gold Sewing Needle"), (8600, 1, 70, "Map: Limgrave, West"), (2950, 3, 110, "Remembrance of the Grafted")] {
             assert!(in_key_items_tab(&goods(id, goods_type, sort_group), &rules), "{name} still gets KH3's OBTAINED popup");
         }
-        assert!(key_item_popup(&goods(150, 0, 120)), "an online item (Furlcalling Finger Remedy) still gets it from the normal inventory");
+        assert!(key_item_popup(&goods(150, 0, 120), &rules), "an online item (Furlcalling Finger Remedy) still gets it from the normal inventory");
         // what stays: (id, goodsType, sortGroupId, name)
         for (id, goods_type, sort_group, name) in [
             (8000, 1, 40, "Stonesword Key"),
@@ -2597,8 +2610,9 @@ pub fn removed_from_game(item: &ErItem) -> bool {
 /// NORMAL INVENTORY THAT GETS KH3'S OBTAINED POPUP when it comes, as the key items (maps) do: by its category, the online
 /// rule's own test (`online_item`: a goods row of the game's "Multiplayer Items" group, sheet sora-er-shop
 /// `online.sort_groups`), never a row Elden Ring hides. (The key-item inventory's own rows get it already: loot.rs.)
-pub fn key_item_popup(item: &ErItem) -> bool {
-    listed_on_kh_screens(item) && online_item(item, &Ctx::of(Source::Unknown, 0)).is_some()
+/// (SPIRIT-POPUP) Also the goods types of the sheet row `goods.popup_types` (the spirit ashes: [`LootRules::popup_by_type`]).
+pub fn key_item_popup(item: &ErItem, rules: &LootRules) -> bool {
+    listed_on_kh_screens(item) && (online_item(item, &Ctx::of(Source::Unknown, 0)).is_some() || rules.popup_by_type(item))
 }
 
 #[cfg(test)]
@@ -2609,6 +2623,8 @@ mod keypop_tests {
     /// consumable or not) gets the key-item popup; another group, an unknown row or a hidden row never.
     #[test]
     fn keypop_online_items_get_the_key_item_popup() {
+        let rules = LootRules::load();
+        let key_item_popup = |item: &ErItem| key_item_popup(item, &rules);
         let online = |id: u32, consumable: bool| ErItem { cat: Some(Cat::Goods), id, sort_group: 120, consumable, known: true, ..ErItem::default() };
         for (id, consumable) in [(100, true), (101, false), (106, false), (102, true), (8170, false)] {
             assert!(key_item_popup(&online(id, consumable)), "online goods {id}");
@@ -2617,6 +2633,22 @@ mod keypop_tests {
         assert!(!key_item_popup(&ErItem { known: false, ..online(106, false) }), "a row not found");
         assert!(!key_item_popup(&ErItem { hidden: true, ..online(166, false) }), "a row Elden Ring never shows");
         assert!(!key_item_popup(&ErItem { cat: Some(Cat::Weapon), ..online(106, false) }), "goods only");
+    }
+
+    /// (SPIRIT-POPUP, the user 2026-11-08: "spirit ashes need a key item pop up, I didn't get one for the spirit jellyfish
+    /// ashes") Every spirit ash (goodsType 7) and renowned ash (8, the Mimic Tear) of the normal inventory gets KH3's OBTAINED
+    /// popup by the sheet row `goods.popup_types`; another type, a hidden row or an unread row does not.
+    #[test]
+    fn spirit_ashes_get_the_key_item_popup() {
+        let rules = LootRules::load();
+        let ash = |id: u32, goods_type: u8| ErItem { cat: Some(Cat::Goods), id, goods_type, sort_group: 10, known: true, ..ErItem::default() };
+        for (id, goods_type, name) in [(236000, 7, "Spirit Jellyfish Ashes"), (200000, 7, "Lone Wolf Ashes"), (236004, 7, "Spirit Jellyfish Ashes +4"), (207000, 8, "Mimic Tear Ashes")] {
+            assert!(key_item_popup(&ash(id, goods_type), &rules), "{name}");
+        }
+        assert!(!key_item_popup(&ash(1000, 0), &rules), "a Flask of Crimson Tears (goodsType 0): no popup");
+        assert!(!key_item_popup(&ErItem { hidden: true, ..ash(236000, 7) }, &rules), "a row Elden Ring never shows");
+        assert!(!key_item_popup(&ErItem { known: false, ..ash(236000, 7) }, &rules), "a row not read");
+        assert!(!key_item_popup(&ErItem { cat: Some(Cat::Weapon), ..ash(236000, 7) }, &rules), "goods only");
     }
 }
 
@@ -2702,7 +2734,7 @@ mod larval_tear_tests {
         let r = LootRules::parse(SHEET, &kh_items());
         for id in LARVAL_TEARS {
             let t = tear(id);
-            assert!(removed_from_game(&t) && !listed_on_kh_screens(&t) && !key_item_popup(&t), "{id}");
+            assert!(removed_from_game(&t) && !listed_on_kh_screens(&t) && !key_item_popup(&t, &r), "{id}");
             assert!(script_required(&t).is_some(), "{id}: Boc's scripts count it (the keep list names it), and still it is converted");
             match r.shop_line(&t, 1) {
                 (ShopLine::Sell { key, .. }, d) => assert!(key == "MAT_ITEM36" && d.rule == "r2.024.larval_tear", "{id}: {key} {d:?}"),

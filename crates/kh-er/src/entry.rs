@@ -88,6 +88,7 @@ pub unsafe extern "C" fn kh_er_init(dir: *const u16, len: usize, generation: u32
                 return 0;
             }
         }
+        crate::crashrec::install(); // (CONT-CRASH) an exception nobody takes: "!!! crash:" lines + a minidump in the log folder; undone at shutdown
         // The renderer: hooks the swap chain and loads the pack on a thread of its own. (Before
         // frame::init, which hands it the control file's switches.)
         let (pack, _) = crate::sora::data_paths(&root);
@@ -119,6 +120,7 @@ pub unsafe extern "C" fn kh_er_init(dir: *const u16, len: usize, generation: u32
         // Saving only at save points (savegate.rs): the game's save-start functions are detoured; undone with the renderer's hooks.
         crate::savegate::install();
         crate::eroptions::install(); // (CAMP-OPTIONS) the title SYSTEM and the in-game System open our settings screen; undone with the renderer's hooks
+        crate::nopause::install(); // (NO-ER-PAUSE) the popup menu's update: Elden Ring's top menu never opens; undone with the renderer's hooks
         // The game's own pause (pause.rs): the in-game step's update is detoured; undone with the renderer's hooks.
         crate::pause::install();
         crate::reactmark::install(); // (INTERACT-MARK) the action-button region tests and step: what Elden Ring's prompt is about; undone with the renderer's hooks
@@ -177,6 +179,7 @@ pub extern "C" fn kh_er_frame(phase: u32, dt: f32) {
     let _ = catch_unwind(crate::gracelock::release); // (SV)
     let _ = catch_unwind(crate::ertext::release); // (MUNNY-TEXT) Elden Ring's message tables point at its own text again
     let _ = catch_unwind(crate::telescope::release); // (TELESCOPE) the telescopes' rows get their region back
+    let _ = catch_unwind(crate::summonpool::release); // (SUMMON-POOL) the pools' row gets its region back
     let _ = catch_unwind(crate::erkeyui::release); // (HUD2)
     let _ = catch_unwind(crate::dragonmsg::release); // (ER-TWEAKS) the game's event messages all pass again
     let _ = catch_unwind(crate::pause::release); // (IMPL_ER11) our hold on the world is taken back before the hooks go
@@ -190,6 +193,7 @@ pub extern "C" fn kh_er_frame(phase: u32, dt: f32) {
     crate::loot::uninstalled(); // (loot)
     crate::savegate::uninstalled();
     crate::eroptions::uninstalled(); // (CAMP-OPTIONS)
+    crate::nopause::uninstalled(); // (NO-ER-PAUSE)
     crate::titlemusic::uninstalled(); // (TITLE-AUDIO)
     crate::ersound::uninstalled(); // (ER-TWEAKS)
     crate::dragonmsg::uninstalled(); // (ER-TWEAKS)
@@ -232,6 +236,7 @@ pub extern "C" fn kh_er_shutdown() {
     let _ = catch_unwind(crate::gracelock::release); // (SV)
     let _ = catch_unwind(crate::ertext::release); // (MUNNY-TEXT) Elden Ring's message tables point at its own text again
     let _ = catch_unwind(crate::telescope::release); // (TELESCOPE) the telescopes' rows get their region back
+    let _ = catch_unwind(crate::summonpool::release); // (SUMMON-POOL) the pools' row gets its region back
     let _ = catch_unwind(crate::erkeyui::release); // (HUD2)
     let _ = catch_unwind(crate::dragonmsg::release); // (ER-TWEAKS) the game's event messages all pass again
     let _ = catch_unwind(crate::pause::release); // (IMPL_ER11) our hold on the world is taken back before the hooks go
@@ -248,6 +253,7 @@ pub extern "C" fn kh_er_shutdown() {
     crate::loot::uninstalled(); // (loot)
     crate::savegate::uninstalled();
     crate::eroptions::uninstalled(); // (CAMP-OPTIONS)
+    crate::nopause::uninstalled(); // (NO-ER-PAUSE)
     crate::titlemusic::uninstalled(); // (TITLE-AUDIO)
     crate::ersound::uninstalled(); // (ER-TWEAKS)
     crate::dragonmsg::uninstalled(); // (ER-TWEAKS)
@@ -261,6 +267,7 @@ pub extern "C" fn kh_er_shutdown() {
     crate::remo::uninstalled();
     crate::talkkh::uninstalled(); // (CV2)
     crate::spirit::uninstalled(); // (THE USER 2026-11-02: "Summon") the buddy range step and the HUD spirit block
+    crate::crashrec::uninstall(); // (CONT-CRASH) the previous top-level filter back, the dump thread ended
     erlog!("payload shut down");
 }
 

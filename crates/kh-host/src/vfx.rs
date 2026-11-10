@@ -392,6 +392,10 @@ pub struct EffectHost {
     /// (P5) The keyblades' root (None until `load_kb_root`) and the keyblade in his hand (None: the Kingdom Key).
     kb_root: Option<KbRoot>,
     kb: Option<KbFx>,
+    /// (LOADIN) Effect names to parse ahead of their first spawn (`queue_preload`), a few per `preload_step`.
+    preload_queue: std::collections::VecDeque<String>,
+    /// (LOADIN) Every name ever queued (lower case): queued once.
+    preload_seen: HashSet<String>,
     /// (INT) His place, facing and bones as of the step BEFORE the latest (an effect spawned on one of his sockets is
     /// drawn from where that socket was then: `World::set_previous_transform`).
     int_before: Option<(Output, PoseTap)>,
@@ -593,6 +597,8 @@ impl EffectHost {
             xsi_root: None,
             kb_root: None,
             kb: None,
+            preload_queue: std::collections::VecDeque::new(), // (LOADIN)
+            preload_seen: HashSet::new(),
             int_before: None,
             kb_rigs: kbweapon::KbRigs::new(pack_dir.to_path_buf()), // (AUDIT-B F-SHIP)
             right_weapon: None, // (HAIR-PULSE)
@@ -971,6 +977,60 @@ impl EffectHost {
         let line = format!("keyblade effect root {}: {} effects (their own materials and meshes as \"{KB_NAMESPACE}<name>\")", dir.display(), files.len());
         self.kb_root = Some(KbRoot { dir, files, main_materials, main_meshes });
         Ok(line)
+    }
+
+    /// (LOADIN) The keyblades' root's effect files whose (lower-case) names start with `prefix` (e.g. `vw_so030_`: a keyblade's
+    /// own trails, appear / disappear and hit effects), sorted; empty without the root.
+    pub fn kb_files_with_prefix(&self, prefix: &str) -> Vec<String> {
+        let prefix = prefix.to_lowercase();
+        let mut out: Vec<String> = self.kb_root.as_ref().map(|r| r.files.keys().filter(|k| k.starts_with(&prefix)).cloned().collect()).unwrap_or_default();
+        out.sort();
+        out
+    }
+
+    /// (LOADIN) THE SLOTTED KEYBLADES' OWN EFFECTS queued to be parsed ahead of their first spawn (`preload_step`): the hand
+    /// keyblade's `trail`, the names their data spawns (`spawns`: kh-core `keyblade::effect_names`) and every effect of the keyblades'
+    /// root of their base models (`bases`, e.g. `w_so030`: its `vw_so030_*` trails, appear / disappear and hit effects). Their form
+    /// weapons' effects are not among them (they come with the form, as before). Returns how many were queued.
+    pub fn queue_keyblade_effects(&mut self, trail: Option<&str>, spawns: &[String], bases: &[String]) -> usize {
+        let mut names: Vec<String> = trail.iter().map(|t| t.to_string()).chain(spawns.iter().cloned()).collect();
+        for base in bases {
+            names.extend(self.kb_files_with_prefix(&format!("v{base}_")));
+        }
+        self.queue_preload(&names)
+    }
+
+    /// (LOADIN) Names these effects to be parsed ahead of their first spawn (`preload_step`, on the host's own thread, a few at a
+    /// time); a name queued before, or already parsed, is skipped. Returns how many were queued.
+    pub fn queue_preload(&mut self, names: &[String]) -> usize {
+        let mut queued = 0;
+        for name in names {
+            let lower = name.to_lowercase();
+            let parsed = self.tried.contains(name.as_str()) || self.files.get(&lower).is_some_and(|f| self.tried.contains(f)) || self.kb_root.as_ref().and_then(|r| r.files.get(&lower)).is_some_and(|f| self.tried.contains(f));
+            if self.preload_seen.insert(lower) && !parsed {
+                self.preload_queue.push_back(name.clone());
+                queued += 1;
+            }
+        }
+        queued
+    }
+
+    /// (LOADIN) Parses queued effects (`queue_preload`) until `budget` is spent (at least one). Some(how many of this call's were
+    /// found) when the queue became empty in this call: their materials and meshes are then among `assets`, for the renderer to
+    /// make ready before their first spawn. None: nothing was queued, or more remain.
+    pub fn preload_step(&mut self, budget: std::time::Duration) -> Option<usize> {
+        if self.preload_queue.is_empty() {
+            return None;
+        }
+        let started = std::time::Instant::now();
+        let mut known = 0;
+        while let Some(name) = self.preload_queue.pop_front() {
+            known += usize::from(self.ensure(&name).is_some());
+            if started.elapsed() >= budget {
+                break;
+            }
+        }
+        self.preload_queue.is_empty().then_some(known)
     }
 
     /// (P5) The keyblades' root is read.

@@ -339,7 +339,7 @@ pub(crate) unsafe fn msaa_pipelines(device: &ID3D12Device, root: &ID3D12RootSign
                 SampleDesc: DXGI_SAMPLE_DESC { Count: SAMPLES, Quality: 0 },
                 ..Default::default()
             };
-            device.CreateGraphicsPipelineState(&desc).map_err(|e| format!("CreateGraphicsPipelineState(hair 4x {variant}{}): {e}", if write { "" } else { ", thin" }))
+            crate::psocache::create(device, &desc).map_err(|e| format!("CreateGraphicsPipelineState(hair 4x {variant}{}): {e}", if write { "" } else { ", thin" }))
         };
         out.push(Some(HairStates { solid: make(solid, true)?, thin: make(thin, false)?, mark }));
     }

@@ -204,6 +204,14 @@ pub fn armed_slot(name: &str, slot: i32) -> bool {
     dir().is_some_and(|d| marker(&d, &save::character_key(name, slot)).is_file())
 }
 
+/// (CONT-LADDER, slots.rs) The save folder and the character key of `slot` for the running character (`None`: Sora has no
+/// save data in this session).
+pub fn slot_key(slot: i32) -> Option<(PathBuf, String)> {
+    let guard = STATE.lock().ok()?;
+    let state = guard.as_ref()?;
+    Some((state.dir.clone(), save::character_key(&state.name, slot)))
+}
+
 /// (IMPL_ER13) A SAVE INTO A SLOT, Sora's half: (the target key, his state captured when the save was asked for).
 static SLOT_SAVE: Mutex<Option<(String, SoraSave)>> = Mutex::new(None);
 
@@ -420,6 +428,10 @@ pub fn on_start(sora: &mut Sora, root: &Path, loadout_path: &Path, control: &Con
             state.live_at = Some(Instant::now());
             return;
         }
+    }
+    // (CONT-LADDER) A KH LOAD (the character starts from its file, not again in its session): its save's place is armed
+    if !fresh && slot >= 0 {
+        crate::saveplace::on_load(&dir, &key, slot, play_ms);
     }
     erlog!("save: character \"{name}\", Elden Ring save slot {slot}, its play time {:.1} min -> key {key}", play_ms as f64 / 60_000.0);
     let mut writable = true;

@@ -313,6 +313,36 @@ fn erchr_frame(chars: &[(Vec3, f32, f32, u8)], step: u32, finale_at: Option<u32>
     (caps, finale)
 }
 
+/// (P5) The effect side as kh-er sora/kbdraw.rs tells it: the hand keyblade `k`'s trail and sockets, its effects let through; the
+/// core holds it (its own hit effects and sound set: kh-core combat/hit.rs) with `others` slotted after it (KEYBLADE-SWAP:
+/// `--keyblade-at`'s D-pad switches).
+fn tell_keyblade(effects: &mut EffectHost, rig: &mut Rig, k: &kh_er_render::keyblade::Keyblade, others: &[&kh_er_render::keyblade::Keyblade]) {
+    let id_of = |k: &kh_er_render::keyblade::Keyblade| k.keys.first().and_then(|key| kh_core::status::KeybladeId::from_key(key));
+    let trail = id_of(k).and_then(|id| id.effect_name("fx.trail"));
+    let mut allowed: Vec<String> = std::iter::once(k).chain(others.iter().copied()).flat_map(|k| std::iter::once(&k.base).chain(&k.models)).map(|m| format!("v{m}")).collect();
+    // (P2 hitfx) the effect names its data spawns pass the filter as in kh-er sora/kbdraw.rs
+    if let Some(id) = id_of(k) {
+        let keys: Vec<Option<&str>> = std::iter::once(Some(id.key())).chain(others.iter().map(|o| id_of(o).map(|i| i.key()))).take(3).collect();
+        let (slots, _) = kh_core::status::Keyblades::from_keys(&keys, 0, &[]);
+        rig.sora.status_mut().set_keyblades(slots);
+        for id in std::iter::once(id).chain(others.iter().filter_map(|o| id_of(o))) {
+            allowed.extend(kh_core::status::keyblade::effect_names(id).into_iter().map(str::to_lowercase));
+            // (AUDIT-B W-FIN) + the other models' effects its forms spawn, as kh-er sora/kbdraw.rs (kh-core
+            // forms::shared_clip_effects: FINISH_SK's ceiling look vw_so073_fin_fsg0 ...)
+            allowed.extend(kh_core::combat::forms::shared_clip_effects(id.key()));
+        }
+    }
+    effects.set_keyblade(trail, kh_er_render::keyblade::sockets_json(&k.base).as_ref(), &allowed);
+    // (LOADIN) their own effects parsed ahead, as kh-er sora/kbdraw.rs (`--no-kb-ahead`: at their first spawn, as before)
+    if !std::env::args().any(|a| a == "--no-kb-ahead") {
+        let spawns: Vec<String> = std::iter::once(k).chain(others.iter().copied()).filter_map(id_of).flat_map(kh_core::status::keyblade::effect_names).map(str::to_string).collect();
+        let bases: Vec<String> = std::iter::once(k).chain(others.iter().copied()).map(|k| k.base.clone()).filter(|b| b != kh_er_render::keyblade::KINGDOM_KEY).collect();
+        let queued = effects.queue_keyblade_effects(trail, &spawns, &bases);
+        println!("effects: (LOADIN) {queued} effect(s) of the slotted keyblades ({}) parsed ahead of their first spawn", bases.join(", "));
+    }
+    println!("effects: (P5) {} in his hand: trail {trail:?}", k.id);
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let value = |name: &str| args.iter().position(|a| a == name).and_then(|k| args.get(k + 1)).cloned();
@@ -551,6 +581,12 @@ fn main() {
     let started = std::time::Instant::now();
     let registered = effects.preload();
     println!("effects: {}; {registered} effects parsed in {:.1} s", effects.describe(), started.elapsed().as_secs_f32());
+    // (LDI) the save point's five systems parsed with Sora's, as kh-er fx.rs's loader does (named to the renderer below)
+    {
+        let sp = kh_host::savepoint::SavePointData::load(&pack);
+        let known = effects.preload_names(&[sp.base.as_str(), sp.body.as_str(), sp.limit_base.as_str(), sp.limit_body.as_str(), sp.heal.as_str()]);
+        println!("effects: (LDI) the save point's effects preloaded ({known} of 5)");
+    }
     // (ER party S5) `--party-root` (implied by `--party`): the party's second effect root, as kh-er's fx.rs reads it (its own
     // shading table and shaders; its materials / meshes as "party:<name>"); `--party "T WHO ACTION; .."`: Donald and Goofy
     let mut party_rig = value("--party").map(|s| {
@@ -1151,23 +1187,12 @@ fn main() {
         if let Some((first, rest)) = kb_list.split_first() {
             kh_er_render::keyblade::set_equipped(first, &rest.iter().map(String::as_str).collect::<Vec<_>>());
         }
-        let kb_hand_id: Option<String> = kb_list.first().and_then(|k| kh_er_render::keyblade::table()?.keyblade(k).map(|k| k.id.clone())).filter(|id| id != kh_er_render::keyblade::KINGDOM_KEY);
+        let mut kb_hand_id: Option<String> = kb_list.first().and_then(|k| kh_er_render::keyblade::table()?.keyblade(k).map(|k| k.id.clone())).filter(|id| id != kh_er_render::keyblade::KINGDOM_KEY);
         // (P5) the effect side as kh-er sora/kbdraw.rs tells it: the hand keyblade's trail and sockets, its effects let through
+        // (LOADIN) with the slotted ones, as kh-er tells it from the first step (their effects pass and are parsed ahead)
         if let Some(k) = kb_hand_id.as_deref().and_then(|id| kh_er_render::keyblade::table()?.keyblade(id)) {
-            let trail = k.keys.first().and_then(|key| kh_core::status::KeybladeId::from_key(key)).and_then(|id| id.effect_name("fx.trail"));
-            let mut allowed: Vec<String> = std::iter::once(&k.base).chain(&k.models).map(|m| format!("v{m}")).collect();
-            // (P2 hitfx) the core holds the same keyblade (its own hit effects and sound set: kh-core combat/hit.rs), and the effect
-            // names its data spawns pass the filter as in kh-er sora/kbdraw.rs
-            if let Some(id) = k.keys.first().and_then(|key| kh_core::status::KeybladeId::from_key(key)) {
-                let (slots, _) = kh_core::status::Keyblades::from_keys(&[Some(id.key())], 0, &[]);
-                rig.sora.status_mut().set_keyblades(slots);
-                allowed.extend(kh_core::status::keyblade::effect_names(id).into_iter().map(str::to_lowercase));
-                // (AUDIT-B W-FIN) + the other models' effects its forms spawn, as kh-er sora/kbdraw.rs (kh-core
-                // forms::shared_clip_effects: FINISH_SK's ceiling look vw_so073_fin_fsg0 ...)
-                allowed.extend(kh_core::combat::forms::shared_clip_effects(id.key()));
-            }
-            effects.set_keyblade(trail, kh_er_render::keyblade::sockets_json(&k.base).as_ref(), &allowed);
-            println!("effects: (P5) {} in his hand: trail {trail:?}", k.id);
+            let others: Vec<&kh_er_render::keyblade::Keyblade> = kb_list.iter().skip(1).filter_map(|o| kh_er_render::keyblade::table()?.keyblade(o)).collect();
+            tell_keyblade(&mut effects, &mut rig, k, &others);
         }
         kh_er_render::set_options(Options { at: kh_er_render::At::Scene, light: false, jitter: false, velocity: 0, shadow_sun: 0.0, key: sora_dark, ambient: sora_dark, debug: value("--char-debug").and_then(|v| v.parse().ok()).unwrap_or(0.0), ..Options::default() });
         // (IMPL_ER44) `--sora-ambient X`: the ambient share that remains with his own lights (hero and effects)
@@ -1249,6 +1274,10 @@ fn main() {
                 (name, geo, blend)
             })
             .collect();
+        // (LOADIN) `--no-early`: the effects' objects only at the first frame that draws effects (before LOADIN; with `--title`)
+        kh_er_render::vfx::EARLY.store(!flag("--no-early"), std::sync::atomic::Ordering::Relaxed);
+        // (LOADIN) `--early-formats T,D`: made early for these formats instead (other than the frame's: the remake path at the first draw)
+        kh_er_render::vfx::set_expected_formats(value("--early-formats").and_then(|v| v.split_once(',').and_then(|(t, d)| Some((t.trim().parse().ok()?, d.trim().parse().ok()?)))));
         if !flag("--no-preload") {
             kh_er_render::vfx::preload(&materials, &meshes);
             println!("effects: {} materials and {} meshes named for preloading", materials.len(), meshes.len());
@@ -1271,7 +1300,7 @@ fn main() {
         // base model, or `--hero-weapon MODEL` (a form weapon of the table, w_so033 ...: its row's effects at its socket)
         let mut hero_driver = kh_er_render::herolight::Driver::default();
         let hero_model: String = value("--hero-weapon").unwrap_or_else(|| kb_hand_id.as_deref().and_then(|id| kh_er_render::keyblade::table()?.keyblade(id)).map_or_else(|| kh_er_render::herolight::KINGDOM_KEY.to_string(), |k| k.base.clone()));
-        let hero_row = kh_er_render::herolight::weapon(&hero_model);
+        let mut hero_row = kh_er_render::herolight::weapon(&hero_model);
         println!("effects: (HEROLIGHT-KB) the hero light's weapon {hero_model}: {}", hero_row.map_or("NOT IN THE TABLE".to_string(), |w| format!("{} glow {:?} hold {} s, sparkles {:?}, socket {}, tint {:?}", w.effect, w.glow, w.hold, w.spark, w.socket, w.tint)));
         let mut glow_handle: Option<kh_core::EffectHandle> = None;
         // (HEROLIGHT-KB) `--hero-friend donald|goofy` (with `--party "" --party-draw`): that friend leads and carries the light (the
@@ -1322,17 +1351,34 @@ fn main() {
         let mut vfx_peak = 0u128;
         let run_started = std::time::Instant::now();
         let mut warm_done_at = None;
+        let title_secs: Option<f32> = value("--title").and_then(|v| v.parse().ok()); // (LOADIN)
+        let mut title_told = false;
         loop {
             let mut message = MSG::default();
             while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
                 let _ = TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
+            // (LOADIN) the effects queued to be parsed ahead (the slotted keyblades'), ~2 ms a frame, then named to the renderer
+            if effects.preload_step(std::time::Duration::from_millis(2)).is_some() {
+                let (materials, meshes) = effects.assets();
+                let materials: Vec<(String, Geo, kh_vfx::Blend)> = materials.into_iter().map(|(name, geo, blend)| (name, match geo { AssetGeo::Quad => Geo::Quad, AssetGeo::Ribbon => Geo::Ribbon, AssetGeo::Mesh => Geo::Mesh, AssetGeo::Decal => Geo::Decal }, blend)).collect();
+                kh_er_render::vfx::preload(&materials, &meshes);
+                println!("effects: (LOADIN) the effects parsed ahead are named to the renderer ({} materials, {} meshes in all) at {:.1} s", materials.len(), meshes.len(), run_started.elapsed().as_secs_f32());
+            }
+            // (LOADIN) `--title S`: the first S seconds are a TITLE: nothing of ours is drawn (no frame of the scene draws effects),
+            // as the game's title before the first load; then he appears and the warm-up measures what is still being made
+            let title = title_secs.is_some_and(|s| run_started.elapsed().as_secs_f32() < s);
+            if title_secs.is_some() && !title && !title_told {
+                title_told = true;
+                println!("effects: (LOADIN) the title ends after {:.1} s (he appears now): {} effect material(s) / mesh(es) still being made; {}", run_started.elapsed().as_secs_f32(), kh_er_render::vfx::pending().map_or("- (no effect objects yet)".to_string(), |n| n.to_string()), kh_er_render::vfx::build_times());
+            }
             // ---- warm-up: until the effect materials are made (or the limit)
-            let warming = run_started.elapsed().as_secs_f32() < warm_limit && !flag("--no-preload") && kh_er_render::vfx::pending().is_none_or(|n| n > 0) && warm_done_at.is_none();
+            let warming = title || run_started.elapsed().as_secs_f32() < warm_limit && !flag("--no-preload") && kh_er_render::vfx::pending().is_none_or(|n| n > 0) && warm_done_at.is_none();
             if !warming && warm_done_at.is_none() {
                 warm_done_at = Some(run_started.elapsed());
                 println!("effects: warm-up over after {warm} frames, {:.1} s: {} still waiting; {}", run_started.elapsed().as_secs_f32(), kh_er_render::vfx::pending().map_or("-".to_string(), |n| n.to_string()), kh_er_render::vfx::status());
+                println!("effects: (LOADIN) the worker's build: {}", kh_er_render::vfx::build_times()); // (LOADIN)
             }
             if warming {
                 warm += 1;
@@ -2008,12 +2054,40 @@ fn main() {
                     println!("effects: (GPU-VALIDATE) step {step}: outfit -> {id}");
                     kh_er_render::set_outfit(if id == "kh3" { "" } else { &id });
                 }
+                // (KEYBLADE-SWAP) `--keyblade-at STEP:HAND[/SLOT2[/SLOT3]],..`: a D-pad switch (or an equip change) mid-run, as kh-er
+                // sora/kbdraw.rs `equip` tells it: the renderer's equipment, the effect side, the core's slots, the hero light's weapon
+                if let Some(spec) = at_step("--keyblade-at") {
+                    let ids: Vec<&str> = spec.split('/').map(str::trim).filter(|s| !s.is_empty()).collect();
+                    if let Some((first, rest)) = ids.split_first() {
+                        let swap_started = std::time::Instant::now();
+                        kh_er_render::keyblade::set_equipped(first, rest);
+                        let t = kh_er_render::keyblade::table();
+                        let k = t.and_then(|t| t.keyblade(first));
+                        kb_hand_id = k.map(|k| k.id.clone()).filter(|id| id != kh_er_render::keyblade::KINGDOM_KEY);
+                        if let Some(k) = k {
+                            let others: Vec<&kh_er_render::keyblade::Keyblade> = rest.iter().filter_map(|r| t?.keyblade(r)).collect();
+                            tell_keyblade(&mut effects, &mut rig, k, &others);
+                        }
+                        let model = k.map_or_else(|| kh_er_render::herolight::KINGDOM_KEY.to_string(), |k| k.base.clone());
+                        if value("--hero-weapon").is_none() {
+                            hero_row = kh_er_render::herolight::weapon(&model);
+                        }
+                        if flag("--chain") {
+                            keychain = match kb_hand_id.as_deref() {
+                                Some(_) => kh_er_render::keyblade::keychain(&model).and_then(Result::ok),
+                                None => kh_anim::Keychain::load(&pack.join("weapon")).ok(),
+                            };
+                            chain_shown = false;
+                        }
+                        println!("effects: (KEYBLADE-SWAP) step {step}: {spec} -> hand {kb_hand_id:?} ({:.2} ms); {}", swap_started.elapsed().as_secs_f64() * 1000.0, kh_er_render::keyblade::status());
+                    }
+                }
                 if let Some(v) = at_step("--style-at-native") {
                     println!("effects: (GPU-VALIDATE) step {step}: Style native = {v}");
                     kh_er_render::set_hybrid(kh_er_render::hybrid::Settings { native: v == "1", ..kh_er_render::hybrid::settings() });
                 }
             }
-            let cleared = !warming && value("--clear-at").and_then(|v| v.split_once(',').and_then(|(a, b)| Some((a.trim().parse::<usize>().ok()?, b.trim().parse::<usize>().ok()?)))).is_some_and(|(a, b)| (a..b).contains(&step));
+            let cleared = title || !warming && value("--clear-at").and_then(|v| v.split_once(',').and_then(|(a, b)| Some((a.trim().parse::<usize>().ok()?, b.trim().parse::<usize>().ok()?)))).is_some_and(|(a, b)| (a..b).contains(&step));
             if cleared {
                 kh_er_render::clear();
             } else {

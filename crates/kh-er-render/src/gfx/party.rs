@@ -358,6 +358,7 @@ unsafe fn add_model(device: &ID3D12Device, assets: &mut Assets, mesh: &'static s
     };
     assets.models.push(GpuModel {
         mesh,
+        source: std::path::PathBuf::new(),
         vertex_view: D3D12_VERTEX_BUFFER_VIEW { BufferLocation: vertices.GetGPUVirtualAddress(), SizeInBytes: model.vertex_bytes().len() as u32, StrideInBytes: std::mem::size_of::<crate::model::Vertex>() as u32 },
         index_view: D3D12_INDEX_BUFFER_VIEW { BufferLocation: indices.GetGPUVirtualAddress(), SizeInBytes: model.index_bytes().len() as u32, Format: DXGI_FORMAT_R32_UINT },
         _vertices: vertices,
@@ -405,7 +406,7 @@ unsafe fn load_member(device: &ID3D12Device, pack: &Path, chara: u8) -> Result<M
     let hy_read = crate::hybrid::settings().on;
     let shaders = read_shaders(&dir, &library.slots.iter().map(|s| s.variant()).collect::<Vec<_>>())?;
     let queue: ID3D12CommandQueue = device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC { Type: D3D12_COMMAND_LIST_TYPE_DIRECT, ..Default::default() }).map_err(|e| format!("CreateCommandQueue: {e}"))?;
-    let mut assets = Assets::create_full(device, &queue, &dir, library, "", false)?;
+    let mut assets = Assets::create_full(device, &queue, &dir, library, "", false, None)?;
     let mut by_mesh = HashMap::new();
     let mut prop_joint = HashMap::new();
     let mut body = None;

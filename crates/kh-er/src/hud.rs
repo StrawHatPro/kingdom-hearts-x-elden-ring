@@ -9,7 +9,7 @@
 //!   groups); `off` = its own option "HUD: Off" (compass and boss bars go too); `hideall` = the hud_state route (see
 //!   `er_hud_phase`; the map / grace / cutscene are then told by interface elements only: `hud.menu_ui = 28,61,65`);
 //!   1 = its whole HUD stays. While a full-screen menu of Elden Ring is up our overlay fades out (`hud.over_menus = 1`: not).
-//! - `in.kh_menu = 1` (the gameplay side's key): Start reaches the HUD: the camp menu (or the Pause screen in
+//! - Start (and the keyboard's Esc; NO-ER-PAUSE: always, `in.kh_menu` retired) reaches the HUD: the camp menu (or the Pause screen in
 //!   battle). `menu.pause = 1`: Elden Ring's world is frozen while the menu is open (`CSFlipper::game_speed`;
 //!   UNTESTED; `menu.pause_speed`, default 0; a watchdog gives the speed back if our frames stop coming).
 //! - `gameover.kh = 1`: Sora's death shows KH3's game-over menu first; the Tarnished is kept alive and
@@ -1070,7 +1070,7 @@ fn load_step(s: &mut Shared, control: &Control) -> bool {
             false
         }
         Some(Ok((mut hud, fonts))) => {
-            hud.config_external = true;
+            hud.config_external = false; // (NO-ER-PAUSE) the Config entry is ours: never Elden Ring's system menu
             hud.camp_hook = Some(kh_host::menu::pad_camp_hook);
             hud.log = log_line;
             // (Elden Ring has no KH save to load from this menu and no title to go to from here)
@@ -2006,18 +2006,19 @@ let (pressed, nav) = if loading || (ui.menu && !borrowed() && !(cutscene_menu &&
             let asked = crate::savegate::quit_to_title("the camp menu's Title Screen");
             erlog!("ui: the Kingdom Hearts menu's TITLE SCREEN entry, confirmed: {}", if asked { "Elden Ring's title screen is asked for; NOTHING IS SAVED (the last Save at a save point stands)" } else { "the game's title request could not be made" });
         }
-        // The Config entry: Elden Ring's system menu, once our menu has closed (the pad hook presses for us).
+        // (NO-ER-PAUSE, the user 2026-11-09: Elden Ring's pause menu must never show up) the Config entry never opens Elden
+        // Ring's system menu any more (`config_external` stays off, erconfig.rs); should the host still ask for "the host's
+        // settings", OUR settings screen opens once our menu has closed
         if hud.take_system_menu() {
             s.system_menu = Some(now_ms() + 3000);
-            erlog!("ui: the Kingdom Hearts menu's Config entry: Elden Ring's system menu is opened when this menu has closed");
+            erlog!("ui: the Kingdom Hearts menu's Config entry asked for the host's settings: OUR settings screen opens when this menu has closed (never Elden Ring's system menu)");
         }
         if let Some(deadline) = s.system_menu {
             if !hud.paused() {
-                if inputs::open_er_system_menu(ui) {
-                    erlog!("ui: Elden Ring's system menu: Start, Up, A are being pressed for it through the pad hook");
+                if hud.open_camp_settings() {
                     s.system_menu = None;
                 } else if now_ms() > deadline {
-                    erlog!("ui: Elden Ring's system menu could not be opened (a menu of its is up, or no pad is connected)");
+                    erlog!("ui: our settings screen could not be opened (config.tabs = 0: the Config entry's own rows are the settings)");
                     s.system_menu = None;
                 }
             }

@@ -283,10 +283,16 @@ impl Stuck {
 /// Frames on the floor in a row after which a place is one "where he last stood" (a landing on an edge he slides off
 /// in the next frames is not).
 pub const ANCHOR_FRAMES: u32 = 12;
-/// The fall net acts only on a real fall: this far below where he left the floor, cm.
-pub const NET_MIN_DROP: f32 = 300.0;
-/// ... and calls the second fall from the same place his death only this far down, cm.
-pub const NET_DEATH_DROP: f32 = 1000.0;
+/// The fall net acts only on a real fall: this far below where he left the floor, cm. (NETDROP, the user 2026-11-08: "I get
+/// teleported sometimes when I fall off a platform ... This happens in a lot of places") Was 3 m: the user's log put him back
+/// four times from plain drops of 3.2 - 8.2 m onto a lower floor, each during an air move that slows his fall (air dodge,
+/// wall kick, air attack, air spell), while the net's casts saw no ground under him for 1.5 s. A fall out of the world goes
+/// on falling; a drop to a floor the casts miss ends on it first. So 15 m: no platform drop is a put-back, a real fall
+/// through the world still is (and the game's own death zones still kill: deathplane.rs).
+pub const NET_MIN_DROP: f32 = 1500.0;
+/// ... and calls the second fall from the same place his death only this far down, cm (NETDROP: was 10 m, kept above
+/// `NET_MIN_DROP`).
+pub const NET_DEATH_DROP: f32 = 2500.0;
 
 /// Where he last STOOD (for `ANCHOR_FRAMES` in a row) and the height at which he last had a floor at all.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -1025,11 +1031,16 @@ mod tests {
         assert_eq!(net_verdict(9.0, anchor.dropped(stood.z - 3.0), true), NetVerdict::Nothing);
         // an air slide out over a void, higher than where he stood: nothing until he falls
         assert_eq!(net_verdict(2.0, anchor.dropped(stood.z + 237.0), false), NetVerdict::Nothing);
-        // a real fall: put back; again from the same place: nothing until 10 m down, then his death
-        assert_eq!(net_verdict(1.5, anchor.dropped(stood.z - 972.0), false), NetVerdict::PutBack);
-        assert_eq!(net_verdict(1.5, anchor.dropped(stood.z - 400.0), true), NetVerdict::Nothing);
-        assert_eq!(net_verdict(1.5, anchor.dropped(stood.z - 1400.0), true), NetVerdict::Death);
-        assert_eq!(net_verdict(1.0, anchor.dropped(stood.z - 1400.0), true), NetVerdict::Nothing);
+        // (NETDROP, the user's log 2026-11-08: put back from drops of 531 / 824 / 319 / 725 cm onto a lower floor) a
+        // platform drop is no fall out of the world: nothing, however long no ground is seen
+        for drop in [319.0, 531.0, 725.0, 824.0, 1400.0] {
+            assert_eq!(net_verdict(2.5, anchor.dropped(stood.z - drop), false), NetVerdict::Nothing, "a drop of {drop} cm");
+        }
+        // a real fall: put back; again from the same place: nothing until 25 m down, then his death
+        assert_eq!(net_verdict(1.5, anchor.dropped(stood.z - 1972.0), false), NetVerdict::PutBack);
+        assert_eq!(net_verdict(1.5, anchor.dropped(stood.z - 1972.0), true), NetVerdict::Nothing);
+        assert_eq!(net_verdict(1.5, anchor.dropped(stood.z - 2600.0), true), NetVerdict::Death);
+        assert_eq!(net_verdict(1.0, anchor.dropped(stood.z - 2600.0), true), NetVerdict::Nothing);
         // a landing of a few frames on an edge is not a place to go back to; the height he left the floor at is kept
         let mut anchor = Anchor::default();
         for _ in 0..ANCHOR_FRAMES {

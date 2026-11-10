@@ -99,6 +99,10 @@ mod fogwalk; // (ER-TWEAKS) the leader walks through a fog gate with his own wal
 mod freezefx; // (FREEZE-FX) KH3's frozen look on every frozen Elden Ring enemy (the shared route's host half)
 mod herolight; // (HEROLIGHT-KB) the hero light's glow and sparkles on the party leader's weapon, whatever it is
 mod mapwatch; // (IMPL_ER38) the map's requests and outcomes, the game's window focus, the View guard
+mod nopause; // (NO-ER-PAUSE) Elden Ring's in-game top menu refused where the game opens it (the user 2026-11-09)
+#[cfg(windows)]
+mod crashrec; // (CONT-CRASH) an exception nobody takes: its place in the log and a minidump beside it, then on to the game / Windows as before
+mod mapgate; // (MAP-GATE) Elden Ring's own gate on its map read from the game, and its own map request made when that gate keeps refusing
 pub mod loadin; // (LDI) everything in place on the first visible frame after a load (the party held under the loading screen)
 mod guards; // (IMPL_ER23A) press ownership, the fall guard, the stuck detector
 mod grabs; // (GRABS) Elden Ring's grabs on KH characters: KH3's caught sequence, the throw census, the Raya Lucaria Abductor, the lock-on camera's release
@@ -272,6 +276,7 @@ mod gracehide; // (SV) the graces' mound models, found by a memory search, never
 mod gracelock; // (SV) the game's grace actions (Touch grace / Rest) switched off in ActionButtonParam
 mod ertext; // (MUNNY-TEXT) Elden Ring's own text changed in its loaded message tables: the currency runes say munny
 mod telescope; // (TELESCOPE) the game's Birdseye Telescopes switched off in ActionButtonParam (`telescope.er = 1`: the game's own)
+mod summonpool; // (SUMMON-POOL) Elden Ring's summoning pools never activate: their action button's region is nothing (the user 2026-11-10)
 mod erprompt; // (RC) every Y interaction (Elden Ring's prompts, party talks, Save) as KH3's green reaction command
 mod reactmark; // (INTERACT-MARK) KH3's green reaction-target marker on what the first Y interaction is about
 mod talkdrive; // (IMPL_ER36) a story rest driven to its end: the gates, her entry's place, the step machine
@@ -322,6 +327,9 @@ pub mod attackers;
 mod save;
 #[cfg(windows)]
 mod slots;
+// (CONT-LADDER) Continue and Load put the leader at the save point of the save they load (our own record of each KH save)
+#[cfg(windows)]
+mod saveplace;
 #[cfg(windows)]
 mod script;
 // (IMPL_ER12) the title's flow (new game)

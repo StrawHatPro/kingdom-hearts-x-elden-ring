@@ -995,7 +995,8 @@ impl ErLoot {
             *now.entry(entry.item_id.into_inner()).or_default() += entry.quantity.max(1);
         }
         // (KEYPOP, the user 2026-10-27: "also multiplayer items should give the "key item" pop up that maps do") ... and the
-        // NORMAL inventory's goods whose category gets it (the online items: lootmap `key_item_popup`), counted the same way
+        // NORMAL inventory's goods whose category gets it (the online items; (SPIRIT-POPUP) the spirit ashes, sheet row
+        // `goods.popup_types`: lootmap `key_item_popup`), counted the same way
         // (a pickup, a gift or a craft that raises the count comes once; using one does not)
         for entry in data.equipment.equip_inventory_data.items_data.normal_entries().iter().filter_map(|e| e.as_option()) {
             let raw = entry.item_id.into_inner();
@@ -1006,7 +1007,7 @@ impl ErLoot {
                 Some(p) => *p,
                 None => {
                     let item = describe(Cat::Goods, raw & 0x0FFF_FFFF);
-                    let p = crate::lootmap::key_item_popup(&item);
+                    let p = crate::lootmap::key_item_popup(&item, rules());
                     if item.known {
                         self.popup_goods.insert(raw, p); // (a row not readable yet is asked again at the next scan)
                     }

@@ -298,7 +298,7 @@ pub(crate) unsafe fn fringe_pipelines(device: &ID3D12Device, root: &ID3D12RootSi
             SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
             ..Default::default()
         };
-        let state: ID3D12PipelineState = device.CreateGraphicsPipelineState(&desc).map_err(|e| format!("CreateGraphicsPipelineState(hair fringe {variant}{}): {e}", if glow { ", glow mask" } else { "" }))?;
+        let state: ID3D12PipelineState = crate::psocache::create(device, &desc).map_err(|e| format!("CreateGraphicsPipelineState(hair fringe {variant}{}): {e}", if glow { ", glow mask" } else { "" }))?;
         out.push(Some(state));
     }
     Ok(out)

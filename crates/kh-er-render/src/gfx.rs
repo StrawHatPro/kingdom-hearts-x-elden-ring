@@ -243,8 +243,11 @@ struct Draw {
     base_vertex: i32,
 }
 
+#[derive(Clone)] // (KEYBLADE-SWAP) a reload takes a model over (its buffers are shared)
 struct GpuModel {
     mesh: &'static str,
+    /// (KEYBLADE-SWAP) the file it was read from (a reload takes over a model of the same file)
+    source: PathBuf,
     _vertices: ID3D12Resource,
     _indices: ID3D12Resource,
     vertex_view: D3D12_VERTEX_BUFFER_VIEW,
@@ -286,6 +289,13 @@ struct Assets {
     data_bound: usize,
     /// (MIMIC-BOSS hotfix 3, MB3-FORMLEAK) the copies of Sora's own looks (their wear forms) and their descriptor tables (gfx/sora_copy_draw.rs)
     copies: sora_copy_draw::CopyLooks,
+    /// (KEYBLADE-SWAP) what a reload takes over: the reflection cube, the textures by (file, sRGB, mips) with their bytes, the
+    /// leg guard the body was made with; what this one made itself (bytes uploaded, models read)
+    cube: ID3D12Resource,
+    by_key: HashMap<(String, bool, bool), (ID3D12Resource, u64)>,
+    guard: bool,
+    uploaded_bytes: u64,
+    models_new: usize,
 }
 
 #[derive(Default)]
@@ -956,6 +966,12 @@ pub fn worker() {
         if DEAD.load(Ordering::Relaxed) {
             return;
         }
+        // (KEYBLADE-SWAP) what the GPU is past is let go of here, outside every lock of the game's frame (outfit.rs `reap`)
+        let reap_started = Instant::now();
+        let reaped = hook::as_ours(crate::outfit::reap);
+        if reaped > 0 && reap_started.elapsed() > Duration::from_millis(5) {
+            rlog!("render: (KEYBLADE-SWAP) {reaped} retired item(s) let go of on the worker in {:.1} ms", reap_started.elapsed().as_secs_f64() * 1000.0);
+        }
         enum Job {
             Load(ID3D12Device),
             Pipelines(ID3D12Device, ID3D12RootSignature, PsoKey, Vec<(String, bool, bool, bool)>),
@@ -1003,10 +1019,24 @@ pub fn worker() {
         match job {
             Some(Job::Load(device)) => {
                 let started = Instant::now();
+                // (KEYBLADE-SWAP) the pipeline-state cache's generation of this load (psocache.rs)
+                let generation = crate::psocache::next_generation();
                 let outfit = crate::outfit::begin_load();
-                // (P5) the keyblade models this load is for (keyblade.rs: the hand's keyblade whole, the other slots' bases)
+                // (P5) the keyblade models this load is for (keyblade.rs: every slotted keyblade whole)
                 let kb_models = crate::keyblade::begin_load();
                 let kb_changed = kb_models != crate::keyblade::loaded();
+                // (KEYBLADE-SWAP) A KEYBLADE-ONLY RELOAD (an equip change: nothing else of his asked for one): his body, the
+                // Kingdom Key, every texture and mesh the drawn assets have are TAKEN OVER (shared objects), only the keyblade
+                // models' own are made. Any reload takes the textures and the keyblade / form weapon meshes it shares with the
+                // drawn assets over, so no reload ever holds two copies of them while the old assets wait for the GPU fence.
+                let kb_only = kb_changed && !crate::outfit::change_wanted() && !crate::ownset::reload_wanted() && !crate::hair::reload_wanted() && !crate::hybrid::reload_wanted();
+                let (reuse, keys) = {
+                    let guard = CORE.lock().unwrap();
+                    match guard.as_ref().filter(|c| c.assets.is_some()) {
+                        Some(c) => (c.assets.as_ref().map(|a| Reuse::of(a, kb_only && a.guard == crate::outfit::leg_guard_on())), SetKeys::of(c)),
+                        None => (None, SetKeys::default()),
+                    }
+                };
                 // SAFETY: object creation on the game's device from our own thread (free-threaded API).
                 let made = hook::as_ours(|| unsafe {
                     let queue = match &upload_queue {
@@ -1037,16 +1067,35 @@ pub fn worker() {
                     crate::keyblade::add_slots(&mut library, &kb_models);
                     // (ER87) also when `r.hair` was switched since they were read (hair.rs); (P5) or other keyblades came in
                     let fresh = if shaders.is_none() || shaders_for != look || shaders_suffix != suffix || crate::hair::reload_wanted() || crate::hybrid::reload_wanted() || kb_changed { Some(read_shaders(&look, &library, &suffix)?) } else { None };
-                    let assets = Assets::create(&device, &queue, &pack, library, &outfit)?;
+                    let assets = Assets::create_full(&device, &queue, &pack, library, &outfit, true, reuse.as_ref())?;
+                    drop(reuse);
                     // (IMPL_ER59) A SWAP: the frame's pipeline states for the new slots are made HERE, before it, so that he
                     // is not left undrawn while the worker makes them afterwards (a form change wears another outfit)
-                    let swap = CORE.lock().ok().and_then(|g| g.as_ref().filter(|c| c.assets.is_some()).map(|c| (c.root.clone(), [c.wanted, c.wanted_more].into_iter().flatten().collect::<Vec<PsoKey>>())));
-                    let mut sets = Vec::new();
-                    if let (Some((root, keys)), Some(sh)) = (swap, fresh.as_ref().or(shaders.as_ref())) {
+                    // (KEYBLADE-SWAP) and every other set the drawn assets had for the keys in use (the glow mask's, the hair
+                    // fringe's, the 4x hair pass's, the Mimic Tear's): the hand-over is whole, nothing of him goes missing for
+                    // the frames the worker would take; the unchanged states are the cache's (psocache.rs)
+                    let mut sets = MadeSets::default();
+                    if let (Some(root), Some(sh)) = (keys.root.as_ref(), fresh.as_ref().or(shaders.as_ref())) {
                         let slots: Vec<(String, bool, bool, bool)> = assets.library.slots.iter().map(|s| (s.variant(), s.two_sided, s.translucent, s.masked)).collect();
-                        for key in keys {
-                            if let Ok(set) = pipelines(&device, &root, key, &slots, sh) {
-                                sets.push((key, set));
+                        for key in &keys.colour {
+                            if let Ok(set) = pipelines(&device, root, *key, &slots, sh) {
+                                sets.colour.push((*key, set));
+                            }
+                        }
+                        for key in &keys.glow {
+                            if let Ok(set) = glow_pipelines(&device, root, *key, &slots, sh) {
+                                sets.glow.push((*key, set));
+                            }
+                        }
+                        for (key, glow) in &keys.hair {
+                            if let Ok(made) = hair_set(&device, root, *key, *glow, &slots, sh) {
+                                sets.hair.push(((*key, *glow), made));
+                            }
+                        }
+                        let dir = look.join("materials").join("er");
+                        for key in &keys.mimic {
+                            if let Ok(made) = mimic_set(&device, root, *key, &slots, sh, (&dir, &suffix), &pack) {
+                                sets.mimic.push((*key, made));
                             }
                         }
                     }
@@ -1055,7 +1104,7 @@ pub fn worker() {
                 let mut guard = CORE.lock().unwrap();
                 crate::outfit::end_load(&outfit, made.is_ok());
                 crate::keyblade::end_load(&kb_models, made.is_ok()); // (P5)
-                let mut made_sets = Vec::new();
+                let mut made_sets = MadeSets::default();
                 let made = made.map(|(assets, fresh, (look, suffix), sets)| {
                     if let Some(fresh) = fresh {
                         (shaders, shaders_for, shaders_suffix) = (Some(fresh), look, suffix);
@@ -1068,8 +1117,29 @@ pub fn worker() {
                     if core.assets.is_some() {
                         match made {
                             Ok(assets) => {
-                                rlog!("render: OUTFIT {} ready in {:.2} s: {} material slots, {} textures ({} MB)", if outfit.is_empty() { "kh3" } else { &outfit }, started.elapsed().as_secs_f32(), assets.library.slots.len(), assets._textures.len(), assets.texture_bytes / 1_048_576);
-                                if let Some(old) = core.assets.replace(assets) {
+                                let handover = Instant::now();
+                                let line = format!(
+                                    "render: OUTFIT {} ready in {:.2} s{}: {} material slots, {} textures ({} MB, {} MB of them new), {} model(s) ({} new)",
+                                    if outfit.is_empty() { "kh3" } else { &outfit },
+                                    started.elapsed().as_secs_f32(),
+                                    if kb_only { " (KEYBLADE-SWAP: the keyblades only)" } else { "" },
+                                    assets.library.slots.len(),
+                                    assets._textures.len(),
+                                    assets.texture_bytes / 1_048_576,
+                                    assets.uploaded_bytes / 1_048_576,
+                                    assets.models.len(),
+                                    assets.models_new
+                                );
+                                let old = core.assets.replace(assets);
+                                // (KEYBLADE-SWAP) what the frame's later passes carry over from a colour draw of the old assets (his
+                                // velocity, his shadow next frame, the hair fringe at the split) is put on the new assets' models and
+                                // slots, or dropped: they drew the NEW assets' model at the OLD model's index with the old one's skin
+                                // constants (another mesh, another joint count: reads past what was written for it)
+                                let carried = match (old.as_ref(), core.assets.as_ref()) {
+                                    (Some(old), Some(new)) => carry_frame_state(old, new, &mut core.velo, &mut core.cast, &mut core.glow.hair_late, &mut core.prev_skin, &mut core.glow.mimic_prev),
+                                    _ => (0, 0),
+                                };
+                                if let Some(old) = old {
                                     crate::outfit::retire(Box::new(old));
                                 }
                                 // (RSF2 round 8) the views the contact shadows keep in the tables: written again into the new ones
@@ -1090,7 +1160,33 @@ pub fn worker() {
                                 core.glow.mimic_failed.clear();
                                 crate::outfit::retire(Box::new(std::mem::take(&mut core.glow.mimic_form_sets)));
                                 crate::outfit::retire(Box::new(std::mem::take(&mut core.glow.mimic_pool)));
-                                core.pso_sets.extend(made_sets.drain(..));
+                                // (KEYBLADE-SWAP) every set made for the new slots goes in at once
+                                core.pso_sets.extend(made_sets.colour.drain(..));
+                                core.glow.sets.extend(made_sets.glow.drain(..));
+                                for (key, (set, msaa)) in made_sets.hair.drain(..) {
+                                    core.glow.hair_sets.insert(key, set);
+                                    if let Some(m) = msaa {
+                                        core.glow.hair_msaa.insert(key.0, m);
+                                    }
+                                }
+                                for (key, (set, form, pool)) in made_sets.mimic.drain(..) {
+                                    core.glow.mimic_sets.insert(key, set);
+                                    core.glow.mimic_form_sets.insert(key, form);
+                                    core.glow.mimic_pool.insert(key, pool);
+                                }
+                                let pruned = crate::psocache::prune(generation);
+                                let (made_states, taken_states, held) = (pruned.made, pruned.taken, pruned.held);
+                                crate::outfit::retire(Box::new(pruned.let_go));
+                                rlog!(
+                                    "{line}; pipeline states: {made_states} made, {taken_states} taken over ({held} held); sets handed over: {} colour, {} glow, {} hair, {} mimic; frame state carried {} / dropped {}; hand-over {:.3} ms",
+                                    core.pso_sets.len(),
+                                    core.glow.sets.len(),
+                                    core.glow.hair_sets.len(),
+                                    core.glow.mimic_sets.len(),
+                                    carried.0,
+                                    carried.1,
+                                    handover.elapsed().as_secs_f64() * 1000.0
+                                );
                             }
                             Err(e) => rlog!("render: OUTFIT {outfit} could not be made ready ({e}): the drawn one stays"),
                         }
@@ -1127,11 +1223,14 @@ pub fn worker() {
                 };
                 let mut guard = CORE.lock().unwrap();
                 if let Some(core) = guard.as_mut() {
+                    // (KEYBLADE-SWAP) a set for other slots (a reload came in meanwhile) is dropped: the worker makes it again
+                    let same = core.assets.as_ref().is_some_and(|a| a.library.slots.len() == slots.len());
                     match made {
-                        Ok(set) => {
+                        Ok(set) if same => {
                             rlog!("render: {} pipeline states for {key:?} in {:.2} s", set.len(), started.elapsed().as_secs_f32());
                             core.pso_sets.insert(key, set);
                         }
+                        Ok(_) => {}
                         Err(e) => {
                             rlog!("render: pipeline states for {key:?} failed ({e}): nothing is drawn with them");
                             core.pso_failed.push(key);
@@ -1167,25 +1266,7 @@ pub fn worker() {
                 let started = Instant::now();
                 let made = match shaders.as_ref() {
                     // SAFETY: as above.
-                    Some(shaders) => hook::as_ours(|| unsafe {
-                        let elements = layout();
-                        let k = crate::hair::Target { format: key.target, depth: key.depth, front_ccw: key.front_ccw, cull: key.cull, alpha: key.alpha };
-                        let inputs = crate::hair::Inputs { slots: &slots, vertex: &shaders.vertex, elements: &elements };
-                        let set = crate::hair::fringe_pipelines(&device, &root, k, glow, inputs, &shaders.fringe)?;
-                        // (ER91) with the colour set, the 4x hair pass's (a failure there leaves the fringe as before)
-                        let msaa = if glow || shaders.msaa.is_empty() {
-                            None
-                        } else {
-                            match crate::hair91::msaa_pipelines(&device, &root, k, inputs, &shaders.msaa, &shaders.pixel) {
-                                Ok(m) => Some(m),
-                                Err(e) => {
-                                    rlog!("render: (ER91) the 4x hair pass's states for {key:?} failed ({e}): the fringe as before");
-                                    None
-                                }
-                            }
-                        };
-                        Ok::<_, String>((set, msaa))
-                    }),
+                    Some(shaders) => hook::as_ours(|| unsafe { hair_set(&device, &root, key, glow, &slots, shaders) }),
                     None => Err("no shaders".to_string()),
                 };
                 let mut guard = CORE.lock().unwrap();
@@ -1213,17 +1294,7 @@ pub fn worker() {
                 let dir = shaders_for.join("materials").join("er");
                 let made = match shaders.as_ref() {
                     // SAFETY: as above.
-                    // (with them: his forming writers and the pool's state, THE USER 2026-11-03's arrival and dissolve; not fatal)
-                    Some(shaders) if crate::hybrid::SHADERS.load(Ordering::Relaxed) => hook::as_ours(|| unsafe {
-                        let set = mimic_draw::pipelines(&device, &root, key, &slots, &shaders.vertex, &dir, &shaders_suffix)?;
-                        let form = mimic_draw::form_pipelines(&device, &root, key, &slots, &shaders.vertex, &dir, &shaders_suffix).unwrap_or_else(|e| {
-                            rlog!("render: (MIMIC SORA) his forming writers: {e}: his arrival / dissolve is not drawn (he appears whole)");
-                            Vec::new()
-                        });
-                        let pool = mimic_draw::pool_pipeline(&device, &root, key, &pack.join("materials").join("er")).map_err(|e| rlog!("render: (MIMIC SORA) the liquid pool: {e}: no pool is drawn")).ok();
-                        Ok::<_, String>((set, form, pool))
-                    }),
-                    Some(_) => Err("the hybrid's *_hy3 / *_gb3 sets are not in use (r.hybrid = 0): the mimic is drawn only through the game's G-buffer".to_string()),
+                    Some(shaders) => hook::as_ours(|| unsafe { mimic_set(&device, &root, key, &slots, shaders, (&dir, &shaders_suffix), &pack) }),
                     None => Err("no shaders".to_string()),
                 };
                 let mut guard = CORE.lock().unwrap();
@@ -1265,6 +1336,176 @@ pub fn worker() {
             }
         }
     }
+}
+
+/// (KEYBLADE-SWAP) What a reload takes over from the drawn assets instead of making it again: shared objects (the old assets
+/// keep their references until the GPU fence lets them go), so no reload holds two copies of a texture or mesh.
+struct Reuse {
+    /// the textures by (file, sRGB, mips), with their bytes
+    textures: HashMap<(String, bool, bool), (ID3D12Resource, u64)>,
+    white: ID3D12Resource,
+    cube: ID3D12Resource,
+    /// the models: the file each was read from, the model, its draws' material names (put on the new library's slots)
+    models: Vec<(PathBuf, GpuModel, Vec<String>)>,
+    /// his body and the Kingdom Key are taken over too (a keyblade-only reload: the same outfit and leg guard)
+    body: bool,
+}
+
+impl Reuse {
+    fn of(a: &Assets, body: bool) -> Reuse {
+        let models = a.models.iter().map(|m| (m.source.clone(), m.clone(), m.draws.iter().map(|d| a.library.slots.get(d.slot).map(|s| s.slot.clone()).unwrap_or_default()).collect())).collect();
+        Reuse { textures: a.by_key.clone(), white: a.white.clone(), cube: a.cube.clone(), models, body }
+    }
+
+    /// A model read from `file` before, its draws put on the slots of `library` (None: not there, its body is not to be
+    /// taken over, or a slot of it is missing).
+    fn model(&self, file: &Path, mesh: &str, library: &Library) -> Option<GpuModel> {
+        if !self.body && (mesh == "sora" || mesh == "kingdom_key") {
+            return None;
+        }
+        let (_, m, names) = self.models.iter().find(|(f, m, _)| f == file && m.mesh == mesh)?;
+        let draws = m.draws.iter().zip(names).map(|(d, name)| library.slots.iter().position(|s| s.mesh == mesh && s.slot == *name).map(|slot| Draw { slot, ..*d })).collect::<Option<Vec<Draw>>>()?;
+        Some(GpuModel { draws, ..m.clone() })
+    }
+}
+
+/// (KEYBLADE-SWAP) The keys of the sets a reload makes before its hand-over: the frame's and the portrait's (`wanted`,
+/// `wanted_more`), the glow mask's, the hair fringe's of those, the Mimic Tear's of the frame's key; each only when the drawn
+/// assets had it (what the worker would make right after the hand-over anyway).
+#[derive(Default)]
+struct SetKeys {
+    root: Option<ID3D12RootSignature>,
+    colour: Vec<PsoKey>,
+    glow: Vec<PsoKey>,
+    hair: Vec<(PsoKey, bool)>,
+    mimic: Vec<PsoKey>,
+}
+
+impl SetKeys {
+    fn of(c: &Core) -> SetKeys {
+        let colour: Vec<PsoKey> = [c.wanted, c.wanted_more].into_iter().flatten().collect();
+        let glow: Vec<PsoKey> = c.glow.wanted.into_iter().filter(|k| c.glow.sets.contains_key(k)).collect();
+        let hair = c.glow.hair_sets.keys().copied().filter(|(k, g)| if *g { glow.contains(k) } else { colour.contains(k) }).collect();
+        let mimic = c.wanted.into_iter().filter(|k| c.glow.mimic_sets.contains_key(k)).collect();
+        SetKeys { root: Some(c.root.clone()), colour, glow, hair, mimic }
+    }
+}
+
+/// (ER87, ER91) A hair fringe's set and (colour only) the 4x hair pass's.
+type HairSet = (Vec<Option<ID3D12PipelineState>>, Option<Vec<Option<crate::hair91::HairStates>>>);
+/// (MIMIC SORA) The Mimic Tear's writers, his forming writers, the pool's state.
+type MimicSet = (Vec<Option<ID3D12PipelineState>>, Vec<Option<ID3D12PipelineState>>, Option<ID3D12PipelineState>);
+
+/// (KEYBLADE-SWAP) The sets a reload made for its new slots.
+#[derive(Default)]
+struct MadeSets {
+    colour: Vec<(PsoKey, Vec<ID3D12PipelineState>)>,
+    glow: Vec<(PsoKey, Vec<ID3D12PipelineState>)>,
+    hair: Vec<((PsoKey, bool), HairSet)>,
+    mimic: Vec<(PsoKey, MimicSet)>,
+}
+
+/// (ER87) The hair fringe's states for `key` (`glow`: the glow mask's), with the colour set the 4x hair pass's (a failure there
+/// leaves the fringe as before). (Cut out of the worker's job: a reload makes it before its hand-over too.)
+///
+/// # Safety
+/// Object creation on `device` (free-threaded).
+unsafe fn hair_set(device: &ID3D12Device, root: &ID3D12RootSignature, key: PsoKey, glow: bool, slots: &[(String, bool, bool, bool)], shaders: &Shaders) -> Result<HairSet, String> {
+    let elements = layout();
+    let k = crate::hair::Target { format: key.target, depth: key.depth, front_ccw: key.front_ccw, cull: key.cull, alpha: key.alpha };
+    let inputs = crate::hair::Inputs { slots, vertex: &shaders.vertex, elements: &elements };
+    let set = crate::hair::fringe_pipelines(device, root, k, glow, inputs, &shaders.fringe)?;
+    let msaa = if glow || shaders.msaa.is_empty() {
+        None
+    } else {
+        match crate::hair91::msaa_pipelines(device, root, k, inputs, &shaders.msaa, &shaders.pixel) {
+            Ok(m) => Some(m),
+            Err(e) => {
+                rlog!("render: (ER91) the 4x hair pass's states for {key:?} failed ({e}): the fringe as before");
+                None
+            }
+        }
+    };
+    Ok((set, msaa))
+}
+
+/// (MIMIC SORA) The Mimic Tear's writers for `key` from the outfit's folder `dir` and its suffix, his forming writers and the
+/// liquid pool's state (THE USER 2026-11-03's arrival and dissolve; those two are not fatal). (Cut out of the worker's job.)
+///
+/// # Safety
+/// Object creation on `device` (free-threaded).
+unsafe fn mimic_set(device: &ID3D12Device, root: &ID3D12RootSignature, key: PsoKey, slots: &[(String, bool, bool, bool)], shaders: &Shaders, (dir, suffix): (&Path, &str), pack: &Path) -> Result<MimicSet, String> {
+    if !crate::hybrid::SHADERS.load(Ordering::Relaxed) {
+        return Err("the hybrid's *_hy3 / *_gb3 sets are not in use (r.hybrid = 0): the mimic is drawn only through the game's G-buffer".to_string());
+    }
+    let set = mimic_draw::pipelines(device, root, key, slots, &shaders.vertex, dir, suffix)?;
+    let form = mimic_draw::form_pipelines(device, root, key, slots, &shaders.vertex, dir, suffix).unwrap_or_else(|e| {
+        rlog!("render: (MIMIC SORA) his forming writers: {e}: his arrival / dissolve is not drawn (he appears whole)");
+        Vec::new()
+    });
+    let pool = mimic_draw::pool_pipeline(device, root, key, &pack.join("materials").join("er")).map_err(|e| rlog!("render: (MIMIC SORA) the liquid pool: {e}: no pool is drawn")).ok();
+    Ok((set, form, pool))
+}
+
+/// (KEYBLADE-SWAP) What makes a model of a reload's assets the same model as one of the drawn assets: its mesh, the file it was
+/// read from, its joints and its buffers' sizes.
+#[derive(Clone, Debug, PartialEq)]
+struct ModelSig {
+    mesh: &'static str,
+    source: PathBuf,
+    joints: usize,
+    sizes: (u32, u32),
+}
+
+/// (KEYBLADE-SWAP) Each old entry's index among the new ones (the first equal one), None when the new ones have none.
+fn index_map<T: PartialEq>(old: &[T], new: &[T]) -> Vec<Option<usize>> {
+    old.iter().map(|o| new.iter().position(|n| n == o)).collect()
+}
+
+/// (KEYBLADE-SWAP) THE HAND-OVER OF A RELOAD: what the frame's later passes carry over from a colour draw of the OLD assets (his
+/// motion vectors at the velocity pass, his shadow from the frame's constants at the next frame's cast pass, the hair fringe at
+/// the split, the skins of the frame before) is put on the new assets' models and slots by their mesh and material, or dropped
+/// when the new assets have no such model (another mesh, another joint count or another buffer: the same file read again has the
+/// same). (They indexed the new assets' models with the old indices: another model's draws with the old one's skin constants,
+/// reading joint matrices past what the colour draw wrote for it.) Returns (entries carried, entries dropped).
+fn carry_frame_state(old: &Assets, new: &Assets, velo: &mut Option<VeloFrame>, cast: &mut Option<(VeloFrame, Instant)>, hair: &mut Option<HairLate>, prev_skin: &mut Vec<(Vec<f32>, u64, Trs)>, mimic_prev: &mut HashMap<(usize, usize), (Vec<f32>, u64, Trs)>) -> (usize, usize) {
+    let sig = |a: &Assets| a.models.iter().map(|m| ModelSig { mesh: m.mesh, source: m.source.clone(), joints: m.joint_bones.len(), sizes: (m.vertex_view.SizeInBytes, m.index_view.SizeInBytes) }).collect::<Vec<_>>();
+    let model_map = index_map(&sig(old), &sig(new));
+    let slot_key = |a: &Assets| a.library.slots.iter().map(|s| (s.mesh.clone(), s.slot.clone())).collect::<Vec<_>>();
+    let slot_map = index_map(&slot_key(old), &slot_key(new));
+    let model = |i: usize| model_map.get(i).copied().flatten();
+    let (mut kept, mut dropped) = (0usize, 0usize);
+    let mut skins = |frame: &mut VeloFrame| {
+        let before = frame.skins.len();
+        frame.skins = frame.skins.iter().filter_map(|(i, now, earlier)| model(*i).map(|j| (j, *now, *earlier))).collect();
+        kept += frame.skins.len();
+        dropped += before - frame.skins.len();
+    };
+    if let Some(v) = velo.as_mut() {
+        skins(v);
+    }
+    if let Some((v, _)) = cast.as_mut() {
+        skins(v);
+    }
+    if let Some(h) = hair.as_mut() {
+        for list in [&mut h.draws, &mut h.translucent] {
+            let before = list.len();
+            *list = list.iter().filter_map(|d| Some((slot_map.get(d.0).copied().flatten()?, model(d.1)?, d.2, d.3, d.4, d.5, d.6, d.7))).collect();
+            kept += list.len();
+            dropped += before - list.len();
+        }
+    }
+    // (the skins of the frame before: body 0, weapon 1, then 2 + the model's index; the Mimic Tear's by (mimic, model))
+    let mut carried = vec![(Vec::new(), 0, Trs::IDENTITY); (2 + new.models.len()).max(prev_skin.len().min(2))];
+    for (k, entry) in std::mem::take(prev_skin).into_iter().enumerate() {
+        let to = if k < 2 { Some(k) } else { model(k - 2).map(|j| 2 + j) };
+        if let Some(to) = to.filter(|t| *t < carried.len()) {
+            carried[to] = entry;
+        }
+    }
+    *prev_skin = carried;
+    *mimic_prev = std::mem::take(mimic_prev).into_iter().filter_map(|((mimic, i), v)| Some(((mimic, model(i)?), v))).collect();
+    (kept, dropped)
 }
 
 /// The vertex layout of `model::Vertex` (the shader's inputs are LOC0..LOC7).
@@ -1337,7 +1578,7 @@ unsafe fn pipelines(device: &ID3D12Device, root: &ID3D12RootSignature, key: PsoK
             SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
             ..Default::default()
         };
-        let state: ID3D12PipelineState = device.CreateGraphicsPipelineState(&desc).map_err(|e| format!("CreateGraphicsPipelineState({variant}): {e}"))?;
+        let state: ID3D12PipelineState = crate::psocache::create(device, &desc).map_err(|e| format!("CreateGraphicsPipelineState({variant}): {e}"))?;
         out.push(state);
     }
     // The contact shadow, after the slots' states: one triangle, no depth, the target multiplied.
@@ -1372,7 +1613,7 @@ unsafe fn pipelines(device: &ID3D12Device, root: &ID3D12RootSignature, key: PsoK
             SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
             ..Default::default()
         };
-        let state: ID3D12PipelineState = device.CreateGraphicsPipelineState(&desc).map_err(|e| format!("CreateGraphicsPipelineState(blob): {e}"))?;
+        let state: ID3D12PipelineState = crate::psocache::create(device, &desc).map_err(|e| format!("CreateGraphicsPipelineState(blob): {e}"))?;
         out.push(state);
         // His motion vectors, after the contact shadow's state: the same vertex shader, the
         // game's velocity format, only where the colour pass left his depth (EQUAL, no write).
@@ -1397,7 +1638,7 @@ unsafe fn pipelines(device: &ID3D12Device, root: &ID3D12RootSignature, key: PsoK
                 SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
                 ..Default::default()
             };
-            let state: ID3D12PipelineState = device.CreateGraphicsPipelineState(&desc).map_err(|e| format!("CreateGraphicsPipelineState(velocity): {e}"))?;
+            let state: ID3D12PipelineState = crate::psocache::create(device, &desc).map_err(|e| format!("CreateGraphicsPipelineState(velocity): {e}"))?;
             out.push(state);
             // (ER88) the same with the own-record vertex shader (taa.rs; not fatal, kept beside the set)
             // (RSF) Sora's sets only: a party set's velocity description with Sora's skin_v88 is not a valid pair (the log's
@@ -1444,7 +1685,7 @@ unsafe fn pipelines(device: &ID3D12Device, root: &ID3D12RootSignature, key: PsoK
                     SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
                     ..Default::default()
                 };
-                match device.CreateGraphicsPipelineState::<ID3D12PipelineState>(&desc) {
+                match crate::psocache::create(device, &desc) {
                     Ok(state) => early.push(state),
                     Err(e) => {
                         early_failed = Some(format!("CreateGraphicsPipelineState(early depth): {e}"));
@@ -1506,7 +1747,7 @@ unsafe fn pipelines(device: &ID3D12Device, root: &ID3D12RootSignature, key: PsoK
                         SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
                         ..Default::default()
                     };
-                    match device.CreateGraphicsPipelineState::<ID3D12PipelineState>(&desc) {
+                    match crate::psocache::create(device, &desc) {
                         Ok(state) => gb.push(state),
                         Err(e) => {
                             gb_failed = Some(format!("CreateGraphicsPipelineState(G-buffer {variant}): {e}"));
@@ -1607,7 +1848,7 @@ unsafe fn glow_pipelines(device: &ID3D12Device, root: &ID3D12RootSignature, key:
             SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
             ..Default::default()
         };
-        let state: ID3D12PipelineState = device.CreateGraphicsPipelineState(&desc).map_err(|e| format!("CreateGraphicsPipelineState(glow mask {variant}): {e}"))?;
+        let state: ID3D12PipelineState = crate::psocache::create(device, &desc).map_err(|e| format!("CreateGraphicsPipelineState(glow mask {variant}): {e}"))?;
         out.push(state);
     }
     Ok(out)
@@ -2021,13 +2262,10 @@ pub(crate) fn ground_stencil(taps: &[u8]) -> Option<u8> {
 }
 
 impl Assets {
-    unsafe fn create(device: &ID3D12Device, queue: &ID3D12CommandQueue, pack: &Path, library: Library, outfit: &str) -> Result<Assets, String> {
-        Self::create_full(device, queue, pack, library, outfit, true)
-    }
-
     /// (ER party S4) `sora` = false: a party library (gfx/party.rs): its textures and tables as Sora's, no models of Sora's
     /// (the caller adds its own), its skeleton (`pack/manifest.json`) when it has one.
-    unsafe fn create_full(device: &ID3D12Device, queue: &ID3D12CommandQueue, pack: &Path, library: Library, outfit: &str, sora: bool) -> Result<Assets, String> {
+    /// (KEYBLADE-SWAP) `reuse`: the drawn assets' textures and models, taken over instead of read and uploaded again.
+    unsafe fn create_full(device: &ID3D12Device, queue: &ID3D12CommandQueue, pack: &Path, library: Library, outfit: &str, sora: bool, reuse: Option<&Reuse>) -> Result<Assets, String> {
         let text = |what: &str, e: windows::core::Error| format!("{what}: {e}");
         // ---- the skeletons (bone names in the order the host's poses come in)
         let skeleton_of = |manifest: &Path| -> Result<kh_anim::Skeleton, String> {
@@ -2109,7 +2347,10 @@ impl Assets {
         };
 
         // ---- the textures of the pack, each once
-        let white = make(1, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, &[(0, 1, 1)], &[255, 255, 255, 255], 4, 0)?;
+        let white = match reuse {
+            Some(r) => r.white.clone(),
+            None => make(1, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, &[(0, 1, 1)], &[255, 255, 255, 255], 4, 0)?,
+        };
         let mut wanted: Vec<kh_look::library::TextureRef> = Vec::new();
         for t in library.slots.iter().flat_map(|s| s.textures.iter().flatten()) {
             if !wanted.iter().any(|w| w.file == t.file) {
@@ -2126,6 +2367,22 @@ impl Assets {
             if !wanted.iter().any(|w| w.file == file) {
                 wanted.push(kh_look::library::TextureRef { file, srgb, mips: false });
             }
+        }
+        // (KEYBLADE-SWAP) the drawn assets' textures of the same file, sRGB and mips are taken over (shared), the rest is read
+        let mut by_file: HashMap<String, ID3D12Resource> = HashMap::new();
+        let mut by_key: HashMap<(String, bool, bool), (ID3D12Resource, u64)> = HashMap::new();
+        let mut taken_bytes = 0u64;
+        if let Some(r) = reuse {
+            wanted.retain(|t| match r.textures.get(&(t.file.clone(), t.srgb, t.mips)) {
+                Some((texture, bytes)) => {
+                    textures.push(texture.clone());
+                    by_file.insert(t.file.clone(), texture.clone());
+                    by_key.insert((t.file.clone(), t.srgb, t.mips), (texture.clone(), *bytes));
+                    taken_bytes += bytes;
+                    false
+                }
+                None => true,
+            });
         }
         // Decoding on a few threads, uploading here.
         let dir = library.dir.clone();
@@ -2153,7 +2410,13 @@ impl Assets {
             let jobs: Vec<_> = wanted.chunks(wanted.len().div_ceil(6).max(1)).map(|chunk| { let load = &load; scope.spawn(move || chunk.iter().map(|t| (t.clone(), load(t))).collect::<Vec<_>>()) }).collect();
             jobs.into_iter().flat_map(|j| j.join().unwrap_or_default()).collect()
         });
-        let mut by_file: HashMap<String, ID3D12Resource> = HashMap::new();
+        // (KEYBLADE-SWAP) a texture's bytes as uploaded (its footprint), for what a later reload takes over
+        let footprint = |t: &ID3D12Resource| {
+            let desc = t.GetDesc();
+            let mut total = 0u64;
+            device.GetCopyableFootprints(&desc, 0, u32::from(desc.MipLevels) * u32::from(desc.DepthOrArraySize), 0, None, None, None, Some(&mut total));
+            total
+        };
         let mut compressed = 0u32;
         for (t, loaded) in decoded {
             match loaded {
@@ -2161,12 +2424,14 @@ impl Assets {
                     let format = if t.srgb { DXGI_FORMAT_R8G8B8A8_UNORM_SRGB } else { DXGI_FORMAT_R8G8B8A8_UNORM };
                     let texture = make(p.width, p.height, 1, format, &p.mips, &p.data, 4, 0)?;
                     textures.push(texture.clone());
-                    by_file.insert(t.file.clone(), texture);
+                    by_file.insert(t.file.clone(), texture.clone());
+                    by_key.insert((t.file.clone(), t.srgb, t.mips), (texture.clone(), footprint(&texture)));
                 }
                 Ok(Loaded::Blocks(b)) => {
                     let texture = make(b.width, b.height, 1, DXGI_FORMAT(b.format), &b.mips, &b.data, 0, b.block_bytes)?;
                     textures.push(texture.clone());
-                    by_file.insert(t.file.clone(), texture);
+                    by_file.insert(t.file.clone(), texture.clone());
+                    by_key.insert((t.file.clone(), t.srgb, t.mips), (texture.clone(), footprint(&texture)));
                     compressed += 1;
                 }
                 Err(e) => rlog!("render: WARNING: texture not read ({e}): white is used"),
@@ -2184,7 +2449,13 @@ impl Assets {
                 offset += (n * n * 8) as usize;
             }
         }
-        let cube = make(kh_look::ENV_SIZE, kh_look::ENV_SIZE, 6, DXGI_FORMAT_R16G16B16A16_FLOAT, &cube_levels, &cube_data, 8, 0)?;
+        let cube = match reuse {
+            Some(r) => r.cube.clone(),
+            None => make(kh_look::ENV_SIZE, kh_look::ENV_SIZE, 6, DXGI_FORMAT_R16G16B16A16_FLOAT, &cube_levels, &cube_data, 8, 0)?,
+        };
+        let uploaded_bytes = texture_bytes;
+        texture_bytes += taken_bytes;
+        let mut models_new = 0usize;
 
         // ---- the descriptor table of every slot
         // (MIMIC-BOSS hotfix 3, MB3-FORMLEAK) + the copies' own tables (copy_wear.rs TablePool), after the slots' and the three above
@@ -2234,7 +2505,7 @@ impl Assets {
             device.CreateShaderResourceView(&cube, Some(&cube_view), at(CUBE_TEXTURE));
         }
         textures.push(white.clone());
-        textures.push(cube);
+        textures.push(cube.clone());
 
         // ---- the models
         let mut models = Vec::new();
@@ -2253,6 +2524,12 @@ impl Assets {
                 rlog!("render: no skeleton for {mesh}: not drawn");
                 continue;
             };
+            // (KEYBLADE-SWAP) the drawn one, on a keyblade-only reload
+            if let Some(m) = reuse.and_then(|r| r.model(&file, mesh, &library)) {
+                models.push(m);
+                continue;
+            }
+            models_new += 1;
             let model = Model::load(&file)?;
             let room = if mesh == "sora" && outfit_retarget.is_some() { MAX_JOINTS_OUTFIT } else { MAX_JOINTS };
             if model.joints.len() > room {
@@ -2277,6 +2554,7 @@ impl Assets {
             }
             models.push(GpuModel {
                 mesh,
+                source: file.clone(),
                 vertex_view: D3D12_VERTEX_BUFFER_VIEW { BufferLocation: vertices.GetGPUVirtualAddress(), SizeInBytes: model.vertex_bytes().len() as u32, StrideInBytes: std::mem::size_of::<crate::model::Vertex>() as u32 },
                 index_view: D3D12_INDEX_BUFFER_VIEW { BufferLocation: indices.GetGPUVirtualAddress(), SizeInBytes: model.index_bytes().len() as u32, Format: DXGI_FORMAT_R32_UINT },
                 _vertices: vertices,
@@ -2292,6 +2570,11 @@ impl Assets {
         // `FrameInput::forms`: (XW) skinned on their own skeleton (the joints' bones, its reference pose; the host hands the
         // clip's pose); ER90's table: their bind pose (every joint's matrix the identity)
         for form in crate::xsiweapon::table().map(|t| t.models.as_slice()).unwrap_or(&[]).iter().filter(|m| sora && library.slots.iter().any(|s| s.mesh == m.mesh)) {
+            if let Some(m) = reuse.and_then(|r| r.model(&form.glb, &form.mesh, &library)) {
+                models.push(m);
+                continue;
+            }
+            models_new += 1;
             let model = match Model::load(&form.glb) {
                 Ok(m) => m,
                 Err(e) => {
@@ -2311,6 +2594,7 @@ impl Assets {
             }
             models.push(GpuModel {
                 mesh: form.mesh.as_str(),
+                source: form.glb.clone(),
                 vertex_view: D3D12_VERTEX_BUFFER_VIEW { BufferLocation: vertices.GetGPUVirtualAddress(), SizeInBytes: model.vertex_bytes().len() as u32, StrideInBytes: std::mem::size_of::<crate::model::Vertex>() as u32 },
                 index_view: D3D12_INDEX_BUFFER_VIEW { BufferLocation: indices.GetGPUVirtualAddress(), SizeInBytes: model.index_bytes().len() as u32, Format: DXGI_FORMAT_R32_UINT },
                 _vertices: vertices,
@@ -2329,6 +2613,12 @@ impl Assets {
         // skeletons (the host's keychain pose of that skeleton for the hand's keyblade, a form part's clip pose, else the
         // reference pose)
         for kb in crate::keyblade::models_in(&library).into_iter().filter(|_| sora) {
+            // (KEYBLADE-SWAP) a keyblade model the drawn assets have: taken over (its buffers shared)
+            if let Some(m) = reuse.and_then(|r| r.model(&kb.glb, &kb.mesh, &library)) {
+                models.push(m);
+                continue;
+            }
+            models_new += 1;
             let model = match Model::load(&kb.glb) {
                 Ok(m) => m,
                 Err(e) => {
@@ -2348,6 +2638,7 @@ impl Assets {
             }
             models.push(GpuModel {
                 mesh: kb.mesh.as_str(),
+                source: kb.glb.clone(),
                 vertex_view: D3D12_VERTEX_BUFFER_VIEW { BufferLocation: vertices.GetGPUVirtualAddress(), SizeInBytes: model.vertex_bytes().len() as u32, StrideInBytes: std::mem::size_of::<crate::model::Vertex>() as u32 },
                 index_view: D3D12_INDEX_BUFFER_VIEW { BufferLocation: indices.GetGPUVirtualAddress(), SizeInBytes: model.index_bytes().len() as u32, Format: DXGI_FORMAT_R32_UINT },
                 _vertices: vertices,
@@ -2362,7 +2653,7 @@ impl Assets {
                 retarget: None,
             });
         }
-        Ok(Assets { library, srv_heap, srv_size, white: white.clone(), _textures: textures, by_file, wear_clock: None, models, bones, khs: None, texture_bytes, hy_bound: [0; 2], data_bound: 0, copies })
+        Ok(Assets { library, srv_heap, srv_size, white: white.clone(), _textures: textures, by_file, wear_clock: None, models, bones, khs: None, texture_bytes, hy_bound: [0; 2], data_bound: 0, copies, cube, by_key, guard: crate::outfit::leg_guard_on(), uploaded_bytes, models_new })
     }
 }
 
@@ -5921,9 +6212,11 @@ fn drop_core(core: Option<Core>) {
         if core.fence.GetCompletedValue() < core.fence_value && core.device.GetDeviceRemovedReason().is_ok() {
             rlog!("render: the GPU did not finish our frames within 10 s: our objects are left alive (not freed under work in flight)");
             std::mem::forget(core);
+            crate::psocache::forget_all(); // (KEYBLADE-SWAP) its states likewise
             return;
         }
         crate::outfit::release_all();
+        crate::psocache::clear(); // (KEYBLADE-SWAP)
         for slot in &core.slots {
             slot.upload.Unmap(0, None);
         }
@@ -7338,6 +7631,21 @@ pub fn status() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// (KEYBLADE-SWAP) an equip change puts other keyblade models between his body and the rest: the frame's carried entries
+    /// follow their own model to its new index; a model the new assets lack, or another file / joint count of the same mesh
+    /// (another outfit's body), maps to none (its entry is dropped, never drawn with another model's skin)
+    #[test]
+    fn a_reload_maps_each_model_to_its_own_index() {
+        let m = |mesh: &'static str, file: &str, joints: usize| ModelSig { mesh, source: PathBuf::from(file), joints, sizes: (100 * joints as u32, 30) };
+        let old = [m("sora", "model.glb", 194), m("kingdom_key", "kk.glb", 7), m("kb:w_so030", "w_so030.glb", 9), m("kb:w_so031", "w_so031.glb", 20), m("kb:w_so080", "w_so080.glb", 12)];
+        let new = [m("sora", "model.glb", 194), m("kingdom_key", "kk.glb", 7), m("kb:w_so070", "w_so070.glb", 5), m("kb:w_so080", "w_so080.glb", 12)];
+        assert_eq!(index_map(&old, &new), [Some(0), Some(1), None, None, Some(3)]);
+        // another outfit's body: the same mesh name, another file and joint count
+        assert_eq!(index_map(&[m("sora", "outfits/kh1/model.glb", 120)], &new), [None]);
+        let slots = |v: &[(&str, &str)]| v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect::<Vec<_>>();
+        assert_eq!(index_map(&slots(&[("sora", "body"), ("kb:w_so031", "m0"), ("kb:w_so080", "m0")]), &slots(&[("sora", "body"), ("kb:w_so080", "m0")])), [Some(0), None, Some(1)]);
+    }
 
     /// (GPU-VALIDATE) whole-depth barriers name only the planes the format has
     #[test]

@@ -707,8 +707,11 @@ pub fn save_to_slot(n: usize, sora: &Sora, why: &str) -> Result<(), &'static str
     // (an outcome nobody took, e.g. of the testing aid `dbg.save`, is not this save's)
     let _ = crate::savegate::take_saved();
     crate::save::slot_save_begin(sora, n as i32)?;
+    // (CONT-LADDER) the body's place (the save point) into the game's saved place and our record of this save
+    crate::saveplace::before_save(n as i32);
     if !crate::savegate::request_save_slot(n as i32, why) {
         crate::save::slot_save_finish(false);
+        crate::saveplace::after_save(false);
         return Err("the game could not be asked to save");
     }
     ops.saving = Some(Saving { slot: n, from, at: Instant::now() });
@@ -735,18 +738,21 @@ pub fn take_save_result() -> Option<Result<usize, (usize, &'static str)>> {
 /// Once a frame (FRAME_BEGIN, after `savegate::frame`): the save under way is followed to its end.
 pub fn frame() {
     tombstone_frame(); // (SV)
+    crate::saveplace::frame(); // (CONT-LADDER) a KH load's arrival at its save's place
     let Ok(mut ops) = OPS.lock() else { return };
     let Some(saving) = ops.saving.as_ref() else { return };
     let (slot, from, seconds) = (saving.slot, saving.from, saving.at.elapsed().as_secs_f32());
     let outcome = match crate::savegate::take_saved() {
         Some(true) => {
             let sora_written = crate::save::slot_save_finish(true);
+            crate::saveplace::after_save(true); // (CONT-LADDER) the place record of this save
             let listed = raw_slots().0[slot].used;
             erlog!("slots: SLOT {slot} SAVED in {seconds:.2} s: the game's slot is written{}; Sora's file {}", if listed { " and its profile summary lists it" } else { " BUT ITS PROFILE SUMMARY DOES NOT LIST IT" }, if sora_written { "is written with it" } else { "could NOT be written" });
             if sora_written { Ok(slot) } else { Err((slot, "the game saved, but Sora's file could not be written")) }
         }
         Some(false) => {
             crate::save::slot_save_finish(false);
+            crate::saveplace::after_save(false);
             crate::savegate::set_slot(from);
             erlog!("slots: SLOT {slot} WAS NOT SAVED (the game did not save in 20 s): its current slot is {from} again; nothing of Sora's was written");
             Err((slot, "the game did not save"))

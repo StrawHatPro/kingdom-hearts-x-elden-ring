@@ -55,11 +55,14 @@
 //! game's REAL rest is made for the body under a black cover and Sora does not take the body's pose: nothing of the
 //! attuning or the sitting is seen; the scene / Melina's talk that follows is the game's. The menu shows "Talk to
 //! Melina" only while a row says the game offers a talk.
-//! (IMPL_ER36, the user: "The Talk to Melina option in the save point menu should just talk to Melina and thats it,
-//! not open grace menu") EVERY STORY REST IS DRIVEN TO ITS END (talkdrive.rs): the game's grace menu is never shown and
-//! never left to the player: her entry is selected for him under the cover, the cover is off while she speaks, and
-//! when the game's menu comes back it is covered at once and the rest is left (B, until the body stands). Only the
-//! accord is made unasked. Keys: `story.menu.ups` (the cursor steps, default derived), `story.diag = 0` (no flag line).
+//! (MELINA-SUMMON, the user 2026-11-08: "Talk to Melina needs to just straight up make Melina appear and talk, using the
+//! same logic for her dialogue but skipping having to access a grace menu behind the scenes all together") "TALK TO
+//! MELINA" SUMMONS HER (talkdrive.rs `Summon`, `melina_step`): no cover, no rest, no grace menu, Sora never sits. The
+//! grace's own commands run on the grace's own talk object (talkkh/hooks.rs `grace_talk` / `run_on`): command 128 (she
+//! appears beside him, as at a rest), the flags its script sets, then her own talk script; command 129 and the flags
+//! cleared when her talk is over. The entry shows where the grace's script has a talk of hers (talkdrive::talk_for).
+//! Only the accord's rest is still the game's real rest, driven under the cover (its scene needs it); nothing selects
+//! anything in the grace menu. Only the accord is made unasked. Key: `story.diag = 0` (no flag line).
 //! | `savepoint.guard` | 2.0 | m around a save point within which a prompt of Elden Ring's cannot be answered with Y (NOT MEASURED: how far out the game offers its rest; the line `!!! savepoint: THE GAME'S OWN REST STARTED WITHOUT US` names the distance when it was too small) |
 //!
 //! HOW THE GAME IS ASKED: there is no function for "rest" or "open the map" in the SDK: the press
@@ -101,7 +104,7 @@ use crate::game::plausible;
 use crate::inputs::{self, ErUi};
 use crate::savepoint_rules::{CtrlSnapshot, Ground, RestEvents, Unlock, UnlockStep, YIn};
 use crate::story::{Blocked, Ctx, Offer, Story};
-use crate::talkdrive::{self, Act, Drive, End, Goal, Seen};
+use crate::talkdrive::{self, Act, Drive, End, Near, Order, Seen, Summon, Talk};
 use crate::targets::ErTargets;
 use crate::word;
 
@@ -189,15 +192,13 @@ enum WorldAsk {
     Respawn,
 }
 
-/// (IMPL_ER33) A rest made for a story event (story.rs): the row (`None` = the menu's "Talk to Melina"), the save point,
-/// the cover's stage.
+/// (IMPL_ER33) A rest made for the accord's scene (story.rs): the row (`None` = the menu's "Talk to Melina" asking for
+/// its scene again), the save point, the cover's stage.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct StoryRest {
     rule: Option<usize>,
-    /// (IMPL_ER36) The row of kind `self` this rest is for (not offered again in the session when she does not speak).
-    own: Option<usize>,
     grace: u32,
-    /// The whole rest, driven (talkdrive.rs).
+    /// The whole rest, driven (talkdrive.rs `Drive`).
     drive: Drive,
     cover: bool,
     /// The popup's talk id while the rest was being asked for (a 3000 left over from an earlier talk is no new talk),
@@ -208,6 +209,17 @@ struct StoryRest {
     /// no new talk: MEASURED, it stays 3000 after her talk until the next window).
     id_left: bool,
     presses: u8,
+}
+
+/// (MELINA-SUMMON) "Talk to Melina" under way: the save point, its grace character's handle (the grace's talk object is
+/// found by it), the summon (talkdrive.rs).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MelinaCall {
+    grace: u32,
+    handle: u64,
+    summon: Summon,
+    /// (MELINA-RT2) her x80's wait as the query detour last reported it (talkdrive.rs `Hurry`), for the log's edges.
+    hurry: talkdrive::Hurry,
 }
 
 /// The game's rest state (its Lua event flags 4079 / 4083 / 4084 and the bonfire of the rest).
@@ -284,16 +296,13 @@ pub struct ErSavePoints {
     story_probe: bool,
     menu_shown: GraceMenu,
     sit_pose: bool,
-    /// (IMPL_ER36) What the open menu's "Talk to Melina" stands for; the player's own pad is kept from the game this
-    /// frame (only our presses reach its menu).
+    /// What the open menu's "Talk to Melina" stands for; the player's own pad is kept from the game this frame (only our
+    /// B reaches its menu while the accord's rest is left).
     talk_offer: Option<Offer>,
     pad_mask: bool,
-    /// (FX5) The body's special effects the open menu's "Talk to Melina" takes off for its rest (`Story::talk_offer_lifting`), and
-    /// the blocked rows last told (the log).
-    talk_lift: Vec<i32>,
-    held_told: Vec<(String, Vec<i32>)>,
-    /// (FX5) The special effects the running driven rest took off the body (given back when it ends).
-    rest_lifted: Vec<i32>,
+    /// (MELINA-SUMMON) "Talk to Melina" under way; why the entry was last not offered (said once).
+    melina: Option<MelinaCall>,
+    melina_told: Option<String>,
     /// (CV3 round 4) the leader's fight and life (sora.rs `set_leader`; None: Sora's own)
     leader: Option<(bool, bool)>,
     /// (IMPL_ER52) Sheet rows `savepoint.ground_*`; the sheet's `collision.floor_layer` (Sora's second cast).
@@ -375,28 +384,9 @@ fn body_has(player: &PlayerIns, id: i32) -> bool {
     player.chr_ins.special_effect.entries().take(128).any(|e| e.param_id == id)
 }
 
-/// (FX5) Takes the special effects `ids` off the body (`back` false) or gives them back (`back` true) through the game's
-/// own functions (the SDK's `ChrInsExt::remove_speffect` / `apply_speffect`, its 2.7.1.0 RVAs 0x3ee2e0 / 0x3e8dc0; the
-/// apply RVA is the one status.rs finds by pattern). Taking off: only those on the body. Returns the ids acted on.
-/// UNTESTED IN THE GAME.
-fn lift_effects(ids: &[i32], back: bool) -> Vec<i32> {
-    use eldenring::cs::ChrInsExt;
-    let Some(player) = crate::game::player_mut() else { return Vec::new() };
-    let mut done = Vec::new();
-    for &id in ids {
-        if back {
-            player.chr_ins.apply_speffect(id, false);
-            done.push(id);
-        } else if body_has(player, id) {
-            player.chr_ins.remove_speffect(id);
-            done.push(id);
-        }
-    }
-    done
-}
-
-/// (FX5) For the log: what the game's SpEffectParam rows of `ids` say (duration, state info), to tell what keeps her silent.
+/// (FX5) For the log: what the game's SpEffectParam rows of `ids` say (duration, state info), to tell what keeps her away.
 fn effect_facts(ids: &[i32]) -> String {
+    // SAFETY: game thread; the singleton lives as long as the game; the SDK checks its holder table.
     let Ok(repo) = (unsafe { SoloParamRepository::instance() }) else { return String::new() };
     let rows: Vec<String> = ids
         .iter()
@@ -409,6 +399,11 @@ fn effect_facts(ids: &[i32]) -> String {
 }
 
 fn set_flag(flag: u32) -> bool {
+    write_flag(flag, true)
+}
+
+/// (MELINA-SUMMON) An event flag set or cleared as the talk scripts do (the SDK's own writer). False: no flag manager.
+fn write_flag(flag: u32, on: bool) -> bool {
     if flag == 0 {
         return false;
     }
@@ -418,7 +413,7 @@ fn set_flag(flag: u32) -> bool {
     if man.virtual_memory_flag.flag_blocks.is_null() {
         return false;
     }
-    man.virtual_memory_flag.set_flag(flag, true);
+    man.virtual_memory_flag.set_flag(flag, on);
     true
 }
 
@@ -472,7 +467,7 @@ const STAND: u32 = 1 << 8;
 
 impl ErSavePoints {
     pub fn new(pack: &std::path::Path, control: &Control, sfx: u8) -> ErSavePoints {
-        ErSavePoints { combat: crate::guards::CombatHide::default(), sfx, data: SavePointData::load(pack), points: Vec::new(), on: false, at: None, flow: Flow::Idle, y_before: false, rest: Rest::default(), resting: false, lua_shot: OneShot::new("dbg.lua", control), seconds: 0.0, check_in: 0.0, healed: 0, healing: false, glow: String::new(), told_on: None, offered: false, saving: false, known: Vec::new(), rest_rule: true, sit: false, autounlock: true, save_at: None, saved_at: None, save_status: None, rested: Vec::new(), roundtable: None, rest_for: None, world_reset: false, ctrl_told: None, menu_at: None, story: Story::new(crate::story::default_rules()), story_rest: None, story_probe: false, menu_shown: GraceMenu::DEFAULT, sit_pose: false, talk_offer: None, pad_mask: false, ground: Ground::DEFAULT, floor_layer: 0, cast_layer: 2 /* (WALLS) */, talk_lift: Vec::new(), held_told: Vec::new(), rest_lifted: Vec::new(), leader: None /* (CV3) */, sounds: Vec::new() /* (SP2) */, load_in: Default::default() /* (LDI) */ }
+        ErSavePoints { combat: crate::guards::CombatHide::default(), sfx, data: SavePointData::load(pack), points: Vec::new(), on: false, at: None, flow: Flow::Idle, y_before: false, rest: Rest::default(), resting: false, lua_shot: OneShot::new("dbg.lua", control), seconds: 0.0, check_in: 0.0, healed: 0, healing: false, glow: String::new(), told_on: None, offered: false, saving: false, known: Vec::new(), rest_rule: true, sit: false, autounlock: true, save_at: None, saved_at: None, save_status: None, rested: Vec::new(), roundtable: None, rest_for: None, world_reset: false, ctrl_told: None, menu_at: None, story: Story::new(crate::story::default_rules()), story_rest: None, story_probe: false, menu_shown: GraceMenu::DEFAULT, sit_pose: false, talk_offer: None, pad_mask: false, ground: Ground::DEFAULT, floor_layer: 0, cast_layer: 2 /* (WALLS) */, melina: None, melina_told: None, leader: None /* (CV3) */, sounds: Vec::new() /* (SP2) */, load_in: Default::default() /* (LDI) */ }
     }
 
     /// (IMPL_ER52) The sheet's rows `savepoint.ground_*` (sora.rs passes ermap's `Params::ground`).
@@ -509,14 +504,14 @@ impl ErSavePoints {
         }
     }
 
-    /// (IMPL_ER36, sora.rs asks) A story rest is under way and the body rests: the pad is the game's (Melina's talk,
-    /// her choice boxes), Sora gets none.
+    /// (IMPL_ER36, sora.rs asks) Melina's talk is under way (the accord's rest with the body resting, or her summoned
+    /// talk): the pad is the game's (her talk, her choice boxes), Sora gets none.
     pub fn holds_pad(&self) -> bool {
-        self.story_rest.is_some_and(|sr| sr.drive.holds_pad())
+        self.story_rest.is_some_and(|sr| sr.drive.holds_pad()) || self.melina.is_some_and(|m| m.summon.holds_pad())
     }
 
-    /// (IMPL_ER36, sora.rs asks) Under the cover the game's menu is being worked for the player: his own pad is kept
-    /// from the game (a stick held down would move the cursor we count on).
+    /// (IMPL_ER36, sora.rs asks) Under the cover the accord's rest is being left for the player (B until he stands): his
+    /// own pad is kept from the game meanwhile.
     pub fn masks_pad(&self) -> bool {
         self.pad_mask
     }
@@ -565,7 +560,7 @@ impl ErSavePoints {
 
     /// The menu's command is being carried out by the game: the pad is the game's meanwhile.
     pub fn busy(&self) -> bool {
-        self.flow != Flow::Idle || self.story_rest.is_some()
+        self.flow != Flow::Idle || self.story_rest.is_some() || self.melina.is_some()
     }
 
     /// ONCE PER GAME FRAME (`ChrIns_PrePhysics`, after the targets were read and Elden Ring's
@@ -634,6 +629,7 @@ impl ErSavePoints {
         }
         if !self.on {
             self.release(true);
+            crate::travel::hold_for_talk(false); // (MELINA-4270b) no save points, no talk of theirs
             self.offered = false;
             PROMPT.store(false, std::sync::atomic::Ordering::Relaxed); // (SP2)
             self.y_before = y_held;
@@ -886,7 +882,7 @@ impl ErSavePoints {
             let blocked = Blocked {
                 cutscene: ui.cutscene,
                 menu: ui.menu || crate::hud::menu_open(),
-                busy: self.flow != Flow::Idle || self.story_rest.is_some() || self.saving || self.resting || self.saved_at.is_some(),
+                busy: self.flow != Flow::Idle || self.story_rest.is_some() || self.melina.is_some() || self.saving || self.resting || self.saved_at.is_some(),
                 no_rest: !(prompt && here.is_some_and(|p| p.allowed || !self.rest_rule)),
                 in_air: !on_floor,
                 dead: !self.leader.map_or(sora.status().hp > 0, |l| l.1), // (CV3) the leader's life
@@ -904,10 +900,11 @@ impl ErSavePoints {
                 erlog!("story: {line}");
             }
             if let Some((rule, grace)) = decision.rest {
-                self.story_rest = Some(StoryRest { rule: Some(rule), own: None, grace, drive: Drive::new(Goal { scene: true, own: false, ups: None }), cover: control.flag("story.cover") != Some(false), id_before: 0, talk_flag_off: false, id_left: false, presses: 0 });
+                self.story_rest = Some(StoryRest { rule: Some(rule), grace, drive: Drive::new(), cover: control.flag("story.cover") != Some(false), id_before: 0, talk_flag_off: false, id_left: false, presses: 0 });
             }
         }
         self.story_step(control, player, ui, dt);
+        self.melina_step(player, dt);
         // (DON-UI) B on the Party Formation screen: back to this menu (the user's rule, B = the previous menu)
         crate::hud::reopen_after_formation(self.menu_shown);
         // ---- the menu's answer
@@ -958,26 +955,21 @@ impl ErSavePoints {
                     erlog!("savepoint: SITE OF GRACE chosen ({refilled} pouch slot(s) refilled; savepoint.sit = 1): the game's own rest and grace menu");
                     self.flow = Flow::Rest { close: false, stage: 0, since: 0.0, tries: 0 };
                 }
-                // (IMPL_ER36) TALK TO MELINA: "just talk to Melina and that's it": the driven rest (talkdrive.rs)
+                // TALK TO MELINA: (MELINA-SUMMON) she is summoned and talks (talkdrive.rs `Summon`); the accord's scene alone
+                // (an automatic row whose rest was tried here) is still the driven rest (its scene needs the game's rest)
                 Some(GraceAction::Talk) => match (self.menu_at, self.talk_offer.take()) {
-                    (Some(grace), Some(offer)) => {
-                        let ups = offer.entry.then(|| talkdrive::entry_ups(&flag_set, control.i64("story.menu.ups").map(|n| n.clamp(1, 20) as u8)));
-                        let goal = Goal { scene: offer.scene, own: offer.own.is_some(), ups };
-                        erlog!("story: TALK TO MELINA chosen at save point {grace} (row {}; {refilled} pouch slot(s) refilled): THE DRIVEN REST: black cover, the game's rest for the body, {}; the cover is off while she speaks; the game's grace menu is never shown, the rest is left for the player at the end", offer.row, match (goal.scene, goal.own, goal.ups) {
-                            (true, ..) => "the event's scene is expected".to_string(),
-                            (_, true, Some(n)) => format!("she is expected to speak by herself, else her entry of the game's menu is selected ({n} x up from the top, confirm)"),
-                            (_, true, None) => "she is expected to speak by herself (the game's menu holds no entry of hers now)".to_string(),
-                            (_, false, Some(n)) => format!("her entry of the game's menu is selected ({n} x up from the top, confirm)"),
-                            (_, false, None) => "nothing is expected".to_string(),
-                        });
-                        // (FX5) the effects that keep her silent come off the body for this rest (given back at its end)
-                        let lifted = lift_effects(&std::mem::take(&mut self.talk_lift), false);
-                        if !lifted.is_empty() {
-                            erlog!("story: (FX5) the body's special effects {lifted:?} are taken off for Melina's talk (the talk script tests them); they are given back when the rest ends");
-                        }
-                        self.story_rest = Some(StoryRest { rule: None, own: offer.own, grace, drive: Drive::new(goal), cover: control.flag("story.cover") != Some(false), id_before: 0, talk_flag_off: false, id_left: false, presses: 0 });
-                        self.rest_lifted = lifted;
+                    (Some(grace), Some(offer)) if offer.scene => {
+                        erlog!("story: TALK TO MELINA chosen at save point {grace} (row {}; {refilled} pouch slot(s) refilled): the accord's scene needs the game's rest: black cover, the game's rest for the body; the cover is off from the scene's first frame; the rest is left for the player at the end", offer.row);
+                        self.story_rest = Some(StoryRest { rule: None, grace, drive: Drive::new(), cover: control.flag("story.cover") != Some(false), id_before: 0, talk_flag_off: false, id_left: false, presses: 0 });
                     }
+                    (Some(grace), Some(Offer { talk: Some(talk), row, .. })) => match self.points.iter().find(|p| p.entity == grace).and_then(|p| p.handle) {
+                        Some(handle) => {
+                            let appear = talkdrive::appear(&flag_set);
+                            erlog!("story: TALK TO MELINA chosen at save point {grace} ({row}; {refilled} pouch slot(s) refilled): SHE IS SUMMONED (no rest, no grace menu, Sora stands): {}", match appear { Some((anim, wait)) => format!("the grace's command 128 (her appearing animation {anim}, {wait} s), then her talk"), None => "flag 4651 says she is there already: her talk is started".to_string() });
+                            self.melina = Some(MelinaCall { grace, handle: crate::game::handle_bits(&handle), summon: Summon::new(talk, appear), hurry: talkdrive::Hurry::default() });
+                        }
+                        None => erlog!("!!! story: TALK TO MELINA chosen at save point {grace} but its grace character is not known: nothing is done"),
+                    },
                     _ => erlog!("story: TALK TO MELINA chosen but the menu's save point or its offer is not known: nothing is done"),
                 },
                 // (party P) PARTY FORMATION: the HUD's screen (who is in the party, who leads); kept with Sora's save. UNTESTED
@@ -1037,7 +1029,7 @@ impl ErSavePoints {
             prompt,
             game_menu: ui.menu,
             resting: self.resting,
-            busy: self.flow != Flow::Idle || self.story_rest.is_some(),
+            busy: self.flow != Flow::Idle || self.story_rest.is_some() || self.melina.is_some(),
             on_floor,
             alive: self.leader.map_or(sora.status().hp > 0, |l| l.1), // (CV3) the leader's life
         });
@@ -1074,34 +1066,38 @@ impl ErSavePoints {
             erlog!("story: (RC) Y at the save point of grace {grace}: {} IS DUE HERE AND STARTS NOW (Melina first; the save menu comes with the next Y)", self.story.rule_id(row));
         } else if offered && y_held && !self.y_before && !menu_open {
             // (IMPL_ER26) Save / Select an Area / Pass Time / Respawn Enemies / [Site of Grace] / Title Screen
-            // (IMPL_ER33) "Talk to Melina" only while a row of the story table says the game offers a talk here
-            // (IMPL_ER36) ... and only where the game's own menu can hold her entry (talkdrive::menu_gate), or she is
-            // expected to speak by herself (a row of kind `self`, once a session)
-            let gate = talkdrive::menu_gate(&flag_set, player.current_block_id.area() as u32);
-            // (FX5) the talk script's whole condition: the body's special effects it tests too (story.rs `no_effects`); a
-            // blocked `self` row is offered only with `story.lift_blockers` 1 (its rest takes them off and back). (FINAL5) DEFAULT 0:
-            // the removal and re-application of the game's effects never ran in game, so the entry is offered only when the
-            // game's own talk condition holds (faithful to Elden Ring); `story.lift_blockers 1` keeps the lifting to try
-            let has = |id: i32| body_has(player, id);
-            let lift = crate::story::lift_blockers(control); // (FINAL5) default 0
-            if let Some(p) = here {
-                let held = self.story.held_by_effects(p.entity, &flag_set, &has);
-                if held != self.held_told {
-                    for (row, effects) in &held {
-                        erlog!("story: (FX5) {row} is ready at grace {} but the body carries {effects:?}, which the talk script tests (she does not speak by herself while any is on): {}{}", p.entity, if lift { "\"Talk to Melina\" is offered and its rest takes them off the body first, then gives them back (story.lift_blockers = 1)" } else { "NOT OFFERED (story.lift_blockers = 0, the default; 1 = its rest takes them off and gives them back)" }, effect_facts(effects));
-                    }
-                    self.held_told = held;
-                }
+            // "Talk to Melina" only (MELINA-SUMMON) where the grace's script has a talk of hers (talkdrive::talk_for: her own talk, else the
+            // entry its menu would add, with the player's special effects it tests) and the grace's own talk object is
+            // known (the summon runs on it); or the accord's scene where its rest was tried here
+            let area = player.current_block_id.area() as u32;
+            // (4270 = travel closed here: the body's 4270 is travel.rs's lock's, so the area's own answer is taken, as the game
+            // would put it on: travel::carries_for_talk. MELINA-4270b: also for the open world's own flag 0)
+            let game_closed = crate::travel::closed_by_the_game(&flag_set);
+            let has = |id: i32| crate::travel::carries_for_talk(id, game_closed, &|e| body_has(player, e));
+            let summon = talkdrive::talk_for(&flag_set, &has, area);
+            if body_has(player, talkdrive::NO_TRAVEL) {
+                erlog!("story: \"Talk to Melina\" at grace {}: the body carries 4270; the area's own fast-travel flag is {} -> {} (MELINA-4270b: the talk scripts are judged as the game would have it); her talk here: {}", here.map_or(0, |p| p.entity), crate::travel::own_flag().map_or("not known".to_string(), |f| f.to_string()), match game_closed { Some(false) => "OPEN: the 4270 is the save-point travel lock's, not counted", Some(true) => "CLOSED by the game itself: 4270 counts", None => "not known: the body's 4270 counts" }, summon.map_or("none".to_string(), |t| t.describe()));
             }
-            let talk = here.filter(|_| control.flag("story.talk") != Some(false) && !self.sit).and_then(|p| self.story.talk_offer_lifting(p.entity, &flag_set, gate.is_ok(), &has, lift));
-            let (talk, lift_now) = match talk {
-                Some((o, l)) => (Some(o), l),
-                None => (None, Vec::new()),
+            let object = here.and_then(|p| p.handle).and_then(|h| crate::talkkh::hooks::grace_talk(crate::game::handle_bits(&h), 2.0));
+            // (FX5's question kept: which of the player's effects keep her own talk away, with their rows)
+            let held: Vec<i32> = talkdrive::MP_EFFECTS.iter().copied().filter(|e| has(*e)).collect();
+            let held = (!held.is_empty() && summon != Some(Talk::Own) && talkdrive::own_talk(&flag_set, &|_| false, area)).then(|| format!("; she would have something to say, but the player carries {held:?}, which the grace's x60 tests (as in the game, she does not){}", effect_facts(&held)));
+            let why_not = match (summon, object) {
+                (Some(t), None) => Some(format!("the game has a talk of hers here ({}) but the grace's own talk object was not seen (its script asked no query lately: are the talk detours in?): not offered", t.describe())),
+                (None, _) => Some(format!("no talk of hers here ({}){}", talkdrive::menu_gate(&flag_set, area).err().unwrap_or("the grace's script has none now"), held.clone().unwrap_or_default())),
+                (Some(_), Some(_)) => held,
             };
-            self.talk_lift = lift_now;
+            if why_not != self.melina_told {
+                if let Some(why) = &why_not {
+                    erlog!("story: \"Talk to Melina\" at grace {}: {why}", here.map_or(0, |p| p.entity));
+                }
+                self.melina_told = why_not;
+            }
+            let summon = summon.filter(|_| object.is_some());
+            let talk = here.filter(|_| control.flag("story.talk") != Some(false) && !self.sit).and_then(|p| self.story.talk_offer(p.entity, &flag_set, summon));
             let menu = GraceMenu { passtime: control.flag("savepoint.passtime") != Some(false), respawn: control.flag("savepoint.respawn") != Some(false), sit: self.sit, title: control.flag("menu.title") != Some(false), talk: talk.is_some(), party: control.flag("savepoint.party") != Some(false) /* (party P) */, load: control.flag("savepoint.load") != Some(false) && crate::hud::saveload_on() /* (SV) */ };
             if let Some(offer) = &talk {
-                erlog!("story: the save menu at grace {} shows \"Talk to Melina\" (row {}: {}{}; the game's menu can hold her entry here: {})", here.map_or(0, |p| p.entity), offer.row, if offer.scene { "its scene is expected" } else if offer.own.is_some() { "by the talk script she speaks by herself at a rest; offered once a session" } else { "an entry of the game's grace menu" }, if offer.own.is_some() && offer.entry { ", and the game's menu holds an entry of hers as well" } else { "" }, match gate { Ok(()) => "yes".to_string(), Err(why) => format!("no, {why}") });
+                erlog!("story: the save menu at grace {} shows \"Talk to Melina\" ({}: {})", here.map_or(0, |p| p.entity), offer.row, if offer.scene { "its scene is expected: the game's rest, driven" } else { "she is summoned and talks" });
             }
             self.talk_offer = talk;
             let opened = crate::hud::open_savepoint_grace(menu);
@@ -1247,16 +1243,11 @@ impl ErSavePoints {
                 self.rest_for = Some(sr.grace);
                 self.flow = Flow::Rest { close: false, stage: 0, since: 0.3, tries: 0 };
             }
-            Act::Up | Act::Confirm | Act::Back => {
-                let (buttons, scan, what) = match step.act {
-                    Act::Up => (0x0001, 0, "UP"),
-                    Act::Confirm => (inputs::XI_A, inputs::SCAN_E, "CONFIRM (A / E)"),
-                    _ => (inputs::XI_B, inputs::SCAN_Q, "BACK (B / Q)"),
-                };
+            Act::Back => {
                 // (the pad hook first; a repeated B alternates with the keyboard when that route is open)
-                let how = inputs::press_for_er_try(buttons, scan, if step.act == Act::Back { sr.presses } else { 0 });
+                let how = inputs::press_for_er_try(inputs::XI_B, inputs::SCAN_Q, sr.presses);
                 sr.presses = sr.presses.saturating_add(1);
-                erlog!("{}story: {name}: {what} pressed for the game's menu ({}); seen: grace menu {} other window {} resting {} talk id {id}", if how.is_none() { "!!! " } else { "" }, how.unwrap_or("NO WAY: the game reads no pad and this key has no keyboard route"), seen.grace_menu, seen.other_window, seen.resting);
+                erlog!("{}story: {name}: BACK (B / Q) pressed for the game's menu ({}); seen: grace menu {} other window {} resting {} talk id {id}", if how.is_none() { "!!! " } else { "" }, how.unwrap_or("NO WAY: the game reads no pad and this key has no keyboard route"), seen.grace_menu, seen.other_window, seen.resting);
             }
         }
         match step.end {
@@ -1264,28 +1255,124 @@ impl ErSavePoints {
             Some(end) => {
                 self.pad_mask = false;
                 crate::story::cover(false);
-                // (FX5) what the rest took off the body is given back (was it already back? the game holds it then)
-                let lifted = std::mem::take(&mut self.rest_lifted);
-                if !lifted.is_empty() {
-                    let back_already: Vec<i32> = lifted.iter().copied().filter(|e| body_has(player, *e)).collect();
-                    let missing: Vec<i32> = lifted.iter().copied().filter(|e| !back_already.contains(e)).collect();
-                    let given = lift_effects(&missing, true);
-                    erlog!("story: (FX5) the body's special effects {given:?} are given back after the rest{}", if back_already.is_empty() { String::new() } else { format!(" ({back_already:?} were on again already: the game puts them back by itself)") });
-                }
                 let rest_failed = matches!(end, End::Failed(step) if step.starts_with("the rest:"));
                 match end {
                     End::Talked(how) => erlog!("story: {name} at save point {}: DONE: {how}", sr.grace),
-                    End::Nothing(why) => erlog!("story: {name} at save point {}: NOTHING OF MELINA'S CAME: {why}; he stands, the cover is down{}", sr.grace, if sr.own.is_some() { "; this row is not offered again in this session (the game's own flags decide when she speaks)" } else { "" }),
+                    End::Nothing(why) => erlog!("story: {name} at save point {}: NOTHING OF MELINA'S CAME: {why}; he stands, the cover is down", sr.grace),
                     End::Failed(step) => erlog!("!!! story: {name} at save point {}: FAILED AT: {step}; the cover is down; the entry is offered again", sr.grace),
-                }
-                if let (Some(k), false) = (sr.own, matches!(end, End::Talked(_)) || rest_failed) {
-                    self.story.own_tried(k);
                 }
                 if rest_failed && matches!(self.flow, Flow::Rest { stage: 0, .. }) {
                     self.rest_for = None;
                     self.flow = Flow::Idle;
                 }
             }
+        }
+    }
+
+    /// (MELINA-SUMMON) "TALK TO MELINA", a step a frame (talkdrive.rs `Summon`): what is seen is read (the grace's own
+    /// talk object, the player's special effects 9600 / 9603, the talk scripts' flags), and what the summon says is done
+    /// with the game's own commands on the grace's own talk object and the flags its script writes.
+    fn melina_step(&mut self, player: &PlayerIns, dt: f32) {
+        // (her talk may take him to the Roundtable Hold: the area's own fast-travel flag stands while it runs, so the game's
+        // own 4270 is what her script tests: travel.rs hold_for_talk). (MELINA-4270b) Also while the game's rest at a grace is
+        // asked for or runs (our rest flow, the accord's driven rest, the body resting): the grace's x30 / x60 (her own talk at
+        // a rest) and x57 ("Tell her you're off to Roundtable Hold") test 4270 there. All of it at a save point.
+        let hold = self.melina.is_some() || self.story_rest.is_some() || self.resting || matches!(self.flow, Flow::Rest { .. });
+        if hold != crate::travel::holding_for_talk() {
+            erlog!("story: (MELINA-4270b) the travel lock {} for the talks at the save point ({})", if hold { "STEPS ASIDE" } else { "is back" }, if self.melina.is_some() { "Melina's summoned talk" } else if self.story_rest.is_some() { "the accord's driven rest" } else if self.resting { "the game's rest at the grace" } else if matches!(self.flow, Flow::Rest { .. }) { "the game's rest asked for" } else { "over" });
+        }
+        crate::travel::hold_for_talk(hold);
+        let Some(mut call) = self.melina.take() else {
+            crate::talkkh::hooks::arm_hurry(false);
+            return;
+        };
+        let ins = crate::talkkh::hooks::grace_talk(call.handle, 0.5);
+        let on = |f: u32| flag_set(f) == Some(true);
+        let seen = Near {
+            grace_talk: ins.is_some(),
+            marker: talkdrive::MARKERS.iter().any(|e| body_has(player, *e)),
+            talking: on(talkdrive::FLAG_TALKING),
+            warp: on(talkdrive::FLAG_WARP) && !on(talkdrive::FLAG_ROUNDTABLE),
+            invited: on(talkdrive::FLAG_INVITED) && !on(talkdrive::FLAG_ROUNDTABLE),
+        };
+        let mut step = call.summon.step(dt, seen);
+        // (MELINA-RT) the touch of her hand her x80 waits for: 9601 on the main player through the game's own apply (the
+        // SDK's ChrInsExt::apply_speffect = 0x1403e8dc0, the call talk command 62 makes: FUN_1403e8dc0(player, id, 0))
+        if step.hand {
+            use eldenring::cs::ChrInsExt;
+            let given = crate::game::player_mut().map(|p| {
+                p.chr_ins.apply_speffect(talkdrive::HAND, false);
+                p.chr_ins.special_effect.entries().take(128).any(|e| e.param_id == talkdrive::HAND)
+            });
+            if step.log.is_some() {
+                erlog!("{}story: Talk to Melina at save point {grace}: (MELINA-RT) effect {} put on the player: {}", if given == Some(true) { "" } else { "!!! " }, talkdrive::HAND, match given { Some(true) => "he carries it (her x80 moves on; her script sets 104 itself after its own wait, common event 945 warps)", Some(false) => "NOT carried right after the apply", None => "no player to put it on" }, grace = call.grace);
+            }
+        }
+        let grace = call.grace;
+        if let Some(line) = step.log {
+            erlog!("story: Talk to Melina at save point {grace}: {line}");
+        }
+        // (MELINA-RT2) her x80's wait: open while the hand is given (the same window); the query detour reads her state time
+        // ahead once x77 / x80 asked for the hand (talkdrive.rs `Hurry`); the game's own talk end (query 57) moves her on
+        let hurry = crate::talkkh::hooks::arm_hurry(step.hand);
+        if hurry.ins != 0 && call.hurry.ins == 0 {
+            erlog!("story: Talk to Melina at save point {grace}: (MELINA-RT2) her script asked for the touch of her hand and has it (query 61 9601 = 1: x77 after her line 10010600 / x80 state 3): her x80 wait's state time (query 103) is read {} s ahead from now: her script moves on at the talk's own end (query 57) and sets 11109786 and 104 itself", talkdrive::X80_WAIT);
+        }
+        if hurry.raised > 0 && call.hurry.raised == 0 {
+            erlog!("story: Talk to Melina at save point {grace}: (MELINA-RT2) her x80 state 4 reads its state time {} s ahead: it waits only for the talk's end now", talkdrive::X80_WAIT);
+        }
+        call.hurry = hurry;
+        let int = |v: i32| eldenring::ez_state::EzStateValue::Int32(v);
+        match step.order {
+            Order::None => {}
+            Order::Summon(anim) => {
+                // the topic flags as the grace's menu would leave them (x43 clears them, x57 sets the entry's), or 4653
+                for f in talkdrive::TOPIC_FLAGS {
+                    write_flag(f, false);
+                }
+                match call.summon.talk {
+                    Talk::Own => {
+                        write_flag(talkdrive::FLAG_OWN, true);
+                    }
+                    Talk::Topic(Some(f)) => {
+                        write_flag(f, true);
+                    }
+                    Talk::Topic(None) => {}
+                }
+                let args: Vec<_> = talkdrive::SUMMON_HEAD.into_iter().chain([anim]).chain(talkdrive::SUMMON_TAIL).map(int).collect();
+                if ins.is_some_and(|i| crate::talkkh::hooks::run_on(i, talkdrive::TALK_GRACE, talkdrive::SUMMON_COMMAND, args)) {
+                    write_flag(talkdrive::FLAG_SUMMONED, true);
+                    erlog!("story: Talk to Melina at save point {grace}: command 128 (2180, 21800000, 1, 3000, {anim}, 1, 2, 60) run on the grace's talk object; flag 4651 on; {}", call.summon.talk.describe());
+                } else {
+                    step = call.summon.abort(true, "the summon: command 128 could not be run on the grace's talk object");
+                }
+            }
+            Order::Start => {
+                write_flag(talkdrive::FLAG_TALKING, true);
+                if matches!(call.summon.talk, Talk::Topic(_)) {
+                    write_flag(talkdrive::FLAG_ASKED, true);
+                }
+                // (MELINA-4270b) what her x72 will test, as it stands now (the hold gave the area its own flag at the summon)
+                let carried: Vec<i32> = talkdrive::MP_EFFECTS.iter().copied().filter(|e| body_has(player, *e)).collect();
+                let stale = carried.contains(&talkdrive::NO_TRAVEL) && crate::travel::closed_by_the_game(&flag_set) == Some(false);
+                erlog!("{}story: Talk to Melina at save point {grace}: flag 4652{} on: her talk script takes over (its lines, its choices; the pad is the game's); the player's effects her x72 tests: {carried:?}{}", if stale { "!!! " } else { "" }, if matches!(call.summon.talk, Talk::Topic(_)) { " and 4655" } else { "" }, if stale { " (4270 STILL ON although the area's own flag is open: the game's update has not taken the lock's off: the Roundtable invitation would be hidden)" } else { " (none of the lock's: as in the game)" });
+            }
+            Order::Dismiss => {}
+        }
+        if step.order == Order::Dismiss {
+            let anim = talkdrive::leave_anim(call.summon.talk, &flag_set);
+            let args = vec![int(anim), eldenring::ez_state::EzStateValue::Float32(talkdrive::DISMISS_SECONDS)];
+            let ran = ins.is_some_and(|i| crate::talkkh::hooks::run_on(i, talkdrive::TALK_GRACE, talkdrive::DISMISS_COMMAND, args));
+            for f in talkdrive::MELINA_FLAGS {
+                write_flag(f, false);
+            }
+            erlog!("{}story: Talk to Melina at save point {grace}: she leaves: {}; flags 4651 .. 4657 cleared", if ran { "" } else { "!!! " }, if ran { format!("command 129 ({anim}, {}) run on the grace's talk object", talkdrive::DISMISS_SECONDS) } else { "the grace's talk object is gone, command 129 was NOT run".to_string() });
+        }
+        match step.end {
+            None => self.melina = Some(call),
+            Some(End::Talked(how)) => erlog!("story: Talk to Melina at save point {grace}: DONE: {how}"),
+            Some(End::Nothing(why)) => erlog!("story: Talk to Melina at save point {grace}: NOTHING OF MELINA'S CAME: {why}"),
+            Some(End::Failed(why)) => erlog!("!!! story: Talk to Melina at save point {grace}: FAILED AT: {why}; nothing of hers is left set; the entry is offered again"),
         }
     }
 
@@ -1736,16 +1823,12 @@ impl ErSavePoints {
         (self.rest_for, self.save_at, self.saved_at) = (None, None, None);
         // (IMPL_ER33) the session's story tries are forgotten with it; the cover never outlives him
         self.story.reset();
-        // (FX5) what a driven rest had taken off the body is given back (a load / death cut the rest short)
-        let lifted = std::mem::take(&mut self.rest_lifted);
-        if !lifted.is_empty() {
-            if let Some(player) = crate::game::player_mut() {
-                let missing: Vec<i32> = lifted.iter().copied().filter(|e| !body_has(player, *e)).collect();
-                let given = lift_effects(&missing, true);
-                erlog!("story: (FX5) the rest was cut short: the body's special effects {given:?} are given back");
-            }
-        }
         self.story_rest = None;
+        // (MELINA-SUMMON) a summon cut short by a death / load: the map's load runs the grace script's start again, whose
+        // x22 clears 4651 .. 4657 (PARSED); nothing of the game's is called from here
+        self.melina = None;
+        crate::talkkh::hooks::arm_hurry(false); // (MELINA-RT2) her x80's wait: the game's answers again
+        crate::travel::hold_for_talk(false);
         (self.talk_offer, self.pad_mask) = (None, false);
         crate::story::cover(false);
         if matches!(self.flow, Flow::World { .. }) {

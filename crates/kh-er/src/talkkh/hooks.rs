@@ -66,6 +66,8 @@ pub(crate) const INS_HANDLE: usize = 0x40;
 const EVENT_INS: usize = 0x10;
 const EVENT_TALK: usize = 0x18;
 const ENV_TALK: usize = 0x10;
+/// (MELINA-SUMMON) `CSEzStateTalkEnv`'s talk object (SDK layout: `npc_talk_ins` after the talk id).
+const ENV_INS: usize = 0x18;
 
 static ORIG_EVENT: AtomicUsize = AtomicUsize::new(0);
 static ORIG_ENV: AtomicUsize = AtomicUsize::new(0);
@@ -214,6 +216,10 @@ unsafe extern "C" fn event_hook(this: *mut u8, ev: *mut u8) {
 
 unsafe extern "C" fn env_hook(this: *mut u8, result: *mut u8, query: *mut u8) -> *mut u8 {
     let original: EnvFn = std::mem::transmute(ORIG_ENV.load(Ordering::Relaxed));
+    // (MELINA-SUMMON) a grace's own talk script asks its queries every frame: its talk object is noted (a plain read)
+    if plausible(this as usize) && std::ptr::read_unaligned(this.add(ENV_TALK) as *const i32) == crate::talkdrive::TALK_GRACE {
+        note_grace_talk(std::ptr::read_unaligned(this.add(ENV_INS) as *const usize));
+    }
     // (SHOP) A REFUSED SMITH'S PROMPT (`npc.smith_talk = 0`): the game's query is not run (no prompt is put up), the
     // script reads 0. The query object's result is the call's hidden return value (16 bytes: the value, its type at + 8).
     if ENABLED.load(Ordering::Relaxed) && plausible(this as usize) && plausible(query as usize) && plausible(result as usize) {
@@ -233,6 +239,10 @@ unsafe extern "C" fn env_hook(this: *mut u8, result: *mut u8, query: *mut u8) ->
         }
     }
     let r = original(this, result, query);
+    // (MELINA-RT2) her summoned talk's x80 wait (talkdrive.rs `Hurry`): the game answered; her state time may be read ahead
+    if plausible(this as usize) && plausible(query as usize) && plausible(result as usize) && std::ptr::read_unaligned(this.add(ENV_TALK) as *const i32) == crate::talkdrive::TALK_MELINA {
+        hurry_query(this, result, query);
+    }
     if !ENABLED.load(Ordering::Relaxed) || !plausible(this as usize) || !plausible(query as usize) || !plausible(result as usize) {
         return r;
     }
@@ -284,6 +294,63 @@ unsafe extern "C" fn env_hook(this: *mut u8, result: *mut u8, query: *mut u8) ->
         std::ptr::write_unaligned(result.add(8) as *mut i32, 2);
     }
     r
+}
+
+/// (MELINA-RT2) Whether the summon's Roundtable window is open (savepoint.rs, each frame), and the rule's state.
+static HURRY: Mutex<(bool, crate::talkdrive::Hurry)> = Mutex::new((false, crate::talkdrive::Hurry { ins: 0, raised: 0 }));
+
+/// (MELINA-RT2) savepoint.rs, each frame: the summon's Roundtable window (`SummonStep.hand`) is open or not; closed, the
+/// rule forgets its talk object at once. Returns the rule's state (for the log).
+pub(crate) fn arm_hurry(armed: bool) -> crate::talkdrive::Hurry {
+    let Ok(mut h) = HURRY.lock() else { return crate::talkdrive::Hurry::default() };
+    h.0 = armed;
+    if !armed {
+        h.1.disarm();
+    }
+    h.1
+}
+
+/// (game thread, inside the query detour, after the game's answer: nothing may panic; a busy lock leaves the game's
+/// answer) Her talk's query 61 / 103 through `Hurry`; a changed answer is written as the game wrote it (the value at
+/// + 0, its type at + 8 unchanged: query 103 is a float, case 0x67).
+unsafe fn hurry_query(env: *mut u8, result: *mut u8, query: *mut u8) {
+    use crate::talkdrive::{QUERY_PLAYER_EFFECT, QUERY_STATE_TIME};
+    let vt = std::ptr::read(query as *const *const usize);
+    if !plausible(vt as usize) {
+        return;
+    }
+    let id_fn: unsafe extern "C" fn(*mut u8) -> i32 = std::mem::transmute(std::ptr::read(vt.add(1)));
+    let id = id_fn(query);
+    if id != QUERY_PLAYER_EFFECT && id != QUERY_STATE_TIME {
+        return;
+    }
+    let as_f32 = |v: Val| match v {
+        Val::Int(i) => Some(i as f32),
+        Val::Float(f) => Some(f),
+        Val::Other => None,
+    };
+    let arg = if id == QUERY_PLAYER_EFFECT {
+        let count_fn: unsafe extern "C" fn(*mut u8) -> i32 = std::mem::transmute(std::ptr::read(vt.add(2)));
+        let arg_fn: unsafe extern "C" fn(*mut u8, *mut u8, i32) -> *const u8 = std::mem::transmute(std::ptr::read(vt.add(3)));
+        if count_fn(query) < 2 {
+            return;
+        }
+        let mut buf = [0u8; 16];
+        as_f32(value_at(arg_fn(query, buf.as_mut_ptr(), 1)))
+    } else {
+        None
+    };
+    let answered = value_at(result);
+    if id == QUERY_STATE_TIME && !matches!(answered, Val::Float(_)) {
+        return;
+    }
+    let Some(answer) = as_f32(answered) else { return };
+    let ins = std::ptr::read_unaligned(env.add(ENV_INS) as *const usize);
+    let Ok(mut h) = HURRY.try_lock() else { return };
+    let armed = h.0;
+    if let Some(v) = h.1.on_query(armed, ins, id, arg, answer) {
+        std::ptr::write_unaligned(result as *mut f32, v);
+    }
 }
 
 unsafe fn skip_byte() -> Option<*mut u8> {
@@ -374,6 +441,56 @@ pub(crate) fn run_for_the_game(event_obj: usize, id: i32, args: &[i32]) -> bool 
     // SAFETY: the game's own command function on the script's own command object, with an event of the SDK's own
     // layout (as `TalkScript::event` makes it), on the game's thread.
     unsafe { original(event_obj as *mut u8, &ev as *const EzStateEvent as *mut u8) };
+    true
+}
+
+/// (MELINA-SUMMON) THE GRACES' OWN TALK OBJECTS (`CSNpcTalkIns` of talk id 1000), as their scripts' queries hand them
+/// over: (the grace character's handle, as `game::handle_bits` gives it; the talk object; when it was last seen).
+static GRACE_TALKS: Mutex<Vec<(u64, usize, std::time::Instant)>> = Mutex::new(Vec::new());
+
+/// (game thread, inside the query detour: nothing may panic; a busy lock skips the note)
+unsafe fn note_grace_talk(ins: usize) {
+    let mut b = [0u8; 8];
+    if !plausible(ins) || !crate::probe::read(ins + INS_HANDLE, &mut b) {
+        return;
+    }
+    let handle = u64::from_le_bytes(b);
+    let Ok(mut talks) = GRACE_TALKS.try_lock() else { return };
+    let now = std::time::Instant::now();
+    match talks.iter_mut().find(|t| t.0 == handle) {
+        Some(t) => *t = (handle, ins, now),
+        None => {
+            talks.retain(|t| now.duration_since(t.2).as_secs_f32() < 5.0);
+            if talks.len() < 64 {
+                talks.push((handle, ins, now));
+            }
+        }
+    }
+}
+
+/// (MELINA-SUMMON) The talk object of the grace whose character has this handle (`game::handle_bits`), if its script
+/// ran within `seconds` (a talk object goes with its map: one not seen lately is not used).
+pub(crate) fn grace_talk(handle: u64, seconds: f32) -> Option<usize> {
+    let talks = GRACE_TALKS.lock().ok()?;
+    talks.iter().find(|t| t.0 == handle && t.2.elapsed().as_secs_f32() <= seconds).map(|t| t.1)
+}
+
+/// (MELINA-SUMMON) RUNS ONE TALK-SCRIPT COMMAND ON A TALK OBJECT OF THE GAME'S (the grace's, `grace_talk`): through a
+/// command object of the SDK's own layout pointing at that talk object, the game's own command function (its vtable;
+/// the detour passes commands it does not read). `ins` must have been seen this moment, on the game's thread.
+pub(crate) fn run_on(ins: usize, talk_id: i32, id: i32, args: Vec<eldenring::ez_state::EzStateValue>) -> bool {
+    if !plausible(ins) {
+        return false;
+    }
+    use eldenring::cs::{CSEzStateTalkEvent, CSNpcTalkIns};
+    use eldenring::ez_state::EzStateEvent;
+    // SAFETY: `ins` is the game's live talk object (its script's query handed it over moments ago, game thread); the
+    // command object is the SDK's own (as `TalkScript::new` makes one) and lives through the call.
+    unsafe {
+        let mut obj = CSEzStateTalkEvent::new(talk_id, &*(ins as *const CSNpcTalkIns));
+        let ev = EzStateEvent::from((id, args));
+        (obj.vftable.invoke)(&mut obj, &ev);
+    }
     true
 }
 

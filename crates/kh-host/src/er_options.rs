@@ -402,8 +402,10 @@ pub const ADVANCED: &[Item] = &[
     item(8114, mt(111224, "Grass Quality"), lh(111224, "Select grass quality"), Kind::Choice(&[(2, MEDIUM), (3, HIGH), (4, MAXIMUM)]), Store::Advanced(0x1A0)),
 ];
 
-/// Quit Game (0x959ab0; the tab exists only when the screen is opened in game). Both rows are the game's own: its options
-/// screen is opened on them (its question, its save, its quit).
+/// Quit Game (0x959ab0; the tab exists only when the screen is opened in game). (NO-ER-PAUSE, the user 2026-11-09: Elden Ring's
+/// pause menu must never show up) Both rows ask the game's own question here (its texts), and on Yes the host quits the KH way
+/// (kh-er eroptions.rs: the game's own return-to-title request; the desktop after the title): Elden Ring's System menu is never
+/// opened for them any more.
 pub const QUIT: &[Item] = &[
     gated(1001, mt(110510, "Quit Game"), lh(110500, "Save the game and return to title menu"), Kind::Button(mt(110510, "Quit Game")), Store::Native(Native::QuitGame), Gate::InGame),
     gated(1002, mt(110511, "Return to Desktop"), lh(110501, "Save the game and return to the desktop"), Kind::Button(mt(110511, "Return to Desktop")), Store::Native(Native::Desktop), Gate::InGame),
@@ -432,6 +434,9 @@ pub const SUBS: [Tab; 2] = [Tab { key: PAGE_HDR, title: mt(110211, "Adjust Image
 
 /// "Keep current settings?" (the game's ApplyScreenSettingJob question).
 pub const KEEP_QUESTION: Text = Text { fmg: Fmg::Dialogues, id: 111101, en: "Keep current settings?" };
+/// (NO-ER-PAUSE) The Quit Game tab's questions: the game's own (GR_Dialogues 110000 / 110010, what its System menu asked).
+pub const QUIT_QUESTION: Text = Text { fmg: Fmg::Dialogues, id: 110000, en: "Save the game and return to title menu?" };
+pub const DESKTOP_QUESTION: Text = Text { fmg: Fmg::Dialogues, id: 110010, en: "Save the game and return to the desktop?" };
 /// "x" between a resolution's width and height (the game's list: "%d" + this + "%d").
 pub const RESOLUTION_X: Text = mt(40410, "x");
 
@@ -550,6 +555,19 @@ pub struct Controller<G: ErGame> {
 
 /// (CAMP-OPTIONS) The question key of a button swap.
 pub const ASK_SWAP: u32 = 2;
+/// (NO-ER-PAUSE) The question keys of Quit Game and Return to Desktop.
+pub const ASK_QUIT: u32 = 3;
+pub const ASK_DESKTOP: u32 = 4;
+
+/// (NO-ER-PAUSE) A screen of the game's asked for by a row (pure): Quit Game and Return to Desktop first ask their question
+/// (its key and text, the cursor on No); the others open at once (None).
+pub fn native_question(screen: Native) -> Option<(u32, Text)> {
+    match screen {
+        Native::QuitGame => Some((ASK_QUIT, QUIT_QUESTION)),
+        Native::Desktop => Some((ASK_DESKTOP, DESKTOP_QUESTION)),
+        Native::KeyBindings | Native::PadButtons | Native::DataAgreement => None,
+    }
+}
 /// The row value while its button is being captured (KH3's own words, kh3_settings.gamepad.detail_0300).
 pub const PRESS_A_BUTTON: &str = "Press a button";
 
@@ -981,6 +999,12 @@ impl<G: ErGame> OptionsHost for Controller<G> {
                             reply.push = Some(self.page(tab, data.as_ref(), kh));
                         }
                     }
+                    // (NO-ER-PAUSE) Quit Game / Return to Desktop: the game's own question first, the quit on its Yes
+                    Some(Store::Native(screen)) if native_question(screen).is_some() => {
+                        if let Some((key, text)) = native_question(screen) {
+                            reply.ask = Some(OptAsk { key, text: self.text(text), cursor: 1 });
+                        }
+                    }
                     Some(Store::Native(screen)) => {
                         let opened = self.game.open_native(screen);
                         self.game.log(&format!("options: Elden Ring's own screen {screen:?}: {}", if opened { "its System menu is being opened on that row" } else { "NOT opened now" }));
@@ -1011,6 +1035,15 @@ impl<G: ErGame> OptionsHost for Controller<G> {
                         table.assign(role, code);
                         self.save_table(&table);
                     }
+                }
+                // (NO-ER-PAUSE) Quit Game / Return to Desktop answered Yes: the host quits; the camp menu closes
+                if let (Some(screen), true) = ([Native::QuitGame, Native::Desktop].into_iter().find(|s| native_question(*s).is_some_and(|q| q.0 == *ask)), *yes) {
+                    let opened = self.game.open_native(screen);
+                    self.game.log(&format!("options: {screen:?} confirmed: {}", if opened { "the quit is asked for (never Elden Ring's System menu)" } else { "NOT possible now" }));
+                    if opened && self.changed {
+                        self.changed = !self.game.request_settings_save();
+                    }
+                    return OptReply { close_menu: opened, ..OptReply::default() };
                 }
                 OptReply::default()
             }
@@ -1447,10 +1480,21 @@ mod tests {
         c.open(&mut kh);
         let reply = c.event(&OptEvent::Pressed { page: TAB_GRAPHICS, item: 807 }, &mut kh);
         assert_eq!(reply.push.as_ref().map(|p| (p.key, p.items.len())), Some((PAGE_ADVANCED, 14)));
+        // (NO-ER-PAUSE) Quit Game / Return to Desktop: the game's own question first (cursor on No); No changes nothing, Yes quits
         let reply = c.event(&OptEvent::Pressed { page: TAB_QUIT, item: 1001 }, &mut kh);
+        assert!(!reply.close_menu && c.game.natives.is_empty(), "nothing happens before the answer");
+        assert_eq!(reply.ask.as_ref().map(|a| (a.key, a.text.as_str(), a.cursor)), Some((ASK_QUIT, "Save the game and return to title menu?", 1)));
+        let reply = c.event(&OptEvent::Answer { ask: ASK_QUIT, yes: false }, &mut kh);
+        assert!(!reply.close_menu && c.game.natives.is_empty(), "No: nothing");
+        let reply = c.event(&OptEvent::Answer { ask: ASK_QUIT, yes: true }, &mut kh);
         assert!(reply.close_menu);
-        c.event(&OptEvent::Pressed { page: TAB_QUIT, item: 1002 }, &mut kh);
+        let reply = c.event(&OptEvent::Pressed { page: TAB_QUIT, item: 1002 }, &mut kh);
+        assert_eq!(reply.ask.as_ref().map(|a| a.key), Some(ASK_DESKTOP));
+        assert!(c.event(&OptEvent::Answer { ask: ASK_DESKTOP, yes: true }, &mut kh).close_menu);
         assert_eq!(c.game.natives, vec![Native::QuitGame, Native::Desktop]);
+        // the swap and keep questions are not quits
+        c.event(&OptEvent::Answer { ask: ASK_KEEP, yes: true }, &mut kh);
+        assert_eq!(c.game.natives.len(), 2);
     }
 
     #[test]

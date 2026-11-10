@@ -49,7 +49,7 @@
 //! - Another owner's conversation running (Donald's), `conv.on = 0`, no bubble in the HUD, a cutscene: Elden Ring's
 //!   own subtitles, menus and dialogs.
 //! - Left alone: the grace's menu and the other system scripts (talk ids below 100000, Melina's 3000 excepted:
-//!   savepoint.rs drives the grace), cutscenes (no bubble while one plays: their subtitles are their own), menus of
+//!   savepoint.rs summons her on the grace's own talk object: hooks.rs `grace_talk` / `run_on`), cutscenes (no bubble while one plays: their subtitles are their own), menus of
 //!   other kinds (shops, level up ...).
 //!
 //! KEYS: `talk.kh` (1; 0 = Elden Ring's own UI), `talk.kh.skip` (talk ids, comma separated, left to Elden Ring),

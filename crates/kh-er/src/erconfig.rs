@@ -1,6 +1,6 @@
 //! (IMPL_ER21) KINGDOM HEARTS III'S CONFIG SCREEN DRIVES ELDEN RING'S OPTIONS (`config.kh`, default on; the user,
 //! 2026-10-13: "Make Config use Kingdom Heart's config menu and make the settings there actually affect Elden Ring's
-//! settings"). `config.kh = 0`: the camp menu's Config entry opens Elden Ring's system menu, as before this pass.
+//! settings"). `config.kh = 0`: the rows do not drive Elden Ring (NO-ER-PAUSE 2026-11-09: Elden Ring's system menu is never opened).
 //!
 //! WHERE ELDEN RING'S OPTIONS ARE: `GameDataMan -> game_settings` (the SDK's `GameSettings`, one byte a field; two of
 //! its fields were written by earlier passes and seen to act in the game: `hud_type` and `show_tutorials`). The
@@ -315,11 +315,11 @@ fn config_file() -> Option<std::path::PathBuf> {
 /// not up, the writes when it applied.
 pub fn hud_frame(hud: &mut kh_host::hud::Hud, control: &crate::control::Control) {
     let on = control.flag("config.kh") != Some(false);
-    hud.config_external = !on;
+    hud.config_external = false; // (NO-ER-PAUSE) never Elden Ring's system menu: `config.kh = 0` = KH3's rows not driving the game
     let Ok(mut live) = LIVE.lock() else { return };
     if live.told != Some(on) {
         live.told = Some(on);
-        crate::erlog!("config: the Kingdom Hearts menu's Config entry {}", if on { "opens KINGDOM HEARTS III'S CONFIG SCREEN; its rows drive Elden Ring's options (config.kh = 0: Elden Ring's system menu instead; LB + Start opens that menu at any time)" } else { "opens Elden Ring's system menu (config.kh = 0)" });
+        crate::erlog!("config: the Kingdom Hearts menu's Config entry {}", if on { "opens KINGDOM HEARTS III'S CONFIG SCREEN; its rows drive Elden Ring's options" } else { "opens KINGDOM HEARTS III'S CONFIG SCREEN, its rows NOT driving Elden Ring's options (config.kh = 0; Elden Ring's own system menu is never opened: NO-ER-PAUSE)" });
     }
     if !on {
         return;

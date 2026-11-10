@@ -79,15 +79,98 @@ fn log(text: &str) {
 static EFFECTS: Mutex<Option<EffectHost>> = Mutex::new(None);
 static EFFECTS_ASKED: AtomicBool = AtomicBool::new(false);
 
-fn start_effects(pack_dir: std::path::PathBuf, xsi: bool) {
+/// (LOADIN) THE EFFECT SIDE STARTS WITH THE PAYLOAD (frame.rs `init`), as the audio side does: the effect pack (Sora's own effects,
+/// the save point's, the party's and the XS roots') is parsed on its thread at once and named to the renderer, whose worker makes
+/// the materials, textures, meshes and pipeline states while the title is up (kh-er-render vfx.rs `EXPECTED_FORMATS`). Before,
+/// all of it started only when Sora did, under or after the first loading screen: the user's logs had the effect pack ready
+/// 2.1 s and its last materials ~6 s after Sora started, the save point and the effects drawn late ("save points, keyblade
+/// particle effects, etc don't load in as soon as the character does", 2026-11-10). The same objects as before, once a
+/// payload, kept over every load as before. Only with `mode = sora` (the only mode in which Sora's `Fx` reads them at all).
+/// `fx.early = 0` (read when the game starts): as before (read when Sora starts; the renderer makes them at the first frame that
+/// draws effects).
+pub fn prestart_effects(pack_dir: &std::path::Path, control: &Control) {
+    configure_effects(control);
+    if control.str("mode") != Some("sora") || control.flag("fx.early") == Some(false) {
+        return;
+    }
+    start_effects(pack_dir.to_path_buf(), control.flag("fx.xsi") != Some(false), true);
+}
+
+/// The effect tables' switches read before the tables are first read (`fx.main_fix`, `fx.trig_fix`, `fx.shards_own`, `fx.xs_own`,
+/// `fx.xs_fix`, `fx.cull_one_sided`): at the payload's start (`prestart_effects`) and when Sora starts (as before).
+fn configure_effects(control: &Control) {
+    // (XW-c) `fx.main_fix = 0` (read when the game starts): the main table without its overlay (the Blizzard ice mask as before)
+    kh_er_render::vfx::MAIN_OVERLAY.store(control.flag("fx.main_fix") != Some(false), std::sync::atomic::Ordering::Relaxed);
+    // (party VF-b) `fx.trig_fix = 0` / `fx.shards_own = 0` (read when the game starts): the tables without the VF-b overlays
+    kh_er_render::vfx::TRIG_OVERLAY.store(control.flag("fx.trig_fix") != Some(false), std::sync::atomic::Ordering::Relaxed);
+    kh_er_render::xsiweapon::SHARDS_OWN.store(control.flag("fx.shards_own") != Some(false), std::sync::atomic::Ordering::Relaxed);
+    // (XW-d) `fx.xs_own = 0` / `fx.xs_fix = 0` (read when the game starts): the XS effects from effects/ only (not their own files of
+    // effects_xwd/: the main pack's same-named materials, no fragment pieces) / the tables without the XW-d overlays (tmt_cry_00a)
+    kh_host::vfx::XS_OWN_FILES.store(control.flag("fx.xs_own") != Some(false), std::sync::atomic::Ordering::Relaxed);
+    kh_er_render::vfx::XWD_OVERLAY.store(control.flag("fx.xs_fix") != Some(false), std::sync::atomic::Ordering::Relaxed);
+    // (FP) `fx.cull_one_sided = 0` (read when the game starts): one-sided mesh particles draw their back faces too (before FP)
+    kh_er_render::vfx::CULL_ONE_SIDED.store(control.flag("fx.cull_one_sided") != Some(false), std::sync::atomic::Ordering::Relaxed);
+    // (LOADIN) `fx.early = 0`: the effects' objects only for a frame's own formats, at its first draw (as before)
+    kh_er_render::vfx::EARLY.store(control.flag("fx.early") != Some(false), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Every material (with what it is drawn on and its emitter's blend) and mesh of the registered effects named to the renderer,
+/// whose worker makes them ready in the background (a name it has already is kept as it is). Returns (materials, meshes).
+fn name_to_renderer(host: &EffectHost) -> (usize, usize) {
+    let (materials, meshes) = host.assets();
+    let materials: Vec<(String, kh_er_render::vfx::Geo, kh_vfx::Blend)> = materials
+        .into_iter()
+        .map(|(name, geo, blend)| {
+            let geo = match geo {
+                AssetGeo::Quad => kh_er_render::vfx::Geo::Quad,
+                AssetGeo::Ribbon => kh_er_render::vfx::Geo::Ribbon,
+                AssetGeo::Mesh => kh_er_render::vfx::Geo::Mesh,
+                AssetGeo::Decal => kh_er_render::vfx::Geo::Decal,
+            };
+            (name, geo, blend)
+        })
+        .collect();
+    kh_er_render::vfx::preload(&materials, &meshes);
+    (materials.len(), meshes.len())
+}
+
+/// (LOADIN) The loader thread reads below normal priority (started at the title) / Sora started meanwhile: it is raised.
+static LOADER_LOW: AtomicBool = AtomicBool::new(false);
+static LOADER_URGENT: AtomicBool = AtomicBool::new(false);
+
+/// (LOADIN) The loader thread's own priority (on that thread).
+fn set_loader_priority(priority: i32) {
+    LOADER_LOW.store(priority < 0, Ordering::SeqCst);
+    // SAFETY: the calling thread's own pseudo handle; only its scheduling priority changes.
+    unsafe {
+        windows_sys::Win32::System::Threading::SetThreadPriority(windows_sys::Win32::System::Threading::GetCurrentThread(), priority);
+    }
+}
+
+/// (LOADIN) On the loader thread between its parts: Sora has started (a quick Continue) while it still reads below normal
+/// priority: it reads at normal priority from now on (as it did before LOADIN, when it started with him).
+fn hurry_loader() {
+    if LOADER_URGENT.load(Ordering::SeqCst) && LOADER_LOW.load(Ordering::SeqCst) {
+        set_loader_priority(windows_sys::Win32::System::Threading::THREAD_PRIORITY_NORMAL);
+        erlog!("vfx: (LOADIN) Sora started while the effect pack is still being read: read on at normal priority");
+    }
+}
+
+/// `early`: started with the payload (the title): the thread reads below normal priority, so that the title's menus never wait
+/// for it on a CPU with few cores (it still takes every idle core's time).
+fn start_effects(pack_dir: std::path::PathBuf, xsi: bool, early: bool) {
     if EFFECTS_ASKED.swap(true, Ordering::SeqCst) {
         return;
     }
     let spawned = std::thread::Builder::new().name("kh-vfx-load".to_string()).spawn(move || {
+        if early {
+            set_loader_priority(windows_sys::Win32::System::Threading::THREAD_PRIORITY_BELOW_NORMAL);
+        }
         let made = std::panic::catch_unwind(move || {
             let started = std::time::Instant::now();
             match EffectHost::load(&pack_dir) {
                 Ok(mut host) => {
+                    hurry_loader();
                     let registered = host.preload();
                     // (LDI) THE SAVE POINT'S FIVE SYSTEMS parsed now, with Sora's: their materials and meshes are named to the
                     // renderer below and made ready before the first save point is drawn (before: at its first spawn)
@@ -97,6 +180,7 @@ fn start_effects(pack_dir: std::path::PathBuf, xsi: bool) {
                     erlog!("vfx: (LDI) the save point's effects preloaded ({sp_known} of {})", sp_names.len());
                     // (ER party S5) THE PARTY'S SECOND ROOT (PACK/party/vfx, with its own shading table: the renderer keeps
                     // its materials and meshes apart as "party:<name>"; the main pack's tables and names are untouched)
+                    hurry_loader();
                     #[cfg(feature = "party")]
                     match host.load_party_root(&pack_dir) {
                         Ok(line) => {
@@ -107,6 +191,7 @@ fn start_effects(pack_dir: std::path::PathBuf, xsi: bool) {
                     }
                     // (ER90, XSI request 1) THE XS ABILITIES' ROOT (PACK/xsi/vfx, its own shading table: the renderer keeps its
                     // materials and meshes apart as "xsi:<name>"); `fx.xsi = 0` (read when the game starts): not read, as before
+                    hurry_loader();
                     if xsi {
                         match host.load_xsi_root(&pack_dir) {
                             Ok(line) => {
@@ -119,22 +204,9 @@ fn start_effects(pack_dir: std::path::PathBuf, xsi: bool) {
                         erlog!("vfx: (XSI) fx.xsi = 0: the XS effect root is not read (the XS moves play without their form effects)");
                     }
                     if let Err(e) = host.load_kb_root(&pack_dir).map(|line| erlog!("vfx: (P5) {line}")) { erlog!("vfx: (P5) no keyblade effect root ({e}): the keyblades play the Kingdom Key's trail"); } // (P5) PACK/keyblades/vfx as "kbfx:<name>"
-                    let (materials, meshes) = host.assets();
-                    let materials: Vec<(String, kh_er_render::vfx::Geo, kh_vfx::Blend)> = materials
-                        .into_iter()
-                        .map(|(name, geo, blend)| {
-                            let geo = match geo {
-                                AssetGeo::Quad => kh_er_render::vfx::Geo::Quad,
-                                AssetGeo::Ribbon => kh_er_render::vfx::Geo::Ribbon,
-                                AssetGeo::Mesh => kh_er_render::vfx::Geo::Mesh,
-                                AssetGeo::Decal => kh_er_render::vfx::Geo::Decal,
-                            };
-                            (name, geo, blend)
-                        })
-                        .collect();
                     // (the renderer's worker makes them ready in the background: textures, meshes, pipeline states)
-                    kh_er_render::vfx::preload(&materials, &meshes);
-                    erlog!("vfx: {}; {registered} effects parsed in {:.1} s; {} materials and {} meshes named to the renderer", host.describe(), started.elapsed().as_secs_f32(), materials.len(), meshes.len());
+                    let (materials, meshes) = name_to_renderer(&host);
+                    erlog!("vfx: {}; {registered} effects parsed in {:.1} s; {materials} materials and {meshes} meshes named to the renderer", host.describe(), started.elapsed().as_secs_f32());
                     host.log.clear();
                     if let Ok(mut guard) = EFFECTS.lock() {
                         *guard = Some(host);
@@ -714,18 +786,11 @@ impl Fx {
         #[cfg(feature = "party")]
         kh_party::donald::zettaflare::set_voice_ja(matches!(language, Language::Ja)); // (ZETTA) Donald's lip track follows the voice
         start_audio(pack_dir.to_path_buf(), language);
-        // (XW-c) `fx.main_fix = 0` (read when the game starts): the main table without its overlay (the Blizzard ice mask as before)
-        kh_er_render::vfx::MAIN_OVERLAY.store(control.flag("fx.main_fix") != Some(false), std::sync::atomic::Ordering::Relaxed);
-        // (party VF-b) `fx.trig_fix = 0` / `fx.shards_own = 0` (read when the game starts): the tables without the VF-b overlays
-        kh_er_render::vfx::TRIG_OVERLAY.store(control.flag("fx.trig_fix") != Some(false), std::sync::atomic::Ordering::Relaxed);
-        kh_er_render::xsiweapon::SHARDS_OWN.store(control.flag("fx.shards_own") != Some(false), std::sync::atomic::Ordering::Relaxed);
-        // (XW-d) `fx.xs_own = 0` / `fx.xs_fix = 0` (read when the game starts): the XS effects from effects/ only (not their own files of
-        // effects_xwd/: the main pack's same-named materials, no fragment pieces) / the tables without the XW-d overlays (tmt_cry_00a)
-        kh_host::vfx::XS_OWN_FILES.store(control.flag("fx.xs_own") != Some(false), std::sync::atomic::Ordering::Relaxed);
-        kh_er_render::vfx::XWD_OVERLAY.store(control.flag("fx.xs_fix") != Some(false), std::sync::atomic::Ordering::Relaxed);
-        // (FP) `fx.cull_one_sided = 0` (read when the game starts): one-sided mesh particles draw their back faces too (before FP)
-        kh_er_render::vfx::CULL_ONE_SIDED.store(control.flag("fx.cull_one_sided") != Some(false), std::sync::atomic::Ordering::Relaxed);
-        start_effects(pack_dir.to_path_buf(), control.flag("fx.xsi") != Some(false));
+        // (LOADIN) the effect pack is normally read since the payload's start (`prestart_effects`; else now, as before); if it is
+        // still being read, on at normal priority
+        LOADER_URGENT.store(true, Ordering::SeqCst);
+        configure_effects(control);
+        start_effects(pack_dir.to_path_buf(), control.flag("fx.xsi") != Some(false), false);
         // (a respawn: the effects of the Sora before have no owner)
         if let Ok(mut guard) = EFFECTS.try_lock() {
             if let Some(effects) = guard.as_mut() {
@@ -783,6 +848,12 @@ impl Fx {
             if let Some(effects) = guard.as_mut() {
                 let rays: Option<std::sync::Arc<dyn kh_vfx::RayWorld>> = (control.flag("vfx.rays") != Some(false)).then(|| std::sync::Arc::new(crate::fxrays::ErRays { frame: *frame }) as std::sync::Arc<dyn kh_vfx::RayWorld>);
                 effects.world.set_rays(rays);
+                // (LOADIN) the effects queued to be parsed ahead (the slotted keyblades': kbdraw.rs `equip`), ~2 ms a frame; when
+                // the last is parsed, their materials and meshes go to the renderer's worker
+                if effects.preload_step(std::time::Duration::from_millis(2)).is_some() {
+                    let (materials, meshes) = name_to_renderer(effects);
+                    erlog!("vfx: (LOADIN) the effects parsed ahead are named to the renderer ({materials} materials, {meshes} meshes in all)");
+                }
             }
         }
         kh_er_render::vfx::set_options(kh_er_render::vfx::VfxOptions {

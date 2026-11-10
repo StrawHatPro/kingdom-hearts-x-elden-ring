@@ -23,7 +23,9 @@
 //!   job reference, as its refused entries do, 0x90f55f) and our screen opens instead. Each decide calls the builder
 //!   twice in a frame (0x790314 / 0x790461): the first opens, the second is ignored. Elden Ring's own screen is reached
 //!   only when one of our rows asks for it (Key Bindings, Button Settings, Data Usage Agreement, Quit Game, Return to
-//!   Desktop: [`NATIVE_PASS`] lets the next call through, and the pad presses walk to that row).
+//!   Desktop: [`NATIVE_PASS`] lets the next call through, and the pad presses walk to that row). (NO-ER-PAUSE 2026-11-09:
+//!   only from the TITLE now; in game the in-game top menu never opens at all, nopause.rs, and Quit Game / Return to Desktop
+//!   go the KH way, [`native_route`].)
 //!
 //! THE SETTINGS REACH THE DISK where the game keeps them: its system data (USER_DATA_10, written by the save start S1
 //! 0x67c3c0 with GraphicsConfig.xml after it). Elden Ring's options screen asks no save itself (re-a NOTES 2.2): the
@@ -276,13 +278,34 @@ impl ErGame for RealGame {
     }
 
     fn open_native(&mut self, screen: Native) -> bool {
-        if !crate::inputs::er_reads_pad() {
-            return false;
+        let in_game = IN_GAME.load(Ordering::Relaxed);
+        match native_route(screen, in_game) {
+            // (NO-ER-PAUSE) in game: the KH way out, never Elden Ring's System menu (its top menu is refused, nopause.rs)
+            NativeRoute::Title => crate::savegate::quit_to_title("the settings' Quit Game"),
+            NativeRoute::TitleThenDesktop => {
+                let asked = crate::savegate::quit_to_title("the settings' Return to Desktop");
+                if asked {
+                    DESKTOP_AT.store(now(), Ordering::Relaxed);
+                    TITLE_SEEN_AT.store(0, Ordering::Relaxed);
+                    erlog!("options: Return to Desktop: the game's title screen first, then its window is closed the way its own close button closes it");
+                }
+                asked
+            }
+            NativeRoute::Refused => {
+                erlog!("options: Elden Ring's own {screen:?} screen is not opened in game (NO-ER-PAUSE: its System menu would show)");
+                false
+            }
+            // the title: its own SYSTEM list is walked (the title is not the pause menu)
+            NativeRoute::TitleSystem => {
+                if !crate::inputs::er_reads_pad() {
+                    return false;
+                }
+                if let Ok(mut n) = NATIVE.lock() {
+                    *n = Some(NativeRun { screen, step: 0, next_at: 0 });
+                }
+                true
+            }
         }
-        if let Ok(mut n) = NATIVE.lock() {
-            *n = Some(NativeRun { screen, in_game: IN_GAME.load(Ordering::Relaxed), step: 0, next_at: 0 });
-        }
-        true
     }
 
     fn request_settings_save(&mut self) -> bool {
@@ -627,26 +650,94 @@ pub fn uninstalled() {
 
 // ------------------------------------------------------------------------------------------------ Elden Ring's own screens
 
-/// A walk to one of Elden Ring's own screens: the presses its System menu needs.
+/// (NO-ER-PAUSE, THE USER 2026-11-09: "Elden Ring pause menu should be impossible to ever show up") HOW A ROW THAT ASKS FOR ONE OF
+/// ELDEN RING'S OWN SCREENS IS SERVED. In game its System menu is never walked any more (it is a page of the pause menu): Quit
+/// Game is the game's own return-to-title request (savegate.rs `quit_to_title`, what the camp menu's Title Screen asks: with
+/// `save.points_only` nothing is saved on the way, as its own Quit Game under the gate saved nothing), Return to Desktop the same,
+/// then the game's window closed on the title (its window procedure's own WM_CLOSE: its close button / Alt+F4); the other screens'
+/// rows are not offered in game. On the title its SYSTEM list is walked as before (the title is not the pause menu).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeRoute {
+    Title,
+    TitleThenDesktop,
+    TitleSystem,
+    Refused,
+}
+
+/// The route of a row (pure).
+pub fn native_route(screen: Native, in_game: bool) -> NativeRoute {
+    match (screen, in_game) {
+        (Native::QuitGame, true) => NativeRoute::Title,
+        (Native::Desktop, true) => NativeRoute::TitleThenDesktop,
+        (_, true) => NativeRoute::Refused,
+        (_, false) => NativeRoute::TitleSystem,
+    }
+}
+
+/// Return to Desktop was confirmed at this tick (0: not); the title screen first seen at this tick (0: not yet).
+static DESKTOP_AT: AtomicU64 = AtomicU64::new(0);
+static TITLE_SEEN_AT: AtomicU64 = AtomicU64::new(0);
+/// The title must come within this long; the window is closed this long after it came (its own fade-in settled).
+const DESKTOP_WAIT_MS: u64 = 90_000;
+const DESKTOP_AFTER_TITLE_MS: u64 = 1_500;
+
+/// (NO-ER-PAUSE) The step of Return to Desktop (pure): (asked at, title seen at, the title is up, now) -> (close the window now,
+/// the title-seen tick after, the request still stands).
+pub fn desktop_step(asked: u64, seen: u64, title: bool, t: u64) -> (bool, u64, bool) {
+    if asked == 0 {
+        return (false, 0, false);
+    }
+    if seen == 0 {
+        if title {
+            return (false, t, true);
+        }
+        return (false, 0, t.saturating_sub(asked) <= DESKTOP_WAIT_MS);
+    }
+    if t.saturating_sub(seen) >= DESKTOP_AFTER_TITLE_MS {
+        return (true, seen, false);
+    }
+    (false, seen, true)
+}
+
+/// Once a frame (FRAME_BEGIN): Return to Desktop, on the title.
+fn desktop_frame() {
+    let asked = DESKTOP_AT.load(Ordering::Relaxed);
+    if asked == 0 {
+        return;
+    }
+    let title = crate::game::player_age() == 0 && crate::inputs::ui_states().is_some_and(|s| s[0] & 2 != 0);
+    let (close, seen, stands) = desktop_step(asked, TITLE_SEEN_AT.load(Ordering::Relaxed), title, now());
+    TITLE_SEEN_AT.store(seen, Ordering::Relaxed);
+    if close {
+        let posted = crate::remap_er::close_game_window();
+        erlog!("options: Return to Desktop: the title is up: {}", if posted { "the game's window is asked to close (WM_CLOSE, as its own close button)" } else { "its window is NOT known: the title's QUIT GAME is the way out" });
+    } else if !stands {
+        erlog!("options: Return to Desktop: the title did not come in {} s: the request is dropped", DESKTOP_WAIT_MS / 1000);
+    }
+    if !stands {
+        DESKTOP_AT.store(0, Ordering::Relaxed);
+        TITLE_SEEN_AT.store(0, Ordering::Relaxed);
+    }
+}
+
+/// A walk to one of Elden Ring's own screens from the TITLE: the presses its System menu needs (never in game: NO-ER-PAUSE).
 #[derive(Clone, Copy, Debug)]
 struct NativeRun {
     screen: Native,
-    in_game: bool,
     step: usize,
     next_at: u64,
 }
 static NATIVE: Mutex<Option<NativeRun>> = Mutex::new(None);
 
-const XI_UP: u16 = 0x0001;
 const XI_DOWN: u16 = 0x0002;
 const XI_RB: u16 = 0x0200;
 
-/// THE PRESSES (pure): from the game's menu as it is when our screen has closed (in game: no menu; the title: its list on
-/// SYSTEM, where it stayed) to the row: open the System page (in game: Start, Up = its last entry System, A; the title: A),
-/// RB to the tab, Down to the row, A. Each (buttons, keyboard scan code, wait before it in ms).
-pub fn native_presses(screen: Native, in_game: bool) -> Vec<(u16, u16, u64)> {
+/// THE PRESSES (pure): from the title's list as it is when our screen has closed (on SYSTEM, where it stayed) to the row: A (the
+/// System page), RB to the tab, Down to the row, A. Each (buttons, keyboard scan code, wait before it in ms). (NO-ER-PAUSE: the
+/// in-game walk, Start / Esc, Up, A into the pause menu's System page, is gone.)
+pub fn native_presses(screen: Native) -> Vec<(u16, u16, u64)> {
     let (tabs, rows) = screen.place();
-    let mut p: Vec<(u16, u16, u64)> = if in_game { vec![(crate::inputs::XI_START, crate::inputs::SCAN_ESC, 600), (XI_UP, 0, 800), (crate::inputs::XI_A, crate::inputs::SCAN_E, 450)] } else { vec![(crate::inputs::XI_A, crate::inputs::SCAN_E, 600)] };
+    let mut p: Vec<(u16, u16, u64)> = vec![(crate::inputs::XI_A, crate::inputs::SCAN_E, 600)];
     // the options screen opens (its own fade) before its tabs take a press
     let first = 1400;
     for k in 0..tabs {
@@ -670,12 +761,12 @@ fn native_frame(our_menu_up: bool) {
     if run.step == 0 && run.next_at == 0 {
         NATIVE_PASS.store(t + 12_000, Ordering::Relaxed);
         run.next_at = t + 500;
-        erlog!("options: Elden Ring's own {:?} screen: its System menu is walked to it ({})", run.screen, if run.in_game { "in game" } else { "from the title" });
+        erlog!("options: Elden Ring's own {:?} screen: the title's System menu is walked to it", run.screen);
     }
     if t < run.next_at {
         return;
     }
-    let presses = native_presses(run.screen, run.in_game);
+    let presses = native_presses(run.screen);
     match presses.get(run.step) {
         Some((buttons, scan, _)) => {
             let how = crate::inputs::press_for_er(*buttons, *scan).unwrap_or("NOT PRESSED");
@@ -710,6 +801,7 @@ pub fn frame(control: &Control, our_menu_up: bool) {
         *ini = Some(Ini { keys, path });
     }
     native_frame(our_menu_up);
+    desktop_frame(); // (NO-ER-PAUSE) Return to Desktop, on the title
     drop_old_axes_flags(control); // (CAMP-OPTIONS)
     // (no in-game HUD frame for half a second and our title screen not up: the title, a load: the game's keys are its own)
     // (TITLE-AUDIO) ... nor KH3's Load screen / delete list on the title (titleload.rs `keys_ours` masks the game's keyboard
@@ -990,6 +1082,9 @@ pub fn title_cursor_frame() {
 mod tests {
     use super::*;
 
+    /// D-pad Up (the in-game walk used it to wrap the pause menu's cursor to System: NO-ER-PAUSE, never pressed now)
+    const XI_UP: u16 = 0x0001;
+
     /// (CAMP-OPTIONS follow-ups) the mouse is the right stick as in KH3 PC (0.07 x 0.5 per 1/60 s, clamped to +-3), Elden Ring's
     /// Mouse Sensitivity scales it, Mouse X / Y-Axis flip it once chosen
     #[test]
@@ -1033,13 +1128,37 @@ mod tests {
 
     #[test]
     fn co_the_walks_to_elden_rings_own_screens() {
-        // in game: Start, Up (System is the last entry), A, then RB x tab, Down x row, A
-        let p = native_presses(Native::KeyBindings, true);
-        assert_eq!(p.iter().map(|x| x.0).collect::<Vec<_>>(), [crate::inputs::XI_START, XI_UP, crate::inputs::XI_A, XI_RB, XI_RB, XI_RB, XI_RB, XI_RB, XI_RB, crate::inputs::XI_A]);
         // the title: its list stayed on SYSTEM: A, then the walk
-        let t = native_presses(Native::DataAgreement, false);
+        let t = native_presses(Native::DataAgreement);
         assert_eq!(t.iter().map(|x| x.0).collect::<Vec<_>>(), [crate::inputs::XI_A, XI_RB, XI_RB, XI_RB, XI_RB, XI_DOWN, XI_DOWN, XI_DOWN, crate::inputs::XI_A]);
-        assert_eq!(native_presses(Native::Desktop, true).iter().filter(|x| x.0 == XI_RB).count(), 8);
+        assert_eq!(native_presses(Native::KeyBindings).iter().filter(|x| x.0 == XI_RB).count(), 6);
+        // (NO-ER-PAUSE) no walk ever presses Start (the pause menu's key), Esc or Up (its wrap to System)
+        for screen in [Native::KeyBindings, Native::PadButtons, Native::DataAgreement, Native::QuitGame, Native::Desktop] {
+            assert!(native_presses(screen).iter().all(|x| x.0 != crate::inputs::XI_START && x.0 != XI_UP && x.1 != crate::inputs::SCAN_ESC), "{screen:?}");
+        }
+    }
+
+    /// (NO-ER-PAUSE) in game a row never walks Elden Ring's System menu: Quit Game = the title, Return to Desktop = the title then
+    /// the window; the title's rows walk the title's own list
+    #[test]
+    fn np_the_quit_rows_go_the_kh_way_in_game() {
+        assert_eq!(native_route(Native::QuitGame, true), NativeRoute::Title);
+        assert_eq!(native_route(Native::Desktop, true), NativeRoute::TitleThenDesktop);
+        for screen in [Native::KeyBindings, Native::PadButtons, Native::DataAgreement] {
+            assert_eq!(native_route(screen, true), NativeRoute::Refused, "{screen:?}");
+            assert_eq!(native_route(screen, false), NativeRoute::TitleSystem, "{screen:?}");
+        }
+    }
+
+    /// (NO-ER-PAUSE) Return to Desktop: nothing before the title; the window 1.5 s after it came; dropped when it never comes
+    #[test]
+    fn np_return_to_desktop_closes_the_window_on_the_title() {
+        assert_eq!(desktop_step(0, 0, true, 5_000), (false, 0, false), "not asked");
+        assert_eq!(desktop_step(1_000, 0, false, 30_000), (false, 0, true), "the way out still loading");
+        assert_eq!(desktop_step(1_000, 0, true, 31_000), (false, 31_000, true), "the title came: its fade first");
+        assert_eq!(desktop_step(1_000, 31_000, true, 32_000), (false, 31_000, true));
+        assert_eq!(desktop_step(1_000, 31_000, true, 32_500), (true, 31_000, false), "closed once, then over");
+        assert_eq!(desktop_step(1_000, 0, false, 1_000 + DESKTOP_WAIT_MS + 1), (false, 0, false), "the title never came: dropped");
     }
 
     /// (the user: "keep the elden ring camera invert options, make them work with KH's camera (non-inverted is default)"; "make

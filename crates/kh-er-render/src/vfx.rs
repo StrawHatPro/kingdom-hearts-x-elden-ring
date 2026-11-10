@@ -257,6 +257,33 @@ static OPTIONS: Mutex<Option<VfxOptions>> = Mutex::new(None);
 static GPU: Mutex<Option<Gpu>> = Mutex::new(None);
 /// The formats of the target and the depth the draws go to (the worker makes pipeline states for them).
 static FORMATS: Mutex<Option<(i32, i32)>> = Mutex::new(None);
+/// (LOADIN) The formats the effects are drawn into in every frame of the game the logs hold (its HDR scene target R11G11B10_FLOAT
+/// and its depth D32_FLOAT_S8X24_UINT: "target format 26, depth format 20"): the worker makes the effects' objects for them
+/// before the first frame draws any (at the title), so that they are there when the character is. A frame with other formats
+/// has the pipeline states made again at its first draw (`worker_tick`).
+const EXPECTED_FORMATS: (i32, i32) = (DXGI_FORMAT_R11G11B10_FLOAT.0, DXGI_FORMAT_D32_FLOAT_S8X24_UINT.0);
+/// (LOADIN) `fx.early` (default on; kh-er fx.rs): the effects' objects are made for `EXPECTED_FORMATS` before the first frame draws
+/// any. Off: only for a frame's own formats, at its first draw (before LOADIN).
+pub static EARLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+/// (LOADIN) A harness's stand-in for `EXPECTED_FORMATS` (None: those): other formats than its frame's prove the remake path.
+static EXPECTED_OVERRIDE: Mutex<Option<(i32, i32)>> = Mutex::new(None);
+
+/// (LOADIN, harness) The formats the effects' objects are made for before the first frame draws any (None: `EXPECTED_FORMATS`).
+pub fn set_expected_formats(formats: Option<(i32, i32)>) {
+    if let Ok(mut f) = EXPECTED_OVERRIDE.lock() {
+        *f = formats;
+    }
+}
+
+/// (LOADIN) The (materials, meshes) counts of the last "everything named so far is made" line.
+static READY_TOLD: Mutex<(usize, usize)> = Mutex::new((0, 0));
+
+/// (LOADIN) Materials made for other formats, let go of after the GPU fence (outfit.rs `retire`).
+struct RetiredMaterials {
+    _materials: Vec<MatState>,
+}
+// SAFETY: D3D12 objects are free-threaded; nothing else of the materials is touched after they are retired.
+unsafe impl Send for RetiredMaterials {}
 
 // ---------------------------------------------------------------------------------------------------- (PARTY-NATIVE)
 // THE LIT (DEFERRED) EFFECTS ON THE CHARACTERS' NATIVE ROUTE (er_vfx.wgsl KH_FXNAT / KH_FX_GB; the user 2026-11-05: "Donald and
@@ -371,6 +398,23 @@ fn native_files(letter: &str, shader_id: u64, outputs: u64, suffix: &str) -> Opt
 }
 // Numbers for the log (since the last `status`).
 static DRAWN_FRAMES: AtomicU32 = AtomicU32::new(0);
+/// (LOADIN) The worker's time on the effects' objects since the start (ns, count): textures (file read, decode, upload),
+/// pipeline states (CreateGraphicsPipelineState), meshes (read, upload). `build_times` reports them.
+static BUILD_TEX: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+static BUILD_UPLOAD: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+static BUILD_PSO: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+static BUILD_MESH: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+
+fn count_build(what: &[AtomicU64; 2], since: Instant) {
+    what[0].fetch_add(since.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    what[1].fetch_add(1, Ordering::Relaxed);
+}
+
+/// (LOADIN) The worker's time on the effects' objects so far: "textures N in X s, pipeline states N in X s, meshes N in X s".
+pub fn build_times() -> String {
+    let part = |what: &[AtomicU64; 2]| format!("{} in {:.2} s", what[1].load(Ordering::Relaxed), what[0].load(Ordering::Relaxed) as f64 / 1e9);
+    format!("textures read {}, uploaded {}, pipeline states {}, meshes {}", part(&BUILD_TEX), part(&BUILD_UPLOAD), part(&BUILD_PSO), part(&BUILD_MESH))
+}
 static DRAWN_BATCHES: AtomicU32 = AtomicU32::new(0);
 static DRAWN_INSTANCES: AtomicU64 = AtomicU64::new(0);
 static NOT_READY: AtomicU32 = AtomicU32::new(0);
@@ -1814,6 +1858,7 @@ impl Gpu {
                 }
             }
         }
+        let built = Instant::now(); // (LOADIN)
         let pixels = match Pixels::load_png(&path, false) {
             Ok(pixels) => pixels,
             Err(e) => {
@@ -1821,9 +1866,12 @@ impl Gpu {
                 return None;
             }
         };
+        count_build(&BUILD_TEX, built);
         let device = self.device.clone();
+        let built = Instant::now(); // (LOADIN)
         match self.uploader.texture(&device, &pixels, srgb) {
             Ok((texture, bytes)) => {
+                count_build(&BUILD_UPLOAD, built);
                 self.texture_bytes += bytes;
                 self.textures.insert(key, texture.clone());
                 Some(texture)
@@ -1906,7 +1954,9 @@ impl Gpu {
             SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
             ..Default::default()
         };
+        let built = Instant::now(); // (LOADIN)
         let made: windows::core::Result<ID3D12PipelineState> = self.device.CreateGraphicsPipelineState(&desc);
+        count_build(&BUILD_PSO, built);
         let state = match made {
             Ok(state) => Some(state),
             Err(e) => {
@@ -1918,75 +1968,33 @@ impl Gpu {
         state
     }
 
-    /// (PARTY-NATIVE) A G-buffer twin's pipeline state: the material's vertex stage and its `g<letter><id>` pixel stage into the
-    /// game's three G-buffer targets (`formats`), depth test and write as the opaque pass, the characters' stencil class written
-    /// (the game's light passes and its TAA treat the texel as a character's, as they do the KH characters').
-    unsafe fn gb_pipeline(&mut self, n: &NativeFx, formats: GbFormats, cull: D3D12_CULL_MODE) -> Option<ID3D12PipelineState> {
-        let (vertex, pixel) = (self.shader(&n.dir, &n.vertex)?, self.shader(&n.dir, &n.pixel)?);
-        let element = |index: u32, format: DXGI_FORMAT, slot: u32, offset: u32, instanced: bool| D3D12_INPUT_ELEMENT_DESC { SemanticName: PCSTR(c"LOC".as_ptr().cast()), SemanticIndex: index, Format: format, InputSlot: slot, AlignedByteOffset: offset, InputSlotClass: if instanced { D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA } else { D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA }, InstanceDataStepRate: u32::from(instanced) };
-        let (f3, f4) = (DXGI_FORMAT_R32G32B32_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT);
-        // (the layouts of `pipeline`)
-        let elements: Vec<D3D12_INPUT_ELEMENT_DESC> = match n.geo {
-            Geo::Quad => (0..9).map(|k| element(k, f4, 0, k * 16, true)).collect(),
-            Geo::Ribbon | Geo::Decal => vec![element(0, f3, 0, 0, false), element(1, f4, 0, 12, false), element(2, f4, 0, 28, false), element(3, f4, 0, 44, false), element(4, f4, 0, 60, false), element(5, f4, 0, 76, false), element(6, f3, 0, 92, false), element(7, f3, 0, 104, false), element(8, f4, 0, 116, false)],
-            Geo::Mesh => {
-                let mut v = vec![element(0, f3, 0, 0, false), element(1, f3, 0, 12, false), element(2, f4, 0, 24, false), element(3, f4, 0, 40, false), element(4, f4, 0, 56, false)];
-                v.extend((0..6).map(|k| element(5 + k, f4, 1, k * 16, true)));
-                v
-            }
-        };
-        let mut formats_rt = [DXGI_FORMAT_UNKNOWN; 8];
-        for (k, f) in formats.0.iter().enumerate() {
-            formats_rt[k] = DXGI_FORMAT(*f);
-        }
-        let stencil = matches!(DXGI_FORMAT(formats.1), DXGI_FORMAT_D32_FLOAT_S8X24_UINT | DXGI_FORMAT_D24_UNORM_S8_UINT);
-        let replace = D3D12_DEPTH_STENCILOP_DESC { StencilFailOp: D3D12_STENCIL_OP_KEEP, StencilDepthFailOp: D3D12_STENCIL_OP_KEEP, StencilPassOp: D3D12_STENCIL_OP_REPLACE, StencilFunc: D3D12_COMPARISON_FUNC_ALWAYS };
-        let desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-            // SAFETY: a borrowed copy of the interface pointer for the duration of the call.
-            pRootSignature: std::mem::transmute_copy(&self.root),
-            VS: D3D12_SHADER_BYTECODE { pShaderBytecode: vertex.as_ptr() as *const c_void, BytecodeLength: vertex.len() },
-            PS: D3D12_SHADER_BYTECODE { pShaderBytecode: pixel.as_ptr() as *const c_void, BytecodeLength: pixel.len() },
-            BlendState: D3D12_BLEND_DESC::default(),
-            SampleMask: u32::MAX,
-            RasterizerState: D3D12_RASTERIZER_DESC { FillMode: D3D12_FILL_MODE_SOLID, CullMode: cull, FrontCounterClockwise: false.into(), DepthClipEnable: true.into(), ..Default::default() },
-            DepthStencilState: D3D12_DEPTH_STENCIL_DESC { DepthEnable: true.into(), DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ALL, DepthFunc: D3D12_COMPARISON_FUNC_GREATER_EQUAL, StencilEnable: stencil.into(), StencilReadMask: 0xFF, StencilWriteMask: 0xFF, FrontFace: replace, BackFace: replace },
-            InputLayout: D3D12_INPUT_LAYOUT_DESC { pInputElementDescs: elements.as_ptr(), NumElements: elements.len() as u32 },
-            PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-            NumRenderTargets: formats.0.len() as u32,
-            RTVFormats: formats_rt,
-            DSVFormat: DXGI_FORMAT(formats.1),
-            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
-            ..Default::default()
-        };
-        match self.device.CreateGraphicsPipelineState(&desc) {
-            Ok(state) => Some(state),
-            Err(e) => {
-                self.tell(format!("(PARTY-NATIVE) the G-buffer twin {} + {} could not be made ({e}): the material keeps its earlier shading", n.vertex, n.pixel));
-                None
+    /// (PARTY-NATIVE) The G-buffer twins still wanted for these G-buffer formats, at most `most` of them (LOADIN: taken under the
+    /// lock with their shader bytes; their states are made outside it, `make_gb_states`). A twin whose shader file is missing is
+    /// marked failed here.
+    fn gb_jobs(&mut self, formats: GbFormats, most: usize) -> Vec<GbJob> {
+        let wanted: Vec<usize> = (0..self.materials.len()).filter(|k| matches!(&self.materials[*k], MatState::Ready(m) if m.native.as_ref().is_some_and(|n| !n.gb_failed && n.gb.as_ref().is_none_or(|g| g.0 != formats)))).take(most).collect();
+        let mut jobs = Vec::new();
+        for k in wanted {
+            let Some((dir, vertex_file, pixel_file, geo, cull, one_sided)) = (match &self.materials[k] {
+                MatState::Ready(m) => m.native.as_ref().map(|n| (n.dir.clone(), n.vertex.clone(), n.pixel.clone(), n.geo, n.cull, n.one_sided)),
+                _ => None,
+            }) else {
+                continue;
+            };
+            match (self.shader(&dir, &vertex_file), self.shader(&dir, &pixel_file)) {
+                (Some(vertex), Some(pixel)) => jobs.push(GbJob { id: k, dir, vertex_file, pixel_file, vertex, pixel, geo, cull, one_sided }),
+                _ => {
+                    if let MatState::Ready(m) = &mut self.materials[k] {
+                        if let Some(n) = m.native.as_mut() {
+                            n.gb_failed = true;
+                        }
+                    }
+                }
             }
         }
+        jobs
     }
 
-    /// (PARTY-NATIVE) The G-buffer twins' states of the ready materials for this frame's G-buffer formats, a few per call (the
-    /// worker's; the drawing thread only tries the lock). Returns how many were made.
-    unsafe fn make_gb_states(&mut self, formats: GbFormats, most: usize) -> usize {
-        let wanted: Vec<usize> = (0..self.materials.len()).filter(|k| matches!(&self.materials[*k], MatState::Ready(m) if m.native.as_ref().is_some_and(|n| !n.gb_failed && n.gb.as_ref().is_none_or(|g| g.0 != formats)))).take(most).collect();
-        for k in &wanted {
-            let MatState::Ready(m) = &mut self.materials[*k] else { continue };
-            let Some(n) = m.native.take() else { continue };
-            let plain = self.gb_pipeline(&n, formats, n.cull);
-            let turned = if n.one_sided { self.gb_pipeline(&n, formats, one_sided_cull(true)) } else { None };
-            let mut n = n;
-            match plain {
-                Some(p) if !n.one_sided || turned.is_some() => n.gb = Some((formats, p, turned)),
-                _ => n.gb_failed = true,
-            }
-            if let MatState::Ready(m) = &mut self.materials[*k] {
-                m.native = Some(n);
-            }
-        }
-        wanted.len()
-    }
 
     /// One material of the registry made ready (the test app's `build_material`, for this host).
     unsafe fn build_material(&mut self, id: usize, key: &MatKey, shading: &Shading) -> MatState {
@@ -2247,6 +2255,9 @@ impl Gpu {
             Some((n_file, g_file)) if pass == Pass::Opaque && shader_dir.join("er").join(&n_file).is_file() && shader_dir.join("er").join(&g_file).is_file() => {
                 let colour = self.pipeline(&shader_dir, &vertex_file, &n_file, PipeKind { pass, geo: key.geo, distort: false, cull });
                 let colour_mirrored = if one_sided { self.pipeline(&shader_dir, &vertex_file, &n_file, PipeKind { pass, geo: key.geo, distort: false, cull: one_sided_cull(true) }) } else { None };
+                // (LOADIN) its G-buffer twin's pixel stage read now (kept with the others): the twin's state, made at the first
+                // frames in the world, reads no file under the effects' lock
+                let _ = self.shader(&shader_dir, &g_file);
                 colour.filter(|_| !one_sided || colour_mirrored.is_some()).map(|colour| Box::new(NativeFx { colour, colour_mirrored, dir: shader_dir.clone(), vertex: vertex_file.clone(), pixel: g_file, geo: key.geo, cull, one_sided, gb: None, gb_failed: false }))
             }
             _ => None,
@@ -2255,6 +2266,13 @@ impl Gpu {
     }
 
     unsafe fn build_mesh(&mut self, name: &str, dir: &Path) -> MeshState {
+        let built = Instant::now(); // (LOADIN)
+        let state = self.build_mesh_now(name, dir);
+        count_build(&BUILD_MESH, built);
+        state
+    }
+
+    unsafe fn build_mesh_now(&mut self, name: &str, dir: &Path) -> MeshState {
         let Some(mesh) = read_glb(&dir.join("meshes").join(format!("{name}.glb"))) else {
             self.tell(format!("mesh {name} could not be read from PACK/vfx/meshes: its particles are not drawn"));
             return MeshState::Failed;
@@ -2408,17 +2426,36 @@ fn read_glb(path: &Path) -> Option<CpuMesh> {
 /// (call again at once).
 pub(crate) fn worker_tick(device: &ID3D12Device) -> bool {
     let Some(shading) = shading() else { return false };
-    let Some(formats) = FORMATS.lock().ok().and_then(|g| *g) else { return false };
+    // (LOADIN) before the first frame draws effects: the formats every frame of the game draws them into, as soon as the effect
+    // side has named what it needs (at the title: everything is made before the world's first frame)
+    let named = EARLY.load(Ordering::Relaxed) && REGISTRY.lock().ok().is_some_and(|r| r.as_ref().is_some_and(|r| !r.keys.is_empty()));
+    let Some(formats) = FORMATS.lock().ok().and_then(|g| *g).or_else(|| named.then(|| EXPECTED_OVERRIDE.lock().ok().and_then(|f| *f).unwrap_or(EXPECTED_FORMATS))) else { return false };
     // ---- our objects, for this device and these formats
     {
         let mut guard = GPU.lock().unwrap();
-        let stale = guard.as_ref().is_some_and(|g| g.device.as_raw() != device.as_raw() || g.formats != formats);
+        let stale = guard.as_ref().is_some_and(|g| g.device.as_raw() != device.as_raw());
         if stale {
-            // (a new device, or other formats: everything is made again)
+            // (a new device: everything is made again)
             let old = guard.take();
             drop(guard);
             drop(POST.lock().unwrap().take()); // (VFXR)
             release_gpu(old);
+            return true;
+        }
+        // (LOADIN) OTHER FORMATS (the frame's are not the expected ones): only what depends on them is made again (the pipeline
+        // states, the materials holding them, the post kit); the textures, meshes and shader bytes are kept. The old materials
+        // are let go of after the GPU fence (a frame may have drawn with them).
+        if let Some(gpu) = guard.as_mut().filter(|g| g.formats != formats) {
+            rlog!("vfx: (LOADIN) the frame's formats ({}, {}) are not the ones the effects' pipeline states were made for ({}, {}): those are made again (textures and meshes kept)", formats.0, formats.1, gpu.formats.0, gpu.formats.1);
+            gpu.formats = formats;
+            gpu.pipelines.clear();
+            if let Ok(mut told) = READY_TOLD.lock() {
+                *told = (0, 0); // (the "everything made" line again when they are)
+            }
+            let old = std::mem::take(&mut gpu.materials);
+            crate::outfit::retire(Box::new(RetiredMaterials { _materials: old }));
+            drop(guard);
+            drop(POST.lock().unwrap().take()); // (VFXR)
             return true;
         }
         // (VFXR) the post kit, once per device and formats (its shaders: PACK/vfx/er/fxp_*.ps.dxil)
@@ -2507,18 +2544,23 @@ pub(crate) fn worker_tick(device: &ID3D12Device) -> bool {
     }
     // (PARTY-NATIVE) the lit effects' G-buffer twins for this frame's G-buffer formats (a few per tick)
     if let Some(gb) = GB_FORMATS.lock().ok().and_then(|g| *g) {
-        let mut guard = GPU.lock().unwrap();
-        if let Some(gpu) = guard.as_mut() {
-            // SAFETY: as above.
-            if crate::hook::as_ours(|| unsafe { gpu.make_gb_states(gb, 4) }) > 0 {
-                return true;
-            }
+        // SAFETY: as above (the states are made outside the effects' lock: `make_gb_states`).
+        if crate::hook::as_ours(|| unsafe { make_gb_states(gb, 4) }) > 0 {
+            return true;
         }
     }
     if material_jobs.is_empty() && mesh_jobs.is_empty() {
         if let Ok(mut guard) = GPU.lock() {
             if let Some(gpu) = guard.as_mut() {
                 gpu.pending_materials = 0;
+                // (LOADIN) a line each time everything named so far is made (the first: the effect pack's preload)
+                let named = (gpu.materials.len(), gpu.meshes.len());
+                let before = READY_TOLD.lock().map(|mut t| std::mem::replace(&mut *t, named)).unwrap_or(named);
+                if before != named {
+                    // (the materials made since the line before, when a few: those named only at their first spawn)
+                    let new: Vec<String> = if before.0 > 0 && named.0 > before.0 && named.0 - before.0 <= 12 { REGISTRY.lock().ok().and_then(|r| r.as_ref().map(|r| r.keys.iter().skip(before.0).take(named.0 - before.0).map(|k| k.name.clone()).collect())).unwrap_or_default() } else { Vec::new() };
+                    rlog!("vfx: (LOADIN) every effect material and mesh named so far is made: {} material(s), {} mesh(es), {} texture(s) ({} MB), for formats ({}, {}){}{}; {}", named.0, named.1, gpu.textures.len(), gpu.texture_bytes / 1_048_576, gpu.formats.0, gpu.formats.1, if FORMATS.lock().ok().and_then(|f| *f).is_none() { " (expected: no frame has drawn effects yet)" } else { "" }, if new.is_empty() { String::new() } else { format!("; new: {}", new.join(", ")) }, build_times());
+                }
             }
         }
         return false;
@@ -2563,6 +2605,117 @@ pub(crate) fn worker_tick(device: &ID3D12Device) -> bool {
         gpu.pending_materials = total;
     }
     true
+}
+
+/// (PARTY-NATIVE) A G-buffer twin to be made: the material's id, its native pair's files and their bytes.
+struct GbJob {
+    id: usize,
+    dir: PathBuf,
+    vertex_file: String,
+    pixel_file: String,
+    vertex: Arc<Vec<u8>>,
+    pixel: Arc<Vec<u8>>,
+    geo: Geo,
+    cull: D3D12_CULL_MODE,
+    one_sided: bool,
+}
+
+/// (PARTY-NATIVE) A G-buffer twin's pipeline state: the material's vertex stage and its `g<letter><id>` pixel stage into the
+/// game's three G-buffer targets (`formats`), depth test and write as the opaque pass, the characters' stencil class written
+/// (the game's light passes and its TAA treat the texel as a character's, as they do the KH characters').
+///
+/// # Safety
+/// `device` and `root` are alive; the shader bytes are DXIL for this root signature.
+unsafe fn gb_pipeline(device: &ID3D12Device, root: &ID3D12RootSignature, job: &GbJob, formats: GbFormats, cull: D3D12_CULL_MODE) -> windows::core::Result<ID3D12PipelineState> {
+    let (vertex, pixel) = (&job.vertex, &job.pixel);
+    let element = |index: u32, format: DXGI_FORMAT, slot: u32, offset: u32, instanced: bool| D3D12_INPUT_ELEMENT_DESC { SemanticName: PCSTR(c"LOC".as_ptr().cast()), SemanticIndex: index, Format: format, InputSlot: slot, AlignedByteOffset: offset, InputSlotClass: if instanced { D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA } else { D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA }, InstanceDataStepRate: u32::from(instanced) };
+    let (f3, f4) = (DXGI_FORMAT_R32G32B32_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT);
+    // (the layouts of `pipeline`)
+    let elements: Vec<D3D12_INPUT_ELEMENT_DESC> = match job.geo {
+        Geo::Quad => (0..9).map(|k| element(k, f4, 0, k * 16, true)).collect(),
+        Geo::Ribbon | Geo::Decal => vec![element(0, f3, 0, 0, false), element(1, f4, 0, 12, false), element(2, f4, 0, 28, false), element(3, f4, 0, 44, false), element(4, f4, 0, 60, false), element(5, f4, 0, 76, false), element(6, f3, 0, 92, false), element(7, f3, 0, 104, false), element(8, f4, 0, 116, false)],
+        Geo::Mesh => {
+            let mut v = vec![element(0, f3, 0, 0, false), element(1, f3, 0, 12, false), element(2, f4, 0, 24, false), element(3, f4, 0, 40, false), element(4, f4, 0, 56, false)];
+            v.extend((0..6).map(|k| element(5 + k, f4, 1, k * 16, true)));
+            v
+        }
+    };
+    let mut formats_rt = [DXGI_FORMAT_UNKNOWN; 8];
+    for (k, f) in formats.0.iter().enumerate() {
+        formats_rt[k] = DXGI_FORMAT(*f);
+    }
+    let stencil = matches!(DXGI_FORMAT(formats.1), DXGI_FORMAT_D32_FLOAT_S8X24_UINT | DXGI_FORMAT_D24_UNORM_S8_UINT);
+    let replace = D3D12_DEPTH_STENCILOP_DESC { StencilFailOp: D3D12_STENCIL_OP_KEEP, StencilDepthFailOp: D3D12_STENCIL_OP_KEEP, StencilPassOp: D3D12_STENCIL_OP_REPLACE, StencilFunc: D3D12_COMPARISON_FUNC_ALWAYS };
+    let desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
+        // SAFETY: a borrowed copy of the interface pointer for the duration of the call.
+        pRootSignature: std::mem::transmute_copy(root),
+        VS: D3D12_SHADER_BYTECODE { pShaderBytecode: vertex.as_ptr() as *const c_void, BytecodeLength: vertex.len() },
+        PS: D3D12_SHADER_BYTECODE { pShaderBytecode: pixel.as_ptr() as *const c_void, BytecodeLength: pixel.len() },
+        BlendState: D3D12_BLEND_DESC::default(),
+        SampleMask: u32::MAX,
+        RasterizerState: D3D12_RASTERIZER_DESC { FillMode: D3D12_FILL_MODE_SOLID, CullMode: cull, FrontCounterClockwise: false.into(), DepthClipEnable: true.into(), ..Default::default() },
+        DepthStencilState: D3D12_DEPTH_STENCIL_DESC { DepthEnable: true.into(), DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ALL, DepthFunc: D3D12_COMPARISON_FUNC_GREATER_EQUAL, StencilEnable: stencil.into(), StencilReadMask: 0xFF, StencilWriteMask: 0xFF, FrontFace: replace, BackFace: replace },
+        InputLayout: D3D12_INPUT_LAYOUT_DESC { pInputElementDescs: elements.as_ptr(), NumElements: elements.len() as u32 },
+        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+        NumRenderTargets: formats.0.len() as u32,
+        RTVFormats: formats_rt,
+        DSVFormat: DXGI_FORMAT(formats.1),
+        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        ..Default::default()
+    };
+    device.CreateGraphicsPipelineState(&desc)
+}
+
+/// (PARTY-NATIVE) The G-buffer twins' states of the ready materials for this frame's G-buffer formats, a few per call (the
+/// worker's). (LOADIN) Made OUTSIDE the effects' lock (only the jobs are taken and the states stored under it): the drawing
+/// thread only TRIES that lock and draws no effects in a frame it is held, and these are made in the first frames in the world
+/// (the G-buffer's formats are known only then), when everything else is made already. Returns how many were made.
+///
+/// # Safety
+/// Object creation on the host's device from our own thread (free-threaded API).
+unsafe fn make_gb_states(formats: GbFormats, most: usize) -> usize {
+    let (device, root, jobs) = {
+        let mut guard = GPU.lock().unwrap();
+        let Some(gpu) = guard.as_mut() else { return 0 };
+        let jobs = gpu.gb_jobs(formats, most);
+        (gpu.device.clone(), gpu.root.clone(), jobs)
+    };
+    if jobs.is_empty() {
+        return 0;
+    }
+    let made: Vec<_> = jobs
+        .iter()
+        .map(|job| {
+            let built = Instant::now();
+            let plain = gb_pipeline(&device, &root, job, formats, job.cull);
+            let turned = if job.one_sided { gb_pipeline(&device, &root, job, formats, one_sided_cull(true)).ok() } else { None };
+            count_build(&BUILD_PSO, built);
+            (plain, turned)
+        })
+        .collect();
+    let mut guard = GPU.lock().unwrap();
+    let Some(gpu) = guard.as_mut().filter(|g| g.device.as_raw() == device.as_raw()) else { return 0 };
+    let mut failed = Vec::new();
+    for (job, (plain, turned)) in jobs.iter().zip(made) {
+        // (the same material still: its native pair's files, its twin still wanted for these formats)
+        let Some(MatState::Ready(m)) = gpu.materials.get_mut(job.id) else { continue };
+        let Some(n) = m.native.as_mut().filter(|n| n.dir == job.dir && n.vertex == job.vertex_file && n.pixel == job.pixel_file && !n.gb_failed && n.gb.as_ref().is_none_or(|g| g.0 != formats)) else { continue };
+        match plain {
+            Ok(p) if !job.one_sided || turned.is_some() => n.gb = Some((formats, p, turned)),
+            Ok(_) => {
+                n.gb_failed = true;
+                failed.push(format!("(PARTY-NATIVE) the G-buffer twin {} + {} (its mirrored state) could not be made: the material keeps its earlier shading", job.vertex_file, job.pixel_file));
+            }
+            Err(e) => {
+                n.gb_failed = true;
+                failed.push(format!("(PARTY-NATIVE) the G-buffer twin {} + {} could not be made ({e}): the material keeps its earlier shading", job.vertex_file, job.pixel_file));
+            }
+        }
+    }
+    for text in failed {
+        gpu.tell(text);
+    }
+    jobs.len()
 }
 
 fn release_gpu(gpu: Option<Gpu>) {

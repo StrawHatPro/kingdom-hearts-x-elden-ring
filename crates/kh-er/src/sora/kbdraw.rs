@@ -105,8 +105,22 @@ pub fn equip(status: &Status) {
         if s.effects_for != key {
             let (trail, sockets) = effect_data(status, &s.base);
             let allowed = allowed_of(status, &current, &slots); // (MIMIC-FX: the rule shared with the Sora copies, `effect_facts`)
-            let told = crate::fx::with_effects(|e| e.set_keyblade(trail.as_deref(), sockets.as_ref(), &allowed));
+            // (LOADIN) THE SLOTTED KEYBLADES' OWN EFFECTS PARSED AHEAD (their trails, appear / disappear and hit effects: the base
+            // models' `v<model>_*` of the keyblades' root, the trail, what their data spawns), a few a frame (fx.rs `Fx::frame`),
+            // and named to the renderer: made ready before the first swing or switch, not at it (the user 2026-11-10: "keyblade
+            // particle effects ... don't load in as soon as the character does"). Their form weapons' effects come with the form,
+            // as before.
+            let spawns: Vec<String> = status.keyblades().slots().iter().flatten().flat_map(|k| kh_core::status::keyblade::effect_names(*k)).map(str::to_string).collect();
+            let bases: Vec<String> = kh_er_render::keyblade::table().map(|t| std::iter::once(current.as_str()).chain(slots.iter().map(String::as_str)).filter_map(|id| t.keyblade(id)).map(|k| k.base.clone()).filter(|b| b != kh_er_render::keyblade::KINGDOM_KEY).collect()).unwrap_or_default();
+            let mut queued = 0;
+            let told = crate::fx::with_effects(|e| {
+                e.set_keyblade(trail.as_deref(), sockets.as_ref(), &allowed);
+                queued = e.queue_keyblade_effects(trail.as_deref(), &spawns, &bases);
+            });
             if told {
+                if queued > 0 {
+                    erlog!("keyblade: (LOADIN) {queued} effect(s) of the slotted keyblades ({}) parsed ahead of their first spawn", bases.join(", "));
+                }
                 erlog!("keyblade: the effect side takes {}'s trail {} and its {} socket(s); its effects and the slotted keyblades' pass ({})", s.base, trail.as_deref().unwrap_or("(the Kingdom Key's)"), sockets.as_ref().and_then(serde_json::Value::as_object).map_or(0, |o| o.len()), allowed.join(", "));
                 s.effects_for = key;
             }
@@ -246,7 +260,13 @@ fn load_chain(model: &str) -> Option<kh_anim::Keychain> {
 pub(crate) struct HandChain {
     chain: Option<kh_anim::Keychain>,
     chain_for: String,
+    /// (KEYBLADE-SWAP) the keychains of the keyblades held before (model, its keychain; the latest few): a D-pad switch back
+    /// to one reads no file on the game's thread (it is reset as a freshly read one)
+    kept: Vec<(String, Option<kh_anim::Keychain>)>,
 }
+
+/// (KEYBLADE-SWAP) How many keychains of keyblades held before a [`HandChain`] keeps (his three slots and a spare).
+const KEPT_CHAINS: usize = 4;
 
 impl HandChain {
     /// One step of the keychain of `base` (the hand keyblade's base model) at `weapon_to_world`: `Some(pose)` in THAT model's
@@ -256,7 +276,19 @@ impl HandChain {
             return None;
         }
         if self.chain_for != base {
-            self.chain = load_chain(base);
+            // (KEYBLADE-SWAP) the one held so far is kept; the new one from those kept, else read
+            let before = (std::mem::take(&mut self.chain_for), self.chain.take());
+            if !before.0.is_empty() {
+                self.kept.retain(|(m, _)| *m != before.0);
+                self.kept.push(before);
+                if self.kept.len() > KEPT_CHAINS {
+                    self.kept.remove(0);
+                }
+            }
+            self.chain = match self.kept.iter().position(|(m, _)| m == base) {
+                Some(k) => self.kept.remove(k).1,
+                None => load_chain(base),
+            };
             self.chain_for = base.to_string();
             if let Some(c) = self.chain.as_mut() {
                 c.reset();

@@ -75,7 +75,9 @@ pub fn init(dll_dir: &Path, root: &Path) {
     kh_er_render::set_options(render_options(&control));
     crate::hud::set_root(root);
     crate::titlemusic::configure(&control); // (TITLE-AUDIO) title.custom_loop, read before the audio side reads the pack
-    crate::fx::prestart(&crate::sora::data_paths(root).0); // (IMPL_ER14) the audio pack and device from the start
+    let pack_dir = crate::sora::data_paths(root).0;
+    crate::fx::prestart(&pack_dir); // (IMPL_ER14) the audio pack and device from the start
+    crate::fx::prestart_effects(&pack_dir, &control); // (LOADIN) the effect pack from the start: ready when the character is
     crate::prize::set_held_file(); // (prize)
     *STATE.lock().unwrap() = Some(State {
         control,
@@ -334,7 +336,7 @@ fn process_cpu_ns() -> u64 {
 
 /// (TITLEPERF) The frame-begin systems timed one by one (ns since the last report), with their names.
 static SUB: [std::sync::atomic::AtomicU64; 15] = [const { std::sync::atomic::AtomicU64::new(0) }; 15];
-const SUB_NAMES: [&str; 15] = ["save.set_dir", "savegate", "slots", "gracelock+telescope", "erkeyui", "slots.aids", "pause", "title", "tutorial", "probe", "newgame", "titleload", "fx.trace", "track_player", "the tick's work"];
+const SUB_NAMES: [&str; 15] = ["save.set_dir", "savegate", "slots", "gracelock+telescope+pools", "erkeyui", "slots.aids", "pause", "title", "tutorial", "probe", "newgame", "titleload", "fx.trace", "track_player", "the tick's work"];
 
 fn sub_timed<R>(k: usize, f: impl FnOnce() -> R) -> R {
     let started = std::time::Instant::now();
@@ -382,10 +384,13 @@ fn run_phase(phase_id: u32, dt: f32) {
             kh_er_render::set_options(render_options(&state.control));
         }
         sub_timed(0, || crate::save::set_dir(&state.root, &state.control)); // (IMPL_ER13)
+        crate::crashrec::frame(state.tick); // (CONT-CRASH) every 10 s: the crash recorder still the top-level filter
         sub_timed(1, || crate::savegate::frame(&state.control, dt)); // (savegate)
+        sub_timed(2, || crate::saveplace::keys(&state.control)); // (CONT-LADDER) saveplace / saveplace.stamp / saveplace.warp
         sub_timed(2, crate::slots::frame); // (IMPL_ER13) a save into a slot is followed to its end
         sub_timed(3, || crate::gracelock::frame(&state.control)); // (SV) the game's grace actions switched off at their source
         sub_timed(3, || crate::telescope::frame(&state.control)); // (TELESCOPE) the game's Birdseye Telescopes switched off at their source
+        sub_timed(3, || crate::summonpool::frame(&state.control)); // (SUMMON-POOL) the summoning pools switched off at their source
         sub_timed(3, || crate::ertext::frame(&state.control)); // (MUNNY-TEXT) the currency runes say munny in Elden Ring's text (`munny.text = 0`: its own words)
         sub_timed(4, || crate::erkeyui::frame(&state.control)); // (HUD2, ERUI) Elden Ring's banners and item-get UI off (hud.er_banners / hud.er_item_ui = 1: shown)
         sub_timed(5, || crate::slots::aids(&state.control)); // (IMPL_ER13) dbg.slots / dbg.saveto
@@ -404,6 +409,7 @@ fn run_phase(phase_id: u32, dt: f32) {
         sub_timed(11, || crate::eroptions::frame(&state.control, false)); // (CAMP-OPTIONS) the Style row's settings file, the walks to Elden Ring's own screens
         sub_timed(11, || crate::eroptions::title_frame(&state.control)); // (CAMP-OPTIONS) the title's SYSTEM = our settings screen
         crate::eroptions::title_cursor_frame(); // (CAMP-OPTIONS) the title's cursor back on SYSTEM after our screen
+        crate::nopause::frame(); // (NO-ER-PAUSE) the refused top-menu requests, in the log
         sub_timed(12, || crate::gosound::frame(&state.control)); // (GOS) the game over's silence given back when our HUD frames stop
         sub_timed(12, || crate::ersound::frame(&state.control)); // (ER-TWEAKS) the Tarnished's voice muted (`tarnished.voice_mute`)
         sub_timed(12, || crate::dragonmsg::frame(&state.control)); // (ER-TWEAKS) the draconic-power popup not shown (`er.dragon_popup = 1`: shown)

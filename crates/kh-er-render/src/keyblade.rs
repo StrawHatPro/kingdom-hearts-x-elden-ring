@@ -13,12 +13,16 @@
 //!   vertex layout (kh-shaderc's normal mode with the main pack's world post-process block spliced in:
 //!   build/sora_tmp/weapons/P5/tools/splice_kb_wgsl.js + kb_shader_jobs.js, `--rebuild`), with every set the renderer may
 //!   pick ("", _pl, _bl, _bli, _hy2, _gb2, _hy3, _gb3, the Mimic Tear's _gb3_mm / _gb3_mf).
-//! - WHAT IS LOADED ([`set_equipped`], the host every frame): the keyblade in his hand with ALL of its models (its forms
-//!   can start at once) and the BASE models of the other two slots (KH3's D-pad switch shows the next one 0.22 s later:
-//!   no load in between). A change of that set is a reload of Sora's assets on the renderer's worker (gfx.rs `Job::Load`,
-//!   as an outfit change): the drawn assets stay until the new ones are made, then they are RETIRED to the GPU fence
-//!   (outfit.rs `retire`: released once the GPU has passed the frame that last used them). The Kingdom Key is the main
-//!   pack's (`weapon/kingdom_key.glb`, its tuned slot): never taken from here.
+//! - WHAT IS LOADED ([`set_equipped`], the host every frame): (KEYBLADE-SWAP) EVERY SLOTTED KEYBLADE WITH ALL OF ITS MODELS
+//!   (the one in his hand and the other two: a D-pad switch between them changes nothing that is loaded, so it loads nothing
+//!   and is drawn at once; its forms can start at once). Only an equip change (another keyblade put into a slot) changes that
+//!   set: a KEYBLADE-ONLY reload on the renderer's worker (gfx.rs `Job::Load`): Sora's textures, meshes and pipeline states
+//!   are taken over from the drawn assets (shared, never a second copy), only the keyblade models' own meshes, textures,
+//!   `kb:` slots and their pipeline states are made; the drawn assets stay until then and are RETIRED to the GPU fence
+//!   (outfit.rs `retire`: released once the GPU has passed the frame that last used them, off the game's thread). (It was the
+//!   hand's keyblade whole + the others' base models: every D-pad switch reloaded all of Sora's ~300 MB, 1.3-2.7 s, and the
+//!   hand-over stalled the game's frame.) The Kingdom Key is the main pack's (`weapon/kingdom_key.glb`, its tuned slot):
+//!   never taken from here.
 //! - WHAT IS DRAWN ([`hand`] / [`role`]): his weapon (`FrameInput::weapon`: R_wep_skt, the host's keychain pose of THAT
 //!   keyblade's own skeleton, its opacity) is drawn with the current keyblade's base model; the Kingdom Key's model is not
 //!   drawn meanwhile. A keyblade not loaded yet is not drawn (the reload is under way; a failed load draws the Kingdom
@@ -203,17 +207,13 @@ impl Table {
         self.models.iter().find(|m| m.model == name)
     }
 
-    /// THE MODELS TO HAVE LOADED for this equipment: every model of the keyblade in his hand and the base model of each
-    /// other slotted keyblade, never the Kingdom Key's own (the main pack's); sorted, each once.
+    /// THE MODELS TO HAVE LOADED for this equipment: (KEYBLADE-SWAP) every model of every slotted keyblade (the one in his
+    /// hand and the others alike: a D-pad switch between them keeps this set), never the Kingdom Key's own (the main
+    /// pack's); sorted, each once. The order of `current` and `slots` does not matter.
     pub fn wanted_models(&self, current: &str, slots: &[&str]) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
-        if let Some(k) = self.keyblade(current) {
+        for k in std::iter::once(current).chain(slots.iter().copied()).filter_map(|s| self.keyblade(s)) {
             out.extend(std::iter::once(k.base.clone()).chain(k.models.iter().cloned()));
-        }
-        for s in slots {
-            if let Some(k) = self.keyblade(s) {
-                out.push(k.base.clone());
-            }
         }
         out.retain(|m| m != KINGDOM_KEY && self.model(m).is_some_and(|x| x.glb.is_file()));
         out.sort();
@@ -280,8 +280,17 @@ pub fn set_equipped(current: &str, slots: &[&str]) {
         if st.current == current && st.slots == slots {
             return;
         }
-        let refs: Vec<&str> = slots.iter().map(String::as_str).collect();
-        st.wanted = t.wanted_models(&current, &refs);
+        // (KEYBLADE-SWAP) a D-pad switch keeps the set of slotted keyblades: the wanted models stay as they are (no file look-up
+        // on the game's thread, nothing to load); only another set (an equip change) is looked up again
+        let set = |c: &str, s: &[String]| {
+            let mut v: Vec<String> = std::iter::once(c.to_string()).chain(s.iter().cloned()).collect();
+            v.sort();
+            v
+        };
+        if st.current.is_empty() || set(&st.current, &st.slots) != set(&current, &slots) {
+            let refs: Vec<&str> = slots.iter().map(String::as_str).collect();
+            st.wanted = t.wanted_models(&current, &refs);
+        }
         if st.told != current {
             crate::rlog!("render: (P5) keyblade in his hand: {current} ({}); slots {:?}; models wanted {:?}", t.keyblade(&current).map_or("?", |k| k.name.as_str()), slots, st.wanted);
             st.told.clone_from(&current);
@@ -384,10 +393,18 @@ pub fn keychain_in(t: &Table, model: &str) -> Option<Result<kh_anim::Keychain, S
 
 /// A keyblade model's skeleton sockets (`<model>/sockets.json`: the blade's trail points vfx_top / vfx_bottom ... relative
 /// to its bone `wep`, the format of `PACK/vfx/host.json` `weapon_sockets`), for the effect side.
+/// (KEYBLADE-SWAP) Read once per model: a D-pad switch reads no file on the game's thread.
 pub fn sockets_json(model: &str) -> Option<Value> {
-    let m = table()?.model(model)?;
-    let text = std::fs::read_to_string(m.dir.join("sockets.json")).ok()?;
-    serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).ok().map(|v| v["weapon_sockets"].clone())
+    static READ: Mutex<Option<HashMap<String, Option<Value>>>> = Mutex::new(None);
+    let mut g = READ.lock().unwrap_or_else(|e| e.into_inner());
+    g.get_or_insert_with(HashMap::new)
+        .entry(model.to_string())
+        .or_insert_with(|| {
+            let m = table()?.model(model)?;
+            let text = std::fs::read_to_string(m.dir.join("sockets.json")).ok()?;
+            serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).ok().map(|v| v["weapon_sockets"].clone())
+        })
+        .clone()
 }
 
 // ---------------------------------------------------------------------------------------------------- what is drawn
@@ -630,6 +647,30 @@ pub fn draw_equipped_parts(keyblade: &str, form: &str, grow: &str, transform: bo
     equipped_parts(keyblade, form, grow, transform).iter().filter(|p| loaded.contains(&p.model)).filter_map(|p| place_part(t, p, pose)).collect()
 }
 
+/// (FORM-GRIP) THE MESH COMPONENT'S OWN TURN INSIDE ITS WEAPON ACTOR: KH3's weapon blueprint `TresWeaponMesh0`
+/// RelativeRotation (pitch, yaw, roll), for the blueprints that set one (every other weapon blueprint of the forms sets none).
+/// KH3 attaches the weapon ACTOR to Sora's socket and its mesh component turned by this inside it, so the mesh is
+/// mesh turn, then socket, then bone. The two shield forms' weapons (Hero's Origin w_so032 / w_so033 / w_so034,
+/// w_so032_wep .. w_so034_wep; Grand Chef's Frying Pan w_so142 / w_so143 / w_so144, w_so142_Wep .. w_so144_Wep) turn theirs
+/// yaw 270, and their socket R_Wep3_skt is (pitch 90, roll -90): without the mesh turn the shield sat sideways and back on
+/// his hand (the user 2026-11-09: "shield is held wrong"). With it, each shield is on KH3's own transform unit at the end of
+/// its form change (w_so031 / w_so141's StyleChange11 / 19, authored in his mesh space: tests/formwep_grip.rs).
+/// assets_converted/packages/KINGDOM HEARTS III/Content/Blueprints/Player/p_ex001/<model>_wep.uasset.json.
+pub const WEAPON_MESH_TURNS: &[(&str, [f32; 3])] = &[
+    ("w_so032", [0.0, 270.0, 0.0]),
+    ("w_so033", [0.0, 270.0, 0.0]),
+    ("w_so034", [0.0, 270.0, 0.0]),
+    ("w_so142", [0.0, 270.0, 0.0]),
+    ("w_so143", [0.0, 270.0, 0.0]),
+    ("w_so144", [0.0, 270.0, 0.0]),
+];
+
+/// (FORM-GRIP) The mesh turn of a weapon part's model inside its actor (identity for every model without one).
+pub fn weapon_mesh_turn(model: &str) -> Trs {
+    let model = model.strip_prefix(PREFIX).unwrap_or(model);
+    WEAPON_MESH_TURNS.iter().find(|(m, _)| *m == model).map_or(Trs::IDENTITY, |(_, [pitch, yaw, roll])| Trs { translation: Vec3::ZERO, rotation: kh_anim::blend::Rotator { pitch: *pitch, yaw: *yaw, roll: *roll }.quat(), scale: Vec3::ONE })
+}
+
 /// One part on Sora (see [`draw_form_weapon_parts`]).
 pub fn place_part(t: &Table, p: &Part, pose: &FormPose<'_>) -> Option<FormWeapon> {
     let model = t.model(&p.model)?;
@@ -649,10 +690,11 @@ pub fn place_part(t: &Table, p: &Part, pose: &FormPose<'_>) -> Option<FormWeapon
     // screenshot), and so do the other units' StyleChange clips with their forms' weapons (tests/formwep_grip.rs). Hung on his
     // hand it carried his hand's whole transform on top of a pose that already holds it.
     if p.on_mesh && pose.anim.and_then(|a| rig_of(model, a)).is_some() {
-        return Some(FormWeapon { model: model.mesh.clone(), to_world: *pose.to_world, component: model_pose(model, pose.anim, pose.time) });
+        return Some(FormWeapon { model: model.mesh.clone(), to_world: weapon_mesh_turn(&p.model).then(pose.to_world), component: model_pose(model, pose.anim, pose.time) });
     }
     let socket = p.socket.unwrap_or(*pose.hand_socket);
-    Some(FormWeapon { model: model.mesh.clone(), to_world: socket.then(bone).then(pose.to_world), component: model_pose(model, pose.anim, pose.time) })
+    // (FORM-GRIP) its mesh component's turn inside the actor, then the socket, the bone, his component
+    Some(FormWeapon { model: model.mesh.clone(), to_world: weapon_mesh_turn(&p.model).then(&socket).then(bone).then(pose.to_world), component: model_pose(model, pose.anim, pose.time) })
 }
 
 /// A finisher / accompany pawn of a form (`model`, "" = the form's first) standing at `ground` (GAME space, cm) turned
@@ -679,8 +721,10 @@ pub fn form_pawn(keyblade: &str, form: &str, model: &str, ground: Vec3, yaw: f32
 pub fn part_on_bone(forms: &mut [FormWeapon], model: &str, bone: &Trs, to_world: &Trs) -> usize {
     let mesh = format!("{PREFIX}{model}");
     let mut n = 0;
+    // (FORM-GRIP) the actor goes on that bone: its mesh turned inside it as on its socket
+    let turn = weapon_mesh_turn(model);
     for f in forms.iter_mut().filter(|f| f.model == mesh) {
-        f.to_world = bone.then(to_world);
+        f.to_world = turn.then(bone).then(to_world);
         n += 1;
     }
     n
@@ -694,8 +738,10 @@ pub fn part_thrown(forms: &mut [FormWeapon], model: &str, to_world: Trs, clip: &
     let mesh = format!("{PREFIX}{model}");
     let pose = table().and_then(|t| t.model(model)).map(|m| clip_pose(m, clip, time)); // (DRILL-IDLE) its own clip, not Sora's play
     let mut n = 0;
+    // (FORM-GRIP) the actor's place and turn: its mesh turned inside it
+    let turn = weapon_mesh_turn(model);
     for f in forms.iter_mut().filter(|f| f.model == mesh) {
-        f.to_world = to_world;
+        f.to_world = turn.then(&to_world);
         if let Some(p) = &pose {
             f.component.clone_from(p);
         }
@@ -726,7 +772,7 @@ mod tests {
     }
 
     /// the manifest: 17 item keyblades and the four without an item row, every form part's model in the table, the
-    /// wanted set of an equipment (the hand's keyblade whole, the others' base models, never the Kingdom Key)
+    /// wanted set of an equipment (KEYBLADE-SWAP: every slotted keyblade whole, never the Kingdom Key; a D-pad switch keeps it)
     #[test]
     fn the_table_names_every_keyblade_and_its_parts() {
         let Some(pack) = pack() else { return };
@@ -742,7 +788,10 @@ mod tests {
         assert_eq!(t.keyblade("WEP_KEYBLADE_SO_06").map(|k| k.id.as_str()), Some("w_so080"));
         let wanted = t.wanted_models("WEP_KEYBLADE_SO_06", &["w_so010", "WEP_KEYBLADE_SO_12"]);
         assert!(wanted.contains(&"w_so080".to_string()) && wanted.contains(&"w_so084".to_string()) && wanted.contains(&"w_so200".to_string()));
-        assert!(!wanted.contains(&"w_so010".to_string()) && !wanted.contains(&"w_so210".to_string()), "{wanted:?}");
+        // (KEYBLADE-SWAP) the slotted Oathkeeper's Double Form part (Oblivion) is loaded too: switching to it loads nothing
+        assert!(!wanted.contains(&"w_so010".to_string()) && wanted.contains(&"w_so210".to_string()), "{wanted:?}");
+        // a D-pad switch (another of the same slots in his hand) wants the same models
+        assert_eq!(wanted, t.wanted_models("WEP_KEYBLADE_SO_12", &["WEP_KEYBLADE_SO_06", "w_so010"]));
         // Crystal Snow's form 07: four Blizzard Blades on the forearms and shins, each with its socket's own turn
         let parts = form_parts_with(&t, "w_so080", "07");
         assert_eq!(parts.iter().map(|p| format!("{}@{}", p.model, p.bone.clone().unwrap_or_default())).collect::<Vec<_>>(), ["w_so084@R_ude2_buki2", "w_so085@L_ude2_buki2", "w_so086@R_ashi2", "w_so087@L_ashi2"]);
@@ -829,6 +878,18 @@ mod tests {
         for s in &lib.slots[before..] {
             for set in ["", "_pl", "_bl", "_bli", "_hy3", "_gb3"] {
                 assert!(er.join(format!("{}{set}.ps.dxil", s.variant())).is_file(), "{} {set}", s.variant());
+            }
+        }
+        // (KEYBLADE-SWAP) every slotted keyblade is loaded whole now, so any model can be in the library with any other: each
+        // slot of every model has every set (one without would switch his whole library's set: gfx.rs read_shaders)
+        let mut all = Library::load(&pack).unwrap();
+        let start = all.slots.len();
+        let models: Vec<String> = t.models.iter().filter(|m| m.glb.is_file()).map(|m| m.model.clone()).collect();
+        add_slots_with(&t, &mut all, &models);
+        assert!(all.slots.len() > start);
+        for s in &all.slots[start..] {
+            for set in ["", "_pl", "_bl", "_bli", "_hy3", "_gb3"] {
+                assert!(er.join(format!("{}{set}.ps.dxil", s.variant())).is_file(), "{} {} {set}", s.mesh, s.variant());
             }
         }
     }

@@ -9,6 +9,8 @@
 //! put back at the payload's stop). After the game's own call, what the level asks for is taken out: 1 = the keys and mouse
 //! buttons the KH table binds (Sora plays), 2 = every key and button (a screen of ours is up). The mouse's movement stays the
 //! game's (its camera when ours is off). Our own reading (GetAsyncKeyState) is not DirectInput: untouched.
+//! (NO-ER-PAUSE) Esc, at every level, is taken out while the pad's Start is masked (`esc_hidden`): the keyboard's menu key is the
+//! Kingdom Hearts menu's wherever the pad's is (its releases always pass).
 //!
 //! (CAMP-OPTIONS follow-up, "camera invert must cover mouse look too") THE MOUSE'S MOVEMENT IS ALSO READ HERE for the KH
 //! camera's mouse look (`take_mouse_motion`, cam.rs): the counts the game's own reads return, summed (the buffered path's
@@ -318,9 +320,17 @@ pub fn set_er_action_open(open: bool) {
     ER_ACTION_OPEN.store(open, Ordering::Relaxed);
 }
 
+/// (KBD-Y, THE USER 2026-11-08: "the prompt was showing me F but pressing F didn't work it was E") A press of the
+/// KEYBOARD's Y (the Situation key, F by default) that Elden Ring's own prompt owns is MADE FOR THE GAME as its action (its
+/// keyboard action key is E, which the prompt never shows): the key the prompt shows is the key that works. Not when the
+/// physical pad's Y is down as well (that one reaches the game itself).
+pub fn keyboard_y_for_er(er_owns_press: bool, keyboard_y: bool, pad_y: bool) -> bool {
+    er_owns_press && keyboard_y && !pad_y
+}
+
 fn key_taken(dik: usize, level: u8) -> bool {
     let bound = KEYS.lock().ok().is_some_and(|k| dik < 256 && k[dik / 64] & (1 << (dik % 64)) != 0);
-    taken(dik, level, bound, ER_ACTION_OPEN.load(Ordering::Relaxed)) && !allowed(dik)
+    (taken(dik, level, bound, ER_ACTION_OPEN.load(Ordering::Relaxed)) || esc_hidden(dik, crate::inputs::current_mask())) && !allowed(dik)
 }
 
 /// WHAT THE GAME DOES NOT SEE OF A KEY (pure): level 2 (a screen of ours) everything; level 1 (Sora plays) the keys the KH table
@@ -331,6 +341,35 @@ pub fn taken(dik: usize, level: u8, bound: bool, er_action_open: bool) -> bool {
         1 => bound && !(er_action_open && dik == DIK_ER_ACTION),
         _ => true,
     }
+}
+
+/// (MAP-NOW) DirectInput's G: Elden Ring's map key on the keyboard by default (inputs.rs `SCAN_G`, the key its save point
+/// presses for the map).
+pub const DIK_MAP: usize = 0x22;
+/// (MAP-NOW) When the game's own keyboard read last returned the map key down (GetTickCount64; 0 never).
+static MAP_KEY_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// (MAP-NOW) A read this recent counts as "held" (the game reads its keyboard every frame).
+pub const MAP_KEY_HOLD_MS: u64 = 100;
+
+/// (MAP-NOW, mapwatch.rs) The game's own keyboard read returns its map key (G) down now.
+pub fn game_map_key_down() -> bool {
+    key_recent(MAP_KEY_AT.load(Ordering::Relaxed), tick())
+}
+
+/// (pure) A key last seen down at `seen` (0 = never) still counts as held at `now`.
+pub fn key_recent(seen: u64, now: u64) -> bool {
+    seen != 0 && now.saturating_sub(seen) < MAP_KEY_HOLD_MS
+}
+
+/// (NO-ER-PAUSE) DirectInput's Escape key.
+pub const DIK_ESCAPE: usize = 0x01;
+
+/// (NO-ER-PAUSE, THE USER 2026-11-09: "esc should make KH menu appear on keyboard. Elden Ring pause menu should be impossible to
+/// ever show up") THE GAME'S Esc FOLLOWS ITS PAD'S Start (pure): hidden from it exactly while the XInput mask `pad_mask` hides
+/// Start (sora.rs: in play, under a menu of ours, our cutscene menu, a borrowed interaction), so the keyboard's menu key is the
+/// Kingdom Hearts menu's wherever the pad's is; under a menu of the game's own (a shop, a talk, its map) both are the game's.
+pub fn esc_hidden(dik: usize, pad_mask: u32) -> bool {
+    dik == DIK_ESCAPE && pad_mask & u32::from(crate::inputs::XI_START) != 0
 }
 
 fn kind_of(device: usize) -> u8 {
@@ -379,7 +418,8 @@ unsafe fn state_read(original: usize, device: usize, size: u32, data: *mut u8) -
         STATE_Y.fetch_add((data.add(4) as *const i32).read_unaligned(), Ordering::Relaxed);
     }
     let level = LEVEL.load(Ordering::Relaxed);
-    if hr < 0 || level == 0 || data.is_null() {
+    // (NO-ER-PAUSE) at level 0 (a menu of the game's, a cutscene) the keyboard is still read for Esc while the pad's Start is hidden
+    if hr < 0 || (level == 0 && !esc_hidden(DIK_ESCAPE, crate::inputs::current_mask())) || data.is_null() {
         return hr;
     }
     match size {
@@ -390,9 +430,13 @@ unsafe fn state_read(original: usize, device: usize, size: u32, data: *mut u8) -
                     *data.add(dik) = 0;
                 }
             }
+            // (MAP-NOW) the game's own map key as the game itself reads it (after what is taken out: a KH-bound G is not the game's)
+            if *data.add(DIK_MAP) != 0 {
+                MAP_KEY_AT.store(tick(), Ordering::Relaxed);
+            }
         }
         // the mouse: DIMOUSESTATE (16) / DIMOUSESTATE2 (20): x, y, z, then the buttons
-        16 | 20 => {
+        16 | 20 if level > 0 => {
             let mouse = if level >= 2 { 0xFF } else { MOUSE.load(Ordering::Relaxed) };
             if mouse & 0x80 != 0 {
                 (data.add(8) as *mut i32).write_unaligned(0);
@@ -445,18 +489,23 @@ unsafe fn data_read(original: usize, device: usize, object_size: u32, objects: *
         }
     }
     let level = LEVEL.load(Ordering::Relaxed);
-    if hr < 0 || level == 0 || objects.is_null() || count.is_null() || object_size < 8 {
+    if hr < 0 || (level == 0 && !esc_hidden(DIK_ESCAPE, crate::inputs::current_mask())) || objects.is_null() || count.is_null() || object_size < 8 {
         return hr;
     }
     let kind = kind_of(device);
-    let mouse = if level >= 2 { 0xFF } else { MOUSE.load(Ordering::Relaxed) };
+    let mouse = match level {
+        0 => 0, // (NO-ER-PAUSE: level 0 reaches here for Esc alone)
+        1 => MOUSE.load(Ordering::Relaxed),
+        _ => 0xFF,
+    };
     let n = *count as usize;
     let mut kept = 0usize;
     for i in 0..n {
         let entry = objects.add(i * object_size as usize);
         let ofs = (entry as *const u32).read_unaligned() as usize;
         let down = (entry.add(4) as *const u32).read_unaligned() & 0x80 != 0;
-        let taken = entry_taken(kind, ofs, down, level, mouse, kind == 0x13 && key_taken(ofs, level));
+        // (NO-ER-PAUSE) at level 0 only Esc's presses are taken: its release always reaches the game (no key left held in its view)
+        let taken = entry_taken(kind, ofs, down, level, mouse, kind == 0x13 && key_taken(ofs, level) && (level > 0 || down));
         if !taken {
             if kept != i {
                 std::ptr::copy(entry, objects.add(kept * object_size as usize), object_size as usize);
@@ -600,8 +649,32 @@ pub fn uninstalled() {
 mod tests {
     use super::*;
 
+    /// (NO-ER-PAUSE) the game's Esc is hidden exactly while its pad's Start is; no other key follows the pad's mask, and the
+    /// key rule of the levels is unchanged
+    #[test]
+    fn np_the_games_esc_follows_its_pads_start() {
+        let start = u32::from(crate::inputs::XI_START);
+        let play = u32::from(crate::inputs::XI_GAMEPLAY | crate::inputs::XI_START) | crate::inputs::MASK_LEFT_STICK;
+        assert!(esc_hidden(DIK_ESCAPE, play), "in play: Esc is the KH menu's");
+        assert!(esc_hidden(DIK_ESCAPE, start), "our cutscene menu hides Start alone: Esc too");
+        assert!(!esc_hidden(DIK_ESCAPE, 0), "a menu of the game's (shop, talk, its map): Esc is its back key");
+        assert!(!esc_hidden(DIK_ESCAPE, play & !start), "a mask without Start: Esc reaches the game");
+        assert!(!esc_hidden(0x12, play) && !esc_hidden(0x1C, u32::MAX), "only Esc follows Start");
+        assert!(!taken(DIK_ESCAPE, 0, false, false) && taken(DIK_ESCAPE, 2, false, false), "the levels' own rule is as before");
+    }
+
     /// (CAMP-OPTIONS) Elden Ring's talk / open / pick-up prompt takes its own action key (E) on the keyboard, KH-bound or not,
     /// while no KH prompt owns the moment; every other KH-bound key stays KH's; a remapped table that frees E leaves it alone
+    /// (KBD-Y) the keyboard's Y at the game's prompt is made into the game's action; the pad's own Y, a press Sora or the
+    /// save point owns, or no keyboard Y: nothing is made
+    #[test]
+    fn kbd_y_the_shown_key_works_at_the_games_prompt() {
+        assert!(keyboard_y_for_er(true, true, false), "F at Elden Ring's prompt: the game's action is pressed for it");
+        assert!(!keyboard_y_for_er(true, true, true), "the pad's Y is down too: it reaches the game itself");
+        assert!(!keyboard_y_for_er(true, false, true), "the pad's Y alone");
+        assert!(!keyboard_y_for_er(false, true, false), "Sora's or the save point's press");
+    }
+
     #[test]
     fn co_the_games_action_prompt_gets_its_key() {
         // the default table: E is KH3's Change Target (bound)

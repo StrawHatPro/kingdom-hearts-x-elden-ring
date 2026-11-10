@@ -54,6 +54,11 @@ pub fn init(dir: &Path, fresh: bool) {
     let _ = START.set(Instant::now());
 }
 
+/// (CONT-CRASH) Seconds since the log began (the lines' time; no allocation, no lock: the crash recorder's lines use it).
+pub fn elapsed_s() -> f64 {
+    START.get().map(|s| s.elapsed().as_secs_f64()).unwrap_or(0.0)
+}
+
 pub fn write(text: &str) {
     let Some(log) = LOG.get() else { return };
     let t = START.get().map(|s| s.elapsed().as_secs_f64()).unwrap_or(0.0);

@@ -58,7 +58,7 @@ pub const ANSWER_YES: i32 = 1;
 pub const ANSWER_NO: i32 = 2;
 
 /// An Elden Ring CHARACTER's talk: every script but the grace's and the other system scripts of m00 (talk ids below
-/// 100000: 1000 the grace menu, which savepoint.rs drives; 1100, 2000, 2006, 2012, 2100), with Melina's 3000 a
+/// 100000: 1000 the grace, whose talk object savepoint.rs summons Melina on; 1100, 2000, 2006, 2012, 2100), with Melina's 3000 a
 /// character's. `skip`: the key `talk.kh.skip` (more talk ids left to Elden Ring).
 pub fn is_character_talk(talk_id: i32, skip: &[i32]) -> bool {
     (talk_id >= 100_000 || talk_id == 3000) && !skip.contains(&talk_id)

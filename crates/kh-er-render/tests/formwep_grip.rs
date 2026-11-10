@@ -265,3 +265,126 @@ fn every_form_weapon_part_is_on_its_mount_in_every_outfit_and_the_cinematic_hand
     }
     assert!(faults.is_empty(), "{} detached part(s) (see DETACHED lines)", faults.len());
 }
+
+// ---------------------------------------------------------------------------------------------------- (FORM-GRIP)
+
+/// (FORM-GRIP) A placed model's skinned vertices on its shown bones (the CPU skin the renderer's vertex shader does).
+fn skinned(t: &Table, f: &FormWeapon) -> Vec<Vec3> {
+    let m = t.model(&f.model).expect("a model of the table");
+    let model = kh_er_render::model::Model::load(&m.glb).expect("its glb");
+    let sk = m.skeleton.clone().expect("its skeleton");
+    let joints: Vec<Option<usize>> = model.joints.iter().map(|(n, _)| sk.index_of(n)).collect();
+    let mat = |t: &Trs| glam::Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.translation);
+    let world = mat(&f.to_world);
+    model
+        .vertices
+        .iter()
+        .filter_map(|v| {
+            let k = (0..4).max_by(|a, b| v.weights[*a].total_cmp(&v.weights[*b]))?;
+            let main = joints[v.joints[k] as usize].and_then(|b| f.component.get(b))?;
+            if main.scale.min_element() < 0.5 {
+                return None;
+            }
+            let mut at = Vec3::ZERO;
+            for k in (0..4).filter(|k| v.weights[*k] > 0.0) {
+                let j = v.joints[k] as usize;
+                let bone = joints[j].and_then(|b| f.component.get(b)).map(mat).unwrap_or(glam::Mat4::IDENTITY);
+                at += v.weights[k] * (world * bone * model.joints[j].1).transform_point3(Vec3::from(v.position));
+            }
+            Some(at)
+        })
+        .collect()
+}
+
+/// (FORM-GRIP) The mean distance (cm) of `a`'s points (about 400 of them) to the nearest of `b`'s.
+fn mean_nearest(a: &[Vec3], b: &[Vec3]) -> f32 {
+    let picked: Vec<&Vec3> = a.iter().step_by((a.len() / 400).max(1)).collect();
+    picked.iter().map(|p| b.iter().map(|q| (**p - *q).length_squared()).fold(f32::MAX, f32::min).sqrt()).sum::<f32>() / picked.len().max(1) as f32
+}
+
+/// (FORM-GRIP) THE USER (2026-11-09): "shield is held wrong" (Counter Shield standing idle: the shield sideways and back on his
+/// right hand). KH3 attaches the weapon ACTOR to R_Wep3_skt (pitch 90, roll -90) and the shield's mesh component inside it is
+/// turned yaw 270 (w_so032_wep .. w_so034_wep, Frying Pan's w_so142_Wep .. w_so144_Wep `TresWeaponMesh0`); the port hung the
+/// mesh on the socket directly. KH3's own data says where the shield is: the transform unit (authored in his mesh space)
+/// ends its form change exactly on it. Each shield's WHOLE SHAPE (its skinned vertices, not only a bone) must lie on the unit's
+/// last frame, on Sora's pose of that frame. (Before: 12.0 cm for Guardian Shield, 7.6 cm for the Frying Pan.)
+#[test]
+fn both_shields_are_held_as_their_form_change_leaves_them() {
+    let Some((t, p, pack)) = pack() else { return };
+    let moving = root_motion_clips(&pack);
+    let mut measured = 0;
+    for c in changes(&t).iter().filter(|c| matches!(c.row.id, "form.SH" | "form.SH2")) {
+        let sora = SoraClip::load(&pack, &p.skeleton, &c.stem, &moving).expect("Sora's clip of the change");
+        let end_t = sora.length();
+        let pose = sora.pose(end_t);
+        let unit = place(&t, &c.unit, &p.skeleton, &pose, Some(&c.logical), end_t).expect("the unit is placed");
+        let unit_shape = skinned(&t, &unit);
+        let form = t.form(&c.keyblade, c.row.weapon_form, "").expect("the row's form");
+        for w in &form.weapons {
+            let drawn = place(&t, w, &p.skeleton, &pose, None, 0.0).expect("the shield is placed");
+            let d = mean_nearest(&skinned(&t, &drawn), &unit_shape);
+            println!("{} {}: {} on {:?} is {d:.2} cm from the unit {}'s last frame", c.row.id, c.row.name, w.model, w.bone, c.unit.model);
+            assert!(d < 3.0, "{} {}: {} is {d:.1} cm off KH3's own unit at the end of its form change", c.row.id, c.row.name, w.model);
+            measured += 1;
+        }
+    }
+    assert!(measured >= 2, "Guardian Shield and the Frying Pan measured: {measured}");
+}
+
+/// (FORM-GRIP) KH3's blueprint of a form part or pawn, when the converted packages are here (None otherwise).
+fn blueprint_json(blueprint: &str) -> Option<serde_json::Value> {
+    let rel = blueprint.strip_prefix("/Game/")?;
+    let file = root().join("assets_converted").join("packages").join("KINGDOM HEARTS III").join("Content").join(format!("{rel}.uasset.json"));
+    serde_json::from_str(std::fs::read_to_string(file).ok()?.trim_start_matches('\u{feff}')).ok()
+}
+
+/// (FORM-GRIP) A component's relative (location, rotation) in a blueprint (zero when the data does not set it).
+fn relative_of(bp: &serde_json::Value, component: &str) -> Option<([f64; 3], [f64; 3])> {
+    let e = bp["exports"].as_array()?.iter().find(|e| e["objectName"].as_str() == Some(component))?;
+    let props = e["data"]["props"].as_array()?;
+    let get = |name: &str, keys: [&str; 3]| props.iter().find(|p| p["name"].as_str() == Some(name)).map_or([0.0; 3], |p| keys.map(|k| p["value"][k].as_f64().unwrap_or(0.0)));
+    Some((get("RelativeLocation", ["x", "y", "z"]), get("RelativeRotation", ["pitch", "yaw", "roll"])))
+}
+
+/// (FORM-GRIP) EVERY form weapon's mesh component as KH3's blueprints set it: the weapons' `TresWeaponMesh0` turns are
+/// exactly keyblade.rs `WEAPON_MESH_TURNS` (none sets a place). Skipped without the converted packages.
+#[test]
+fn every_form_weapon_mesh_turn_is_kh3s() {
+    let Some((t, _, _)) = pack() else { return };
+    let json: serde_json::Value = serde_json::from_str(std::fs::read_to_string(t.dir.join("manifest.json")).unwrap().trim_start_matches('﻿')).unwrap();
+    let mut weapons: Vec<(String, String)> = Vec::new();
+    for k in json["keyblades"].as_object().into_iter().flatten().map(|(_, k)| k) {
+        for f in k["forms"].as_array().into_iter().flatten() {
+            for u in f["weapons"].as_array().into_iter().flatten().chain(f["transform"].as_array().into_iter().flatten()) {
+                if let (Some(bp), Some(m)) = (u["blueprint"].as_str(), u["model"].as_str()) {
+                    weapons.push((bp.to_string(), m.to_string()));
+                }
+            }
+        }
+    }
+    weapons.sort();
+    weapons.dedup();
+    let near = |a: [f64; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - f64::from(y)).abs() < 1.0e-3);
+    let mut read = 0;
+    let mut turned = 0;
+    let mut faults = Vec::new();
+    for (bp, model) in &weapons {
+        let Some(json) = blueprint_json(bp) else { continue };
+        let Some((at, rot)) = relative_of(&json, "TresWeaponMesh0") else { continue };
+        read += 1;
+        let want = kh_er_render::keyblade::WEAPON_MESH_TURNS.iter().find(|(m, _)| m == model).map_or([0.0; 3], |(_, r)| *r);
+        if want != [0.0; 3] {
+            turned += 1;
+        }
+        if !near(rot, want) || at != [0.0; 3] {
+            faults.push(format!("{bp} ({model}): TresWeaponMesh0 at {at:?} turned {rot:?}, the port turns {want:?}"));
+        }
+    }
+    if read == 0 {
+        eprintln!("SKIPPED: no converted blueprints");
+        return;
+    }
+    println!("{read} form weapon blueprints read, {turned} with a mesh turn");
+    assert!(faults.is_empty(), "{faults:#?}");
+    assert_eq!(turned, kh_er_render::keyblade::WEAPON_MESH_TURNS.len(), "every row of the table is a form weapon of the manifest");
+}

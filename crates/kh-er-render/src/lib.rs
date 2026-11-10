@@ -36,6 +36,7 @@ mod detour;
 mod gfx;
 mod hook;
 mod passtime; // (HAIRPERF) the GPU time of our main list by section
+mod psocache; // (KEYBLADE-SWAP) Sora's pipeline states by content: a reload takes the unchanged ones over
 // (IMPL_ER59) Sora's outfits (Boc's service): which model is drawn, loaded on demand; the pose onto its skeleton.
 pub mod outfit;
 /// (ER83) KH1 Sora's hands on the Keyblade and on his body (contact IK after the retarget).

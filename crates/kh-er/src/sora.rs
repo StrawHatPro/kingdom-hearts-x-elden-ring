@@ -233,6 +233,8 @@ pub struct SoraHost {
     descend_told: bool,
     /// (TELESCOPE) a Birdseye Telescope's prompt was up last frame (the log's edge)
     telescope_told: bool,
+    /// (SUMMON-POOL) a summoning pool's prompt was taken away (said once per sighting)
+    pool_told: bool,
     leap_wait: Option<(Vec3, f32, f32)>,
     /// (SPIRITSPRING) the leader's jump at a spiritspring (spiritspring.rs)
     spring: crate::spiritspring::rules::Watch,
@@ -512,7 +514,6 @@ struct Shots {
     spawn: OneShot,
     hurt: OneShot,
     heal: OneShot,
-    sysmenu: OneShot,
     launch: OneShot,
     atk: OneShot,
     watch: OneShot,
@@ -741,7 +742,7 @@ impl SoraHost {
             paused: false,
             r3_before: false,
             invulnerable: false,
-            shots: Shots { chrs: OneShot::new("dbg.chrs", control), goto: OneShot::new("dbg.goto", control), spawn: OneShot::new("dbg.spawn", control), hurt: OneShot::new("dbg.hurt", control), heal: OneShot::new("dbg.heal", control), sysmenu: OneShot::new("er.sysmenu", control), launch: OneShot::new("dbg.launch", control), atk: OneShot::new("dbg.atk", control), watch: OneShot::new("dbg.watch", control), travel: OneShot::new("dbg.travel", control), raw: OneShot::new("dbg.raw", control), hop: OneShot::new("dbg.hop", control), findslope: OneShot::new("dbg.findslope", control) },
+            shots: Shots { chrs: OneShot::new("dbg.chrs", control), goto: OneShot::new("dbg.goto", control), spawn: OneShot::new("dbg.spawn", control), hurt: OneShot::new("dbg.hurt", control), heal: OneShot::new("dbg.heal", control), launch: OneShot::new("dbg.launch", control), atk: OneShot::new("dbg.atk", control), watch: OneShot::new("dbg.watch", control), travel: OneShot::new("dbg.travel", control), raw: OneShot::new("dbg.raw", control), hop: OneShot::new("dbg.hop", control), findslope: OneShot::new("dbg.findslope", control) },
             hits_in: 0,
             invulnerable_frames: 0,
             key_frames: 0,
@@ -789,6 +790,7 @@ impl SoraHost {
             ladder_go: Default::default(),
             descend_told: false,
             telescope_told: false,
+            pool_told: false,
             leap_wait: None,
             spring: Default::default(),
             leap: None,
@@ -1205,7 +1207,10 @@ impl SoraHost {
                     // any ground under him: a line, and (IMPL_ER24) a sphere of his body's width: a line goes through the holes
                     // and cracks of a plank floor he is wedged on
                     let wide = friend.map_or(SORA_PARAMS.capsule_radius, |f| f.capsule.0);
-                    let ground = kh_core::World::line_trace(&self.world, p + Vec3::Z * 50.0, p - Vec3::Z * 30_000.0).is_some()
+                    // (NETDROP) the nearest 30 m first, then the whole 300 m: a floor close under him counts even where the one long
+                    // cast does not see it (the user's log 2026-11-08: put back over lower floors 3 - 8 m down)
+                    let ground = kh_core::World::line_trace(&self.world, p + Vec3::Z * 50.0, p - Vec3::Z * 3_000.0).is_some()
+                        || kh_core::World::line_trace(&self.world, p + Vec3::Z * 50.0, p - Vec3::Z * 30_000.0).is_some()
                         || safe && kh_core::World::sweep_capsule(&self.world, p + Vec3::Z * (wide + 50.0), p - Vec3::Z * 30_000.0, wide, wide).is_some();
                     // (IMPL_ER57) WATER UNDER HIM IS GROUND for the net: his casts go through the sea (layer 0x56 does not see it),
                     // and the net put him back from a jump into the sea before he reached it (the user's log, 111.2 s); in the
@@ -1514,6 +1519,12 @@ impl SoraHost {
         }
         if self.ladder_go.over(ladder_anim) {
             self.ladder_go.end();
+            // (MAP-GATE, the user 2026-11-08: "using a ladder disables anything to do with the map") what the cut-short ladder
+            // leaves in the game's own map gate is said, and an action-button press still waiting (the ladder's "Climb" is
+            // carried out by now) is ended as the game ends one it carried out (mapgate.rs)
+            let gate = crate::mapgate::read(player);
+            let ended = gate.action_press_waiting == Some(true) && crate::mapgate::consume_action_press();
+            erlog!("ladder: (MAP-GATE) the let-go is over: the game's own map gate: {}{}", gate.text(), if ended { "; the action-button press that waited was ENDED" } else { "" });
         }
         step
     }
@@ -1919,7 +1930,7 @@ impl SoraHost {
         // (ERUI) A BORROWED INTERACTION (the body's own action: Follow::Action, own_hold): Start = KH3's Pause screen, the game
         // sees no Start / View (hud.rs `borrowed_pad`); a window of the game's own besides it keeps the pad as before
         let borrowed_pad = {
-            let borrowed = (self.follow == Some(Follow::Action) || self.own_hold) && control.flag("in.action_pause") != Some(false) && control.on("hud.kh") && control.on("in.kh_menu") && !ui.cutscene;
+            let borrowed = (self.follow == Some(Follow::Action) || self.own_hold) && control.flag("in.action_pause") != Some(false) && control.on("hud.kh") && !ui.cutscene; // (NO-ER-PAUSE) Start is always the KH menu's (`in.kh_menu` retired)
             let standing = crate::pause::world_runs() == Some(false) && !crate::pause::holding() && !crate::hud::menu_open();
             crate::hud::borrowed_pad(borrowed, er_menu_own || self.dialog_up || standing, crate::hud::menu_open())
         };
@@ -2060,6 +2071,7 @@ impl SoraHost {
         // (IMPL_ER38) View on the real pad (mapwatch.rs: each press in the field is a map request), and THE GAME'S WINDOW NOT
         // IN FRONT: Elden Ring takes no pad input then (the user's lost map, mapwatch.rs), so neither does Sora (`in.focus = 0`: he does)
         let view_raw = device.is_some_and(|p| p.buttons.has(PadButton::SpecialLeft));
+        let pad_y_raw = device.is_some_and(|p| p.buttons.has(PadButton::FaceTop)); // (KBD-Y) the physical pad's own Y
         if !self.map_watch.pad_gate(control, dt) {
             (stick, right_stick, held) = (Vec2::ZERO, Vec2::ZERO, PadButtons::NONE);
             mouse_look = Vec2::ZERO; // (CAMP-OPTIONS)
@@ -2071,6 +2083,11 @@ impl SoraHost {
             }
             for button in key_buttons.iter() {
                 held.set(button, true);
+            }
+            // (NO-ER-PAUSE) the keyboard's Esc is Start: the KH menu (the camp menu, the Pause screen in battle) opens and
+            // closes on it as on the pad's Start
+            if inputs::esc_menu() {
+                held.set(PadButton::SpecialRight, true);
             }
             if key_stick != Vec2::ZERO || key_buttons != PadButtons::NONE {
                 self.key_frames += 1;
@@ -2104,24 +2121,15 @@ impl SoraHost {
             inputs::set_virtual(seg.left, seg.right, seg.buttons);
         }
         let raw_held = held; // (IMPL_ER23A) what is physically down, before any ownership rule
-        // INPUT OWNERSHIP: Menu (Start) and View are Elden Ring's (its menu, its map); while one of
-        // its prompts is on screen so is Y; while a menu of its has the input Sora gets nothing.
-        // BUTTON TABLE (user decision 2026-10-12): View (select) = Elden Ring's map, always. Menu (Start)
-        // = the Kingdom Hearts menu: with `in.kh_menu = 1` Start is hidden from Elden Ring and goes to
-        // the core; LB + Start (and the keyboard's Esc, always) open Elden Ring's own menu. DEFAULT OFF
-        // until the KH menu is drawn in Elden Ring: an invisible open menu would trap the player, so
-        // for now Start still opens Elden Ring's menu and the core never sees it.
-        let kh_menu = control.on("in.kh_menu");
-        let start_to_er = !kh_menu || held.iter().any(|b| b == PadButton::LeftShoulder);
-        let start_to_er = start_to_er && !crate::hud::menu_open(); // (hud) while our menu is up Start closes it
+        // INPUT OWNERSHIP: View is Elden Ring's (its map); while one of its prompts is on screen so is Y; while a menu of its
+        // has the input Sora gets nothing.
+        // BUTTON TABLE (user decision 2026-10-12): View (select) = Elden Ring's map, always. Menu (Start) = the Kingdom Hearts
+        // menu, ALWAYS: (NO-ER-PAUSE, THE USER 2026-11-09: "remove all access to the elden ring pause menu, esc should make KH
+        // menu appear on keyboard. Elden Ring pause menu should be impossible to ever show up") Start is hidden from Elden Ring
+        // and goes to the core, with or without LB (LB + Start opened Elden Ring's menu before), whatever `in.kh_menu` says; the
+        // keyboard's Esc is Start too (`inputs::esc_menu`, where the keyboard is read), hidden from the game's keyboard as Start is from its pad
+        // (dinput_mask.rs). The game's top menu itself is refused where the game opens it (nopause.rs).
         held.set(PadButton::SpecialLeft, false);
-        if start_to_er {
-            held.set(PadButton::SpecialRight, false);
-        }
-        // `er.sysmenu` (one-shot): Elden Ring's system menu, as the KH menu's Config entry will ask for it.
-        if self.shots.sysmenu.fired(control).is_some() {
-            erlog!("ui: Elden Ring's system menu asked for (er.sysmenu): {}", if inputs::open_er_system_menu(ui) { "Start, Up, A are being pressed for Elden Ring through the pad hook" } else { "not now (a menu is open, or no pad is connected)" });
-        }
         inputs::run_key_script();
         let r3 = held.iter().any(|b| b == PadButton::RightThumb);
         // (savepoint) the save points of the sites of grace in reach; Y at a discovered one is the KH3 save menu's
@@ -2172,6 +2180,13 @@ impl SoraHost {
                 y.count += 1;
                 y.down_at = std::time::Instant::now();
                 y.owner = YOwner::at_down(menu_before, sp_y, er_prompt, ui.menu); // (PFY) (CV3: er_prompt)
+                // (KBD-Y) the keyboard's Y (F) at Elden Ring's prompt: made for the game as its action (its pad Y through the pad
+                // hook when it reads a pad, else its own E key), the press the prompt shows
+                let keyboard_y = control.flag("in.keys") != Some(false) && inputs::keyboard().1.has(PadButton::FaceTop);
+                if crate::dinput_mask::keyboard_y_for_er(y.owner == YOwner::EldenRing, keyboard_y, pad_y_raw) {
+                    let how = inputs::press_for_er(inputs::XI_Y, crate::dinput_mask::DIK_ER_ACTION as u16);
+                    erlog!("y: press #{}: the KEYBOARD's Y for Elden Ring's prompt: made for the game as its action ({}) (KBD-Y)", y.count, how.unwrap_or("NOT made: no route open"));
+                }
                 (y.replayed, y.watching, y.prompt_at_down, y.er_frames, y.frames) = (false, y.owner == YOwner::Sora, self.prompt, 0, 0);
                 if control.flag("log.y") != Some(false) {
                     let visible: Vec<String> = self.ui_states.as_ref().map(|s| s.iter().enumerate().filter(|(_, v)| **v & 2 != 0).map(|(k, _)| k.to_string()).collect()).unwrap_or_default();
@@ -2192,7 +2207,7 @@ impl SoraHost {
                 y.watching = false;
                 y.replayed = true;
                 y.owner = YOwner::EldenRing;
-                let how = inputs::press_for_er(inputs::XI_Y, 0);
+                let how = inputs::press_for_er(inputs::XI_Y, crate::dinput_mask::DIK_ER_ACTION as u16); // (KBD-Y) also keyboard-only
                 erlog!("y: press #{}: Elden Ring's prompt came up {} ms after the down-edge (inside the {} ms window): THE PRESS IS HANDED ON to Elden Ring as a press of its own ({}); Sora had the down-edge", y.count, y.down_at.elapsed().as_millis(), window.as_millis(), how.unwrap_or("NO WAY: the game reads no pad"));
             }
             if y_raw {
@@ -2276,7 +2291,7 @@ impl SoraHost {
         }
         // What Elden Ring does not see of the pad (inputs.rs; renewed every frame, lapses by itself).
         let own = control.flag("in.own") != Some(false) && control.flag("hud.hide") != Some(true);
-        let mask = if own && cutscene_menu { crate::hud::cutscene_mask() } else if !own || ui.menu { 0 } else { u32::from((inputs::XI_GAMEPLAY | if start_to_er { 0 } else { inputs::XI_START }) & !(if y_to_er || (er_action_open && crate::remap_er::pad_moves(PadButton::FaceTop)) { inputs::XI_Y } else { 0 })) | inputs::MASK_LEFT_STICK | inputs::MASK_TRIGGERS | if self.cam.has_view() { inputs::MASK_RIGHT_STICK } else { 0 } };
+        let mask = if own && cutscene_menu { crate::hud::cutscene_mask() } else if !own || ui.menu { 0 } else { u32::from((inputs::XI_GAMEPLAY | inputs::XI_START) & !(if y_to_er || (er_action_open && crate::remap_er::pad_moves(PadButton::FaceTop)) { inputs::XI_Y } else { 0 })) | inputs::MASK_LEFT_STICK | inputs::MASK_TRIGGERS | if self.cam.has_view() { inputs::MASK_RIGHT_STICK } else { 0 } };
         let mask = if borrowed_pad.on && own { mask | borrowed_pad.er_mask } else { mask }; // (ERUI) no Start / View of the game's in a borrowed interaction (nothing under our Pause)
         inputs::set_mask(if mask != 0 { mask | crate::hud::extra_mask() } else { mask }); // (hud) + Start, View, right stick while a menu of ours is up
         if self.savepoint.masks_pad() {
@@ -2295,9 +2310,11 @@ impl SoraHost {
                 body_anim: ta.anim_queue[(ta.read_idx as usize) % 10].anim_id,
                 ladder: ladder_state(player),
                 world_still: crate::pause::world_runs() == Some(false),
+                cutscene: ui.cutscene || self.cutscene, // (MAP-GATE)
+                leader_alive: self.lead_alive(),
                 ..Default::default()
             };
-            self.map_watch.frame(control, view_raw, if mask != 0 { mask | crate::hud::extra_mask() } else { mask }, facts, dt);
+            self.map_watch.frame(control, view_raw, if mask != 0 { mask | crate::hud::extra_mask() } else { mask }, facts, player, dt);
         }
         if control.on("dbg.padprobe") {
             inputs::probe_log(); // (IMPL_ER8, testing aid) what Elden Ring would read of the pad right now
@@ -3074,6 +3091,16 @@ impl SoraHost {
             }
         }
         self.telescope_told = telescope;
+        // (SUMMON-POOL, the user 2026-11-10: "Disable summoning pools") the second line under summonpool.rs: a pool's prompt
+        // (its ActionButtonParam row) the manager still shows is no prompt for us: no KH3 command, Y never reaches the game for it
+        let pool = crate::erprompt::shown().filter(|s| crate::summonpool::hides_prompt(control, s.row)).map(|s| s.row);
+        if let Some(row) = pool.filter(|_| self.prompt) {
+            self.prompt = false;
+            if !self.pool_told {
+                erlog!("{}", crate::summonpool::told_line(row as u32));
+            }
+        }
+        self.pool_told = pool.is_some();
         crate::erprompt::set_er_up(self.prompt);
         self.ui_states = now;
     }

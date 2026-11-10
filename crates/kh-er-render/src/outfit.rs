@@ -34,6 +34,9 @@ struct Retired {
     _item: Box<dyn std::any::Any + Send>,
 }
 static RETIRED: Mutex<Vec<Retired>> = Mutex::new(Vec::new());
+/// (KEYBLADE-SWAP) What the GPU is past, waiting to be let go of on the renderer's worker ([`reap`]): releasing a reload's old
+/// assets (hundreds of textures and pipeline states) took the game's frame up to 156 ms when [`frame_begins`] dropped them.
+static REAPED: Mutex<Vec<Retired>> = Mutex::new(Vec::new());
 
 /// (ER69) The outfits' own Bonamik runs (false: their extra bones keep their pose on the parent, as before).
 const SIM_LIVE: bool = true;
@@ -352,8 +355,22 @@ pub fn frame_begins(fence: &ID3D12Fence, signaled: u64) {
             old.after = Some((fence.clone(), signaled));
         }
         // SAFETY: plain getter.
-        r.retain(|o| o.after.as_ref().is_none_or(|(f, v)| unsafe { f.GetCompletedValue() } < *v));
+        let (keep, done): (Vec<Retired>, Vec<Retired>) = std::mem::take(&mut *r).into_iter().partition(|o| o.after.as_ref().is_none_or(|(f, v)| unsafe { f.GetCompletedValue() } < *v));
+        *r = keep;
+        // (KEYBLADE-SWAP) not dropped here, on the game's thread: the worker lets go of them ([`reap`])
+        if !done.is_empty() {
+            REAPED.lock().unwrap_or_else(|e| e.into_inner()).extend(done);
+        }
     }
+}
+
+/// (KEYBLADE-SWAP) The renderer's worker, outside every lock of the frame: lets go of what the GPU is past. Returns how many
+/// items were let go of.
+pub fn reap() -> usize {
+    let done = std::mem::take(&mut *REAPED.lock().unwrap_or_else(|e| e.into_inner()));
+    let n = done.len();
+    drop(done);
+    n
 }
 
 /// Lets go of everything retired (our frames are over: the device was waited for, or is gone).
@@ -361,6 +378,7 @@ pub fn release_all() {
     if let Ok(mut r) = RETIRED.lock() {
         r.clear();
     }
+    reap();
 }
 
 /// One bone of the outfit.

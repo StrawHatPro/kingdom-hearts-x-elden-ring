@@ -342,6 +342,43 @@ pub fn uninstalled() {
     }
 }
 
+
+// ------------------------------------------------------------------------------------------------ (NO-ER-PAUSE) Esc = the KH menu
+
+/// An Esc that a button capture saw (it gives the capture up) is not the menu key until it has been let go.
+static ESC_LATCH: AtomicBool = AtomicBool::new(false);
+
+/// (NO-ER-PAUSE, eroptions.rs Return to Desktop) The game's window is asked to close the way its own close button asks it: a
+/// WM_CLOSE posted to it (its window procedure handles the message itself: gosound.rs reads its close mute there). False: the
+/// window is not known (never subclassed) or the post failed.
+pub fn close_game_window() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+    let window = WINDOW.load(Ordering::SeqCst);
+    if window == 0 {
+        return false;
+    }
+    // SAFETY: a plain post to the game's own top-level window (the handle the subclass was made on); nothing is read back.
+    unsafe { PostMessageW(window as HWND, WM_CLOSE, 0, 0) != 0 }
+}
+
+/// A button capture of the settings screen is waiting.
+pub fn capturing() -> bool {
+    CAPTURE.lock().is_ok_and(|c| c.is_some())
+}
+
+/// THE RULE (pure): Esc `down` now, a capture waiting, the latch -> (Esc is the menu key this frame, the latch after). Esc
+/// held while a capture waits latches; the latch lets go only with the key.
+pub fn esc_as_menu(down: bool, capturing: bool, latched: bool) -> (bool, bool) {
+    let latched = down && (latched || capturing);
+    (down && !latched, latched)
+}
+
+/// (inputs.rs `esc_menu`) Esc counts as the KH menu key now.
+pub fn esc_counts(down: bool) -> bool {
+    let (menu, latched) = esc_as_menu(down, capturing(), ESC_LATCH.load(Ordering::Relaxed));
+    ESC_LATCH.store(latched, Ordering::Relaxed);
+    menu
+}
 // ------------------------------------------------------------------------------------------------ the capture
 
 struct Capture {
@@ -388,6 +425,9 @@ pub fn capture_poll(device: Device) -> Option<Option<u16>> {
     let Ok(mut guard) = CAPTURE.lock() else { return Some(None) };
     let Some(c) = guard.as_mut().filter(|c| c.device == device) else { return Some(None) };
     if now().saturating_sub(c.at) > CAPTURE_MS || down(0x1B) {
+        if down(0x1B) {
+            ESC_LATCH.store(true, Ordering::Relaxed); // (NO-ER-PAUSE) the Esc that gave the capture up does not also close the menu
+        }
         *guard = None;
         return Some(None);
     }
@@ -434,6 +474,23 @@ mod tests {
         assert_eq!(message_scan(0x0148_0001), 0x148);
         assert_eq!(crate::dinput_mask::dik_of_scan(message_scan(0x0148_0001)), 0xC8);
         assert_eq!(message_scan(0xC01F_0001u32 as i32 as LPARAM), 0x1F, "a key-up's transition bits are not the scan code");
+    }
+
+    /// (NO-ER-PAUSE) Esc is the KH menu key; the Esc that gives a button capture up is not, until it is let go
+    #[test]
+    fn np_esc_is_the_menu_key_but_not_the_capture_give_up() {
+        assert_eq!(esc_as_menu(true, false, false), (true, false), "Esc in play / in the menu: Start");
+        assert_eq!(esc_as_menu(false, false, false), (false, false));
+        // a capture waits: Esc gives it up (remap_er's poll), the same press must not close the menu
+        let (menu, latched) = esc_as_menu(true, true, false);
+        assert!(!menu && latched);
+        // the capture is over, the key still held: still not the menu key
+        let (menu, latched) = esc_as_menu(true, false, latched);
+        assert!(!menu && latched);
+        // let go: the latch goes; the next press is Start again
+        let (menu, latched) = esc_as_menu(false, false, latched);
+        assert!(!menu && !latched);
+        assert_eq!(esc_as_menu(true, false, latched), (true, false));
     }
 
     #[test]

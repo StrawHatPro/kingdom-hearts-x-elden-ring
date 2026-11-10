@@ -89,7 +89,7 @@ unsafe fn set_of(device: &ID3D12Device, root: &ID3D12RootSignature, key: PsoKey,
             SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
             ..Default::default()
         };
-        let state: ID3D12PipelineState = device.CreateGraphicsPipelineState(&desc).map_err(|e| format!("CreateGraphicsPipelineState(mimic G-buffer {variant}): {e}"))?;
+        let state: ID3D12PipelineState = crate::psocache::create(device, &desc).map_err(|e| format!("CreateGraphicsPipelineState(mimic G-buffer {variant}): {e}"))?;
         out.push(Some(state));
     }
     if out.iter().all(Option::is_none) {
@@ -133,7 +133,7 @@ pub(super) unsafe fn pool_pipeline(device: &ID3D12Device, root: &ID3D12RootSigna
         SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
         ..Default::default()
     };
-    device.CreateGraphicsPipelineState(&desc).map_err(|e| format!("CreateGraphicsPipelineState(mimic pool): {e}"))
+    crate::psocache::create(device, &desc).map_err(|e| format!("CreateGraphicsPipelineState(mimic pool): {e}"))
 }
 
 /// What the mimic's G-buffer draws need of the frame's G-buffer pass.

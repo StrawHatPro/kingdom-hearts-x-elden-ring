@@ -160,6 +160,7 @@ mod offline {
         all.extend(crate::mimic_music::LOCATED.iter()); // (MIMIC-MUSIC) the SetBossBGM core, the BgmVolume setter
         all.extend(crate::savegate::STARTS.iter());
         all.extend(crate::eroptions::LOCATED.iter()); // (CAMP-OPTIONS) Elden Ring's options: load / apply / defaults, the window, the key config, the two menu entries
+        all.extend(crate::nopause::LOCATED.iter()); // (NO-ER-PAUSE) the popup menu's update (the in-game top menu refused)
         all.extend(crate::spirit::LOCATED.iter()); // (THE USER 2026-11-02: "Summon") the buddy range step, spawn point, arena check, HUD spirit block
         all.extend(crate::deathplane::LOCATED.iter()); // (DEATHPLANE) the death barriers' record / kind functions, the tracker's filter
         all.extend(crate::chrtime::LOCATED.iter()); // (WORLDTIME-2) the characters' / bullets' own delta, the effects' rate, the map clock's passage
