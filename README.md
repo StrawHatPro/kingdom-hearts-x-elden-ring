@@ -58,6 +58,8 @@ needs from them, on your PC.
 
 ### Controls
 - **Made for a controller**, with KH3's Xbox layout. Keyboard and mouse use KH3's PC keys.
+- **Start** (**Esc** on the keyboard) opens the KH menu, which replaces Elden Ring's pause menu. To quit, use the KH
+  menu's **Title Screen**, or the **Quit Game** tab in its settings.
 - Buttons and keys can be remapped in the settings, with Xbox, PlayStation or keyboard-and-mouse button icons.
 - **Linux and Steam Deck:** there is a Linux download for playing through Proton (see "Linux / Steam Deck").
 
@@ -69,6 +71,18 @@ needs from them, on your PC.
   [its releases page](https://github.com/garyttierney/me3/releases).
 - About **85 GB of free disk space** while the setup runs.
 - A **controller** is strongly recommended.
+- A PC that runs Elden Ring well, with some extra room for the mod (see below).
+
+### System requirements
+
+The mod needs a little more than Elden Ring on its own, mostly video memory:
+
+- **Video memory (VRAM):** about **1 GB more** than Elden Ring uses at your settings (Sora, the Keyblades,
+  Donald and Goofy, and their effects). A graphics card with **6 GB or more** is recommended. On 3–4 GB cards,
+  expect stutter or textures loading late.
+- **System memory (RAM):** **16 GB** recommended.
+- **GPU and CPU:** the mod costs a few milliseconds per frame. If Elden Ring runs at a steady 60 fps on your PC,
+  it should stay at or close to that with the mod.
 
 **The mod currently supports the Steam version of both games only** (on Linux and Steam Deck: Steam with Proton).
 
@@ -120,6 +134,17 @@ as administrator.
 
 To check that the mod loaded, look for `er\logs\kh-er.log` in the mod's folder.
 
+## If the game crashes
+
+Please report it, and attach these two files from the mod's `er\logs` folder:
+- **`kh-er.log`**, the mod's log. If the mod saw the crash, the log ends with lines that start with `!!! crash:`.
+- **The newest `kh-er-crash-<date>-<time>.dmp`**, if there is one (the date and time are when it crashed). On Linux and
+  Steam Deck there is no `.dmp` file: the log is enough.
+
+The `.dmp` file is a snapshot of the game's memory at the moment of the crash,
+so it can contain things like your Windows user name or folder names: **only send a `.dmp` to the person fixing the
+crash**, and don't post it publicly.
+
 ## Your saves
 
 Your mod game is kept in two places:
@@ -147,8 +172,9 @@ To back up your mod game, or move it to another PC, copy both.
 
 **Do I have to rebuild the assets?** The setup decides for you: it checks what the new version changed and rebuilds only
 that. Each release's notes say which kind of update it is.
-- **From 0.1.3 to 0.2.0:** no rebuild. The setup checks your files, finds them up to date and says **Ready** within a
+- **From 0.2.0 to 0.2.1:** no rebuild. The setup checks your files, finds them up to date and says **Ready** within a
   few minutes.
+- **From 0.1.3 to 0.2.1:** no rebuild either, the same as from 0.2.0.
 - **From 0.1.2 or older:** a full rebuild. The setup builds all the mod's asset files again from your KH3 install, like
   the first install: about an hour, and about 85 GB of free disk space while it runs. Your saves and settings are kept.
   The first time you visit the Moogle, your old Photo Missions turn into Journey to the Erdtree: every boss you have
@@ -188,8 +214,8 @@ but can't build the mod's files there, and tells you to use the Linux version).
 **Updating on Linux:** close Elden Ring, back up `er/saves` and `KHSora.sl2`, unpack the new version's tarball into the
 same place so it lands on top of your mod folder (your saves, settings and the files the setup built are kept), run
 `./setup-linux` again until it says **Ready**, then play with `er/play.sh`. Always run the setup after updating. As on
-Windows: **from 0.1.3 to 0.2.0** there is no rebuild (a few minutes); **from 0.1.2 or older** it rebuilds all the asset
-files like the first install (about an hour, about 85 GB free).
+Windows: **from 0.2.0 or 0.1.3 to 0.2.1** there is no rebuild (a few minutes); **from 0.1.2 or older** it rebuilds all
+the asset files like the first install (about an hour, about 85 GB free).
 
 The mod's save file `KHSora.sl2` is in Elden Ring's Proton folder:
 `steamapps/compatdata/1245620/pfx/drive_c/users/steamuser/AppData/Roaming/EldenRing/<your id>/`.
